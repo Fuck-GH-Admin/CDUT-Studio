@@ -11,8 +11,8 @@ const reportDir = process.env.QA_REPORT_DIR
 if (!reportDir) throw new Error('QA_REPORT_DIR is required')
 mkdirSync(reportDir, { recursive: true })
 const accountDoc = readFileSync('docs/design/review-agent/16-batch-review-stage-b-local-acceptance.md', 'utf8')
-const demoUser = accountDoc.match(/\|\s*账号\s*\|\s*([^|]+)\|/)?.[1]?.trim()
-const demoPass = accountDoc.match(/\|\s*密码\s*\|\s*([^|]+)\|/)?.[1]?.trim()
+const demoUser = accountDoc.match(/\|\s*账号\s*\|\s*([^|]+)\|/)?.[1]?.trim().replace(/`/g, '')
+const demoPass = accountDoc.match(/\|\s*密码\s*\|\s*([^|]+)\|/)?.[1]?.trim().replace(/`/g, '')
 if (!demoUser || !demoPass) throw new Error('Demo login fixture not documented; refusing to guess credentials')
 const results = []
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
