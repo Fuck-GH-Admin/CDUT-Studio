@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Actor, Appeal, BusinessDecision, CaseAggregateV2, CommandErrorCode, CommandReceipt, ReviewCommandResult, EvidenceLink, Observation, ReviewCaseV2, SupplementRequest, WorkflowTask } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
+import { assertSafeReviewStorageId } from './review-storage-id'
 
 // ===== 聚合形态（07 §3.3） =====
 
@@ -27,6 +28,7 @@ export function emptyAggregate(caseV2: ReviewCaseV2): CaseAggregateV2 {
 const writeQueues = new Map<string, Promise<unknown>>()
 
 function aggregatePath(caseId: string): string {
+  assertSafeReviewStorageId(caseId, 'caseId')
   return join(getConfigDir(), 'review-cases', caseId, 'state.v2.json')
 }
 
@@ -57,6 +59,7 @@ export function listAggregatesV2(): AggregateSummary[] {
   if (!existsSync(dir)) return []
   const out: AggregateSummary[] = []
   for (const entry of readdirSync(dir)) {
+    try { assertSafeReviewStorageId(entry, 'caseId') } catch { continue }
     const aggregate = readAggregate(entry)
     if (!aggregate) continue
     out.push({
@@ -74,6 +77,7 @@ export function listAggregatesV2(): AggregateSummary[] {
 
 /** 原子落盘：唯一临时名 + rename（避免并发覆盖固定 .tmp） */
 export function writeAggregate(aggregate: CaseAggregateV2): void {
+  assertSafeReviewStorageId(aggregate?.caseV2?.id, 'caseId')
   const dir = join(getConfigDir(), 'review-cases', aggregate.caseV2.id)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const filePath = aggregatePath(aggregate.caseV2.id)
@@ -114,6 +118,7 @@ export async function submitCommand<TPayload, TEntity = TPayload>(
   handler: CommandHandler<TPayload, TEntity>,
   source?: CommandSourceMeta,
 ): Promise<ReviewCommandResult<TEntity>> {
+  assertSafeReviewStorageId(caseId, 'caseId')
   return enqueueCase(caseId, async (): Promise<ReviewCommandResult<TEntity>> => {
     const aggregate = readAggregate(caseId)
     if (!aggregate) return { ok: false, code: 'NOT_FOUND', message: `案卷聚合不存在: ${caseId}` }
@@ -163,6 +168,9 @@ export class CommandValidationError extends Error {
 
 /** 创建新案卷聚合（CreateCaseFromTemplate 专用：不走 expectedRevision，revision=0 起） */
 export async function createAggregate(caseId: string, caseV2: ReviewCaseV2, initialReceipt?: CommandReceipt): Promise<void> {
+  assertSafeReviewStorageId(caseId, 'caseId')
+  assertSafeReviewStorageId(caseV2?.id, 'caseId')
+  if (caseId !== caseV2.id) throw new CommandValidationError('VALIDATION_FAILED', '案卷 ID 与聚合内容不一致')
   await enqueueCase(caseId, async () => {
     if (existsSync(aggregatePath(caseId))) throw new CommandValidationError('INVALID_TRANSITION', `案卷聚合已存在: ${caseId}`)
     const fresh = emptyAggregate(caseV2)

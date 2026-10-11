@@ -5,12 +5,15 @@
  * 到案卷受控目录 reports/（不覆盖任意宿主路径）。
  */
 
+import { assertSafeReviewStorageId } from './review-storage-id'
+
 export interface ExportReportResultV2 {
   file: string
   decision: { result: string; reason: string; at: string } | null
 }
 
 export function exportCaseReport(caseId: string): ExportReportResultV2 {
+  assertSafeReviewStorageId(caseId, 'caseId')
   const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
   const { buildCaseFeedback } = require('./report-service-v2') as typeof import('./report-service-v2')
   const { listRunsV2 } = require('./run-store-v2') as typeof import('./run-store-v2')

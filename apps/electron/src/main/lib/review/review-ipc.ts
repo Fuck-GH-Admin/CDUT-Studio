@@ -1,3 +1,5 @@
+import { bindLocalReviewerCommand } from './review-ipc-actor-guard'
+import { assertSafeReviewStorageId } from './review-storage-id'
 /**
  * 内容审核专区 - IPC 处理器注册
  *
@@ -468,13 +470,14 @@ export function registerReviewIpc(): void {
     return publishTemplate(templateId, version)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.LIST_RUNS_V2, (_e, caseId: string) => {
-    if (typeof caseId !== 'string' || !caseId) throw new Error('参数 caseId 非法')
+    assertSafeReviewStorageId(caseId, 'caseId')
     const { listRunsV2 } = require('./run-store-v2') as typeof import('./run-store-v2')
     const { reconcilePiReviewRunsWithReadReceipts } = require('./pi-case-review-service') as typeof import('./pi-case-review-service')
     return reconcilePiReviewRunsWithReadReceipts(caseId, listRunsV2(caseId))
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.GET_RUN_V2, (_e, input: { caseId: string; runId: string }) => {
-    if (!input?.caseId || !input?.runId) throw new Error('参数非法')
+    assertSafeReviewStorageId(input?.caseId, 'caseId')
+    assertSafeReviewStorageId(input?.runId, 'runId')
     const { getRunV2 } = require('./run-store-v2') as typeof import('./run-store-v2')
     return getRunV2(input.caseId, input.runId)
   })
@@ -508,12 +511,13 @@ export function registerReviewIpc(): void {
     return true
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, (_e, input: { caseId: string; templateId: string; version: number; payload: unknown; actor: import('@profer/shared').Actor }) => {
-    if (!input?.caseId || !input?.templateId) throw new Error('参数非法')
+    if (!input?.templateId) throw new Error('参数非法')
+    assertSafeReviewStorageId(input?.caseId, 'caseId')
     const { createCaseFromTemplate } = require('./application-service') as typeof import('./application-service')
     return createCaseFromTemplate(input.templateId, input.version, input.payload as never, input.actor, input.caseId)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.GET_AGGREGATE_V2, (_e, caseId: string) => {
-    if (typeof caseId !== 'string' || !caseId) throw new Error('参数 caseId 非法')
+    assertSafeReviewStorageId(caseId, 'caseId')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
     return getCaseV2Aggregate(caseId)
   })
@@ -555,7 +559,7 @@ export function registerReviewIpc(): void {
     return buildCaseTimeline(aggregate, runs, input.filterOperator)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.GET_RUN_OBSERVATIONS_V2, (_e, caseId: string) => {
-    if (typeof caseId !== 'string' || !caseId) throw new Error('参数 caseId 非法')
+    assertSafeReviewStorageId(caseId, 'caseId')
     const { listRunsV2, readArtifact } = require('./run-store-v2') as typeof import('./run-store-v2')
     const runs = listRunsV2(caseId).filter((run) => run.status === 'completed' || run.status === 'partially-completed')
     if (runs.length === 0) return []
@@ -583,23 +587,23 @@ export function registerReviewIpc(): void {
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_DISPOSITION_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { recordWorkspaceDispositionV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
-    return recordWorkspaceDispositionV2(input.caseId, input.command as unknown as Parameters<typeof recordWorkspaceDispositionV2>[1])
+    return recordWorkspaceDispositionV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordWorkspaceDispositionV2>[1])
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.OPEN_WORKSPACE_SUPPLEMENT_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { openWorkspaceSupplementV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
-    return openWorkspaceSupplementV2(input.caseId, input.command as unknown as Parameters<typeof openWorkspaceSupplementV2>[1])
+    return openWorkspaceSupplementV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof openWorkspaceSupplementV2>[1])
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.ACKNOWLEDGE_WORKSPACE_MATERIAL_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { acknowledgeWorkspaceMaterialV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
-    return acknowledgeWorkspaceMaterialV2(input.caseId, input.command as unknown as Parameters<typeof acknowledgeWorkspaceMaterialV2>[1])
+    return acknowledgeWorkspaceMaterialV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof acknowledgeWorkspaceMaterialV2>[1])
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.DECIDE_WORKSPACE_CASE_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { decideWorkspaceCaseV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
-    return decideWorkspaceCaseV2(input.caseId, input.command as unknown as Parameters<typeof decideWorkspaceCaseV2>[1])
+    return decideWorkspaceCaseV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof decideWorkspaceCaseV2>[1])
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_SUBJECT_ADJUDICATION_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { recordWorkspaceSubjectAdjudicationV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
-    return recordWorkspaceSubjectAdjudicationV2(input.caseId, input.command as unknown as Parameters<typeof recordWorkspaceSubjectAdjudicationV2>[1])
+    return recordWorkspaceSubjectAdjudicationV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordWorkspaceSubjectAdjudicationV2>[1])
   })
 
   // ===== N3b：业务闭环命令（薄委托 stage-workflow） =====
@@ -608,11 +612,11 @@ export function registerReviewIpc(): void {
     const { getTemplate } = require('./template-store') as typeof import('./template-store')
     const template = getTemplate(input.templateId, input.version)
     if (!template) throw new Error(`模板不存在: ${input.templateId}@${input.version}`)
-    return recordStageDecision(input.caseId, input.command as unknown as Parameters<typeof recordStageDecision>[1], template)
+    return recordStageDecision(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordStageDecision>[1], template)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RESOLVE_SUPPLEMENT_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { resolveSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
-    return resolveSupplementV2(input.caseId, input.command as unknown as Parameters<typeof resolveSupplementV2>[1])
+    return resolveSupplementV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof resolveSupplementV2>[1])
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RESPOND_SUPPLEMENT_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { respondSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
@@ -623,15 +627,21 @@ export function registerReviewIpc(): void {
     if (typeof batchId !== 'string' || !batchId) throw new Error('参数 batchId 非法')
     const { runBatchQueue } = require('./batch-store') as typeof import('./batch-store')
     const { assembleAndRunReview } = require('./run-async-service') as typeof import('./run-async-service')
-    return runBatchQueue(batchId, {
+    const completed = await runBatchQueue(batchId, {
       runCase: async (caseId: string) => {
         const run = await assembleAndRunReview(caseId)
         return { status: run.status }
       },
     })
+    if (completed.automation && completed.automation.mode !== 'assist') {
+      const { runBatchAutomation } = require('./batch-automation-service') as typeof import('./batch-automation-service')
+      await runBatchAutomation(batchId)
+    }
+    const { readBatchStateV2 } = require('./batch-store') as typeof import('./batch-store')
+    return readBatchStateV2(batchId)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RUN_REVIEW_V2, async (_e, caseId: string) => {
-    if (typeof caseId !== 'string' || !caseId) throw new Error('参数 caseId 非法')
+    assertSafeReviewStorageId(caseId, 'caseId')
     // 薄委托共享运行服务（08 设计：IPC 与 Agent 工具同服务函数；人工发起 local-user）
     const { assembleAndRunReview } = require('./run-async-service') as typeof import('./run-async-service')
     return assembleAndRunReview(caseId)
@@ -668,11 +678,11 @@ export function registerReviewIpc(): void {
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.CAST_RATING_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { castRating } = require('./rating-service') as typeof import('./rating-service')
-    return castRating(input.caseId, input.command as unknown as Parameters<typeof castRating>[1])
+    return castRating(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof castRating>[1])
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RESOLVE_APPEAL_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { resolveAppealV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
-    return resolveAppealV2(input.caseId, input.command as unknown as Parameters<typeof resolveAppealV2>[1])
+    return resolveAppealV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof resolveAppealV2>[1])
   })
 
   // ===== N4b：模板向导（无代码创建：政策先行 → 模板草稿 → 发布走 PUBLISH_TEMPLATE_V2） =====
@@ -709,10 +719,40 @@ export function registerReviewIpc(): void {
     const { listBatchStatesV2 } = require('./batch-store') as typeof import('./batch-store')
     return listBatchStatesV2()
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.BATCH_ACTION_V2, (_e, input: { action: 'finalize' | 'reopen'; batchId: string; newBatchId?: string; reason?: string; snapshot?: Record<string, unknown> }) => {
-    const { finalizeBatch, reopenBatch } = require('./batch-store') as typeof import('./batch-store')
-    if (input.action === 'finalize') return finalizeBatch(input.batchId, input.snapshot ?? {})
-    return reopenBatch(input.batchId, input.newBatchId ?? `${input.batchId}-r${Date.now().toString(36)}`, input.reason ?? '人工重开')
+  ipcMain.handle(REVIEW_IPC_CHANNELS.BATCH_ACTION_V2, (_e, input: { action: 'finalize' | 'reopen' | 'retry' | 'recover' | 'configure-automation' | 'finalize-completed'; batchId: string; newBatchId?: string; reason?: string; snapshot?: Record<string, unknown>; caseIds?: string[]; mode?: import('@profer/shared').BatchAutomationMode; confirmed?: boolean }) => {
+    if (!input || typeof input.batchId !== 'string' || !input.batchId) throw new Error('无效批次操作')
+    const { reopenBatch, retryBatchCases, recoverInterruptedBatch } = require('./batch-store') as typeof import('./batch-store')
+    // Legacy free-form renderer snapshots are NOT authoritative decisions.
+    // Use the central verified finalization service instead.
+    if (input.action === 'finalize') throw new Error('原始快照定稿入口已禁用，请使用核验并定稿')
+    if (input.action === 'reopen') return reopenBatch(input.batchId, input.newBatchId ?? `${input.batchId}-r${Date.now().toString(36)}`, input.reason ?? '人工重开')
+    if (input.action === 'retry') return retryBatchCases(input.batchId, input.caseIds ?? [])
+    if (input.action === 'recover') return recoverInterruptedBatch(input.batchId)
+    if (input.action === 'configure-automation') {
+      const { configureBatchAutomation } = require('./batch-store') as typeof import('./batch-store')
+      if (!input.mode) throw new Error('需要指定批次自动化策略')
+      return configureBatchAutomation(input.batchId, input.mode, input.confirmed === true)
+    }
+    if (input.action === 'finalize-completed') {
+      const { finalizeCompletedBatch } = require('./batch-automation-service') as typeof import('./batch-automation-service')
+      return finalizeCompletedBatch(input.batchId)
+    }
+    throw new Error('未知批次操作')
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.BATCH_AUTO_PROCESS_V2, (_e, batchId: string) => {
+    if (typeof batchId !== 'string' || !batchId) throw new Error('参数 batchId 非法')
+    const { runBatchAutomation } = require('./batch-automation-service') as typeof import('./batch-automation-service')
+    return runBatchAutomation(batchId)
+  })
+  // Local-human batch group operation. The backend recomputes the preview and
+  // reruns each case's existing transaction guards; the renderer supplies no actor.
+  ipcMain.handle(REVIEW_IPC_CHANNELS.BATCH_GROUP_PREVIEW_V2, (_e, input: import('@profer/shared').BatchGroupActionRequest) => {
+    const { previewBatchGroupAction } = require('./batch-group-action-service') as typeof import('./batch-group-action-service')
+    return previewBatchGroupAction(input)
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.BATCH_GROUP_APPLY_V2, (_e, input: import('@profer/shared').BatchGroupApplyRequest) => {
+    const { applyBatchGroupAction } = require('./batch-group-action-service') as typeof import('./batch-group-action-service')
+    return applyBatchGroupAction(input)
   })
 
   ipcMain.handle(REVIEW_IPC_CHANNELS.LIST_CASES_V2, () => {

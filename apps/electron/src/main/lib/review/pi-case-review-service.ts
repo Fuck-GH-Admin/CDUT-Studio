@@ -6,6 +6,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { AiOpinion, CaseAggregateV2, CheckResult, FieldValue, Observation, ReviewRunV2, RuleSpec, SourceRef, TemplateVersion } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
+import { assertSafeReviewStorageId } from './review-storage-id'
 import { getCaseV2Aggregate } from './application-service'
 import { buildDeterministicRuleChecks } from './v2-executor-factory'
 import { combineCoverage } from './coverage-ledger'
@@ -90,7 +91,10 @@ export interface PiReviewPrepareResult {
   inheritedReadDocumentNames?: string[]
 }
 
-const CASE_ROOT = (caseId: string): string => join(getConfigDir(), 'review-cases', caseId)
+const CASE_ROOT = (caseId: string): string => {
+  assertSafeReviewStorageId(caseId, 'caseId')
+  return join(getConfigDir(), 'review-cases', caseId)
+}
 interface PiDocumentReadState {
   blocks?: Record<string, string[]>
   previewedDocumentVersionIds?: string[]
@@ -445,13 +449,13 @@ export function preparePiReviewRunV2(input: { caseId: string; sessionId: string;
   if (!input.sessionId || !input.turnId) throw new Error('普通 Pi 审核必须绑定真实会话与用户消息')
   const aggregate = getCaseV2Aggregate(input.caseId)
   if (!aggregate) throw new Error(`案卷不存在或未初始化：${input.caseId}`)
+  const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+  if (!template) throw new Error(`案卷模板不存在：${aggregate.caseV2.templateId}@${aggregate.caseV2.templateVersion}`)
   if (!aggregate.d2RuntimePlan && isAuthoringCandidateDraft(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)) {
     throw new Error('D2_FIXED_PLAN_MISSING: 作者态候选必须先绑定技术预审任务包，不能直接启动普通 Pi 审核')
   }
   const d2Problems = verifyD2InstalledPlan(aggregate)
   if (d2Problems.length) throw new Error('D2_FIXED_PLAN_MISMATCH: ' + d2Problems.join('；'))
-  const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
-  if (!template) throw new Error(`案卷模板不存在：${aggregate.caseV2.templateId}@${aggregate.caseV2.templateVersion}`)
   const effectiveRules = effectiveRulesFor(aggregate, template)
   if (effectiveRules.length === 0) {
     throw new Error(`模板「${template.name}」和本案审核依据都没有可执行检查项；审核尚未启动。请先选择包含检查要求的模板或补充审核依据。`)
@@ -843,13 +847,13 @@ export function submitPiReviewResultV2(input: {
   if (!run || run.status !== 'running') throw new Error('本次审核运行已结束；请在工作台开始新一轮审核')
   const aggregate = getCaseV2Aggregate(input.binding.caseId)
   if (!aggregate) throw new Error('案卷已不存在')
+  const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+  if (!template) throw new Error('案卷模板版本不存在')
   if (!aggregate.d2RuntimePlan && isAuthoringCandidateDraft(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)) {
     throw new Error('D2_FIXED_PLAN_MISSING: 作者态候选必须先绑定技术预审任务包，不能直接启动普通 Pi 审核')
   }
   const d2Problems = verifyD2InstalledPlan(aggregate)
   if (d2Problems.length) throw new Error('D2_FIXED_PLAN_MISMATCH: ' + d2Problems.join('；'))
-  const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
-  if (!template) throw new Error('案卷模板版本不存在')
   if (inputHashOf(aggregate) !== run.inputManifest.hash) throw new Error('案卷材料或人工事实已变化；本次结果已过期，请开始新一轮审核')
   const rules = effectiveRulesFor(aggregate, template)
   const observations: Array<Record<string, unknown>> = []

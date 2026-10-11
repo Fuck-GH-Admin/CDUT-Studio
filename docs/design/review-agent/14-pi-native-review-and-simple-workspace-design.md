@@ -1,6 +1,6 @@
 # 审核功能收敛设计：普通 Pi Agent 与简洁工作台
 
-日期：2026-10-09；现状补记：2026-10-10。核对对象为当前工作区的审核代码，提交基线 `60c25542`；参考 [13 的源码阅读和隔离试用](13-single-agent-framework-trial.md) 与 [15 模板模块和运行时边界规范](15-template-modules-and-runtime-boundary-spec.md)。**本文是下一轮设计，不是实施完成声明。** 本轮进行了代码核对，没有新增模型实测或页面操作验收。
+日期：2026-10-09；现状补记：2026-10-10。核对对象为当时工作区的审核代码，提交基线 `60c25542`；参考 [13 的源码阅读和隔离试用](13-single-agent-framework-trial.md) 与 [15 模板模块和运行时边界规范](15-template-modules-and-runtime-boundary-spec.md)。**本文是设计核对快照，不是当前实现状态表。** 批量审核 A/B 与受授权 C 阶段后续已在 `feat/batch-review-triage-v1` 接入页面与服务；当前状态、测试结果和未完成验收见[开发者交接](17-current-state-and-handoff.md)。本文没有覆盖这些实现及其 UI 验收。
 
 ## 1. 要解决的问题与取舍
 
@@ -33,7 +33,7 @@
 | 预算合计、编号唯一性、条件与计分 | [TemplateSheetCheckSpec](../../../packages/shared/src/types/review-v2.ts)、[v2-executor-factory](../../../apps/electron/src/main/lib/review/v2-executor-factory.ts)、[deterministic-engine](../../../apps/electron/src/main/lib/review/deterministic-engine.ts) | 已有固定计算及接线，不能再笼统写成“完全没有确定性核对”；拆出可复用计算服务，保留单元格来源、缺值和公式警告 |
 | 补件、事实修正、证明关联、人工认定、最终决定 | [application-service](../../../apps/electron/src/main/lib/review/application-service.ts)、[workspace-business-service-v2](../../../apps/electron/src/main/lib/review/workspace-business-service-v2.ts)、[decision-readiness-v2](../../../packages/shared/src/review/decision-readiness-v2.ts) | 保留持久化与权限；减少同一问题产生多张待办和多个确认表单 |
 | 来源点击定位、报告与历史 | [SourceBlockView](../../../apps/electron/src/renderer/components/content-review/SourceBlockView.tsx)、[RightPanel](../../../apps/electron/src/renderer/components/content-review/RightPanel.tsx)、[report-export-v2-service](../../../apps/electron/src/main/lib/review/report-export-v2-service.ts) | 默认只显示本次结果；来源打开原件，导出区分当前/历史与未完成范围 |
-| 批次与评委服务 | [batch-store](../../../apps/electron/src/main/lib/review/batch-store.ts)、[judging-service](../../../apps/electron/src/main/lib/review/judging-service.ts)、[rating-service](../../../apps/electron/src/main/lib/review/rating-service.ts)、[BatchPanel](../../../apps/electron/src/renderer/components/content-review/BatchPanel.tsx) | 批次页已可读持久化批次、按批次展示项目进度并新建批次；队列执行和定稿服务及 IPC 已存在，但页面尚未接入启动队列、重试、人工处置与定稿的控制入口 |
+| 批次与评委服务 | [batch-store](../../../apps/electron/src/main/lib/review/batch-store.ts)、[judging-service](../../../apps/electron/src/main/lib/review/judging-service.ts)、[rating-service](../../../apps/electron/src/main/lib/review/rating-service.ts)、[BatchPanel](../../../apps/electron/src/renderer/components/content-review/BatchPanel.tsx) | **此行是 2026-10-09 快照，批次页状态已被 A/B/C 阶段实现取代。** 当前批次队列、恢复/定向重试、问题组人工处理和受授权的自动补件/通过见 [16 规范](16-batch-review-automation-and-issue-clustering-spec.md)、[C 阶段验收](17-batch-review-stage-c-local-acceptance.md) 与[交接文档](17-current-state-and-handoff.md)；新分支的真实 UI 场景仍待手动验收 |
 
 ### 2.1 已经确认的主流程问题
 
@@ -249,7 +249,7 @@ Docling 仅作为复杂材料的可选服务。普通文本与现有 XLSX 单元
 
 批量审核已从示例占位页改为真实数据页：能列出持久化批次、切换批次、展示项目名称/申请人/进度/待处理状态/最近更新，并从已发布模板和已有审核项目创建批次。项目行会按案卷类型打开 V2 案卷页或旧版审核工作台。状态来自批次条目、V2 案卷阶段和最近一次 V2 运行记录。
 
-目前批次主要承担项目编组和进度汇总：创建时要选择同一模板版本下已经存在的项目；不会自动创建项目或上传材料。队列执行与定稿能力已有服务和 IPC，但批次页没有相应操作入口，用户暂时仍需逐项目进入工作台处理；批次级调度、逐项目恢复/重试、统一处理待办和正式定稿尚未形成可从页面使用的闭环。因此当前页面可以用于查看和编组，不能称作可操作的全自动批量审核。
+以上两段是 2026-10-10 较早的实现快照，已被 `feat/batch-review-triage-v1` 的 A/B/C 阶段实现取代。当前批次页有队列执行、恢复/定向重试、分流、问题组人工处置和受授权自动处理入口；策略及测试边界见 [C 阶段验收](17-batch-review-stage-c-local-acceptance.md) 与[当前状态交接](17-current-state-and-handoff.md)。新功能仍待真实 Electron UI 场景验收。
 
 ### 上游同步
 

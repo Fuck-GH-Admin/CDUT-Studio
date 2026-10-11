@@ -9,19 +9,21 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { join } from 'node:path'
 import type { ReviewRunV2 } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
+import { assertSafeReviewStorageId } from './review-storage-id'
 
 function runsDir(caseId: string): string {
-  const dir = join(getConfigDir(), 'review-cases', caseId, 'runs-v2')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
+  assertSafeReviewStorageId(caseId, 'caseId')
+  return join(getConfigDir(), 'review-cases', caseId, 'runs-v2')
 }
 
 function runPath(caseId: string, runId: string): string {
+  assertSafeReviewStorageId(runId, 'runId')
   return join(runsDir(caseId), `${runId}.json`)
 }
 
 export function saveRunV2(run: ReviewRunV2): void {
   const filePath = runPath(run.caseId, run.id)
+  mkdirSync(runsDir(run.caseId), { recursive: true })
   const tmp = `${filePath}.tmp`
   writeFileSync(tmp, JSON.stringify(run, null, 2), 'utf-8')
   renameSync(tmp, filePath)
@@ -30,15 +32,18 @@ export function saveRunV2(run: ReviewRunV2): void {
 
 /** 启动恢复：把上次进程崩溃/重启遗留的 queued/running 运行标 interrupted（08 设计 §5：不能留永久 running 文件） */
 export function markStaleRunsInterrupted(caseId?: string): number {
+  if (caseId !== undefined) assertSafeReviewStorageId(caseId, 'caseId')
   const baseDir = join(getConfigDir(), 'review-cases')
   if (!existsSync(baseDir)) return 0
   let count = 0
   for (const entry of readdirSync(baseDir)) {
+    try { assertSafeReviewStorageId(entry, 'caseId') } catch { continue }
     if (caseId && entry !== caseId) continue
     const runsDir = join(baseDir, entry, 'runs-v2')
     if (!existsSync(runsDir)) continue
     for (const file of readdirSync(runsDir)) {
       if (!file.endsWith('.json')) continue
+      try { assertSafeReviewStorageId(file.slice(0, -'.json'.length), 'runId') } catch { continue }
       const filePath = join(runsDir, file)
       try {
         const run = JSON.parse(readFileSync(filePath, 'utf-8')) as ReviewRunV2
@@ -69,8 +74,12 @@ export function getRunV2(caseId: string, runId: string): ReviewRunV2 | undefined
 
 export function listRunsV2(caseId: string): ReviewRunV2[] {
   const dir = runsDir(caseId)
+  if (!existsSync(dir)) return []
   return readdirSync(dir)
-    .filter((name) => name.endsWith('.json'))
+    .filter((name) => {
+      if (!name.endsWith('.json')) return false
+      try { assertSafeReviewStorageId(name.slice(0, -'.json'.length), 'runId'); return true } catch { return false }
+    })
     .map((name) => getRunV2(caseId, name.replace('.json', '')))
     .filter((run): run is ReviewRunV2 => !!run)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
@@ -78,19 +87,23 @@ export function listRunsV2(caseId: string): ReviewRunV2[] {
 
 /** 节点产物目录：runs-v2/{runId}/artifacts/{nodeId}.json（不可变；恢复核验依据，R03） */
 function artifactsDir(caseId: string, runId: string): string {
-  const dir = join(getConfigDir(), 'review-cases', caseId, 'runs-v2', runId, 'artifacts')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
+  assertSafeReviewStorageId(caseId, 'caseId')
+  assertSafeReviewStorageId(runId, 'runId')
+  return join(getConfigDir(), 'review-cases', caseId, 'runs-v2', runId, 'artifacts')
 }
 
 export function saveArtifact(caseId: string, runId: string, nodeId: string, artifact: unknown): void {
-  const filePath = join(artifactsDir(caseId, runId), `${nodeId}.json`)
+  assertSafeReviewStorageId(nodeId, 'nodeId')
+  const dir = artifactsDir(caseId, runId)
+  const filePath = join(dir, `${nodeId}.json`)
+  mkdirSync(dir, { recursive: true })
   const tmp = `${filePath}.${Math.random().toString(36).slice(2, 6)}.tmp`
   writeFileSync(tmp, JSON.stringify(artifact, null, 2), 'utf-8')
   renameSync(tmp, filePath)
 }
 
 export function readArtifact<T = unknown>(caseId: string, runId: string, nodeId: string): T | undefined {
+  assertSafeReviewStorageId(nodeId, 'nodeId')
   const filePath = join(artifactsDir(caseId, runId), `${nodeId}.json`)
   if (!existsSync(filePath)) return undefined
   try {

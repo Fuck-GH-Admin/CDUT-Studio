@@ -213,6 +213,46 @@ export function acknowledgeWorkspaceMaterialV2(
   })
 }
 
+/**
+ * Machine-originated final decisions are only allowed through a current, explicit
+ * batch policy. The check is performed INSIDE submitCommand's serialized handler,
+ * so disabling the policy or changing the case before commit fails closed.
+ */
+function assertAutomatedWorkspaceDecision(
+  aggregate: CaseAggregateV2,
+  run: ReviewRunV2,
+  actor: Actor,
+  result: WorkspaceDecision,
+  requiredElements: string[] | undefined,
+  reason: string,
+): void {
+  if (actor.actorSource === 'agent') {
+    const { getSettings } = require('../settings-service') as typeof import('../settings-service')
+    if (getSettings().reviewAgentAutoApproval !== true) throw new CommandValidationError('AGENT_DECISION_DISABLED', 'AI 代批未授权')
+    // Generic Agent approval is not batch automation. Its permissions are scoped separately.
+    return
+  }
+  if (actor.actorSource !== 'system') return
+  const match = /^batch-auto:([^:]+):(\d+)$/.exec(actor.actorId)
+  if (!match) throw new CommandValidationError('AGENT_DECISION_DISABLED', '未经授权的系统审批主体')
+  const batchId = decodeURIComponent(match[1]!)
+  const { readBatchStateV2 } = require('./batch-store') as typeof import('./batch-store')
+  const { checkAutoBatchAction } = require('./batch-automation-gates') as typeof import('./batch-automation-gates')
+  const { getTemplate } = require('./template-store') as typeof import('./template-store')
+  const { readArtifact } = require('./run-store-v2') as typeof import('./run-store-v2')
+  const batch = readBatchStateV2(batchId)
+  const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+  if (!batch || !template || batch.automation?.revision !== Number(match[2]))
+    throw new CommandValidationError('AGENT_DECISION_DISABLED', '批次自动化授权已失效')
+  const action = result === 'pass' ? 'pass' : result === 'return' ? 'return' : null
+  if (!action) throw new CommandValidationError('AGENT_DECISION_DISABLED', '自动审批只支持符合或补件')
+  const artifact = readArtifact<{ observations?: Array<Record<string, unknown>> }>(aggregate.caseV2.id, run.id, 'node-auto-check-extract')
+  const gate = checkAutoBatchAction(batch, aggregate, run, template, action, artifact?.observations ?? [])
+  if (!gate.allowed) throw new CommandValidationError('AGENT_DECISION_DISABLED', gate.reason)
+  if (reason !== gate.reason || (action === 'return' && JSON.stringify(requiredElements ?? []) !== JSON.stringify(gate.requiredElements)))
+    throw new CommandValidationError('VALIDATION_FAILED', '自动处理的理由或补正要素与已核验规则不一致')
+}
+
 export function decideWorkspaceCaseV2(
   caseId: string,
   command: { requestId: string; actor: Actor; expectedRevision: number; payload: { result: WorkspaceDecision; reason: string; basedOnRunId: string; inputHash: string; requiredElements?: string[]; supplementReason?: string } },
@@ -224,6 +264,7 @@ export function decideWorkspaceCaseV2(
     if (!['completed', 'partially-completed'].includes(run.status)) throw new CommandValidationError('INVALID_TRANSITION', '运行未完成，不能形成最终决定')
     if (!payload.reason.trim()) throw new CommandValidationError('VALIDATION_FAILED', '最终决定必须填写理由')
     if (aggregate.caseV2.stage === 'decided' || aggregate.caseV2.stage === 'archived') throw new CommandValidationError('INVALID_TRANSITION', '案卷已结束')
+    assertAutomatedWorkspaceDecision(aggregate, run, command.actor, payload.result, payload.requiredElements, payload.reason)
 
     if (payload.result === 'pass' || payload.result === 'partial-pass') {
       const { getTemplate } = require('./template-store') as typeof import('./template-store')

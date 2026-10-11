@@ -407,13 +407,17 @@ function BusinessFlowSection({ aggregate, onResult }: { aggregate: CaseAggregate
   const [replyText, setReplyText] = useState('')
   const [replyAttachments, setReplyAttachments] = useState<string[]>([])
   const openTasks = aggregate.tasks.filter((task) => task.status === 'open')
+  // Local reviewer UI cannot claim a teacher, judge or school credential.
+  // Renderer actors are rebound by main process to the local-reviewer principal.
+  const reviewerTasks = openTasks.filter((task) => task.assigneeRole === 'reviewer'
+    && (!task.assigneeActorId || task.assigneeActorId === 'local-reviewer'))
   const projection = resolveFinalDecisionProjectionPublic(aggregate.decisions)
   const templateId = aggregate.caseV2.templateId
   const version = aggregate.caseV2.templateVersion
   const caseId = aggregate.caseV2.id
 
   const act = async (action: string, extra: Record<string, unknown>): Promise<void> => {
-    const task = openTasks[0]
+    const task = reviewerTasks[0]
     if (!task) {
       return
     }
@@ -433,20 +437,18 @@ function BusinessFlowSection({ aggregate, onResult }: { aggregate: CaseAggregate
         开放任务：{openTasks.length > 0 ? openTasks.map((task) => `${task.stageId}(R${task.round})`).join('、') : '无'}
         {' · '}最终决定：{projection.decision ? `${projection.decision.result}${projection.isFinal ? '（终审）' : '（阶段）'}` : '未形成'}
       </p>
-      {openTasks.length > 0 && (
+      {openTasks.length > 0 && reviewerTasks.length === 0 && (
+        <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+          当前开放任务由教师、评委或其他角色负责；本地工作台不能自行声明其审批身份，请使用已授权的角色入口。
+        </p>
+      )}
+      {reviewerTasks.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-1.5">
-          <Button size="sm" variant="outline" onClick={() => void act('stage-pass', { reason: `${openTasks[0]?.stageId ?? ''} 通过` })}>阶段通过</Button>
+          <Button size="sm" variant="outline" onClick={() => void act('stage-pass', { reason: `${reviewerTasks[0]?.stageId ?? ''} 通过` })}>阶段通过</Button>
           <Button size="sm" variant="outline" onClick={() => void act('return-for-supplement', { reason: '缺证明', supplementRequiredElements: ['等级', '日期'], supplementReason: '请补交含等级与日期的证明' })}>退回补件</Button>
           <Button size="sm" variant="outline" onClick={() => void act('final-reject', { reason: '不符合规定' })}>最终驳回</Button>
           <Button size="sm" variant="outline" onClick={() => void act('withdraw', { reason: '提交者撤回' })}>撤回</Button>
-          {openTasks[0]?.stageId === 'rating' && (
-            <Button size="sm" variant="outline" onClick={() => {
-              void window.reviewAPI.castRatingV2({
-                caseId,
-                command: { requestId: `rate-${Date.now().toString(36)}`, target: { kind: 'case', id: caseId }, expectedRevision: aggregate.caseV2.revision, actor: { actorId: 'judge-local', actorSource: 'local', role: 'judge' }, type: 'CastRating', payload: { stageId: 'rating', scores: { overall: 4 } } },
-              }).then(onResult)
-            }}>评委评分（4/5）</Button>
-          )}
+
         </div>
       )}
       {aggregate.supplements.filter((request) => request.status === 'open' || request.status === 'responded').length > 0 && (

@@ -161,10 +161,12 @@ cmd.exe /c ".\apps\electron\out\win-unpacked\CDUT Studio.exe --enable-logging"
 | `browser-controller.ts` / `browser-*.ts` | 内嵌浏览器控制、策略、截图与会话 |
 | `feishu-bridge.ts` / `feishu/` | 飞书集成：消息同步、任务通知、卡片渲染、OAuth 认证 |
 | `cdut/cdut-auth-manager.ts` | CDUT 专区「特区账户」认证：隐藏窗口 headless 统一身份认证（CAS）、办事大厅画像抓取（学院/专业/班级/头像）、10 分钟静默保活、OS 级加密凭据持久化 |
-| `review/` | 内容审核专区服务矩阵：项目 Pi Agent 负责通用审核推理，案卷范围的材料能力库按需列出/检索/读取文档与表格、单页核验图像；受控工具校验引用、规则材料覆盖与人工确认边界，运行记录把能力调用和模型用量反馈到界面 |
+| `review/` | 内容审核专区服务矩阵：项目 Pi Agent 负责通用审核推理，案卷范围的材料能力库按需列出/检索/读取文档与表格、单页核验图像；受控工具校验引用、规则材料覆盖与人工确认边界，运行记录把能力调用和模型用量反馈到界面。批量审核当前分支状态、已实现范围与接手步骤见 [审核当前状态与开发者交接](docs/design/review-agent/17-current-state-and-handoff.md) |
 | `runtime-init.ts` / `git-detector.ts` / `shell-env.ts` | 运行时初始化：Shell 环境注入、Bun/Git/Node 检测与自适应配置 |
 | `config-paths.ts` | 配置路径管理：`~/.cdutai/` 目录结构与默认 Skills 播种 |
 | `changelog-service.ts` / `github-release-service.ts` | 版本更新日志与 GitHub Release 展示（只读，不涉及自动更新） |
+
+批量审核复验入口见 [24 号独立验收](docs/design/review-agent/24-batch-review-independent-final-acceptance.md)。队列失败提示须保留失败数量；无已完成案卷时待人工分流明确为零。Electron 回放的缺模型负例须核对持久化错误原因，不能仅检查 `failed` 状态。
 
 ---
 

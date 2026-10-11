@@ -14,6 +14,7 @@ import { buildEvidenceLinks, recordObservation, transitionEvidenceLink } from '.
 import { getTemplate } from './template-store'
 import { validatePolicyRef } from './policy-store'
 import { CommandValidationError, createAggregate, payloadHash, readAggregate, submitCommand } from './case-store-v2'
+import { assertSafeReviewStorageId } from './review-storage-id'
 import type { CaseAggregateV2, ReviewCommandResult } from '@profer/shared'
 
 // ===== CreateCaseFromTemplate =====
@@ -94,6 +95,7 @@ export async function createCaseFromTemplate(
   actor: Actor,
   caseId: string,
 ): Promise<ReviewCommandResult<ReviewCaseV2>> {
+  assertSafeReviewStorageId(caseId, 'caseId')
   const template = getTemplate(templateId, version)
   if (!template) throw new CommandValidationError('NOT_FOUND', `模板不存在: ${templateId}@${version}`)
   if (template.status !== 'published') throw new CommandValidationError('VALIDATION_FAILED', '只有已发布模板可创建真实案卷')
