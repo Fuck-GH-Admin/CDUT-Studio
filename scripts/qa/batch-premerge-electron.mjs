@@ -3,13 +3,17 @@
  * No school identity, no external SchoolPort, no model API.
  * A failed or unreachable UI is NOT-RUN/FAIL, never silently PASS.
  */
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import WebSocket from 'ws'
 
 const reportDir = process.env.QA_REPORT_DIR
 if (!reportDir) throw new Error('QA_REPORT_DIR is required')
 mkdirSync(reportDir, { recursive: true })
+const accountDoc = readFileSync('docs/design/review-agent/16-batch-review-stage-b-local-acceptance.md', 'utf8')
+const demoUser = accountDoc.match(/\|\s*账号\s*\|\s*([^|]+)\|/)?.[1]?.trim()
+const demoPass = accountDoc.match(/\|\s*密码\s*\|\s*([^|]+)\|/)?.[1]?.trim()
+if (!demoUser || !demoPass) throw new Error('Demo login fixture not documented; refusing to guess credentials')
 const results = []
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const deadline = (ms) => Date.now() + ms
@@ -124,7 +128,7 @@ async function loginAndOpenBatch() {
         'const visible=[...document.querySelectorAll("input")].filter(e=>e.getClientRects().length);' +
         'const user=visible.find(e=>e!==pass && ["text","number","tel",""].includes(e.type));' +
         'if (!user || !pass) return false; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set;' +
-        'for(const [el,value] of [[user,' + JSON.stringify(process.env.QA_DEMO_USERNAME || '') + '],[pass,' + JSON.stringify(process.env.QA_DEMO_PASSWORD || '') + ']]){' +
+        'for(const [el,value] of [[user,' + JSON.stringify(demoUser) + '],[pass,' + JSON.stringify(demoPass) + ']]){' +
         'setter.call(el,value);el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}))}' +
         'return true })()')
       if (!ok) throw new Error('Demo login fields not located')
