@@ -267,13 +267,15 @@ export function updateCase(
 export function computeCaseInputHash(reviewCase: ReviewCase): string {
   const fingerprint = {
     domainPackId: reviewCase.domainPackId ?? 'comprehensive-assessment',
+    reviewTemplate: reviewCase.reviewTemplate ?? null,
+    manualRules: (reviewCase.manualRules ?? []).map((rule) => ({ id: rule.id, title: rule.title, requirement: rule.requirement })),
     subjectDocumentIds: reviewCase.subjectDocumentIds ?? null,
     rulePacks: reviewCase.rulePacks.map((pack) => ({
       id: pack.id,
       version: pack.version,
       academicYear: pack.academicYear,
       confirmed: pack.confirmed,
-      outline: pack.outline.map((item) => ({ id: item.id, title: item.title, anchors: item.anchors })),
+      outline: pack.outline.map((item) => ({ id: item.id, category: item.category, title: item.title, summary: item.summary, anchors: item.anchors })),
     })),
     documents: reviewCase.documents.map((doc) => ({
       id: doc.id,

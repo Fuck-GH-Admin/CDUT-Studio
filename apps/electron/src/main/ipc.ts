@@ -2141,11 +2141,25 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // AI 代批开关专用确认通道：只有 UI 风险确认后的写入才被接受（Agent 工具不可达此通道）
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.SET_REVIEW_AGENT_AUTO_APPROVAL,
+    async (_event, input: { enabled: boolean; grantedBy: string }): Promise<AppSettings> => {
+      const enabled = input?.enabled === true
+      const updates: Partial<AppSettings> = enabled
+        ? { reviewAgentAutoApproval: true, reviewAgentAutoApprovalGrantedAt: new Date().toISOString(), reviewAgentAutoApprovalGrantedBy: String(input.grantedBy ?? 'local-user').slice(0, 64) }
+        : { reviewAgentAutoApproval: false }
+      return updateSettings(updates)
+    },
+  )
+
   // 更新应用设置
   ipcMain.handle(
     SETTINGS_IPC_CHANNELS.UPDATE,
     async (event, updates: Partial<AppSettings>): Promise<AppSettings> => {
-      const result = await updateSettings(updates)
+      // AI 代批开关走专用确认通道（REVIEW_AGENT_AUTO_APPROVAL_SET），通用通道剥离防止未确认改写
+      const { reviewAgentAutoApproval: _sa, reviewAgentAutoApprovalGrantedAt: _st, reviewAgentAutoApprovalGrantedBy: _sb, ...safeUpdates } = updates
+      const result = await updateSettings(safeUpdates)
 
 
       if (updates.feishuSessionMirror !== undefined) {
@@ -3749,6 +3763,16 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
+      const inputForRun: AgentSendInput = { ...input }
+      try {
+        const { getPiReviewBindingForSession, finishPiReviewRunV2 } = require('./lib/review/pi-case-review-service') as typeof import('./lib/review/pi-case-review-service')
+        const reviewBinding = input.sessionId ? getPiReviewBindingForSession(input.sessionId) : undefined
+        if (reviewBinding) {
+          inputForRun.onRunOutcome = (outcome) => finishPiReviewRunV2(reviewBinding, outcome)
+        }
+      } catch (error) {
+        console.warn('[审核 Pi 会话] 绑定运行结果回调失败:', error)
+      }
       await coordinateAgentSend(input, {
         getSession: getAgentSessionMeta,
         workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
@@ -3769,7 +3793,7 @@ export function registerIpcHandlers(): void {
           getAgentPresetByReference(reference, workspaceSlug)
         },
         startMirror: (session) => feishuBridgeManager.startSessionMirrorRun(session),
-        startAgent: () => runAgent(input, event.sender, async (session) => {
+        startAgent: () => runAgent(inputForRun, event.sender, async (session) => {
           try {
             await feishuBridgeManager.startSessionMirrorRun(session)
           } catch (error) {

@@ -15,14 +15,27 @@ export interface DocumentLedgerEntry {
   reason?: string
 }
 
-/** 材料账本：从文档版本直接投影（usage 字段由解析/审核流程维护） */
+/** 材料账本：解析失败的旧材料即使残留 usage=read，也不能当作读过原件。 */
 export function buildDocumentLedger(documents: DocumentVersion[]): DocumentLedgerEntry[] {
-  return documents.map((doc) => ({
-    documentVersionId: doc.versionId,
-    fileName: doc.fileName,
-    status: doc.usage,
-    reason: doc.unusedReason,
-  }))
+  return documents.map((doc) => {
+    const parseFailed = doc.parseStatus === 'failed'
+    if (doc.manualReadReceipt) {
+      return {
+        documentVersionId: doc.versionId,
+        fileName: doc.fileName,
+        status: 'read',
+        reason: `审核员已核对原件：${doc.manualReadReceipt.reason}`,
+      }
+    }
+    return {
+      documentVersionId: doc.versionId,
+      fileName: doc.fileName,
+      status: parseFailed ? 'unread' : doc.usage,
+      reason: parseFailed
+        ? `自动解析失败；空占位块不代表读过原件。${doc.parseError ? `解析原因：${doc.parseError}` : '请重新解析或打开原件核验。'}`
+        : doc.unusedReason,
+    }
+  })
 }
 
 export interface CheckLedgerEntry {
@@ -42,17 +55,24 @@ export function buildCheckLedger(
   subjectIds: string[],
   results: CheckResult[],
   groupValues?: Record<string, string[]>,
+  sectionSubjectIds?: Record<string, string[]>,
 ): CheckLedgerEntry[] {
+  const subjectIds0 = [...subjectIds]
   const byRuleTarget = new Map<string, CheckResult>()
   for (const result of results) {
-    const key = `${result.ruleId}::${result.target.scope}::${[...result.target.subjectIds].sort().join(',')}`
+    // 真实模型返回的 check 可能缺 target（确定性引擎总会带）：缺省按 case 级归位，逐案规则由下方回退匹配消费
+    const scope = result.target?.scope ?? 'case'
+    const subjectIds = result.target?.subjectIds ?? subjectIds0
+    const key = `${result.ruleId}::${scope}::${[...subjectIds].sort().join(',')}`
     byRuleTarget.set(key, result)
+    if (scope === 'group' && result.target?.groupKey) byRuleTarget.set(`${result.ruleId}::group-key::${result.target.groupKey}`, result)
   }
   const ledger: CheckLedgerEntry[] = []
   for (const rule of plannedRules) {
+    const ruleSubjectIds = rule.sectionId ? sectionSubjectIds?.[rule.sectionId] ?? [] : subjectIds
     if (rule.targetScope === 'subject') {
-      for (const subjectId of subjectIds) {
-        const hit = byRuleTarget.get(`${rule.id}::subject::${subjectId}`)
+      for (const subjectId of ruleSubjectIds) {
+        const hit = byRuleTarget.get(`${rule.id}::subject::${subjectId}`) ?? byRuleTarget.get(`${rule.id}::case::${subjectIds0.sort().join(',')}`)
         ledger.push(
           hit
             ? { ruleId: rule.id, targetKey: subjectId, status: hit.status }
@@ -60,13 +80,18 @@ export function buildCheckLedger(
         )
       }
     } else if (rule.targetScope === 'group') {
-      const groups = groupValues?.[rule.id] ?? []
+      // A group rule with no groupBy is one aggregate check for the rule's full section/case scope.
+      // Older runs omitted an explicit groupValues list and produced precisely this aggregate target.
+      const groups = groupValues?.[rule.id] ?? (rule.groupBy?.length ? [] : ['group'])
       if (groups.length === 0) {
         ledger.push({ ruleId: rule.id, targetKey: 'group', status: 'not-executed', reason: '组规则未提供组值，无法展开' })
         continue
       }
       for (const groupValue of groups) {
-        const hit = byRuleTarget.get(`${rule.id}::group::${groupValue}`)
+        const aggregateKey = `${rule.id}::group::${[...ruleSubjectIds].sort().join(',')}`
+        const hit = byRuleTarget.get(`${rule.id}::group-key::${groupValue}`)
+          ?? (groupValue === 'group' ? byRuleTarget.get(aggregateKey) : undefined)
+          ?? byRuleTarget.get(`${rule.id}::group::${groupValue}`)
         ledger.push(
           hit
             ? { ruleId: rule.id, targetKey: groupValue, status: hit.status }
@@ -74,7 +99,7 @@ export function buildCheckLedger(
         )
       }
     } else {
-      const key = `${rule.id}::${rule.targetScope}::${subjectIds.sort().join(',')}`
+      const key = `${rule.id}::${rule.targetScope}::${[...ruleSubjectIds].sort().join(',')}`
       const hit = byRuleTarget.get(key)
       ledger.push(
         hit
@@ -104,9 +129,10 @@ export function combineCoverage(
   subjectIds: string[],
   results: CheckResult[],
   groupValues?: Record<string, string[]>,
+  sectionSubjectIds?: Record<string, string[]>,
 ): CoverageSummary {
   const documentLedger = buildDocumentLedger(documents)
-  const checkLedger = buildCheckLedger(plannedRules, subjectIds, results, groupValues)
+  const checkLedger = buildCheckLedger(plannedRules, subjectIds, results, groupValues, sectionSubjectIds)
   const unread = documentLedger.filter((entry) => entry.status !== 'read')
   const notExecuted = checkLedger.filter((entry) => entry.status === 'not-executed' || entry.status === 'execution-failed')
   const awaiting = checkLedger.filter((entry) => entry.status === 'awaiting-confirmation' || entry.status === 'awaiting-supplement')
@@ -121,7 +147,7 @@ export function combineCoverage(
   return {
     documents: documentLedger,
     plannedChecks: checkLedger.length,
-    completedChecks: checkLedger.filter((entry) => entry.status !== 'not-executed').length,
+    completedChecks: checkLedger.filter((entry) => entry.status !== 'not-executed' && entry.status !== 'execution-failed').length,
     effectiveVerdicts: checkLedger.filter((entry) => entry.status === 'compliant' || entry.status === 'non-compliant').length,
     pendingChecks: awaiting.length + notExecuted.length,
     allClearVerdictAllowed: blockers.length === 0,

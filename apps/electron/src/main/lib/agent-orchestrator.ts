@@ -1170,7 +1170,9 @@ export class AgentOrchestrator {
     const sdk1MSelection = resolveAgentSdk1MSelection(configuredModelId, channel.provider, context1mPreference)
     const oneMillionContextEnabled = sdk1MSelection.oneMillionContextEnabled
     const effectiveSdkModelId = sdk1MSelection.modelId
-    const initialContextWindow = inferAgentSdkContextWindow(configuredModelId, channel.provider, context1mPreference)
+    const configuredContextWindow = configuredChannelModel?.contextWindow
+    const initialContextWindow = configuredContextWindow
+      ?? inferAgentSdkContextWindow(configuredModelId, channel.provider, context1mPreference)
     if (initialContextWindow != null) {
       // 兼容网关可能剥掉 [1m] 后缀或不返回 modelUsage；启动时先同步本轮最终窗口。
       this.eventBus.emit(sessionId, {
@@ -1306,6 +1308,21 @@ export class AgentOrchestrator {
         : []
       const currentPresetReference = presetSessionMeta?.presetReference
         ?? presetReferenceForId(workspaceSlug, presetSessionMeta?.presetId)
+      // 审核上下文策略必须同时满足工作台预设、用户发起和真实活动案卷运行绑定。
+      // 单独选用同一模型或预设不会改变普通 Pi 任务的压缩阈值与摘要策略。
+      const activePiReviewBinding = agentRuntime === 'pi'
+        && currentPresetReference?.presetId === 'review-operator'
+        && presetOperationSource === 'user'
+        ? (() => {
+            try {
+              const { getPiReviewBindingForSession } = require('./review/pi-case-review-service') as typeof import('./review/pi-case-review-service')
+              return getPiReviewBindingForSession(sessionId)
+            } catch (error) {
+              console.warn(`[Agent 编排] 无法确认 Pi 审核运行绑定，沿用普通上下文策略 (${sessionId}):`, error)
+              return undefined
+            }
+          })()
+        : undefined
       const presetPolicy = createEffectiveAgentPresetPolicy(
         sessionPreset,
         currentPresetReference,
@@ -1920,6 +1937,15 @@ ${dynamicCtx}`
           channelName: channel.name,
           // Pi 不做 SDK 侧 beta 協商，只用 1M 偏好决定注册的上下文窗口（影响压缩阈值与用量环）。
           ...(context1mPreference !== null && { context1m: context1mPreference }),
+          ...(configuredChannelModel?.contextWindow !== undefined && { contextWindow: configuredChannelModel.contextWindow }),
+          ...(configuredChannelModel?.maxTokens !== undefined && { maxTokens: configuredChannelModel.maxTokens }),
+          ...(activePiReviewBinding && {
+            contextPolicy: {
+              kind: 'review' as const,
+              caseId: activePiReviewBinding.caseId,
+              runId: activePiReviewBinding.runId,
+            },
+          }),
           permissionMode: initialPermissionMode,
           piAgentDir: getSdkConfigDir(),
           // Keep Pi JSONL session files below the SDK-isolated config directory, never in another workspace.
@@ -3400,6 +3426,21 @@ ${dynamicCtx}`
       stopDelegationsForParent(sessionId)
     } catch (err) {
       console.error(`[Agent 编排] 级联停止子会话失败: sessionId=${sessionId}`, err)
+    }
+    // C3 清理语义：会话停止即撤销其审核指派（新写入被拒；已完成动作保留时间线）
+    try {
+      const { listAssignments, revokeAssignment } = require('./review/review-agent-assignment') as typeof import('./review/review-agent-assignment')
+      const { cancelPiReviewRunForSession } = require('./review/pi-case-review-service') as typeof import('./review/pi-case-review-service')
+      let revoked = 0
+      for (const assignment of listAssignments(sessionId)) {
+        if (!assignment.revokedAt) {
+          cancelPiReviewRunForSession(sessionId, assignment)
+          if (revokeAssignment(assignment.id)) revoked += 1
+        }
+      }
+      if (revoked > 0) console.log(`[Agent 编排] 会话停止，已撤销 ${revoked} 个审核指派: sessionId=${sessionId}`)
+    } catch (err) {
+      console.error(`[Agent 编排] 撤销审核指派失败: sessionId=${sessionId}`, err)
     }
     console.log(`[Agent 编排] 已请求中止会话: ${sessionId}`)
   }

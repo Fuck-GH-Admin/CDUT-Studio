@@ -137,9 +137,8 @@ describe('parseFileIntoSourceDocument', () => {
     expect(document.parseStatus).toBe('failed')
     expect(typeof document.parseError).toBe('string')
     expect((document.parseError ?? '').length).toBeGreaterThan(0)
-    // 不伪造解析结果：仍保留单个占位块
-    expect(document.blocks).toHaveLength(1)
-    expect(document.blocks[0]!.kind).toBe('paragraph')
+    // 解析失败没有可读文本块；错误原因与原件路径另行保留。
+    expect(document.blocks).toHaveLength(0)
   })
 })
 
@@ -200,6 +199,52 @@ describe('parseFileIntoSourceDocument / 文本类文件入口（行为不回归�
       'table-cell',
     ])
   })
+
+  test('Given HTML 申报材料 When 导入 Then 提取可读正文和实体字符并忽略脚本', async () => {
+    const filePath = join(testRoot, '申报说明.html')
+    writeFileSync(filePath, '<html><head><title>不应进入正文</title></head><body><h1>申报说明</h1><p>获奖等级：省级二等奖 &amp; 个人项目</p><script>secret()</script></body></html>', 'utf-8')
+
+    const document = await parseFileIntoSourceDocument(filePath, '申报说明.html', 'application')
+
+    expect(document.parseStatus).toBe('parsed')
+    expect(document.mimeType).toBe('text/html')
+    expect(document.blocks.map((block) => block.text).join('\n')).toContain('获奖等级：省级二等奖 & 个人项目')
+    expect(document.blocks.map((block) => block.text).join('\n')).not.toContain('secret')
+    expect(document.blocks.map((block) => block.text).join('\n')).not.toContain('不应进入正文')
+  })
+
+  test('Given multipart EML 邮件 When 导入 Then 提取邮件头和纯文本正文', async () => {
+    const filePath = join(testRoot, '补充说明.eml')
+    writeFileSync(filePath, [
+      'From: reviewer@example.edu',
+      'To: student@example.edu',
+      'Subject: =?UTF-8?B?6KGl5YWF5paH5Lu2?=',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/alternative; boundary="part-1"',
+      '',
+      '--part-1',
+      'Content-Type: text/plain; charset="utf-8"',
+      'Content-Transfer-Encoding: quoted-printable',
+      '',
+      '=E8=AF=B7=E8=A1=A5=E4=BA=A4=E5=AE=8C=E6=95=B4=E8=AF=81=E4=B9=A6=E3=80=82',
+      '--part-1',
+      'Content-Type: text/html; charset="utf-8"',
+      '',
+      '<p>备用 HTML 正文</p>',
+      '--part-1--',
+      '',
+    ].join('\r\n'), 'utf-8')
+
+    const document = await parseFileIntoSourceDocument(filePath, '补充说明.eml', 'evidence')
+    const extracted = document.blocks.map((block) => block.text).join('\n')
+
+    expect(document.parseStatus).toBe('parsed')
+    expect(document.mimeType).toBe('message/rfc822')
+    expect(extracted).toContain('From: reviewer@example.edu')
+    expect(extracted).toContain('Subject: 补充文件')
+    expect(extracted).toContain('请补交完整证书。')
+    expect(extracted).not.toContain('备用 HTML 正文')
+  })
 })
 
 describe('parseFileIntoSourceDocument / PDF 文本层', () => {
@@ -253,10 +298,22 @@ describe('parseFileIntoSourceDocument / 图片与未知二进制', () => {
     expect(block.text).toBe('')
     // imageAssetPath 是原件在案卷目录内的相对路径，供后续 Vision 送模型
     expect(block.imageAssetPath).toBe(assetRelativePath)
-    expect(document.parseError ?? '').toContain('多模态')
+    expect(document.parseError ?? '').toContain('视觉模型')
   })
 
-  test('Given 未知二进制文件 When 解析 Then parseStatus 为 failed 且保留单个占位块（既有行为不回归）', async () => {
+  test('Given JPG 图片 When 导入 Then 保留视觉材料块而不是报成不支持格式', async () => {
+    const filePath = join(testRoot, '证明.jpg')
+    writeFileSync(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+
+    const document = await parseFileIntoSourceDocument(filePath, '证明.jpg', 'evidence', 'source-docs/doc-jpg.jpg')
+
+    expect(document.parseStatus).toBe('partial')
+    expect(document.mimeType).toBe('image/jpeg')
+    expect(document.blocks[0]).toMatchObject({ kind: 'image', imageAssetPath: 'source-docs/doc-jpg.jpg' })
+    expect(document.parseError ?? '').toContain('视觉模型')
+  })
+
+  test('Given 未知二进制文件 When 解析 Then parseStatus 为 failed 且不伪造可读块', async () => {
     const filePath = join(testRoot, '原始数据.bin')
     writeFileSync(filePath, Buffer.from([0x00, 0x01, 0x02, 0xfe, 0xff]))
 
@@ -264,7 +321,6 @@ describe('parseFileIntoSourceDocument / 图片与未知二进制', () => {
 
     expect(document.parseStatus).toBe('failed')
     expect((document.parseError ?? '').length).toBeGreaterThan(0)
-    expect(document.blocks).toHaveLength(1)
-    expect(document.blocks[0]!.kind).toBe('paragraph')
+    expect(document.blocks).toHaveLength(0)
   })
 })

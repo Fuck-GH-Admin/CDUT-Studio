@@ -89,12 +89,12 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
       {/* 头部 */}
       <header className="flex shrink-0 items-start justify-between gap-2 border-b border-border/60 px-4 py-3">
         <div className="min-w-0">
-          <h2 className="text-[13px] font-semibold text-foreground">审核助手</h2>
+          <h2 className="text-sm font-semibold text-foreground">审核助手</h2>
           <p className="mt-0.5 truncate text-xs text-muted-foreground" title={reviewCase?.title}>
             案卷：{reviewCase?.title ?? '未载入'}
           </p>
           {selectedFinding && (
-            <p className="mt-0.5 truncate text-[11px] text-blue-600 dark:text-blue-400" title={selectedFinding.title}>
+            <p className="mt-0.5 truncate text-xs text-blue-600 dark:text-blue-400" title={selectedFinding.title}>
               当前问题卡：{selectedFinding.title}
             </p>
           )}
@@ -137,7 +137,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
             type="button"
             disabled={pending}
             onClick={() => void send(prompt)}
-            className="rounded-md bg-muted px-2 py-1 text-[11px] text-foreground/80 transition-colors hover:bg-muted/70 disabled:opacity-50"
+            className="rounded-md bg-muted px-2 py-1 text-xs text-foreground/80 transition-colors hover:bg-muted/70 disabled:opacity-50"
           >
             {prompt}
           </button>
@@ -158,7 +158,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
           }}
           placeholder="向助手提问（Enter 发送，Shift+Enter 换行）"
           rows={2}
-          className="min-h-[56px] resize-none text-[13px]"
+          className="min-h-[56px] resize-none text-sm"
         />
         <Button
           type="button"
@@ -182,13 +182,13 @@ function MessageBubble({ message }: { message: ReviewAssistantMessage }): React.
     <div className={cn('flex flex-col gap-1', isUser && 'items-end')}>
       {/* degraded：无模型渠道时的静态解答，顶部灰条明示 */}
       {message.degraded && !isUser && (
-        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+        <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
           离线解答（未连接模型）
         </span>
       )}
       <div
         className={cn(
-          'max-w-[92%] whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-[13px] leading-5',
+          'max-w-[92%] whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-sm leading-5',
           isUser ? 'bg-primary text-primary-foreground' : 'bg-muted/60 text-foreground',
         )}
       >
@@ -200,7 +200,7 @@ function MessageBubble({ message }: { message: ReviewAssistantMessage }): React.
           {message.references.map((reference) => (
             <span
               key={reference}
-              className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400"
+              className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400"
             >
               {reference}
             </span>

@@ -13,6 +13,9 @@
 
 import * as React from 'react'
 import { X, Download, ExternalLink, FolderOpen, Loader2 } from 'lucide-react'
+import DOMPurify from 'dompurify'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@profer/ui/primitives/dialog'
 import { Button } from '@profer/ui/primitives/button'
 import { cn } from '@/lib/utils'
@@ -40,7 +43,7 @@ type PreviewState =
   | { status: 'error'; message: string }
 
 const TEXT_EXTS = new Set([
-  'txt', 'md', 'json', 'csv', 'xml', 'html', 'htm', 'css', 'scss', 'less',
+  'txt', 'md', 'eml', 'json', 'csv', 'xml', 'css', 'scss', 'less',
   'js', 'jsx', 'ts', 'tsx', 'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h',
   'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'sh', 'bat', 'sql', 'graphql',
   'env', 'gitignore', 'dockerfile', 'log',
@@ -109,6 +112,16 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
         const result = await window.electronAPI.officeToHtml(localPath, access)
         if (result?.html) setState({ status: 'html', html: result.html })
         else setState({ status: 'error', message: '无法预览文档' })
+      } else if (e === 'html' || e === 'htm') {
+        const result = await window.electronAPI.resolveAndReadFile(localPath, access)
+        if (!result?.content) { setState({ status: 'error', message: '无法读取网页文件' }); return }
+        const safeHtml = DOMPurify.sanitize(result.content, {
+          FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button'],
+          FORBID_ATTR: ['style'],
+        })
+        const securityAndStyle = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src data:;">'
+          + '<style>body{font:14px/1.65 system-ui,sans-serif;color:#222;padding:20px;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{border-collapse:collapse;max-width:100%}td,th{border:1px solid #bbb;padding:5px 8px}</style>'
+        setState({ status: 'html', html: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">${securityAndStyle}</head><body>${safeHtml}</body></html>` })
       } else if (TEXT_EXTS.has(e) || !e) {
         const result = await window.electronAPI.resolveAndReadFile(localPath, access)
         if (result?.content) setState({ status: 'text', content: result.content, language: langFromExt(e) })
@@ -219,7 +232,7 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
             </div>
           )}
           {state.status === 'html' && (
-            <iframe srcDoc={state.html} className="w-full h-full border-0" sandbox="allow-scripts" />
+            <iframe srcDoc={state.html} className="w-full h-full border-0" sandbox="" />
           )}
           {state.status === 'office' && (
             <OfficePreview
@@ -227,7 +240,7 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
               fileName={fileName}
               access={state.access}
               className="h-full"
-              fallback={state.fallbackHtml ? <iframe srcDoc={state.fallbackHtml} className="h-full w-full border-0" sandbox="allow-scripts" /> : undefined}
+              fallback={state.fallbackHtml ? <iframe srcDoc={state.fallbackHtml} className="h-full w-full border-0" sandbox="" /> : undefined}
               onError={() => { void handleOfficeError(state.path, state.access) }}
             />
           )}
@@ -235,9 +248,15 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
             <iframe src={state.src} className="w-full h-full border-0" />
           )}
           {state.status === 'text' && (
-            <pre className="h-full overflow-auto bg-code p-4 font-mono text-xs whitespace-pre-wrap text-code-foreground">
-              <code>{state.content}</code>
-            </pre>
+            ext(fileName) === 'md' ? (
+              <article className="prose prose-sm dark:prose-invert mx-auto max-w-4xl px-6 py-5 prose-headings:scroll-mt-4 prose-table:block prose-table:overflow-x-auto">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.content}</ReactMarkdown>
+              </article>
+            ) : (
+              <pre className="h-full overflow-auto bg-code p-4 font-mono text-xs whitespace-pre-wrap text-code-foreground">
+                <code>{state.content}</code>
+              </pre>
+            )
           )}
           {state.status === 'unsupported' && (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">

@@ -1,37 +1,81 @@
 /**
- * V2 案卷原子与面板（N1d，05 §5.1 第 3 条：V2 命令可操作入口）
+ * 案卷原子与面板（审核命令的可操作入口）
  *
- * Jotai 状态：当前 V2 聚合（按 caseId 缓存）+ 动作回调；组件只做展示与触发命令，
+ * Jotai 状态：当前案卷聚合（按 caseId 缓存）+ 动作回调；组件只做展示与触发命令，
  * 不散落 IPC 调用（仓库四层约定）。U01 部分走通：seed 样例 → 创建案卷 → 改字段 → 重启保留。
  */
 
 import { atom, useAtomValue, useStore, useSetAtom } from 'jotai'
-import { useCallback, useEffect, useState } from 'react'
-import type { Actor, CaseAggregateV2, ReviewCommandResult } from '@profer/shared'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { Actor, CaseAggregateV2, FieldSpec, ReviewCommandResult, TemplateVersion } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { toast } from 'sonner'
+import { RunResultPanel } from './RunResultPanel'
+import { ObservationConfirmPanel } from './ObservationConfirmPanel'
+import { ReviewAssignmentCard } from './ReviewAssignmentCard'
+import { CaseTimelinePanel } from './CaseTimelinePanel'
+import { MaterialDropZone } from './MaterialDropZone'
 
-/** 当前 V2 聚合（单案；N3 扩展为按案映射） */
+/** 当前案卷聚合 */
 export const reviewV2AggregateAtom = atom<CaseAggregateV2 | null>(null)
 export const reviewV2BusyAtom = atom(false)
 export const reviewV2NoticeAtom = atom<string | null>(null)
+/** 模板发布后通知 V2CasePanel 重载模板列表（面板常驻挂载，tab 切换不触发 effect） */
+export const templatesRefreshAtom = atom(0)
 
 const localActor: Actor = { actorId: 'local-user', actorSource: 'local', role: 'reviewer' }
 
-/** V2 命令面板：演示样例种子 → 创建案卷 → 更新字段（07 §3.2 首批命令的 UI 面） */
+interface CaseListEntry { caseId: string; title: string; stage: string; revision: number; templateId: string; templateVersion: number; updatedAt: string }
+interface SubjectDraft { id: string; title: string; sectionId?: string; fieldValues: Record<string, string> }
+
+function subjectId(sectionId = 'item'): string {
+  return `item-${sectionId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+}
+
+function initialSubjectRows(template: TemplateVersion): SubjectDraft[] {
+  const requiredSections = (template.sections ?? []).filter((section) => section.required)
+  if (requiredSections.length > 0) {
+    return requiredSections.map((section) => ({ id: subjectId(section.id), title: '', sectionId: section.id, fieldValues: {} }))
+  }
+  if ((template.sections ?? []).length > 0) return []
+  return template.fields.some((field) => (field.scope ?? 'subject') === 'subject')
+    ? [{ id: subjectId(), title: '', fieldValues: {} }]
+    : []
+}
+
+function renderTemplateFieldInput(
+  field: FieldSpec,
+  value: string,
+  onChange: (value: string) => void,
+): JSX.Element {
+  if (field.kind === 'boolean') {
+    return <select className="flex-1 rounded border bg-background px-2 py-1 text-xs" value={value} onChange={(event) => onChange(event.target.value)}><option value="">请选择</option><option value="true">是</option><option value="false">否</option></select>
+  }
+  if (field.kind === 'enum' && field.options?.length) {
+    return <select className="flex-1 rounded border bg-background px-2 py-1 text-xs" value={value} onChange={(event) => onChange(event.target.value)}><option value="">请选择</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+  }
+  return <input className="flex-1 rounded border bg-background px-2 py-1 text-xs" type={field.kind === 'number' ? 'number' : field.kind === 'date' ? 'date' : 'text'} value={value} onChange={(event) => onChange(event.target.value)} />
+}
+
+/** 案卷面板：选择模板 → 创建案卷 → 登记材料 → 开始审核 */
 export function V2CasePanel(): JSX.Element {
   const store = useStore()
   const aggregate = useAtomValue(reviewV2AggregateAtom)
   const setNotice = useSetAtom(reviewV2NoticeAtom)
 
-interface CaseListEntry { caseId: string; title: string; stage: string; revision: number; templateId: string; templateVersion: number; updatedAt: string }
-interface TemplateLite { templateId: string; version: number; name: string; status: string; fields: Array<{ key: string; label: string; kind: string; required: boolean; scope?: string }> }
-type TemplateFieldInput = { key: string; label: string; kind: string; required: boolean }
-
   const [caseList, setCaseList] = useState<CaseListEntry[]>([])
-  const [templates, setTemplates] = useState<TemplateLite[]>([])
-  const [selectedTemplate, setSelectedTemplate] = useState<TemplateLite | null>(null)
+  const [templates, setTemplates] = useState<TemplateVersion[]>([])
+  const publishedTemplates = useMemo(() => {
+    const latestByTemplate = new Map<string, TemplateVersion>()
+    for (const template of [...templates].filter((item) => item.status === 'published').sort((a, b) => b.version - a.version)) {
+      if (!latestByTemplate.has(template.templateId)) latestByTemplate.set(template.templateId, template)
+    }
+    return [...latestByTemplate.values()]
+  }, [templates])
+  const templatesRefresh = useAtomValue(templatesRefreshAtom)
+  const [selectedTemplate, setSelectedTemplate] = useState<TemplateVersion | null>(null)
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
+  const [subjectRows, setSubjectRows] = useState<SubjectDraft[]>([])
   const [newTitle, setNewTitle] = useState('')
 
 
@@ -78,32 +122,46 @@ type TemplateFieldInput = { key: string; label: string; kind: string; required: 
 
   const loadTemplates = useCallback(async (): Promise<void> => {
     try {
-      const all = await window.reviewAPI.listTemplatesV2()
-      const published = all.filter((template: { status: string }) => template.status === 'published')
-      setTemplates(published as TemplateLite[])
+      const all = await window.reviewAPI.listTemplateVersionsV2()
+      setTemplates(all)
     } catch (error) {
       console.error('[V2] 模板列表加载失败', error)
     }
   }, [])
-  useEffect(() => { void loadTemplates() }, [loadTemplates])
+  useEffect(() => { void loadTemplates() }, [loadTemplates, templatesRefresh])
 
   const createFromTemplate = useCallback(() => run(async () => {
     if (!selectedTemplate) { toast.error('请先选择已发布模板'); return }
     if (!newTitle.trim()) { toast.error('请填写案卷标题'); return }
     const caseId = `case-${Date.now().toString(36)}`
+    const subjects = subjectRows.map((subject) => ({
+      ...subject,
+      type: 'item' as const,
+      fieldValues: Object.fromEntries(Object.entries(subject.fieldValues).map(([key, value]) => {
+        const spec = selectedTemplate.fields.find((field) => field.key === key)
+        return [key, spec?.kind === 'number' && value !== '' ? Number(value) : spec?.kind === 'boolean' ? value === 'true' : value]
+      })),
+    }))
     await window.reviewAPI.createCaseV2({
       caseId,
       templateId: selectedTemplate.templateId,
       version: selectedTemplate.version,
-      payload: { title: newTitle.trim(), fieldValues, subjects: [] },
+      payload: {
+        title: newTitle.trim(),
+        fieldValues: Object.fromEntries(Object.entries(fieldValues).map(([key, value]) => {
+          const spec = selectedTemplate.fields.find((field) => field.key === key)
+          return [key, spec?.kind === 'number' && value !== '' ? Number(value) : spec?.kind === 'boolean' ? value === 'true' : value]
+        })),
+        subjects,
+      },
       actor: localActor,
     })
     const aggregate = await window.reviewAPI.getAggregateV2(caseId)
     store.set(reviewV2AggregateAtom, aggregate ?? null)
     await refreshList()
-    setNewTitle(''); setFieldValues({})
+    setNewTitle(''); setFieldValues({}); setSubjectRows([])
     toast.success(`案卷已创建：${caseId}（${selectedTemplate.name}）`)
-  }), [selectedTemplate, newTitle, fieldValues, run, store, refreshList])
+  }), [selectedTemplate, newTitle, fieldValues, subjectRows, run, store, refreshList])
   const seedAndCreate = useCallback(() => run(async () => {
     await window.reviewAPI.seedFixtureV2()
     const caseId = `v2-demo-${Date.now().toString(36)}`
@@ -112,32 +170,36 @@ type TemplateFieldInput = { key: string; label: string; kind: string; required: 
       templateId: 'comprehensive-assessment-v2',
       version: 2,
       payload: {
-        title: 'V2 演示案卷（综测样例）',
+        title: '示例审核任务（综合测评）',
         fieldValues: { studentName: '张三', studentId: '20260101', academicYear: '2025-2026', applicant: '张三' },
-        subjects: [{ id: 's1', title: '省级竞赛一等奖', type: 'item', fieldValues: { category: 'competition', level: 'national-1', declaredScore: 8, eventId: 'E1' } }],
+        subjects: [{ id: 's1', title: '省级竞赛一等奖', type: 'item', fieldValues: { category: 'competition', level: 'national-1', declaredScore: 8, activityDate: '2026-09-01', eventId: 'E1' } }],
       },
       actor: localActor,
     })
     const aggregate = await window.reviewAPI.getAggregateV2(caseId)
     store.set(reviewV2AggregateAtom, aggregate ?? null)
     await refreshList()
-    if (result) toast.success(`V2 案卷已创建：${caseId}`)
+    if (result) toast.success(`审核任务已创建：${caseId}`)
   }), [run, store, toast, refreshList])
 
   const current = aggregate
 
   const [slotId, setSlotId] = useState('')
+  const [runNonce, setRunNonce] = useState(0)
   const currentTemplate = templates.find((template) => template.templateId === current?.caseV2.templateId && template.version === current?.caseV2.templateVersion)
 
-  const registerMaterials = useCallback(() => run(async () => {
-    if (!current) return
-    const versionIds = await window.reviewAPI.pickRegisterMaterialV2({ caseId: current.caseV2.id, role: 'evidence', materialSlotId: slotId || undefined })
-    if (versionIds.length === 0) { toast.info('未选择文件'); return }
-    const loaded = await window.reviewAPI.openAggregateV2(current.caseV2.id)
-    if (loaded) store.set(reviewV2AggregateAtom, loaded)
-    await refreshList()
-    toast.success(`已登记 ${versionIds.length} 份材料${slotId ? `至槽位 ${slotId}` : ''}`)
-  }), [current, run, store, refreshList, slotId])
+  const selectTemplate = (templateKey: string): void => {
+    const [templateId, versionText] = templateKey.split('@')
+    const version = Number(versionText)
+    const template = templates.find((candidate) => candidate.templateId === templateId && candidate.version === version && candidate.status === 'published') ?? null
+    setSelectedTemplate(template)
+    setFieldValues({})
+    setSubjectRows(template ? initialSubjectRows(template) : [])
+  }
+
+  const updateSubject = (id: string, update: (subject: SubjectDraft) => SubjectDraft): void => {
+    setSubjectRows((subjects) => subjects.map((subject) => subject.id === id ? update(subject) : subject))
+  }
 
   const submitCase = useCallback(() => run(async () => {
     if (!current) return
@@ -168,30 +230,75 @@ type TemplateFieldInput = { key: string; label: string; kind: string; required: 
 
   return (
     <div className="mx-3 mb-3 rounded-xl border bg-card p-3 shadow-sm">
-      <p className="mb-2 text-sm font-semibold">V2 案卷（通用审核）</p>
+      <p className="mb-2 flex items-center gap-2 text-sm font-semibold">审核任务</p>
       <div className="mb-2 space-y-1.5 rounded-lg border-t pt-2">
-        <p className="text-xs font-medium text-muted-foreground">从已发布模板建案（G10 使用入口）</p>
-        <select className="w-full rounded-md border bg-background px-2 py-1 text-xs" value={selectedTemplate?.templateId ?? ''} onChange={(event) => { setSelectedTemplate(templates.find((template) => template.templateId === event.target.value) ?? null); setFieldValues({}) }}>
+        <p className="text-xs font-medium text-muted-foreground">从模板新建审核任务</p>
+        <select className="w-full rounded-md border bg-background px-2 py-1 text-xs" value={selectedTemplate ? `${selectedTemplate.templateId}@${selectedTemplate.version}` : ''} onChange={(event) => selectTemplate(event.target.value)}>
           <option value="">选择已发布模板…</option>
-          {templates.map((template) => (
-            <option key={template.templateId} value={template.templateId}>{template.name}（{template.templateId}@v{template.version}）</option>
+          {publishedTemplates.map((template) => (
+            <option key={`${template.templateId}@${template.version}`} value={`${template.templateId}@${template.version}`}>{template.name} v{template.version}</option>
           ))}
         </select>
+        <p className="text-xs text-muted-foreground">当前有 {publishedTemplates.length} 套已发布模板可创建案卷；草稿和参考范本需先在模板库配置并发布。</p>
         {selectedTemplate && (
           <>
             <input className="w-full rounded-md border bg-background px-2 py-1 text-xs" placeholder="案卷标题" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} />
-            {selectedTemplate.fields.filter((field) => (field.scope ?? 'case') === 'case').map((field) => (
+            {selectedTemplate.fields.filter((field) => (field.scope ?? 'subject') === 'case').map((field) => (
               <div key={field.key} className="flex items-center gap-1.5">
-                <span className="w-24 shrink-0 truncate text-xs">{field.label}{field.required ? ' *' : ''}</span>
-                <input
-                  className="flex-1 rounded border px-1 py-0.5 text-xs"
-                  type={field.kind === 'number' ? 'number' : field.kind === 'date' ? 'date' : 'text'}
-                  value={fieldValues[field.key] ?? ''}
-                  onChange={(event) => setFieldValues({ ...fieldValues, [field.key]: event.target.value })}
-                />
+                <span className="w-28 shrink-0 truncate text-xs">{field.label}{field.required ? ' *' : ''}</span>
+                {renderTemplateFieldInput(field, fieldValues[field.key] ?? '', (value) => setFieldValues({ ...fieldValues, [field.key]: value }))}
               </div>
             ))}
-            <Button size="sm" disabled={!newTitle.trim()} onClick={() => void createFromTemplate()}>用该模板创建案卷</Button>
+            {(selectedTemplate.sections ?? []).map((section) => {
+              const rows = subjectRows.filter((subject) => subject.sectionId === section.id)
+              const specs = selectedTemplate.fields.filter((field) => (field.scope ?? 'subject') === 'subject' && (!field.sectionId || field.sectionId === section.id))
+              return (
+                <div key={section.id} className="space-y-2 rounded-lg border bg-muted/20 p-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-medium">{section.order + 1}. {section.name}{section.required ? ' · 必需分项' : ''}</p>
+                      {section.description && <p className="mt-0.5 text-xs text-muted-foreground">{section.description}</p>}
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => setSubjectRows((current) => [...current, { id: subjectId(section.id), title: '', sectionId: section.id, fieldValues: {} }])}>添加事项</Button>
+                  </div>
+                  {section.criteria.length > 0 && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">本分项审核标准（{section.criteria.length}）</summary><ol className="mt-1 list-decimal space-y-1 pl-5">{section.criteria.map((criterion) => <li key={criterion.id}><span className="font-medium">{criterion.title}</span>：{criterion.requirement}</li>)}</ol></details>}
+                  {rows.length === 0 && <p className="rounded bg-background px-2 py-2 text-xs text-muted-foreground">此分项暂未添加申报事项{section.required ? '（创建案卷前需要添加）' : ''}。</p>}
+                  {rows.map((subject) => (
+                    <div key={subject.id} className="space-y-1.5 rounded-md bg-background p-2">
+                      <div className="flex items-center gap-2">
+                        <input className="flex-1 rounded border px-2 py-1 text-xs" placeholder="申报事项名称" value={subject.title} onChange={(event) => updateSubject(subject.id, (current) => ({ ...current, title: event.target.value }))} />
+                        <Button size="sm" variant="ghost" onClick={() => setSubjectRows((current) => current.filter((item) => item.id !== subject.id))}>删除事项</Button>
+                      </div>
+                      {specs.map((field) => (
+                        <div key={field.key} className="flex items-center gap-2">
+                          <span className="w-28 shrink-0 truncate text-xs">{field.label}{field.required ? ' *' : ''}</span>
+                          {renderTemplateFieldInput(field, subject.fieldValues[field.key] ?? '', (value) => updateSubject(subject.id, (current) => ({ ...current, fieldValues: { ...current.fieldValues, [field.key]: value } })))}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+            {(selectedTemplate.sections ?? []).length === 0 && selectedTemplate.fields.some((field) => (field.scope ?? 'subject') === 'subject') && (
+              <div className="space-y-2 rounded-lg border bg-muted/20 p-2">
+                <p className="text-xs font-medium">申报事项</p>
+                {subjectRows.map((subject) => (
+                  <div key={subject.id} className="space-y-1.5 rounded-md bg-background p-2">
+                    <div className="flex items-center gap-2"><input className="flex-1 rounded border px-2 py-1 text-xs" placeholder="事项名称" value={subject.title} onChange={(event) => updateSubject(subject.id, (current) => ({ ...current, title: event.target.value }))} /><Button size="sm" variant="ghost" onClick={() => setSubjectRows((current) => current.filter((item) => item.id !== subject.id))}>删除</Button></div>
+                    {selectedTemplate.fields.filter((field) => (field.scope ?? 'subject') === 'subject').map((field) => (
+                      <div key={field.key} className="flex items-center gap-2">
+                        <span className="w-28 shrink-0 text-xs">{field.label}{field.required ? ' *' : ''}</span>
+                        {renderTemplateFieldInput(field, subject.fieldValues[field.key] ?? '', (value) => updateSubject(subject.id, (current) => ({ ...current, fieldValues: { ...current.fieldValues, [field.key]: value } })))}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                <Button size="sm" variant="outline" onClick={() => setSubjectRows((current) => [...current, { id: subjectId(), title: '', fieldValues: {} }])}>添加事项</Button>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">保存后可在案卷材料区分别选择共用材料或分项材料槽；整份案卷只需启动一次审核。</p>
+            <Button size="sm" disabled={!newTitle.trim() || store.get(reviewV2BusyAtom)} onClick={() => void createFromTemplate()}>创建一份案卷</Button>
           </>
         )}
       </div>
@@ -200,7 +307,7 @@ type TemplateFieldInput = { key: string; label: string; kind: string; required: 
           <p className="text-xs font-medium text-muted-foreground">已保存案卷（重启可恢复）</p>
           {caseList.map((entry: CaseListEntry) => (
             <div key={entry.caseId} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1">
-              <span className="truncate text-xs">{entry.title} · {entry.stage} · r{entry.revision}</span>
+              <span className="truncate text-xs">{entry.title} · {entry.stage}</span>
               <Button size="sm" variant="outline" onClick={() => void openCase(entry.caseId)}>打开</Button>
             </div>
           ))}
@@ -209,39 +316,63 @@ type TemplateFieldInput = { key: string; label: string; kind: string; required: 
       <div className="space-y-2">
         {!current && (
           <Button size="sm" disabled={store.get(reviewV2BusyAtom)} onClick={seedAndCreate}>
-            载入综测样例并创建 V2 案卷
+            载入示例并创建审核任务
           </Button>
         )}
         {current && (
           <div className="space-y-1.5 text-xs">
-            {currentTemplate && currentTemplate.fields.length >= 0 && (current as unknown as { caseV2: { templateId: string } }).caseV2.templateId && (
+            {currentTemplate?.materialSlots.length && (
               <div className="flex items-center gap-1.5">
                 <span className="shrink-0 text-muted-foreground">材料槽：</span>
                 <select className="rounded border bg-background px-1 py-0.5" value={slotId} onChange={(event) => setSlotId(event.target.value)}>
                   <option value="">未指定</option>
-                  {(currentTemplate as unknown as { materialSlots?: Array<{ id: string; name: string }> }).materialSlots?.map((slot) => (
-                    <option key={slot.id} value={slot.id}>{slot.name}</option>
-                  ))}
+                  {currentTemplate.materialSlots.map((slot) => {
+                    const sectionName = currentTemplate.sections?.find((section) => section.id === slot.sectionId)?.name
+                    return <option key={slot.id} value={slot.id}>{sectionName ? `${sectionName} · ` : ''}{slot.name}</option>
+                  })}
                 </select>
               </div>
             )}
             {current.caseV2.documents.length > 0 && (
-              <ul className="list-disc pl-4 text-muted-foreground">
+              <ul className="list-disc space-y-1 pl-4 text-sm text-muted-foreground">
                 {current.caseV2.documents.map((doc) => (
-                  <li key={doc.versionId}>{doc.fileName} · {doc.versionId.slice(-8)}{doc.active === false ? '（旧版）' : ''}{doc.materialSlotId ? ` · ${doc.materialSlotId}` : ''}</li>
+                  <li key={doc.versionId}>{doc.fileName} · {doc.versionId.slice(-8)}{doc.active === false ? '（旧版）' : ''}{doc.materialSlotId ? ` · ${currentTemplate?.materialSlots.find((slot) => slot.id === doc.materialSlotId)?.name ?? doc.materialSlotId}` : ''}</li>
                 ))}
               </ul>
             )}
+            <MaterialDropZone
+              caseId={current.caseV2.id}
+              slotId={slotId}
+              hasSlots={!!currentTemplate?.materialSlots?.length}
+              slotLabel={currentTemplate?.materialSlots.find((slot) => slot.id === slotId)?.name}
+              onRegistered={() => run(async () => {
+                const loaded = await window.reviewAPI.openAggregateV2(current.caseV2.id)
+                if (loaded) store.set(reviewV2AggregateAtom, loaded)
+                await refreshList()
+              })}
+            />
             <div className="flex flex-wrap gap-1.5">
-              <Button size="sm" variant="outline" onClick={registerMaterials}>登记材料</Button>
               {(current.caseV2.stage === 'draft' || (current.caseV2.stage === 'submitted' && current.tasks.length === 0)) && (
                 <Button size="sm" onClick={submitCase}>{current.caseV2.stage === 'draft' ? '提交案卷' : '恢复审核任务'}</Button>
               )}
             </div>
             <BusinessFlowSection aggregate={current} onResult={applyResult} />
+            <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
+            <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
+            <ReviewAssignmentCard caseId={current.caseV2.id} />
+            <CaseTimelinePanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <p className="font-medium">{current.caseV2.title}</p>
+            {current.caseV2.subjects.length > 0 && (
+              <div className="rounded-md bg-muted/30 p-2">
+                <p className="mb-1 font-medium">本案卷申报事项（{current.caseV2.subjects.length}）</p>
+                <ul className="space-y-1">{current.caseV2.subjects.map((subject) => {
+                  const sectionName = currentTemplate?.sections?.find((section) => section.id === subject.sectionId)?.name
+                  return <li key={subject.id} className="flex justify-between gap-2"><span className="truncate">{sectionName ? `${sectionName} · ` : ''}{subject.title}</span><span className="shrink-0 text-muted-foreground">{subject.status}</span></li>
+                })}</ul>
+              </div>
+            )}
             <p className="text-muted-foreground">
-              阶段 {current.caseV2.stage} · revision {current.caseV2.revision} · 回执 {current.receiptLog.length} 条
+              阶段 {current.caseV2.stage} · 已记录操作 {current.receiptLog.length} 条
             </p>
             <div className="flex items-center gap-1.5">
               <input key={current.caseV2.id} id="v2-student-name" className="h-7 w-32 rounded-md border bg-background px-2 text-xs" placeholder="学生姓名" defaultValue={String((current.caseV2.caseFields.studentName as { value?: string })?.value ?? '')} />
@@ -276,13 +407,17 @@ function BusinessFlowSection({ aggregate, onResult }: { aggregate: CaseAggregate
   const [replyText, setReplyText] = useState('')
   const [replyAttachments, setReplyAttachments] = useState<string[]>([])
   const openTasks = aggregate.tasks.filter((task) => task.status === 'open')
+  // Local reviewer UI cannot claim a teacher, judge or school credential.
+  // Renderer actors are rebound by main process to the local-reviewer principal.
+  const reviewerTasks = openTasks.filter((task) => task.assigneeRole === 'reviewer'
+    && (!task.assigneeActorId || task.assigneeActorId === 'local-reviewer'))
   const projection = resolveFinalDecisionProjectionPublic(aggregate.decisions)
   const templateId = aggregate.caseV2.templateId
   const version = aggregate.caseV2.templateVersion
   const caseId = aggregate.caseV2.id
 
   const act = async (action: string, extra: Record<string, unknown>): Promise<void> => {
-    const task = openTasks[0]
+    const task = reviewerTasks[0]
     if (!task) {
       return
     }
@@ -302,20 +437,18 @@ function BusinessFlowSection({ aggregate, onResult }: { aggregate: CaseAggregate
         开放任务：{openTasks.length > 0 ? openTasks.map((task) => `${task.stageId}(R${task.round})`).join('、') : '无'}
         {' · '}最终决定：{projection.decision ? `${projection.decision.result}${projection.isFinal ? '（终审）' : '（阶段）'}` : '未形成'}
       </p>
-      {openTasks.length > 0 && (
+      {openTasks.length > 0 && reviewerTasks.length === 0 && (
+        <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+          当前开放任务由教师、评委或其他角色负责；本地工作台不能自行声明其审批身份，请使用已授权的角色入口。
+        </p>
+      )}
+      {reviewerTasks.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-1.5">
-          <Button size="sm" variant="outline" onClick={() => void act('stage-pass', { reason: `${openTasks[0]?.stageId ?? ''} 通过` })}>阶段通过</Button>
+          <Button size="sm" variant="outline" onClick={() => void act('stage-pass', { reason: `${reviewerTasks[0]?.stageId ?? ''} 通过` })}>阶段通过</Button>
           <Button size="sm" variant="outline" onClick={() => void act('return-for-supplement', { reason: '缺证明', supplementRequiredElements: ['等级', '日期'], supplementReason: '请补交含等级与日期的证明' })}>退回补件</Button>
           <Button size="sm" variant="outline" onClick={() => void act('final-reject', { reason: '不符合规定' })}>最终驳回</Button>
           <Button size="sm" variant="outline" onClick={() => void act('withdraw', { reason: '提交者撤回' })}>撤回</Button>
-          {openTasks[0]?.stageId === 'rating' && (
-            <Button size="sm" variant="outline" onClick={() => {
-              void window.reviewAPI.castRatingV2({
-                caseId,
-                command: { requestId: `rate-${Date.now().toString(36)}`, target: { kind: 'case', id: caseId }, expectedRevision: aggregate.caseV2.revision, actor: { actorId: 'judge-local', actorSource: 'local', role: 'judge' }, type: 'CastRating', payload: { stageId: 'rating', scores: { overall: 4 } } },
-              }).then(onResult)
-            }}>评委评分（4/5）</Button>
-          )}
+
         </div>
       )}
       {aggregate.supplements.filter((request) => request.status === 'open' || request.status === 'responded').length > 0 && (

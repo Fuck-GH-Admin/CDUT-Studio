@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Actor, Appeal, BusinessDecision, CaseAggregateV2, CommandErrorCode, CommandReceipt, ReviewCommandResult, EvidenceLink, Observation, ReviewCaseV2, SupplementRequest, WorkflowTask } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
+import { assertSafeReviewStorageId } from './review-storage-id'
 
 // ===== 聚合形态（07 §3.3） =====
 
@@ -27,6 +28,7 @@ export function emptyAggregate(caseV2: ReviewCaseV2): CaseAggregateV2 {
 const writeQueues = new Map<string, Promise<unknown>>()
 
 function aggregatePath(caseId: string): string {
+  assertSafeReviewStorageId(caseId, 'caseId')
   return join(getConfigDir(), 'review-cases', caseId, 'state.v2.json')
 }
 
@@ -57,6 +59,7 @@ export function listAggregatesV2(): AggregateSummary[] {
   if (!existsSync(dir)) return []
   const out: AggregateSummary[] = []
   for (const entry of readdirSync(dir)) {
+    try { assertSafeReviewStorageId(entry, 'caseId') } catch { continue }
     const aggregate = readAggregate(entry)
     if (!aggregate) continue
     out.push({
@@ -74,6 +77,7 @@ export function listAggregatesV2(): AggregateSummary[] {
 
 /** 原子落盘：唯一临时名 + rename（避免并发覆盖固定 .tmp） */
 export function writeAggregate(aggregate: CaseAggregateV2): void {
+  assertSafeReviewStorageId(aggregate?.caseV2?.id, 'caseId')
   const dir = join(getConfigDir(), 'review-cases', aggregate.caseV2.id)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const filePath = aggregatePath(aggregate.caseV2.id)
@@ -99,12 +103,22 @@ export function payloadHash(type: string, payload: unknown): string {
 /** 命令处理器：只做校验与纯变更（不动 revision、不落盘）；抛 CommandError 中止 */
 export type CommandHandler<TPayload, TEntity = TPayload> = (aggregate: CaseAggregateV2, payload: TPayload) => { summary: string; mutate: (aggregate: CaseAggregateV2) => TEntity | void } | never
 
+/** 命令来源元数据（08 设计：Agent 代操作时的指派与会话追溯） */
+export interface CommandSourceMeta {
+  /** 可信指派 ID（ReviewAgentAssignment.id；人工操作缺省） */
+  assignmentId?: string
+  /** 发起会话完整 ID（显示用短码由 UI 派生） */
+  sessionId?: string
+}
+
 /** 应用命令事务（07 §3.3 全步骤；幂等/冲突/校验失败不写部分业务数据） */
 export async function submitCommand<TPayload, TEntity = TPayload>(
   caseId: string,
   command: { requestId: string; actor: Actor; expectedRevision: number; type: string; payload: TPayload },
   handler: CommandHandler<TPayload, TEntity>,
+  source?: CommandSourceMeta,
 ): Promise<ReviewCommandResult<TEntity>> {
+  assertSafeReviewStorageId(caseId, 'caseId')
   return enqueueCase(caseId, async (): Promise<ReviewCommandResult<TEntity>> => {
     const aggregate = readAggregate(caseId)
     if (!aggregate) return { ok: false, code: 'NOT_FOUND', message: `案卷聚合不存在: ${caseId}` }
@@ -135,7 +149,8 @@ export async function submitCommand<TPayload, TEntity = TPayload>(
     const entity = applied.mutate(draft)
     // revision 由事务统一 +1 一次
     draft.caseV2 = { ...draft.caseV2, revision: aggregate.caseV2.revision + 1, updatedAt: new Date().toISOString() }
-    const receipt: CommandReceipt = { requestId: command.requestId, type: command.type, payloadHash: hash, revision: draft.caseV2.revision, at: new Date().toISOString(), summary: applied.summary }
+    // 操作者与指派来源同事务落盘（08 设计：时间线可辨人工/AI；旧记录无此字段按未记录呈现）
+    const receipt: CommandReceipt = { requestId: command.requestId, type: command.type, payloadHash: hash, revision: draft.caseV2.revision, at: new Date().toISOString(), summary: applied.summary, actor: command.actor, ...(source ?? {}) }
     draft.receiptLog = [...draft.receiptLog, receipt]
 
     // 回执与业务变化同一事务落盘
@@ -152,9 +167,15 @@ export class CommandValidationError extends Error {
 }
 
 /** 创建新案卷聚合（CreateCaseFromTemplate 专用：不走 expectedRevision，revision=0 起） */
-export async function createAggregate(caseId: string, caseV2: ReviewCaseV2): Promise<void> {
+export async function createAggregate(caseId: string, caseV2: ReviewCaseV2, initialReceipt?: CommandReceipt): Promise<void> {
+  assertSafeReviewStorageId(caseId, 'caseId')
+  assertSafeReviewStorageId(caseV2?.id, 'caseId')
+  if (caseId !== caseV2.id) throw new CommandValidationError('VALIDATION_FAILED', '案卷 ID 与聚合内容不一致')
   await enqueueCase(caseId, async () => {
     if (existsSync(aggregatePath(caseId))) throw new CommandValidationError('INVALID_TRANSITION', `案卷聚合已存在: ${caseId}`)
-    writeAggregate(emptyAggregate(caseV2))
+    const fresh = emptyAggregate(caseV2)
+    // 创建回执与创建动作同事务落盘（08 设计：创建动作可追溯）
+    if (initialReceipt) fresh.receiptLog = [initialReceipt]
+    writeAggregate(fresh)
   })
 }

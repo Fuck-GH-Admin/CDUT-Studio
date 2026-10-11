@@ -39,7 +39,7 @@
     },
     "apps/electron": {
       "name": "@profer/electron",
-      "version": "0.15.141",
+      "version": "0.15.153",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.93.0",
         "@earendil-works/pi-agent-core": "0.86.1",
@@ -50,6 +50,7 @@
         "cheerio": "1.2.0",
         "pdfjs-dist": "^4.10.38",
         "pptxgenjs": "4.0.1",
+        "xlsx": "npm:@stackline/xlsx@^1.0.6",
       },
       "devDependencies": {
         "@emoji-mart/data": "^1.2.1",
@@ -210,7 +211,7 @@
     },
     "packages/shared": {
       "name": "@profer/shared",
-      "version": "0.1.64",
+      "version": "0.1.65",
       "devDependencies": {
         "typescript": "^5.0.0",
       },

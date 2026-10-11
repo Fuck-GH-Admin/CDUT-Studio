@@ -25,6 +25,31 @@ describe('材料账本（M2）', () => {
     expect(ledger).toHaveLength(3)
     expect(ledger.find((entry) => entry.documentVersionId === 'v2')?.reason).toContain('无文本层')
   })
+
+  test('历史解析失败材料即使 usage=read 也按未读入账并说明原因', () => {
+    const failed = { ...doc('v4', '损坏.pdf', 'read'), parseStatus: 'failed' as const, parseError: '文件无法解码' }
+    expect(buildDocumentLedger([failed])).toEqual([{
+      documentVersionId: 'v4',
+      fileName: '损坏.pdf',
+      status: 'unread',
+      reason: '自动解析失败；空占位块不代表读过原件。解析原因：文件无法解码',
+    }])
+    expect(combineCoverage([failed], [], [], []).allClearVerdictAllowed).toBeFalse()
+  })
+
+  test('解析失败材料带审核员原件核对凭据时按已读入账', () => {
+    const manuallyChecked = {
+      ...doc('v5', '扫描件.pdf', 'read'),
+      parseStatus: 'failed' as const,
+      manualReadReceipt: { actorId: 'reviewer', reason: '已逐页核对原件', at: '' },
+    }
+    expect(buildDocumentLedger([manuallyChecked])).toEqual([{
+      documentVersionId: 'v5',
+      fileName: '扫描件.pdf',
+      status: 'read',
+      reason: '审核员已核对原件：已逐页核对原件',
+    }])
+  })
 })
 
 describe('检查账本（M2）', () => {
@@ -34,6 +59,15 @@ describe('检查账本（M2）', () => {
     const ledger = buildCheckLedger(rules, ['s1', 's2'], results)
     expect(ledger).toHaveLength(4)
     expect(ledger.find((entry) => entry.ruleId === 'r2' && entry.targetKey === 's2')?.status).toBe('not-executed')
+  })
+
+  test('同一案卷内的分项规则只为所属分项建立计划检查', () => {
+    const sectionRule = { ...rule('r-study', 'subject'), sectionId: 'study' }
+    const ledger = buildCheckLedger([sectionRule], ['s-study', 's-service'], [result('r-study', ['s-study'], 'compliant')], undefined, {
+      study: ['s-study'],
+      service: ['s-service'],
+    })
+    expect(ledger).toEqual([{ ruleId: 'r-study', targetKey: 's-study', status: 'compliant' }])
   })
 })
 
@@ -65,6 +99,14 @@ describe('combineCoverage（全部符合判定，A08）', () => {
     expect(summary.effectiveVerdicts).toBe(1)
     expect(summary.blockers).toEqual([])
   })
+
+  test('系统执行失败不计为已完成检查', () => {
+    const summary = combineCoverage([doc('v1', '申报.md', 'read')], [rule('r1', 'subject')], ['s1'], [result('r1', ['s1'], 'execution-failed')])
+    expect(summary.completedChecks).toBe(0)
+    expect(summary.effectiveVerdicts).toBe(0)
+    expect(summary.pendingChecks).toBe(1)
+    expect(summary.allClearVerdictAllowed).toBeFalse()
+  })
 })
 
 describe('OCR 端口与预览（M2）', () => {
@@ -91,11 +133,17 @@ describe('组规则展开（G12/误判 5）', () => {
     expect(ledger.find((entry) => entry.targetKey === 'g1')?.status).toBe('compliant')
   })
 
-  test('Given 组规则无组值 When 构建 Then 单条 not-executed（不冒充覆盖）', () => {
+  test('无 groupBy 的组规则使用整个作用域作为聚合键', () => {
     const ledger = buildCheckLedger([groupRule], ['s1'], [hit('g1')])
     expect(ledger).toHaveLength(1)
     expect(ledger[0]!.status).toBe('not-executed')
-    expect(ledger[0]!.reason).toContain('未提供组值')
+  })
+
+  test('真实组级聚合结果以适用主体列表匹配覆盖计划', () => {
+    const planned = rule('r-group-real', 'group')
+    const aggregateResult = result('r-group-real', ['s1', 's2'], 'compliant')
+    const ledger = buildCheckLedger([planned], ['s1', 's2'], [aggregateResult])
+    expect(ledger).toEqual([{ ruleId: 'r-group-real', targetKey: 'group', status: 'compliant' }])
   })
 
   test('Given combineCoverage 带组值 When 存在未执行组 Then allClear 被阻断', () => {

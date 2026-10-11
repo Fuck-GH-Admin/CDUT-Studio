@@ -51,7 +51,7 @@ import { AssistantDrawer } from './AssistantDrawer'
 import { CenterPanel } from './CenterPanel'
 import { LeftPanel } from './LeftPanel'
 import { RightPanel } from './RightPanel'
-import { V2CasePanel } from './V2CasePanel'
+import { reviewV2AggregateAtom, V2CasePanel } from './V2CasePanel'
 import { TemplateWizardPanel } from './TemplateWizardPanel'
 import { BatchPanel } from './BatchPanel'
 import { useReviewActions } from './use-review-actions'
@@ -71,6 +71,7 @@ export function ContentReviewView(): React.ReactElement {
   const running = useAtomValue(reviewRunningAtom)
   const section = useAtomValue(reviewWorkspaceSectionAtom)
   const setSection = useSetAtom(reviewWorkspaceSectionAtom)
+  const setV2Aggregate = useSetAtom(reviewV2AggregateAtom)
   const channels = useAtomValue(channelsAtom)
   const activePane = useAtomValue(reviewActivePaneAtom)
   const setActivePane = useSetAtom(reviewActivePaneAtom)
@@ -245,7 +246,20 @@ export function ContentReviewView(): React.ReactElement {
         <TemplateWizardPanel />
       </section>
       <section aria-label="审核批次管理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'batches' && 'hidden')}>
-        <BatchPanel />
+        <BatchPanel
+          active={section === 'batches'}
+          onOpenProject={async (caseId) => {
+            const aggregate = await window.reviewAPI.openAggregateV2(caseId)
+            if (aggregate) {
+              setV2Aggregate(aggregate)
+              setSection('case-v2')
+              return true
+            }
+            const opened = await actions.selectCase(caseId)
+            if (opened) setSection('workbench')
+            return opened
+          }}
+        />
       </section>
 
       {/* ===== 助手抽屉（fixed 到本视图根） ===== */}

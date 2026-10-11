@@ -14,20 +14,25 @@
  * - .doc/.docx/.xls/.xlsx/.ppt/.pptx 复用 document-parser 提取文本后按行切块
  * - 图片（png/jpg/jpeg/gif/webp/bmp）→ 单个 image 块 + imageAssetPath（相对案卷目录），
  *   状态 partial：纯文本管线读不到图内文字，需后续 Vision 送模型
- * - 其他二进制 → 单块 paragraph + parseStatus 'failed' + 中文原因
+ * - 不支持或解析失败的文件 → 零个可读块 + parseStatus 'failed' + 中文原因；原件单独预览
  */
 
-import { readFile, stat } from 'node:fs/promises'
-import { extname } from 'node:path'
+import { readFile, stat, writeFile, mkdir } from 'node:fs/promises'
+import { dirname, extname, join } from 'node:path'
+import { TextDecoder } from 'node:util'
+import { load } from 'cheerio'
 import type { DocumentLayoutBlock, LayoutRegionKind, ReviewDocumentBlock, SourceDocument } from '@profer/shared'
-import { extractTextFromFile } from '../document-parser'
+import { extractDocxReviewContent, extractSpreadsheetReviewContent, extractTextFromFile } from '../document-parser'
 
 /** 支持直接按文本切块的扩展名 */
-const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.csv', '.json'])
+const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.csv', '.json', '.html', '.htm', '.eml'])
 
 /** 文档类扩展名：交给 document-parser 的成熟解析器（PDF / Office / WPS 旧版 Word） */
 const DOCUMENT_EXTENSIONS = new Set([
-  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.pdf', '.doc', '.docx', '.docm', '.dot', '.dotx', '.dotm', '.wps', '.wpt',
+  '.xls', '.xlsx', '.xlsm', '.xltx', '.xltm', '.et', '.ett',
+  '.ppt', '.pptx', '.pptm', '.potx', '.potm', '.ppsx', '.ppsm', '.dps', '.dpt',
+  '.rtf', '.odt', '.ods', '.odp',
 ])
 
 /** 图片类扩展名：内容需经多模态模型识别，走 Vision 而非文本切块 */
@@ -117,8 +122,39 @@ function guessMimeType(ext: string): string {
     case '.txt': return 'text/plain'
     case '.csv': return 'text/csv'
     case '.json': return 'application/json'
+    case '.html':
+    case '.htm': return 'text/html'
+    case '.eml': return 'message/rfc822'
     case '.svg': return 'image/svg+xml'
     case '.pdf': return 'application/pdf'
+    case '.doc': return 'application/msword'
+    case '.docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    case '.docm': return 'application/vnd.ms-word.document.macroEnabled.12'
+    case '.dot': return 'application/msword'
+    case '.dotx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.template'
+    case '.dotm': return 'application/vnd.ms-word.template.macroEnabled.12'
+    case '.wps':
+    case '.wpt': return 'application/vnd.ms-works'
+    case '.xls': return 'application/vnd.ms-excel'
+    case '.xlsx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    case '.xlsm': return 'application/vnd.ms-excel.sheet.macroEnabled.12'
+    case '.xltx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.template'
+    case '.xltm': return 'application/vnd.ms-excel.template.macroEnabled.12'
+    case '.et':
+    case '.ett': return 'application/vnd.ms-works'
+    case '.ppt': return 'application/vnd.ms-powerpoint'
+    case '.pptx': return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    case '.pptm': return 'application/vnd.ms-powerpoint.presentation.macroEnabled.12'
+    case '.potx': return 'application/vnd.openxmlformats-officedocument.presentationml.template'
+    case '.potm': return 'application/vnd.ms-powerpoint.template.macroEnabled.12'
+    case '.ppsx': return 'application/vnd.openxmlformats-officedocument.presentationml.slideshow'
+    case '.ppsm': return 'application/vnd.ms-powerpoint.slideshow.macroEnabled.12'
+    case '.dps':
+    case '.dpt': return 'application/vnd.ms-works'
+    case '.rtf': return 'application/rtf'
+    case '.odt': return 'application/vnd.oasis.opendocument.text'
+    case '.ods': return 'application/vnd.oasis.opendocument.spreadsheet'
+    case '.odp': return 'application/vnd.oasis.opendocument.presentation'
     case '.png': return 'image/png'
     case '.jpg':
     case '.jpeg': return 'image/jpeg'
@@ -127,6 +163,117 @@ function guessMimeType(ext: string): string {
     case '.bmp': return 'image/bmp'
     default: return 'application/octet-stream'
   }
+}
+
+/** Extract readable text from HTML without evaluating markup or scripts. */
+function htmlToReviewText(html: string): string {
+  const $ = load(html)
+  $('script, style, noscript, template, head, svg').remove()
+  $('br').replaceWith('\n')
+  $('td, th').each((_index, element) => { $(element).after('\t') })
+  $('p, div, li, tr, h1, h2, h3, h4, h5, h6, section, article, blockquote, header, footer').each((_index, element) => { $(element).after('\n') })
+  return $('body').text()
+    .replace(/[\t ]+\n/g, '\n')
+    .replace(/\n[\t ]+/g, '\n')
+    .replace(/[\t ]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+interface MimeEntity {
+  headers: Map<string, string>
+  body: string
+}
+
+function splitMimeEntity(raw: string): MimeEntity {
+  const boundary = raw.search(/\r?\n\r?\n/)
+  if (boundary < 0) return { headers: new Map(), body: raw }
+  const separatorLength = raw.slice(boundary).startsWith('\r\n\r\n') ? 4 : 2
+  const headerText = raw.slice(0, boundary).replace(/\r?\n[ \t]+/g, ' ')
+  const headers = new Map<string, string>()
+  for (const line of headerText.split(/\r?\n/)) {
+    const colon = line.indexOf(':')
+    if (colon <= 0) continue
+    const name = line.slice(0, colon).trim().toLowerCase()
+    const value = line.slice(colon + 1).trim()
+    headers.set(name, headers.has(name) ? `${headers.get(name)}, ${value}` : value)
+  }
+  return { headers, body: raw.slice(boundary + separatorLength) }
+}
+
+function mimeParameter(header: string, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return header.match(new RegExp(`(?:^|;)\\s*${escaped}\\s*=\\s*(?:"([^"]*)"|([^;\\s]*))`, 'i'))?.slice(1).find(Boolean)
+}
+
+function decodeQuotedPrintable(value: string): Buffer {
+  const normalized = value.replace(/=\r?\n/g, '').replace(/=([\da-f]{2})/gi, (_match, byte: string) => String.fromCharCode(Number.parseInt(byte, 16)))
+  return Buffer.from(normalized, 'binary')
+}
+
+function decodeMimeBytes(bytes: Uint8Array, charset: string): string {
+  try { return new TextDecoder(charset || 'utf-8').decode(bytes) }
+  catch { return new TextDecoder('utf-8').decode(bytes) }
+}
+
+function decodeMimeText(body: string, headers: Map<string, string>): string {
+  const transfer = headers.get('content-transfer-encoding')?.toLowerCase().trim()
+  const bytes = transfer === 'base64'
+    ? Buffer.from(body.replace(/\s+/g, ''), 'base64')
+    : transfer === 'quoted-printable'
+      ? decodeQuotedPrintable(body)
+      : Buffer.from(body, 'utf-8')
+  return decodeMimeBytes(bytes, mimeParameter(headers.get('content-type') ?? '', 'charset') ?? 'utf-8')
+}
+
+function mimeTextParts(raw: string, depth = 0): { plain: string[]; html: string[] } {
+  if (depth > 8) return { plain: [], html: [] }
+  const { headers, body } = splitMimeEntity(raw)
+  if (/\battachment\b/i.test(headers.get('content-disposition') ?? '')) return { plain: [], html: [] }
+  const contentType = headers.get('content-type') ?? 'text/plain'
+  if (/^multipart\//i.test(contentType)) {
+    const boundary = mimeParameter(contentType, 'boundary')
+    if (!boundary) return { plain: [], html: [] }
+    const parts = body.split(`--${boundary}`).slice(1).filter((part) => !part.trimStart().startsWith('--'))
+    return parts.reduce((result, part) => {
+      const next = mimeTextParts(part.replace(/^\r?\n/, '').replace(/\r?\n$/, ''), depth + 1)
+      result.plain.push(...next.plain)
+      result.html.push(...next.html)
+      return result
+    }, { plain: [] as string[], html: [] as string[] })
+  }
+  const text = decodeMimeText(body, headers).trim()
+  if (!text) return { plain: [], html: [] }
+  if (/^text\/html\b/i.test(contentType)) return { plain: [], html: [text] }
+  if (/^text\/plain\b/i.test(contentType)) return { plain: [text], html: [] }
+  return { plain: [], html: [] }
+}
+
+function decodeMimeHeader(value: string): string {
+  return value.replace(/=\?([^?]+)\?([bq])\?([^?]*)\?=/gi, (_match, charset: string, encoding: string, payload: string) => {
+    const bytes = encoding.toLowerCase() === 'b'
+      ? Buffer.from(payload, 'base64')
+      : decodeQuotedPrintable(payload.replace(/_/g, ' '))
+    return decodeMimeBytes(bytes, charset)
+  })
+}
+
+function emlToReviewText(eml: string): string {
+  const { headers } = splitMimeEntity(eml)
+  const parts = mimeTextParts(eml)
+  const body = parts.plain[0] ?? parts.html.map(htmlToReviewText).find(Boolean) ?? ''
+  const headerLines = ['from', 'to', 'date', 'subject']
+    .flatMap((key) => headers.has(key) ? [`${key[0]!.toUpperCase()}${key.slice(1)}: ${decodeMimeHeader(headers.get(key)!)}`] : [])
+  return [...headerLines, ...(headerLines.length > 0 && body ? [''] : []), body].filter((line) => line !== '').join('\n').trim()
+}
+
+/** Read plain review text for formats that need lightweight normalization before block splitting. */
+export async function extractReviewableTextFile(filePath: string, fileName: string): Promise<string> {
+  const ext = extname(fileName).toLowerCase()
+  const contents = await readFile(filePath, 'utf-8')
+  if (ext === '.html' || ext === '.htm') return htmlToReviewText(contents)
+  if (ext === '.eml') return emlToReviewText(contents)
+  return contents
 }
 
 /** 版面区域类别 → 审核块类型映射 */
@@ -228,12 +375,14 @@ function toSourceDocument(draft: SourceDocumentDraft): SourceDocument {
  * @param role 文档在案卷中的角色
  * @param assetRelativePath 图片原件在案卷目录内的相对路径（如 `source-docs/doc-x-证书.png`），
  *   写入 imageAssetPath 供后续 Vision 送模型；非图片分支忽略
+ * @param assetDirectory 案卷内 source-docs 目录；DOCX 提取的嵌入图片写入此目录供后续 Vision 使用
  */
 export async function parseFileIntoSourceDocument(
   filePath: string,
   fileName: string,
   role: SourceDocument['role'],
   assetRelativePath?: string,
+  assetDirectory?: string,
 ): Promise<SourceDocument> {
   const ext = extname(fileName).toLowerCase()
   const now = new Date().toISOString()
@@ -257,9 +406,13 @@ export async function parseFileIntoSourceDocument(
   ): SourceDocument =>
     toSourceDocument({ fileName, role, mimeType, sizeBytes, importedAt: now, parseStatus, blocks, parseError })
 
-  /** 解析失败时的占位块（不伪造内容，仅保证 UI 有可展示的锚点） */
+  /**
+   * 解析失败时不创建占位块。
+   * 空文本占位块会被能力库误当成真实解析块，Agent 读取后就会出现“已读 1/1”的假进度。
+   * 失败原因由 parseError 承载，原件仍通过只读文件预览查看。
+   */
   const placeholderBlocks = (): ReviewDocumentBlock[] => [
-    { id: `blk-${slug}-001`, kind: 'paragraph', text: '', page: 1 },
+    // Keep the helper so all parser failure branches share the same empty result.
   ]
 
   // 图片：产出单个 image 块并记录原件相对路径（供 Vision 送模型）；纯文本管线读不到图内文字，故为 partial
@@ -267,11 +420,92 @@ export async function parseFileIntoSourceDocument(
     return draftOf(
       'partial',
       [{ id: `blk-${slug}-001`, kind: 'image', text: '', page: 1, imageAssetPath: assetRelativePath }],
-      '图片内容需经多模态模型识别',
+      '图片原件已收录；内容由视觉模型识别（不做文本切块），无法视觉识别时需人工核对',
     )
   }
 
-  // 文档类（PDF / Office）：复用既有解析器提取文本，再走同一套纯文本切块管线
+  // DOCX 额外保留标题、列表、表格坐标与嵌入图片，避免 Mammoth 纯文本路径丢失结构。
+  if (ext === '.docx') {
+    try {
+      const parsed = await extractDocxReviewContent(filePath)
+      const imageExtension: Record<string, string> = {
+        'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'image/bmp': '.bmp',
+      }
+      const blocks: ReviewDocumentBlock[] = []
+      let omittedImages = 0
+      for (const parsedBlock of parsed.blocks) {
+        const index = blocks.length
+        if (parsedBlock.kind === 'image') {
+          const image = parsedBlock.imageIndex === undefined ? undefined : parsed.images[parsedBlock.imageIndex]
+          const imageExt = image ? imageExtension[image.contentType] : undefined
+          let imageAssetPath: string | undefined
+          if (image && imageExt && assetDirectory && assetRelativePath) {
+            const embeddedName = `${slug}-embedded-${String(parsedBlock.imageIndex! + 1).padStart(3, '0')}${imageExt}`
+            const targetPath = join(assetDirectory, embeddedName)
+            await mkdir(dirname(targetPath), { recursive: true })
+            await writeFile(targetPath, image.data)
+            const slash = assetRelativePath.lastIndexOf('/')
+            imageAssetPath = `${slash >= 0 ? assetRelativePath.slice(0, slash + 1) : ''}${embeddedName}`
+          } else if (parsedBlock.imageIndex !== undefined) {
+            omittedImages += 1
+          }
+          blocks.push({
+            id: blockIdAt(slug, index), kind: 'image', text: '', page: 1,
+            ...(parsedBlock.imageAlt ? { imageAlt: parsedBlock.imageAlt } : {}),
+            ...(imageAssetPath ? { imageAssetPath } : {}),
+          })
+          continue
+        }
+        blocks.push({
+          id: blockIdAt(slug, index), kind: parsedBlock.kind, text: parsedBlock.text, page: 1,
+          ...(parsedBlock.table ? { table: parsedBlock.table } : {}),
+        })
+      }
+      const extractedText = blocks.some((block) => block.text.trim())
+      if (!extractedText && blocks.length === 0) {
+        return draftOf('partial', [], 'DOCX 未提取到可审核文本或图片；需查看原件人工复核')
+      }
+      const warnings = [...parsed.warnings]
+      if (omittedImages > 0) warnings.push(`${omittedImages} 张嵌入图片未保存为视觉材料，需查看原件人工复核`)
+      const parseStatus: SourceDocument['parseStatus'] = warnings.length > 0 || omittedImages > 0 ? 'partial' : 'parsed'
+      return draftOf(parseStatus, blocks, warnings.length > 0 ? [...new Set(warnings)].join('；') : undefined)
+    } catch (error) {
+      // 结构解析异常时保留原有纯文本兜底；明确标成 partial，不能伪装成完整结构解析。
+      console.warn(`[审核专区] DOCX 结构解析失败，回退纯文本: ${filePath}`, error)
+      try {
+        const fallback = await extractTextFromFile(filePath)
+        if (fallback.trim()) return draftOf('partial', parseTextIntoBlocks(fileName, fallback), 'DOCX 结构解析失败，已回退纯文本；表格、版式和嵌入图片可能未保留')
+      } catch (fallbackError) {
+        console.warn(`[审核专区] DOCX 纯文本兜底失败: ${filePath}`, fallbackError)
+      }
+      return draftOf('failed', placeholderBlocks(), `DOCX 解析失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  if (['.xls', '.xlsx', '.xlsm', '.xltx', '.xltm'].includes(ext)) {
+    try {
+      const parsed = extractSpreadsheetReviewContent(filePath)
+      const blocks: ReviewDocumentBlock[] = parsed.blocks.map((cell, index) => ({
+        id: blockIdAt(slug, index), kind: 'table-cell', text: cell.text, page: 1,
+        table: { row: cell.row, column: cell.column, sheet: cell.sheet },
+      }))
+      if (blocks.length === 0) {
+        return draftOf('partial', [], parsed.warnings.join('；') || 'Excel 未提取到有值的单元格，需查看原件人工复核')
+      }
+      return draftOf(parsed.warnings.length > 0 ? 'partial' : 'parsed', blocks, parsed.warnings.length > 0 ? parsed.warnings.join('；') : undefined)
+    } catch (error) {
+      console.warn(`[审核专区] Excel 单元格结构解析失败，回退纯文本: ${filePath}`, error)
+      try {
+        const fallback = await extractTextFromFile(filePath)
+        if (fallback.trim()) return draftOf('partial', parseTextIntoBlocks(fileName, fallback), 'Excel 单元格结构解析失败，已回退纯文本；工作表和行列坐标可能未保留')
+      } catch (fallbackError) {
+        console.warn(`[审核专区] XLSX 纯文本兜底失败: ${filePath}`, fallbackError)
+      }
+      return draftOf('failed', placeholderBlocks(), `Excel 解析失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  // 其他文档类（PDF / Office）：复用既有解析器提取文本，再走同一套纯文本切块管线
   if (DOCUMENT_EXTENSIONS.has(ext)) {
     // PDF：优先走高精引擎，拿到真实多页 + 归一化坐标 + 阅读顺序 + 表格行列
     if (ext === '.pdf') {
@@ -300,7 +534,7 @@ export async function parseFileIntoSourceDocument(
       return draftOf(
         'partial',
         [],
-        `${label} 未提取到文本内容（可能是扫描件或纯图片文档），需人工复核或 OCR 处理`,
+        `${label} 未提取到文本内容（可能是扫描件或纯图片文档，需 OCR/视觉核验）；原件已保留，审核 Agent 可按需查看页面图像`,
       )
     }
 
@@ -314,7 +548,7 @@ export async function parseFileIntoSourceDocument(
 
   let text = ''
   try {
-    text = await readFile(filePath, 'utf-8')
+    text = await extractReviewableTextFile(filePath, fileName)
   } catch (error) {
     console.error(`[审核专区] 读取文件失败: ${filePath}`, error)
     return draftOf(

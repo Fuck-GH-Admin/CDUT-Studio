@@ -6,7 +6,7 @@
  * 命令外壳扩展与错误码见文末；新设计哈希用 SHA-256，旧 SHA-1 记录带 algorithm 标识。
  */
 
-import type { Actor, Appeal, BusinessDecision, EvidenceLink, FieldSpec, Observation, ReviewAppErrorCode, ReviewCaseV2, RoleId, SourceLocation, SupplementRequest } from './review-v2'
+import type { Actor, Appeal, BusinessDecision, EvidenceLink, FieldSpec, Observation, ReviewAppErrorCode, ReviewCaseV2, RoleId, SourceLocation, SupplementRequest, SubjectAdjudication } from './review-v2'
 
 // ===== 政策仓库（07 §2.1 PolicyRef/PolicyVersion；05 §2.1 误判 8：模板必须有对应政策） =====
 
@@ -286,6 +286,12 @@ export interface CommandReceipt {
   revision: number
   at: string
   summary: string
+  /** 操作者（08 设计：时间线可辨人工/AI；旧记录缺省按"未记录"呈现） */
+  actor?: Actor
+  /** 命令的可信指派来源（C1：ReviewAgentAssignment.id；人工操作缺省） */
+  assignmentId?: string
+  /** 发起会话（Agent 操作可追溯完整身份；短码仅显示用） */
+  sessionId?: string
 }
 
 /** 单案业务聚合（state.v2.json 形态；07 §3.3） */
@@ -303,22 +309,79 @@ export interface CaseAggregateV2 {
   caseV2: ReviewCaseV2
   observations: Observation[]
   evidenceLinks: EvidenceLink[]
-  dispositions: Array<{ findingKey: string; disposition: string; actor: string; reason: string; at: string }>
+  dispositions: Array<{
+    findingKey: string
+    disposition: string
+    actor: string
+    reason: string
+    at: string
+    /** 阶段 3：处置绑定到不可变运行输入；不同输入下旧处置自然变为历史记录。 */
+    runId?: string
+    inputHash?: string
+    actorSource?: import('./review-v2').ActorSource
+    role?: import('./review-v2').RoleId
+  }>
   tasks: WorkflowTask[]
   decisions: BusinessDecision[]
   supplements: SupplementRequest[]
   appeals: Appeal[]
   receiptLog: CommandReceipt[]
+  /** 事项最终认定（可选，兼容既有 state.v2.json）。 */
+  adjudications?: SubjectAdjudication[]
+  /** D2 技术预审任务固定快照；不授予正式学校发布/审批权限。 */
+  d2RuntimePlan?: import('./review-d2').D2RuntimePlan
   /** 独立评分（G06：唯一票，事务内查重） */
   ratings?: RatingEntryV2[]
 }
 
+/** 普通审核工作台到业务聚合的内部映射；当前迁移期统一使用同一 caseId。 */
+export interface ReviewWorkspaceCaseRef {
+  workspaceCaseId: string
+  aggregateV2Id: string
+}
+
 export type CommandErrorCode =
-  | 'VERSION_CONFLICT' | 'NOT_FOUND' | 'VALIDATION_FAILED' | 'REQUEST_ID_COLLISION' | 'INVALID_TRANSITION' | 'DEPENDENCY_UNRESOLVED'
+  | 'VERSION_CONFLICT' | 'NOT_FOUND' | 'VALIDATION_FAILED' | 'REQUEST_ID_COLLISION' | 'INVALID_TRANSITION' | 'DEPENDENCY_UNRESOLVED' | 'STALE_INPUT'
+  | 'AGENT_DECISION_DISABLED'
 
 export type ReviewCommandResult<TEntity = unknown> =
   | { ok: true; receipt: CommandReceipt; aggregate: CaseAggregateV2; entity?: TEntity }
   | { ok: false; code: CommandErrorCode; message: string; currentRevision?: number }
+
+export type BatchAutomationMode = 'assist' | 'auto-return' | 'auto-approve'
+
+/** Per-batch explicit local authorization. Not a school-side approval credential. */
+export interface BatchAutomationPolicy {
+  mode: BatchAutomationMode
+  grantedBy: string
+  grantedAt: string
+  /** Incremented whenever an authorized user changes policy, including revocation. */
+  revision: number
+  templateId: string
+  templateVersion: number
+}
+
+/** Outcome of a real V2 transaction, never a raw AI opinion. */
+export interface BatchAutomationReceipt {
+  caseId: string
+  runId: string
+  action: 'pass' | 'return'
+  status: 'applied' | 'blocked' | 'failed' | 'conflict'
+  message: string
+  at: string
+  requestId: string
+  policyRevision: number
+}
+
+export interface BatchAutomationReport {
+  batchId: string
+  policyRevision: number
+  results: BatchAutomationReceipt[]
+  applied: number
+  blocked: number
+  failed: number
+  conflicts: number
+}
 
 /** 批次运行状态（N5：batch-store 持久化形态，renderer 可读） */
 export interface BatchStateV2 {
@@ -329,4 +392,6 @@ export interface BatchStateV2 {
   finalizedAt?: string
   round: number
   reopenedFromBatchId?: string
+  automation?: BatchAutomationPolicy
+  automationReceipts?: BatchAutomationReceipt[]
 }

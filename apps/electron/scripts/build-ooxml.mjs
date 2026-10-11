@@ -5,11 +5,22 @@ import { fileURLToPath } from 'node:url'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(scriptDir, '..')
-const sourceDir = path.join(appRoot, 'node_modules', '@silurus', 'ooxml', 'dist')
 const publicDir = path.join(appRoot, 'src', 'renderer', 'public', 'vendor', 'ooxml')
 
-if (!fs.existsSync(sourceDir)) {
-  throw new Error(`@silurus/ooxml dist directory does not exist: ${sourceDir}`)
+// Bun workspace 会把依赖装到 monorepo 顶层 node_modules，不能只查 apps/electron/node_modules。
+const checked = []
+let from = appRoot
+let sourceDir
+for (;;) {
+  const dist = path.join(from, 'node_modules', '@silurus', 'ooxml', 'dist')
+  checked.push(dist)
+  if (fs.existsSync(dist)) { sourceDir = dist; break }
+  const parent = path.dirname(from)
+  if (parent === from) break
+  from = parent
+}
+if (!sourceDir) {
+  throw new Error(`@silurus/ooxml dist directory does not exist; tried:\\n${checked.join('\\n')}`)
 }
 
 fs.rmSync(publicDir, { recursive: true, force: true })
