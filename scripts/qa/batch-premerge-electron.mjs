@@ -194,10 +194,13 @@ try {
     const text = await evaluate('document.body?.innerText || ""')
     const state = await evaluate('window.reviewAPI.getBatchV2("qa-failure-batch")')
     if (state?.cases?.[0]?.status !== 'failed') throw new Error('Expected synthetic no-model error, actual state=' + JSON.stringify(state?.cases))
+    const failureReason = state.cases[0].error || ''
+    if (!failureReason.includes('未配置可用模型渠道')) throw new Error('Wrong failure branch: ' + failureReason)
     if (!text.includes('失败 1 案') && !text.includes('批次执行失败：')) throw new Error('Failure not surfaced: ' + text.slice(0, 1800))
+    if (!text.includes('待人工处理 0 案')) throw new Error('All-failed batch must show zero human triage cases')
     if (text.includes('本轮审核及已启用的自动处理完成')) throw new Error('Old misleading generic success message remains')
     await screenshot('05-queue-failure')
-    return { caseStatus: state.cases[0].status, hasFailureFeedback: true }
+    return { caseStatus: state.cases[0].status, failureReason, hasFailureFeedback: true, needsHuman: 0 }
   })
 } catch (error) {
   process.exitCode = 1

@@ -13,6 +13,16 @@ writeFileSync(join(root, 'settings.json'), JSON.stringify({
   onboardingCompleted: true, coachTourVersion: 9999, reviewAgentAutoApproval: false,
 }, null, 2))
 const templateId = 'qa-review-template'
+// 使用完整的合成模板，让队列确实进入模型配置检查，而不是提前因模板缺失失败。
+const templateDir = join(root, 'review-templates', templateId, 'versions')
+mkdirSync(templateDir, { recursive: true })
+writeFileSync(join(templateDir, '1.json'), JSON.stringify({
+  templateId, version: 1, schemaVersion: 2, name: 'QA 合成审核模板',
+  sourceNote: 'QA_SYNTHETIC_ONLY', objectType: 'person', displayName: { template: 'QA 合成案卷' },
+  fields: [], materialSlots: [], policyVersionIds: [],
+  stages: [{ id: 'qa-review', name: '合成审核', kind: 'auto-check', executorRole: 'reviewer' }],
+  outputs: [], autoPassPolicy: { enabled: false }, status: 'published', createdAt: now, publishedAt: now,
+}, null, 2))
 const cases = [
   ['qa-history-case', 'QA 补件回流案'],
   ['qa-failure-case', 'QA 缺模型渠道案'],

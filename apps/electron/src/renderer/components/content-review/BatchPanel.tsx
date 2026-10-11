@@ -281,7 +281,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         // Never turn a completed run into a false "execution failed" notification.
       }
       const summary = summarizeBatchExecution(result, routes)
-      const humanText = routes.size ? String(summary.needsHuman) : '待刷新确认'
+      const humanText = summary.completed === 0 || routes.size ? String(summary.needsHuman) : '待刷新确认'
       const message = `批次检查结束：完成 ${summary.completed} 案，失败 ${summary.failed} 案，待人工处理 ${humanText} 案`
         + (summary.technical ? `，技术异常 ${summary.technical} 案` : '')
         + (summary.pending ? `，仍待执行 ${summary.pending} 案` : '')

@@ -166,6 +166,8 @@ cmd.exe /c ".\apps\electron\out\win-unpacked\CDUT Studio.exe --enable-logging"
 | `config-paths.ts` | 配置路径管理：`~/.cdutai/` 目录结构与默认 Skills 播种 |
 | `changelog-service.ts` / `github-release-service.ts` | 版本更新日志与 GitHub Release 展示（只读，不涉及自动更新） |
 
+批量审核复验入口见 [24 号独立验收](docs/design/review-agent/24-batch-review-independent-final-acceptance.md)。队列失败提示须保留失败数量；无已完成案卷时待人工分流明确为零。Electron 回放的缺模型负例须核对持久化错误原因，不能仅检查 `failed` 状态。
+
 ---
 
 ### 3.4 AI Provider 适配器 (`packages/core/src/providers/`)

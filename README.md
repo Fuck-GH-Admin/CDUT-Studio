@@ -149,6 +149,8 @@
 
 批量审核的当前实现状态、边界、测试记录和接手步骤见[开发者交接文档](docs/design/review-agent/17-current-state-and-handoff.md)。当前功能分支包含批次队列执行/恢复、技术异常定向重试、问题组预览与人工确认后逐案处置，以及需逐批授权和严格门控的自动补件/通过；这不代表接入了学校身份或远端审批。
 
+离线演示入口与最终独立验收见[批量审核复验报告](docs/design/review-agent/24-batch-review-independent-final-acceptance.md)：失败提示包含真实失败数量，全部执行失败时待人工分流为零，旧自动处置单独显示为历史回执。
+
 同一份合成综测案卷的基线与能力库复跑记录见 [审核 Agent 能力库对照](outputs/template-review-suite-2026-10-08/run-results-deepseek-capabilities/COMPARISON.md)。该单案测试显示材料覆盖从 0/4 个被记为已读提高到 4/4、修正了一个错误自动通过；总 token 约下降 6.6%，耗时约增加 1.9 秒。基线把文本材料预注入提示，但没有逐份读取日志，故 0/4 指能力覆盖记账，不表示模型完全没看到文本材料。
 
 ---

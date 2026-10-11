@@ -1,5 +1,7 @@
 # 22｜批量审核第三轮 QA 修复闭环与复验边界
 
+> 后续状态：使用者已授权“验收合格直接合入 main”；独立复验、小修与最终合并条件见 [24 号报告](24-batch-review-independent-final-acceptance.md)。本文的保持 Draft/等待认可记录描述的是当时状态。
+
 > 2026-10-11 · 功能分支 `feat/batch-review-triage-v1`，对应 [19 号第二轮收口](19-batch-review-premerge-round2-acceptance.md)、[20 号 QA 报告](20-batch-review-qa-round3.md) 和 [21 号离线 UI 补验](21-batch-review-offline-ui-acceptance.md)。  
 > 20/21 号是特定旧 HEAD 的真实现场证据，**不应直接将其中的发现或已观察操作覆盖为“最新版通过”**。本文件记录后续修复，最新 CI 与人工复验结果以 PR #1 当前 HEAD 为准。
 

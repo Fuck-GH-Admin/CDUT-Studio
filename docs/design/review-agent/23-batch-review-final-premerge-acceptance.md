@@ -1,5 +1,7 @@
 # 23｜批量审核 A+B+C 合并前最终复验报告
 
+> **后续独立验收入口：[24 号报告](24-batch-review-independent-final-acceptance.md)。使用者已授权合格直接合入测试仓库 main，本文“暂不合并/等待明确同意”是该授权前的历史状态。**
+
 > 2026-10-11；测试仓库 Fuck-GH-Admin/cdut-studio-review-agent；功能分支 `feat/batch-review-triage-v1`；PR #1（Draft）。
 >
 > **结论：本地批量审核功能收口、路径安全与最新版 Electron 六项定向复验通过；仍须核对最终提交五条 CI 并由使用者明确同意，暂不合并。**
@@ -25,11 +27,13 @@
 | 21 号补件回流 | 当前显示“待本轮重新审核”，上次自动退回单独显示为历史回执 | PASS |
 | 21 号自动授权拒绝 | 未开启全局代批时 UI 显示业务原因，不出现 Electron IPC transport 前缀 | PASS |
 | 21 号定稿拒绝 | 不满足正式业务终态的案卷被拒定稿，弹窗/提示没有 transport 前缀 | PASS |
-| 21 号队列失败 | 无模型渠道执行的合成案卷状态为 `failed`，用户看到失败提示，不再误报“全部成功” | PASS |
+| 21 号队列失败 | 合成案卷状态为 `failed`，用户看到失败提示，不再误报“全部成功”；后续独立复验发现此时实际原因是夹具缺模板，尚不能证明缺模型渠道分支，纠正见 24 号 | PASS（失败提示） |
 
 真实 Electron UI/IPC **6 pass / 0 fail**。同一工作流另外运行 `review-ipc-path.test.ts`、`review-storage-id.test.ts`、`batch-ui-feedback.test.ts`，**11 pass / 0 fail**。
 
 **证据边界：** 合成数据与真实渲染器 UI 的成功，不等于真实模型的材料审读成功，也不代表学校有权批准；真实模型缺席是用于测“执行失败”分支。GitHub Actions 的 PR checkout 可能产生合并测试 SHA，artifact 内 `commit-sha.txt` 可能与功能分支 head SHA 不同。以 GitHub 对应 PR run 和最新源码提交共同判定。本轮为提升截图中文可读性追加字体依赖，因此要以**最终 head 上重新执行的同一工作流**确认截图与结果。
+
+后续证据纠正：原回放仅断言 `failed`，未核对失败原因。24 号复验补齐合成模板并要求持久化错误包含“未配置可用模型渠道”，避免其他失败原因冒充缺模型测试。
 
 ## 3. 合并前剩余门槛
 

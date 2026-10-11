@@ -16,7 +16,7 @@ on:
       - 'apps/electron/src/main/lib/review/workspace-business-service-v2.ts'
       - 'apps/electron/src/main/lib/review/review-ipc-actor-guard*'
       - 'apps/electron/src/main/lib/review/stage-workflow.ts'
-      - 'apps/electron/src/main/lib/review/real-chain-journey.test.ts apps/electron/src/main/lib/review/review-storage-id.test.ts apps/electron/src/renderer/components/content-review/batch-ui-feedback.test.ts'
+      - 'apps/electron/src/main/lib/review/real-chain-journey.test.ts'
       - 'apps/electron/src/main/lib/review/review-ipc.ts'
       - 'apps/electron/src/renderer/components/content-review/BatchAutomationDialog.tsx'
       - 'apps/electron/src/renderer/components/content-review/BatchPanel.tsx'

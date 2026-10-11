@@ -42,5 +42,9 @@ describe('21 号本地 UI QA：反馈语义', () => {
     expect(summarizeBatchExecution(state, routes)).toEqual({
       completed: 3, failed: 1, pending: 0, needsHuman: 2, technical: 0,
     })
+    // 全部执行失败时，没有已完成案卷需要分流，待人工数可直接确定为零。
+    expect(summarizeBatchExecution({ ...state, cases: [{ caseId: 'error', status: 'failed' }] }, new Map())).toEqual({
+      completed: 0, failed: 1, pending: 0, needsHuman: 0, technical: 0,
+    })
   })
 })
