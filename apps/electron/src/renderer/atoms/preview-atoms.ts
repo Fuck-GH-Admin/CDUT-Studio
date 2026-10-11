@@ -120,3 +120,29 @@ export function getAgentInterruptionTone(reason: AgentEndReason): AgentInterrupt
   if (reason === 'unknown') return 'muted'
   return 'amber'
 }
+
+// ===== PDF 双平行拓扑引用精确坐标聚光灯（Citation Spotlight）=====
+
+/** 点击聊天消息中的拓扑引用胶囊（如 `[第1页·左栏](#f1:p1-b11)`）后触发的 PDF 定位与坐标高亮状态 */
+export interface PdfHighlightTarget {
+  /** 唯一请求递增戳，确保连续点击同一个引用胶囊也能重新触发脉冲高亮 */
+  requestId: number
+  /** 所属会话 ID */
+  sessionId: string
+  /** 会话级唯一文件标识（如 "f1"） */
+  fileId?: string
+  /** 目标 PDF 绝对路径 */
+  filePath: string
+  /** 目标页码（1-indexed） */
+  pageNumber: number
+  /** 目标块 ID（如 "p1-b11"） */
+  blockId: string
+  /** 归一化页面坐标 [x0, y0, x1, y1]（左上角原点，0..1） */
+  bbox?: [number, number, number, number]
+  /** 人类可读位置标签（如 "第1页·左栏"） */
+  label?: string
+}
+
+/** 当前待派发或激活中的 PDF 聚光灯定位目标 */
+export const pdfHighlightTargetAtom = atom<PdfHighlightTarget | null>(null)
+

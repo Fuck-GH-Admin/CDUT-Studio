@@ -10,8 +10,9 @@ import type { Dispatcher } from 'undici'
 import { randomUUID } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync } from 'node:fs'
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
+import { PREINGEST_DOCUMENT_EXTENSIONS, redirectBinaryDocumentRead } from '../document-parse-tools'
 import type {
   AgentThinkingLevel,
   AgentRuntime,
@@ -247,15 +248,6 @@ interface ActivePiSession {
 
 interface PendingInterruptPrompt extends PiInterruptReservation {
   /** Reservation is registered before async prompt preparation / abort. */
-}
-
-interface ProferTaskItem {
-  id: string
-  subject: string
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled' | 'error' | 'deleted'
-  description?: string
-  activeForm?: string
-  blocks?: string[]
 }
 
 interface AssistantMessageState {
@@ -719,7 +711,11 @@ export function mapSDKErrorToTypedError(errorCode: string, message: string, orig
 }
 
 /** 历史工具结果折叠阈值（字符）：超过即紧凑折叠，杜绝 50KB 终端/文件输出反复重放。 */
-const HISTORICAL_TOOL_RESULT_MAX_CHARS = 800
+const HISTORICAL_TOOL_RESULT_MAX_CHARS = 1_200
+/** 历史写入工具参数折叠阈值（字符）：防止长回合内多次 Write/Edit 撑爆 160K 上下文窗口。 */
+const HISTORICAL_WRITE_ARGS_MAX_CHARS = 1_500
+/** 当前回合内保留最近 N 条消息完整不折叠，保证紧邻的工具循环正常运作。 */
+const RECENT_UNFOLDED_MESSAGES = 6
 
 /** content 块是否属于「思考/推理」类，必须在历史轮次中剥离。 */
 function isThinkingBlock(block: unknown): boolean {
@@ -753,11 +749,84 @@ function stripHistoricalReasoning(msg: any): void {
   }
 }
 
-/** 折叠历史超大工具输出；当前轮结果不处理，保证正在进行的工具循环完整。 */
+/** 折叠历史超大工具输出；最近步骤结果不处理，保证正在进行的工具循环完整。 */
 function foldHistoricalToolContent(msg: any, limit: number): void {
   if (typeof msg.content === 'string' && msg.content.length > limit) {
     const omitted = msg.content.length - limit
     msg.content = `${msg.content.slice(0, limit)}\n\n[...该历史查询结果已折叠，共省略 ${omitted} 字符以节省上下文...]`
+  } else if (Array.isArray(msg.content)) {
+    msg.content = msg.content.map((block: any) => {
+      if (!block || typeof block !== 'object') return block
+      if (block.type === 'text' && typeof block.text === 'string' && block.text.length > limit) {
+        const omitted = block.text.length - limit
+        return {
+          ...block,
+          text: `${block.text.slice(0, limit)}\n\n[...该历史查询结果已折叠，共省略 ${omitted} 字符以节省上下文...]`,
+        }
+      }
+      if (block.type === 'tool_result' && typeof block.content === 'string' && block.content.length > limit) {
+        const omitted = block.content.length - limit
+        return {
+          ...block,
+          content: `${block.content.slice(0, limit)}\n\n[...该历史查询结果已折叠，共省略 ${omitted} 字符以节省上下文...]`,
+        }
+      }
+      return block
+    })
+  }
+}
+
+/** 折叠历史步骤中超大 Write/Edit 工具调用参数（兼容 OpenAI tool_calls 与 Anthropic tool_use）。 */
+function foldHistoricalWriteToolCalls(msg: any, limit: number): void {
+  if (Array.isArray(msg.tool_calls)) {
+    msg.tool_calls = msg.tool_calls.map((tc: any) => {
+      if (!tc?.function || typeof tc.function.arguments !== 'string') return tc
+      const name = String(tc.function.name ?? '').toLowerCase()
+      if (name !== 'write' && name !== 'edit' && name !== 'multiedit') return tc
+      if (tc.function.arguments.length <= limit) return tc
+      try {
+        const parsed = JSON.parse(tc.function.arguments) as Record<string, unknown>
+        let mutated = false
+        for (const key of ['content', 'new_string', 'old_string', 'newText', 'oldText']) {
+          const val = parsed[key]
+          if (typeof val === 'string' && val.length > limit) {
+            parsed[key] = `[...历史写入内容已成功落盘并折叠 (共 ${val.length} 字符)，请勿重复写入...]`
+            mutated = true
+          }
+        }
+        if (!mutated) return tc
+        return {
+          ...tc,
+          function: {
+            ...tc.function,
+            arguments: JSON.stringify(parsed),
+          },
+        }
+      } catch {
+        return tc
+      }
+    })
+  }
+  if (Array.isArray(msg.content)) {
+    msg.content = msg.content.map((block: any) => {
+      if (!block || typeof block !== 'object') return block
+      if (block.type !== 'tool_use' && block.type !== 'toolCall') return block
+      const name = String(block.name ?? '').toLowerCase()
+      if (name !== 'write' && name !== 'edit' && name !== 'multiedit') return block
+      const inputObj = (block.input ?? block.arguments) as Record<string, unknown> | undefined
+      if (!inputObj || typeof inputObj !== 'object') return block
+      let mutated = false
+      const cloned: Record<string, unknown> = { ...inputObj }
+      for (const key of ['content', 'new_string', 'old_string', 'newText', 'oldText']) {
+        const val = cloned[key]
+        if (typeof val === 'string' && val.length > limit) {
+          cloned[key] = `[...历史写入内容已成功落盘并折叠 (共 ${val.length} 字符)，请勿重复写入...]`
+          mutated = true
+        }
+      }
+      if (!mutated) return block
+      return block.input ? { ...block, input: cloned } : { ...block, arguments: cloned }
+    })
   }
 }
 
@@ -767,10 +836,10 @@ function foldHistoricalToolContent(msg: any, limit: number): void {
  * 统一处理 OpenAI Chat Completions / Anthropic Messages / Google / OpenAI Responses 全协议：
  * 1. 剥离历史轮次 Thinking/Reasoning（assistant 的 reasoning_content/reasoning/reasoning_details
  *    字段，以及 content 块数组中的 thinking/redacted_thinking 块、Google thought part）；
- * 2. 折叠历史轮次超大 ToolResult（超过 HISTORICAL_TOOL_RESULT_MAX_CHARS 字符）；
+ * 2. 折叠历史步骤超大 ToolResult（超过 HISTORICAL_TOOL_RESULT_MAX_CHARS 字符）与超大 Write/Edit 入参；
  * 3. OpenAI 兼容协议专属：删除非标 store 字段、developer 角色纠正为 system、纯文本单项数组平坦化。
  *
- * 当前轮消息 100% 保留完整，避免破坏正在等待执行/结算的工具循环。
+ * 最近推理步消息 100% 保留完整，避免破坏正在等待执行/结算的工具循环。
  * 纯函数式原地净化，零模型延迟、零额外 Token 开销。
  */
 export function sanitizeContextForInference(
@@ -809,6 +878,7 @@ export function sanitizeContextForInference(
     const msg = messages[i]
     if (!msg || typeof msg !== 'object') continue
     const isPastTurn = i < currentTurnStartIndex
+    const isOlderStep = isPastTurn || i < totalCount - RECENT_UNFOLDED_MESSAGES
 
     // 纠正任何可能残留的 developer 角色（OpenAI 兼容协议）
     if (options.openAICompatible && msg.role === 'developer') {
@@ -820,8 +890,13 @@ export function sanitizeContextForInference(
       stripHistoricalReasoning(msg)
     }
 
-    // 【瘦身2：旧轮次超大 ToolResult 安全折叠截断】
-    if (isPastTurn && msg.role === 'tool') {
+    // 【瘦身2：折叠较早步骤中已落盘的超大 Write/Edit 工具调用入参】
+    if (isOlderStep && (msg.role === 'assistant' || msg.role === 'model')) {
+      foldHistoricalWriteToolCalls(msg, HISTORICAL_WRITE_ARGS_MAX_CHARS)
+    }
+
+    // 【瘦身3：旧步骤超大 ToolResult 安全折叠截断】
+    if (isOlderStep && (msg.role === 'tool' || msg.role === 'toolResult' || (msg.role === 'user' && Array.isArray(msg.content)))) {
       foldHistoricalToolContent(msg, HISTORICAL_TOOL_RESULT_MAX_CHARS)
     }
 
@@ -1042,10 +1117,45 @@ function createPiReviewLedgerCompactionExtension(contextPolicy: NonNullable<PiAg
   }
 }
 
+function buildPinnedArtifactsContinuationBlock(cwd?: string): string {
+  if (!cwd) return ''
+  try {
+    const artifactsDir = join(cwd, '.context', 'artifacts')
+    if (!existsSync(artifactsDir)) return ''
+    const indexFiles = readdirSync(artifactsDir).filter((f) => f.endsWith('.index.json'))
+    if (indexFiles.length === 0) return ''
+    const lines: string[] = []
+    for (const file of indexFiles) {
+      try {
+        const meta = JSON.parse(readFileSync(join(artifactsDir, file), 'utf-8')) as {
+          artifactId?: string
+          sourceName?: string
+          pageCount?: number
+          totalChars?: number
+          cleanMarkdownPath?: string
+          anchoredMarkdownPath?: string
+        }
+        if (meta.sourceName) {
+          lines.push(
+            `- 文档《${meta.sourceName}》(artifact_id="${meta.artifactId ?? ''}", 共 ${meta.pageCount ?? 1} 页, ${meta.totalChars ?? 0} 字符): 纯净版 Markdown 已完整落盘于 \`${meta.cleanMarkdownPath ?? ''}\`（无需再用 Write/Edit 重写）；如需按页或关键词检阅原文，请调用 \`read_document_artifact\`。`,
+          )
+        }
+      } catch {
+        // ignore malformed index
+      }
+    }
+    if (lines.length === 0) return ''
+    return `\n\n<pinned_document_artifacts>\n【跨压缩钉住的内核文档产物句柄】\n${lines.join('\n')}\n</pinned_document_artifacts>`
+  } catch {
+    return ''
+  }
+}
+
 export function planPiCompactionContinuation(options: {
   continuationCount: number
   abortRequested: boolean
   runtimeLimitReached: boolean
+  cwd?: string
 }):
   | { shouldContinue: true; prompt: string }
   | { shouldContinue: false; reason: 'aborted' | 'runtime_limit' | 'continuation_limit' } {
@@ -1054,7 +1164,8 @@ export function planPiCompactionContinuation(options: {
   if (options.continuationCount >= MAX_AUTOMATIC_COMPACTION_CONTINUATIONS) {
     return { shouldContinue: false, reason: 'continuation_limit' }
   }
-  return { shouldContinue: true, prompt: PI_COMPACTION_CONTINUATION_PROMPT }
+  const pinnedBlock = buildPinnedArtifactsContinuationBlock(options.cwd)
+  return { shouldContinue: true, prompt: `${PI_COMPACTION_CONTINUATION_PROMPT}${pinnedBlock}` }
 }
 
 export function canRunCurrentSessionCompaction(toolNames: string[]): boolean {
@@ -1098,7 +1209,10 @@ function createTerminatingJsonToolResult(payload: unknown): AgentToolResult<unkn
   } as AgentToolResult<unknown>
 }
 
-function installCurrentSessionCompactionHooks(session: AgentSession): void {
+const EXTERNAL_PDF_EXTRACTION_COMMAND_RE =
+  /\b(?:pdftotext|pdfplumber|pypdf|pypdf2|pymupdf|pdfminer|markitdown|docx2txt)\b|\bimport\s+fitz\b/i
+
+function installCurrentSessionCompactionHooks(session: AgentSession, cwd?: string): void {
   const previousBeforeToolCall = session.agent.beforeToolCall
   session.agent.beforeToolCall = async (context, signal) => {
     const previousResult = await previousBeforeToolCall?.(context, signal)
@@ -1111,6 +1225,27 @@ function installCurrentSessionCompactionHooks(session: AgentSession): void {
       return {
         block: true,
         reason: 'AskUserQuestion 会暂停 Agent，不能与其他工具在同一批次执行。请在收到用户回答后再调用后续工具。',
+      }
+    }
+
+    // 外部 PDF/Office 提取脚本熔断器：若当前会话已有内核物化的文档产物，拦截盲目拉起外部脚本重新提取的行为
+    const toolNameLower = context.toolCall.name.toLowerCase()
+    if (cwd && (toolNameLower === 'bash' || toolNameLower === 'powershell')) {
+      const args = (context.toolCall.arguments ?? {}) as Record<string, unknown>
+      const command = typeof args.command === 'string' ? args.command : ''
+      if (
+        command &&
+        !command.includes('--allow-external-pdf') &&
+        EXTERNAL_PDF_EXTRACTION_COMMAND_RE.test(command)
+      ) {
+        const artifactsDir = join(cwd, '.context', 'artifacts')
+        if (existsSync(artifactsDir) && readdirSync(artifactsDir).some((f) => f.endsWith('.index.json'))) {
+          return {
+            block: true,
+            reason:
+              '【内核熔断保护】当前工作区的附件文档已由客户端内核高精解析引擎完成 100% 物理落盘（完整无损的纯净版 Markdown 已直接写入工作目录 clean_markdown_path，带锚点索引位于 .context/artifacts/）。严禁调用 pdftotext/pdfplumber/pypdf/fitz 等外部脚本重复提取！请直接使用已落盘的 Markdown 文件或调用 `read_document_artifact` 按页/关键词查阅。',
+          }
+        }
       }
     }
 
@@ -1171,43 +1306,16 @@ export async function compactCurrentSessionAfterTurn(
   }
 }
 
-function stringFromInput(input: Record<string, unknown>, keys: string[], fallback = ''): string {
-  for (const key of keys) {
-    const value = input[key]
-    if (typeof value === 'string' && value.trim()) return value.trim()
-    if (typeof value === 'number') return String(value)
-  }
-  return fallback
-}
-
-function normalizeTaskStatus(value: unknown, fallback: ProferTaskItem['status']): ProferTaskItem['status'] {
-  if (
-    value === 'pending' ||
-    value === 'in_progress' ||
-    value === 'completed' ||
-    value === 'blocked' ||
-    value === 'cancelled' ||
-    value === 'error' ||
-    value === 'deleted'
-  ) {
-    return value
-  }
-  return fallback
-}
-
-function normalizeStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const items = value.map((item) => String(item).trim()).filter(Boolean)
-  return items.length > 0 ? items : undefined
-}
-
+/**
+ * 构建产品级核心交互工具（计划模式切换与用户结构化问答）。
+ *
+ * 注意：旧版纯内存伪工具 TaskCreate/TaskUpdate/TaskGet/TaskList/TodoRead/TodoWrite 已彻底移除，
+ * 避免与系统提示词及持久化任务图（mcp__task-graph__proma_task_*）/ 规划中心（mcp__planning__*）冲突。
+ */
 export function buildPromaProductToolDefinitions(
   sdk: PiSdk,
   canUseTool: PiAgentQueryOptions['canUseTool'],
 ): ToolDefinition[] {
-  const tasks = new Map<string, ProferTaskItem>()
-  let nextTaskId = 1
-
   const definitions = [
     sdk.defineTool({
       name: 'EnterPlanMode',
@@ -1264,144 +1372,6 @@ export function buildPromaProductToolDefinitions(
       async execute(_toolCallId, params) {
         const input = params as Record<string, unknown>
         return createJsonToolResult({ answers: input.answers ?? {} })
-      },
-    }),
-    sdk.defineTool({
-      name: 'TaskCreate',
-      label: '创建任务',
-      description: '创建一个可见进度任务，用于多步骤或长耗时工作。',
-      promptSnippet: '创建一个可见进度任务。',
-      parameters: Type.Object({
-        subject: Type.String({ description: '任务标题。' }),
-        description: Type.Optional(Type.String({ description: '任务说明。' })),
-        activeForm: Type.Optional(Type.String({ description: '当前活动形态或阶段。' })),
-        blocks: Type.Optional(Type.Array(Type.String({ description: '关联区块 ID。' }))),
-      }),
-      async execute(_toolCallId, params) {
-        const input = params as Record<string, unknown>
-        const id = stringFromInput(input, ['id', 'taskId', 'task_id'], String(nextTaskId++))
-        const task: ProferTaskItem = {
-          id,
-          subject: stringFromInput(input, ['subject', 'title', 'name'], `任务 #${id}`),
-          status: 'pending',
-          description: typeof input.description === 'string' ? input.description : undefined,
-          activeForm: typeof input.activeForm === 'string' ? input.activeForm : undefined,
-          blocks: normalizeStringArray(input.blocks),
-        }
-        tasks.set(id, task)
-        return createJsonToolResult({ task })
-      },
-    }),
-    sdk.defineTool({
-      name: 'TaskUpdate',
-      label: '更新任务',
-      description: '更新已有可见进度任务的状态、标题或说明。',
-      promptSnippet: '更新可见进度任务。',
-      parameters: Type.Object({
-        taskId: Type.String({ description: '任务 ID。' }),
-        status: Type.Optional(Type.Union([
-          Type.Literal('pending'),
-          Type.Literal('in_progress'),
-          Type.Literal('completed'),
-          Type.Literal('blocked'),
-          Type.Literal('cancelled'),
-          Type.Literal('error'),
-          Type.Literal('deleted'),
-        ])),
-        subject: Type.Optional(Type.String({ description: '新的任务标题。' })),
-        description: Type.Optional(Type.String({ description: '新的任务说明。' })),
-        activeForm: Type.Optional(Type.String({ description: '当前活动形态或阶段。' })),
-        blocks: Type.Optional(Type.Array(Type.String({ description: '关联区块 ID。' }))),
-      }),
-      async execute(_toolCallId, params) {
-        const input = params as Record<string, unknown>
-        const id = stringFromInput(input, ['taskId', 'task_id', 'id'])
-        if (!id) throw new Error('taskId 必填')
-        const existing = tasks.get(id)
-        const task: ProferTaskItem = {
-          id,
-          subject: stringFromInput(input, ['subject', 'title', 'name'], existing?.subject ?? `任务 #${id}`),
-          status: normalizeTaskStatus(input.status, existing?.status ?? 'pending'),
-          description: typeof input.description === 'string' ? input.description : existing?.description,
-          activeForm: typeof input.activeForm === 'string' ? input.activeForm : existing?.activeForm,
-          blocks: normalizeStringArray(input.blocks) ?? existing?.blocks,
-        }
-        tasks.set(id, task)
-        return createJsonToolResult({ task })
-      },
-    }),
-    sdk.defineTool({
-      name: 'TaskGet',
-      label: '查看任务',
-      description: '读取某个可见进度任务的当前状态。',
-      promptSnippet: '查看可见进度任务。',
-      parameters: Type.Object({
-        taskId: Type.String({ description: '任务 ID。' }),
-      }),
-      async execute(_toolCallId, params) {
-        const input = params as Record<string, unknown>
-        const id = stringFromInput(input, ['taskId', 'task_id', 'id'])
-        if (!id) throw new Error('taskId 必填')
-        const task = tasks.get(id)
-        if (!task) throw new Error(`任务不存在: ${id}`)
-        return createJsonToolResult({ task })
-      },
-    }),
-    sdk.defineTool({
-      name: 'TaskList',
-      label: '任务列表',
-      description: '列出当前 turn 中已创建的可见进度任务。',
-      promptSnippet: '列出可见进度任务。',
-      parameters: Type.Object({
-        reason: Type.Optional(Type.String({ description: '读取任务列表的原因。' })),
-      }),
-      async execute() {
-        return createJsonToolResult({ tasks: [...tasks.values()].filter((task) => task.status !== 'deleted') })
-      },
-    }),
-    sdk.defineTool({
-      name: 'TodoRead',
-      label: '读取待办',
-      description: '读取当前 turn 的任务列表。兼容 Claude SDK 的 TodoRead。',
-      promptSnippet: '读取当前待办列表。',
-      parameters: Type.Object({}),
-      async execute() {
-        return createJsonToolResult({ todos: [...tasks.values()].filter((task) => task.status !== 'deleted') })
-      },
-    }),
-    sdk.defineTool({
-      name: 'TodoWrite',
-      label: '更新待办',
-      description: '以 Claude SDK TodoWrite 兼容格式更新当前 turn 的任务列表。',
-      promptSnippet: '更新当前待办列表。',
-      parameters: Type.Object({
-        todos: Type.Array(Type.Object({
-          content: Type.Optional(Type.String()),
-          subject: Type.Optional(Type.String()),
-          status: Type.Union([
-            Type.Literal('pending'),
-            Type.Literal('in_progress'),
-            Type.Literal('completed'),
-            Type.Literal('blocked'),
-            Type.Literal('cancelled'),
-            Type.Literal('error'),
-          ]),
-          activeForm: Type.Optional(Type.String()),
-        })),
-      }),
-      async execute(_toolCallId, params) {
-        const input = params as { todos?: Array<Record<string, unknown>> }
-        tasks.clear()
-        for (const [index, todo] of (input.todos ?? []).entries()) {
-          const id = String(index + 1)
-          tasks.set(id, {
-            id,
-            subject: stringFromInput(todo, ['subject', 'content'], `待办 #${id}`),
-            status: normalizeTaskStatus(todo.status, 'pending'),
-            activeForm: typeof todo.activeForm === 'string' ? todo.activeForm : undefined,
-          })
-        }
-        return createJsonToolResult({ todos: [...tasks.values()] })
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -2205,6 +2175,86 @@ function createPromaBashToolOptions(
   }
 }
 
+const BLOCKED_BINARY_READ_EXTENSIONS = new Set([
+  '.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.zip', '.tar', '.gz', '.7z', '.rar',
+  '.wasm', '.pyc', '.class', '.o', '.obj', '.db', '.sqlite', '.sqlite3', '.ico',
+  '.mp3', '.mp4', '.wav', '.avi', '.mov', '.woff', '.woff2', '.ttf', '.otf',
+])
+
+const ALLOWED_IMAGE_READ_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'])
+
+/**
+ * 包装 Pi 原生 read 工具：
+ * 1. 当目标路径为 `.pdf/.docx/.xlsx/.pptx` 等富格式文档时，透明重定向至内核高精解析产物（返回句柄与前 3 页切片）；
+ * 2. 当目标路径为非图像二进制文件（按扩展名或首部 512 字节含 NUL / %PDF- 魔数检测）时，硬阻断读取以防止 50KB 二进制乱码污染上下文。
+ */
+export function createSafeReadToolDefinition(
+  sdk: PiSdk,
+  cwd: string,
+  additionalDirectories?: string[],
+): ToolDefinition {
+  const baseRead = sdk.createReadToolDefinition(cwd) as unknown as ToolDefinition<TSchema, unknown, unknown>
+  return {
+    ...baseRead,
+    async execute(
+      toolCallId: string,
+      params: unknown,
+      signal: AbortSignal | undefined,
+      onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+      ctx: unknown,
+    ) {
+      const raw = (params ?? {}) as Record<string, unknown>
+      const rawPath = typeof raw.path === 'string' ? raw.path.trim() : typeof raw.file_path === 'string' ? raw.file_path.trim() : ''
+      if (rawPath) {
+        const ext = extname(rawPath).toLowerCase()
+        if (PREINGEST_DOCUMENT_EXTENSIONS.has(ext)) {
+          const redirected = await redirectBinaryDocumentRead(rawPath, {
+            agentCwd: cwd,
+            allowedRoots: [cwd, ...(additionalDirectories ?? [])],
+          })
+          return createTextToolResult(redirected, { redirectedToArtifact: true, path: rawPath })
+        }
+        if (BLOCKED_BINARY_READ_EXTENSIONS.has(ext)) {
+          throw new Error(
+            `安全拦截：禁止使用 read 工具直接读取二进制文件 (${rawPath})。请使用专用工具或元数据检阅命令。`,
+          )
+        }
+        if (!ALLOWED_IMAGE_READ_EXTENSIONS.has(ext)) {
+          const resolvedPath = isAbsolute(rawPath) ? rawPath : resolve(cwd, rawPath)
+          if (existsSync(resolvedPath)) {
+            try {
+              const fd = openSync(resolvedPath, 'r')
+              const probe = Buffer.alloc(512)
+              let bytesRead = 0
+              try {
+                bytesRead = readSync(fd, probe, 0, 512, 0)
+              } finally {
+                closeSync(fd)
+              }
+              const slice = probe.subarray(0, bytesRead)
+              if (slice.subarray(0, 5).toString('ascii') === '%PDF-') {
+                const redirected = await redirectBinaryDocumentRead(resolvedPath, {
+                  agentCwd: cwd,
+                  allowedRoots: [cwd, ...(additionalDirectories ?? [])],
+                })
+                return createTextToolResult(redirected, { redirectedToArtifact: true, path: rawPath })
+              }
+              if (slice.includes(0)) {
+                throw new Error(
+                  `安全拦截：检测到目标文件包含二进制字节流 (${rawPath})，已阻止使用 read 工具直接读取以防污染上下文。`,
+                )
+              }
+            } catch (err) {
+              if (err instanceof Error && err.message.startsWith('安全拦截：')) throw err
+            }
+          }
+        }
+      }
+      return baseRead.execute(toolCallId, params as never, signal, onUpdate, ctx as never)
+    },
+  } as unknown as ToolDefinition
+}
+
 function buildBuiltinToolDefinitions(
   sdk: PiSdk,
   sessionId: string,
@@ -2212,10 +2262,11 @@ function buildBuiltinToolDefinitions(
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
   onToolExecutionResult?: PiAgentQueryOptions['onToolExecutionResult'],
+  additionalDirectories?: string[],
 ): ToolDefinition[] {
   const powerShellTool = createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId)
   const definitions = [
-    sdk.createReadToolDefinition(cwd),
+    createSafeReadToolDefinition(sdk, cwd, additionalDirectories),
     sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult)),
     ...(powerShellTool ? [powerShellTool] : []),
     sdk.createEditToolDefinition(cwd),
@@ -2443,6 +2494,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 input.canUseTool,
                 input.runtimeEnv,
                 input.onToolExecutionResult,
+                input.additionalDirectories,
               ),
               ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
             ]),
@@ -2450,8 +2502,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       ]
 
       const settingsManager = sdk.SettingsManager.inMemory({
-        // 使用 Pi SDK 原生压缩策略。普通会话在约 80% 触发；审核工作台按有效案卷绑定提前到约 70%。
-        compaction: { enabled: true, reserveTokens: autoCompactionReserveTokens },
+        // 审核会话保留账本驱动的自动压缩；普通会话沿用上游暂时关闭自动压缩的设置。
+        compaction: { enabled: input.contextPolicy?.kind === 'review', reserveTokens: autoCompactionReserveTokens },
         // Continue the same transcript after transient failures so completed tools are not replayed.
         // Ollama 由 buildPiRetrySettings 单独关闭 native retry，避免兼容层重复提交工具上下文。
         retry: buildPiRetrySettings(input.provider, { isReviewRequest: input.toolProfile === 'review' }),
@@ -2592,7 +2644,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         }
       }
       installRuntimeGuardHooks(session, runtimeGuard)
-      installCurrentSessionCompactionHooks(session)
+      installCurrentSessionCompactionHooks(session, cwd)
       active.session = session
       resolveActiveReady(active, session)
 
@@ -2985,6 +3037,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               continuationCount: automaticCompactionContinuations,
               abortRequested: active.abortRequested,
               runtimeLimitReached: runtimeGuard.shouldStopBeforeNextTurn(),
+              cwd,
             })
             if (continuation.shouldContinue) {
               automaticCompactionContinuations += 1

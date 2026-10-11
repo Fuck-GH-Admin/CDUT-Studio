@@ -13,6 +13,7 @@
 
 // 领域包（P1/D14）经 review 统一出口，保证 `from '@profer/shared'` 单入口
 import type { ReviewDomainPackId } from './review-domain-packs'
+import type { NormalizedBBox } from './pdf'
 export * from './review-domain-packs'
 
 // ===== 定位锚点 =====
@@ -56,6 +57,15 @@ export interface ReviewDocumentBlock {
    * 不内联 base64：避免 case.json 被大图撑爆；审核时按需读取并转 data URL 送 Vision。
    */
   imageAssetPath?: string
+  /**
+   * 归一化边界框 [x0, y0, x1, y1]（0~1，左上角原点）。
+   * 由高精 PDF 解析引擎产出，用于三栏联动的几何定位高亮；纯文本切块缺省。
+   */
+  bbox?: NormalizedBBox
+  /** 全文线性阅读顺序序号（0 起）；仅高精解析路径提供 */
+  readingOrder?: number
+  /** 解析置信度 0.0 ~ 1.0；仅高精解析路径提供 */
+  confidence?: number
 }
 
 /** 解析状态 */

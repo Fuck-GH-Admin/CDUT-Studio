@@ -9,7 +9,9 @@
  * - .md/.txt/.json 等按行识别 heading / list-item / paragraph
  * - .csv 首行（表头）→ heading，其余行 → table-cell（保留原始行文本）
  * - .svg 读文本抽取 <text> 内容进 imageAlt，产出单个 image 块
- * - .pdf/.doc/.docx/.xls/.xlsx/.ppt/.pptx 复用 document-parser 提取文本后按行切块
+ * - .pdf 优先走 @profer/core 高精解析引擎（真实多页 + 归一化 bbox + 阅读顺序 + 表格行列），
+ *   引擎不可用/结果为空时回退 document-parser 文本并按行切块
+ * - .doc/.docx/.xls/.xlsx/.ppt/.pptx 复用 document-parser 提取文本后按行切块
  * - 图片（png/jpg/jpeg/gif/webp/bmp）→ 单个 image 块 + imageAssetPath（相对案卷目录），
  *   状态 partial：纯文本管线读不到图内文字，需后续 Vision 送模型
  * - 不支持或解析失败的文件 → 零个可读块 + parseStatus 'failed' + 中文原因；原件单独预览
@@ -19,7 +21,7 @@ import { readFile, stat, writeFile, mkdir } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { load } from 'cheerio'
-import type { ReviewDocumentBlock, SourceDocument } from '@profer/shared'
+import type { DocumentLayoutBlock, LayoutRegionKind, ReviewDocumentBlock, SourceDocument } from '@profer/shared'
 import { extractDocxReviewContent, extractSpreadsheetReviewContent, extractTextFromFile } from '../document-parser'
 
 /** 支持直接按文本切块的扩展名 */
@@ -274,6 +276,58 @@ export async function extractReviewableTextFile(filePath: string, fileName: stri
   return contents
 }
 
+/** 版面区域类别 → 审核块类型映射 */
+function mapLayoutKindToReviewKind(kind: LayoutRegionKind): ReviewDocumentBlock['kind'] {
+  switch (kind) {
+    case 'title':
+    case 'section-heading':
+      return 'heading'
+    case 'list-item':
+      return 'list-item'
+    case 'table':
+      return 'table-cell'
+    case 'figure':
+      return 'image'
+    default:
+      return 'paragraph'
+  }
+}
+
+/** 把引擎产出的排版块映射为审核块（保留真实页码、几何坐标与阅读顺序） */
+function mapLayoutBlockToReviewBlock(block: DocumentLayoutBlock): ReviewDocumentBlock {
+  const mapped: ReviewDocumentBlock = {
+    id: block.id,
+    kind: mapLayoutKindToReviewKind(block.kind),
+    text: block.text,
+    page: block.pageNumber,
+    bbox: block.bbox,
+    readingOrder: block.readingOrderIndex,
+    confidence: block.confidence,
+  }
+  if (block.table) {
+    mapped.table = { row: block.table.rowCount, column: block.table.columnCount }
+  }
+  return mapped
+}
+
+/**
+ * 用高精 PDF 解析引擎产出结构化块（真实多页 + 归一化坐标 + 阅读顺序 + 表格行列）。
+ *
+ * 引擎异常或结果为空时返回 null，调用方回退既有文本切块管线，绝不伪造块。
+ */
+async function parsePdfLayoutBlocks(filePath: string, fileName: string): Promise<ReviewDocumentBlock[] | null> {
+  try {
+    const { parsePdfDocument } = await import('@profer/core/pdf-engine')
+    const buffer = await readFile(filePath)
+    const ast = await parsePdfDocument(new Uint8Array(buffer), { fileName })
+    if (ast.readingOrderedBlocks.length === 0) return null
+    return ast.readingOrderedBlocks.map(mapLayoutBlockToReviewBlock)
+  } catch (error) {
+    console.warn(`[审核专区] 高精 PDF 解析失败，回退文本切块: ${filePath}`, error)
+    return null
+  }
+}
+
 /** SourceDocument 公共字段：各分支只决定 parseStatus / blocks / parseError */
 interface SourceDocumentDraft {
   fileName: string
@@ -453,6 +507,14 @@ export async function parseFileIntoSourceDocument(
 
   // 其他文档类（PDF / Office）：复用既有解析器提取文本，再走同一套纯文本切块管线
   if (DOCUMENT_EXTENSIONS.has(ext)) {
+    // PDF：优先走高精引擎，拿到真实多页 + 归一化坐标 + 阅读顺序 + 表格行列
+    if (ext === '.pdf') {
+      const layoutBlocks = await parsePdfLayoutBlocks(filePath, fileName)
+      if (layoutBlocks && layoutBlocks.length > 0) {
+        return draftOf('parsed', layoutBlocks)
+      }
+    }
+
     let extracted = ''
     try {
       extracted = await extractTextFromFile(filePath)

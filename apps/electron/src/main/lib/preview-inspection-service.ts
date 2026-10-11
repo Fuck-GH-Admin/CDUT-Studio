@@ -68,7 +68,11 @@ async function realDirectory(path: string): Promise<string | null> {
   }
 }
 
-async function resolveAuthorizedFile(filePath: string, context: PreviewInspectionContext): Promise<string | InspectPreviewError> {
+/**
+ * 解析并校验路径是否落在 Agent 工作目录 / 已授权目录内。
+ * 抽出为公开函数，供「文档内容解析」等常驻工具复用同一套授权语义。
+ */
+export async function resolveAuthorizedFile(filePath: string, context: PreviewInspectionContext): Promise<string | InspectPreviewError> {
   if (typeof filePath !== 'string' || !filePath.trim()) return error('invalid_input', 'filePath 必须是非空字符串')
   // 非工作区会话可以拥有显式附加目录，但不应把 home 当作默认 cwd/授权根。
   if (!isAbsolute(filePath) && !context.agentCwd.trim()) return error('unauthorized_path', '当前会话没有可解析相对路径的 Agent 工作目录')

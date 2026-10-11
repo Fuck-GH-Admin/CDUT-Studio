@@ -3,7 +3,7 @@
  *
  * 负责从各类办公文档中提取纯文本内容。
  * 支持的格式：
- * - PDF：使用 pdf-parse 提取文本，必要时用 pdfjs-dist 兜底
+ * - PDF：使用 @profer/core 下一代非自回归高精解析引擎（分栏感知/表格重构/公式/TrapDoc 防御）
  * - DOC/WPS：使用 word-extractor 提取文本（旧版 Word/WPS Writer）
  * - DOCX/XLSX/PPTX/ODP/ODS/ODT 及宏/模板变体：使用 mammoth/officeparser 提取文本
  * - RTF：使用内置的 brace 感知解析器提取文本
@@ -11,8 +11,7 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { pathToFileURL } from 'node:url'
-import { extname, posix as pathPosix } from 'node:path'
+import { basename, extname, posix as pathPosix } from 'node:path'
 import { load } from 'cheerio'
 import AdmZip from 'adm-zip'
 import { DOMParser } from '@xmldom/xmldom'
@@ -90,7 +89,7 @@ export function isDocumentAttachment(mediaType: string): boolean {
  * 从文件中提取纯文本内容
  *
  * 根据文件扩展名选择合适的解析器：
- * - .pdf → pdf-parse，必要时 pdfjs-dist
+ * - .pdf → @profer/core 下一代高精解析引擎（唯一路径）
  * - .doc/.dot/.wps/.wpt → word-extractor
  * - .docx/.xlsx/.pptx/.odt/.odp/.ods 等 → mammoth/officeparser
  * - .txt/.md/... → 直接 UTF-8 读取
@@ -145,29 +144,20 @@ export async function extractTextFromFile(filePath: string): Promise<string> {
 
 /**
  * 提取 PDF 文本
+ *
+ * 唯一路径：@profer/core 的下一代非自回归高精解析引擎（分栏感知、表格重构、
+ * 行间公式、TrapDoc 幽灵字符防御），产出高保真学术 Markdown。
+ * 引擎异常向上抛出，由调用方如实标记解析失败；无文本层（扫描件）返回空串。
  */
 async function extractPdf(filePath: string): Promise<string> {
   const buffer = readFileSync(filePath)
-
-  try {
-    // 直接引 lib/pdf-parse.js：主入口 index.js 在 esbuild 捆绑下 module.parent 丢失会误入 debug 分支（读仓库测试文件导致 ENOENT）
-    // 该子路径无类型声明，用动态变量绕开 TS 路径解析（运行时由 esbuild 捆绑解析）
-    const libSpecifier = 'pdf-parse/lib/pdf-parse.js'
-    const pdfParse = ((await import(/* @vite-ignore */ libSpecifier)) as { default: (b: Buffer) => Promise<{ text: string; numpages: number }> }).default
-    const result = await pdfParse(buffer)
-    const text = result.text.trim()
-    if (text.length > 0) {
-      console.log(`[文档解析] PDF 提取完成: ${result.numpages} 页, ${result.text.length} 字符`)
-      return result.text
-    }
-    console.warn(`[文档解析] PDF 文本为空，尝试 pdfjs-dist 兜底: ${filePath}`)
-  } catch (error) {
-    console.warn(`[文档解析] pdf-parse 提取失败，尝试 pdfjs-dist 兜底: ${filePath}`, error)
-  }
-
-  const text = await extractPdfWithPdfJs(buffer)
-  console.log(`[文档解析] PDF 兜底提取完成: ${text.length} 字符`)
-  return text
+  const { parsePdfDocument } = await import('@profer/core/pdf-engine')
+  const layoutAst = await parsePdfDocument(buffer, { fileName: basename(filePath) })
+  console.log(
+    `[文档解析] PDF 高精解析完成: ${layoutAst.pageCount} 页, `
+    + `${layoutAst.readingOrderedBlocks.length} 块, 拦截幽灵字符 ${layoutAst.metrics.trapDocFilteredCount}`,
+  )
+  return layoutAst.markdown
 }
 
 /**
@@ -726,76 +716,6 @@ async function extractDocxWithMammoth(filePath: string): Promise<string> {
   const mammoth = await import('mammoth') as unknown as MammothModule
   const result = await mammoth.extractRawText({ path: filePath })
   return result.value
-}
-
-interface PdfJsModule {
-  GlobalWorkerOptions: { workerSrc: string }
-  getDocument(src: {
-    data: Uint8Array
-    disableFontFace?: boolean
-    isEvalSupported?: boolean
-    useWorkerFetch?: boolean
-  }): PdfLoadingTask
-}
-
-interface PdfLoadingTask {
-  promise: Promise<PdfDocument>
-}
-
-interface PdfDocument {
-  numPages: number
-  getPage(pageNumber: number): Promise<PdfPage>
-  destroy(): Promise<void> | void
-}
-
-interface PdfPage {
-  getTextContent(): Promise<{ items: unknown[] }>
-}
-
-interface PdfTextItem {
-  str: string
-  hasEOL?: boolean
-}
-
-function isPdfTextItem(item: unknown): item is PdfTextItem {
-  return (
-    typeof item === 'object'
-    && item !== null
-    && 'str' in item
-    && typeof (item as { str: unknown }).str === 'string'
-  )
-}
-
-async function extractPdfWithPdfJs(buffer: Buffer): Promise<string> {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs') as unknown as PdfJsModule
-  // esbuild 后模块位于 dist/main.cjs，默认相对 worker 路径会失效。
-  // 从随包的 pdfjs-dist 定位 worker，file URL 同时兼容 Windows 盘符路径。
-  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')).href
-  const loadingTask = pdfjs.getDocument({
-    data: new Uint8Array(buffer),
-    disableFontFace: true,
-    isEvalSupported: false,
-    useWorkerFetch: false,
-  })
-  const pdf = await loadingTask.promise
-
-  try {
-    const pages: string[] = []
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
-      const page = await pdf.getPage(pageNumber)
-      const content = await page.getTextContent()
-      const pageParts: string[] = []
-      for (const item of content.items) {
-        if (!isPdfTextItem(item)) continue
-        pageParts.push(item.str)
-        if (item.hasEOL) pageParts.push('\n')
-      }
-      pages.push(pageParts.join(' ').replace(/[ \t]+\n/g, '\n').trim())
-    }
-    return pages.filter(Boolean).join('\n\n')
-  } finally {
-    await pdf.destroy()
-  }
 }
 
 /**

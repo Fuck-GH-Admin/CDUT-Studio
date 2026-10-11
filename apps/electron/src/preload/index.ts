@@ -10,7 +10,7 @@ import { IPC_CHANNELS, REVIEW_IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANN
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
 import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
 import type {
   RuntimeStatus,
@@ -1103,6 +1103,20 @@ export interface ElectronAPI {
   /** 为内联 PDF 预览生成临时 HTML 文件，返回文件路径 */
   preparePdfPreview: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ tmpHtmlUrl: string } | null>
 
+  /** 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标 PDF 文件路径、页码与归一化 BBox 坐标 */
+  resolveDocumentAnchor: (
+    anchor: string,
+    access?: import('@profer/shared').FileAccessOptions & { label?: string },
+  ) => Promise<{
+    fileId: string
+    filePath: string
+    fileName: string
+    pageNumber: number
+    blockId: string
+    bbox?: [number, number, number, number]
+    label?: string
+  } | null>
+
   /** 读取文件为 base64（带路径校验，供内联图片预览等） */
   readBinaryBase64: (filePath: string, access?: import('@profer/shared').FileAccessOptions, maxSize?: number) => Promise<string | null>
 
@@ -1622,6 +1636,8 @@ export interface ElectronAPI {
     listDocuments: (sessionId: string) => Promise<StudyDocumentOutline[]>
     getOutline: (input: StudyDocumentQueryInput) => Promise<StudyDocumentOutline | null>
     removeDocument: (input: StudyDocumentQueryInput) => Promise<{ success: boolean }>
+    toggleDocumentActive: (input: StudyToggleDocumentActiveInput) => Promise<{ success: boolean; enabled: boolean }>
+    setDocumentsActive: (input: StudySetDocumentsActiveInput) => Promise<{ success: boolean }>
   }
 
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====
@@ -2958,6 +2974,21 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke('file:prepare-pdf-preview', filePath, access) as Promise<{ tmpHtmlUrl: string } | null>
   },
 
+  resolveDocumentAnchor: (
+    anchor: string,
+    access?: import('@profer/shared').FileAccessOptions & { label?: string },
+  ) => {
+    return ipcRenderer.invoke('file:resolve-document-anchor', anchor, access) as Promise<{
+      fileId: string
+      filePath: string
+      fileName: string
+      pageNumber: number
+      blockId: string
+      bbox?: [number, number, number, number]
+      label?: string
+    } | null>
+  },
+
   readBinaryBase64: (filePath: string, access?: import('@profer/shared').FileAccessOptions, maxSize?: number) => {
     return ipcRenderer.invoke('file:read-binary-base64', filePath, access, maxSize) as Promise<string | null>
   },
@@ -3776,6 +3807,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_OUTLINE, input),
     removeDocument: (input: StudyDocumentQueryInput) =>
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.REMOVE_DOCUMENT, input),
+    toggleDocumentActive: (input: StudyToggleDocumentActiveInput) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.TOGGLE_DOCUMENT_ACTIVE, input),
+    setDocumentsActive: (input: StudySetDocumentsActiveInput) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.SET_DOCUMENTS_ACTIVE, input),
   },
 
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====

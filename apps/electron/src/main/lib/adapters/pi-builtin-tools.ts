@@ -128,6 +128,7 @@ import { describeCdutMutation, executeDomainTool, isCdutMutationAction } from '.
 import { requestCdutMutationConfirm } from '../cdut/cdut-mutation-guard'
 import { cdutDemoService } from '../cdut/cdut-demo/demo-service'
 import { buildPiStudyTools } from '../study/study-tools'
+import { executeReadDocumentArtifact } from '../document-parse-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -154,6 +155,8 @@ export interface PiBuiltinToolsContext {
   pptCapabilityActive?: boolean
   /** 当前会话激活的场景工具组集合；传入时仅注册集合内的工具组；未传时回退兼容模式。 */
   activeToolGroups?: ReadonlySet<string>
+  /** 当模型通过 discover_tools 主动查询某个已启用的能力组时，回调通知编排器将其持久化激活。 */
+  onActivateToolGroup?: (groupId: string) => void
   /** 图片生命周期持久化成功后通知 renderer 的安全卡片。 */
   onImageGenerationUpdate?: (record: AgentImageGenerationCard) => void
   /** Agent 请求使用当前会话的正式文件预览入口，并等待用户可见 viewer ready/error。 */
@@ -1960,6 +1963,75 @@ function buildWindowsShellInstallerTools(sdk: PiSdk, ctx: PiBuiltinToolsContext)
 }
 
 /**
+ * Tier 0：内核文档产物按页/关键词切片检阅工具（常驻）。
+ */
+function buildPiDocumentArtifactTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  return [
+    sdk.defineTool({
+      name: 'read_document_artifact',
+      label: '按页或关键词检阅文档产物',
+      description:
+        '按页码范围（如 "1-3"、"5"、"2,4,6-8"）或关键词/正则（query）按需读取已由内核前置解析的文档（PDF/DOCX/XLSX/PPTX）带双平行拓扑锚点的切片。注意：附件文档的完整纯净版 Markdown 已经由客户端内核在 0 秒内直写落盘至 <attached_document> 中的 clean_markdown_path；若用户仅要求“解析/转换为 Markdown 放到工作目录”，请直接引用该路径交付，严禁调用 Write/Edit 逐段手敲搬运全文！仅在需要阅读特定页面、回答细节问题或检索公式/表格时调用本工具。',
+      promptSnippet:
+        'read_document_artifact: read specific page ranges (pages="1-3") or search regex/keywords (query="...") in pre-parsed PDF/Office document artifacts with topology anchors.',
+      parameters: Type.Object({
+        file: Type.Optional(
+          Type.String({
+            description: '可选：文档文件名、artifact_id 或路径（省略时自动选取当前工作区已落盘的文档）',
+          }),
+        ),
+        filePath: Type.Optional(
+          Type.String({
+            description: '可选：同 file，兼容文件路径入参',
+          }),
+        ),
+        pages: Type.Optional(
+          Type.String({
+            description: '可选：页码范围，如 "1-3"、"5"、"2,4,6-8"（未提供 query 时默认读取 "1-3"）',
+          }),
+        ),
+        query: Type.Optional(
+          Type.String({
+            description: '可选：关键词或正则表达式，在全文档所有页中检索匹配段落并返回带双轨锚点的上下文',
+          }),
+        ),
+        includeAnchors: Type.Optional(
+          Type.Boolean({
+            description: '是否保留双平行拓扑锚点（默认 true，便于回答时按 [第X页·位置](#blockId) 引用）',
+          }),
+        ),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          const args = params as {
+            file?: string
+            filePath?: string
+            pages?: string
+            query?: string
+            includeAnchors?: boolean
+          }
+          const result = await executeReadDocumentArtifact(
+            {
+              file: args.file ?? args.filePath,
+              pages: args.pages,
+              query: args.query,
+              includeAnchors: args.includeAnchors,
+            },
+            {
+              agentCwd: ctx.agentCwd ?? '',
+              allowedRoots: ctx.allowedRoots ?? [],
+            },
+          )
+          return textToolResult(result.content, result)
+        } catch (error) {
+          return jsonToolError(error)
+        }
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
+/**
  * Tier 2：能力发现兜底工具（轻量目录，约 150 Tokens）。
  *
  * 当模型需要某类能力（浏览器、定时任务、子 Agent 委派、PPT 等）但当前工具列表中
@@ -1970,6 +2042,7 @@ function buildDiscoverToolsTool(
   sdk: PiSdk,
   mountedNames: ReadonlySet<string>,
   disabledGroups: ReadonlySet<string>,
+  onActivateGroup?: (groupId: string) => void,
 ): ToolDefinition {
   return sdk.defineTool({
     name: 'discover_tools',
@@ -1998,9 +2071,22 @@ function buildDiscoverToolsTool(
           || group.id.toLowerCase().includes(category)
           || group.label.toLowerCase().includes(category)
           || group.hint.toLowerCase().includes(category))
+
+      if (category && onActivateGroup) {
+        for (const group of groups) {
+          if (group.enabled) onActivateGroup(group.id)
+        }
+      }
+
+      const isDocumentQuery = category && /(?:pdf|doc|docx|xlsx|pptx|parse|markdown|文档|解析)/i.test(category)
+      const tip = isDocumentQuery
+        ? '【内核文档引擎】PDF/Office 附件已由客户端内核高精解析引擎前置解析并双态落盘：完整无损的纯净版 Markdown 已直接写入 <attached_documents> 中的 clean_markdown_path（无需再调 Write/Edit 重写）；如需按页码或关键词精读原文切片，请直接调用常驻工具 `read_document_artifact`。'
+        : 'mountedTools 表示当前已实际挂载、可直接调用的工具；enabled=false 表示该能力组被当前预设关闭，需用户在预设设置中启用后才能使用。'
+
       const payload = {
         groups,
-        tip: 'mountedTools 表示当前已实际挂载、可直接调用的工具；enabled=false 表示该能力组被当前预设关闭，需用户在预设设置中启用后才能使用。',
+        coreDocumentTools: mountedNames.has('read_document_artifact') ? ['read_document_artifact'] : [],
+        tip,
       }
       return {
         content: [{ type: 'text', text: JSON.stringify(payload) }],
@@ -2034,6 +2120,13 @@ export async function buildPiBuiltinTools(
   })
 
   const tools: ToolDefinition[] = []
+
+  // 0. 常驻内核文档切片检阅工具（Tier 0 核心能力）
+  try {
+    tools.push(...buildPiDocumentArtifactTools(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入文档产物切片工具失败:', error)
+  }
 
   if (ctx.reportGoalResult) {
     tools.push(...buildPiGoalTools(sdk, ctx))
@@ -2174,7 +2267,7 @@ export async function buildPiBuiltinTools(
     }
   }
 
-  // 12. 剪贴板工具（Tier 0 基础）
+  // 13. 剪贴板工具（Tier 0 基础）
   if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'clipboard')) {
     try {
       tools.push(...buildPiClipboardTools(sdk))
@@ -2208,7 +2301,7 @@ export async function buildPiBuiltinTools(
   // 15. Tier 2 能力发现保底工具（常驻）
   try {
     const mountedBeforeDiscover = new Set(tools.map((tool) => tool.name))
-    tools.push(buildDiscoverToolsTool(sdk, mountedBeforeDiscover, new Set(ctx.disabledToolGroups ?? [])))
+    tools.push(buildDiscoverToolsTool(sdk, mountedBeforeDiscover, new Set(ctx.disabledToolGroups ?? []), ctx.onActivateToolGroup))
   } catch (error) {
     console.error('[Pi 桥接] 注入能力发现工具失败:', error)
   }

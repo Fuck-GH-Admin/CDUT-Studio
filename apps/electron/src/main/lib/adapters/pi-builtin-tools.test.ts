@@ -543,6 +543,8 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     }
     // 预设工具不属于普通裁剪组：用户必须能够切换到其它预设。
     expect(names.has('mcp__agent-presets__preset_list')).toBe(true)
+    // 文档解析已内化为内核前置摄入：绝不再暴露为外置工具，避免消耗大模型工具决策 Token。
+    expect(names.has('parse_document')).toBe(false)
   })
 
   test('Given 预设关闭部分能力组 When building Pi builtin tools Then discover_tools 报告启用状态与已挂载工具', async () => {

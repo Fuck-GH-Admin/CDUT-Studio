@@ -33,7 +33,7 @@ const DELEGATION_GUIDELINES = `- 当任务包含可独立推进的子问题，�
 function buildTaskGraphGuideline(isPiRuntime: boolean | undefined): string {
   const create = isPiRuntime ? 'mcp__task-graph__proma_task_create' : 'proma_task_create'
   const update = isPiRuntime ? 'mcp__task-graph__proma_task_update' : 'proma_task_update'
-  return `- **任务图**：多步骤任务用 \`${create}\` 创建子任务并填 \`dependsOn\`。用 \`${update}\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**不要用 TaskCreate/TaskUpdate**。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`${create}\` 落成节点，再补依赖/分叉边，别只口头描述。`
+  return `- **任务图**：多步骤任务用 \`${create}\` 创建子任务并填 \`dependsOn\`。用 \`${update}\` 更新状态，**发现遗漏的依赖关系时也在 update 时补 dependsOn**。简单一步任务不创建。**让图随推进成链**：每完成一步再创建下一个子任务时，新任务的 \`dependsOn\` 要指向刚完成的任务（或本序列前置任务）；任务推进过程中发现新子方向，先 \`${create}\` 落成节点，再补依赖/分叉边，别只口头描述。`
 }
 
 /** 规划 Todo 与本地日程工具清单：Pi 运行时带 mcp__planning__ 前缀 */
@@ -63,6 +63,8 @@ function buildPresetToolList(
 }
 
 const TOOL_USAGE_GUIDELINES = `- **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
+- **附件文档双态落盘与按需切片读取**：当消息中包含 \`<attached_documents>\` 句柄时，客户端内核已在底层完成高精度版面分析并生成了双态产物：① 如用户要求“解析/转存为 Markdown 放到工作目录”，句柄中的 \`clean_markdown_path\` 已为您在工作目录直接生成了**零 HTML 注释污染的纯净版 Markdown**，可直接交付或按需润色；② 如需深度问答、总结或定位细节，请直接调用核心工具 \`read_document_artifact\`（支持 \`pages\` 页码区间切片或 \`query\` 正则/关键词检索）读取带双平行拓扑锚点的精确原文片段。系统中不存在任何外部 \`parse_document\` 工具，严禁调用 \`discover_tools\` 寻找解析工具，也严禁编写 Python/命令行脚本重复提取文档文本。
+- **文档证据引用规范**：当回答涉及随消息携带的文档内容时，必须使用人类友好且可点击跳转的双轨定位格式引用来源，格式为：[第X页·位置/图表名](#blockId)（例如：[第2页·左栏](#p2-b01) 或 [第3页·图1](#p3-fig01)）。严禁虚构页码，严禁输出无交互锚点的孤立结论。
 - **文件内容与视觉预览**：Markdown、HTML、SVG、图片、PDF、DOCX、XLSX 等通用文件可按需使用 \`inspect_preview\`；**PPTX 必须先用 \`open_file_preview\` 打开 CDUT Studio 正式文件预览，再用 \`inspect_file_preview\` 从同一用户可见 viewer 读取页级视觉**。不得为 PPTX 创建 \`Preview.html\`、使用 \`BrowserPreviewOpen\`、调用浏览器截图或另建隐藏截图链路。PPTX 修改后再次调用 \`open_file_preview\` 等待新 revision ready，再重新观察受影响页。
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
 
@@ -126,7 +128,7 @@ function buildPreviewGuideline(
   const parts: string[] = []
 
   if (availablePreviewTools.has('inspect_preview')) {
-    parts.push('Markdown、HTML、SVG、图片、PDF、DOCX、XLSX 等通用文件可按需使用 `inspect_preview`')
+    parts.push('Markdown、HTML、SVG、图片、PDF、DOCX、XLSX 等通用文件的视觉预览可按需使用 `inspect_preview`')
   }
 
   if (availablePreviewTools.has('open_file_preview') && availablePreviewTools.has('inspect_file_preview')) {
@@ -340,6 +342,8 @@ interface SystemPromptContext {
   teamMemoryAvailable?: boolean
   /** 预设硬禁用的能力组；组内工具与对应 SOP 均不可用。 */
   disabledToolGroups?: readonly AgentPresetToolGroup[]
+  /** 当前轮次实际激活挂载的能力组（Tier 2 动态挂载）；传入时仅已挂载能力组注入 SOP，实现工具与提示词 100% 同构。 */
+  activeToolGroups?: ReadonlySet<string>
   /** 仅当 PPT 能力已通过会话级 gate 激活时才注入对应 SOP。 */
   pptCapabilityActive?: boolean
   /** 预设禁用的单个内置工具；与能力组门禁叠加。 */
@@ -408,6 +412,8 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const userName = profile.userName || '用户'
   const suppress = new Set(ctx.suppressSections ?? [])
   const capabilityDisabled = (group: AgentPresetToolGroup): boolean => isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, group)
+  const capabilityMounted = (group: AgentPresetToolGroup): boolean =>
+    !capabilityDisabled(group) && (ctx.activeToolGroups ? ctx.activeToolGroups.has(group) : true)
   const toolDisabled = (toolName: string): boolean => ctx.disabledTools?.includes(toolName) === true
   const workspacePaths = ctx.workspaceSlug
     ? buildWorkspacePromptPaths(ctx.workspaceSlug, ctx.sessionId)
@@ -479,12 +485,12 @@ ${buildEpistemicStance(epistemicMode)}`)
 
   // AI 速课堂已在上方按学习场景精简注入规范，跳过通用工具指南与多模态段；普通会话保持完整。
   if (!isStudyClass) {
-  // 工具使用指南：任务图与规划中心分别跟随各自实际注册状态；规划中心归入 automation 组。
+  // 工具使用指南：任务图与规划中心分别跟随各自实际挂载状态；未挂载时零提示词（100% 同构）。
   sections.push(`## 工具使用指南
-${suppress.has('task-graph') || capabilityDisabled('task-graph') ? '' : `${buildTaskGraphGuideline(ctx.isPiRuntime)}\n`}${suppress.has('automation') || capabilityDisabled('automation') ? '' : `${buildPlanningTodoGuideline(ctx.isPiRuntime)}\n`}${buildToolUsageGuidelines(
+${suppress.has('task-graph') || !capabilityMounted('task-graph') ? '' : `${buildTaskGraphGuideline(ctx.isPiRuntime)}\n`}${suppress.has('automation') || !capabilityMounted('automation') ? '' : `${buildPlanningTodoGuideline(ctx.isPiRuntime)}\n`}${buildToolUsageGuidelines(
     new Set(
       (AGENT_PRESET_CAPABILITY_GROUPS.find((group) => group.id === 'preview')?.toolNames ?? [])
-        .filter((toolName) => !capabilityDisabled('preview') && !toolDisabled(toolName)),
+        .filter((toolName) => capabilityMounted('preview') && !toolDisabled(toolName)),
     ),
   )}`)
 
@@ -492,9 +498,9 @@ ${suppress.has('task-graph') || capabilityDisabled('task-graph') ? '' : `${build
   sections.push(MULTIMODAL_PRESENTATION_CONTRACT)
   }
 
-  // SubAgent 委派策略（Pi 无 SDK 内置 SubAgent，委派走 CDUT Studio 协作子会话；极简类预设可隐藏）
+  // SubAgent 委派策略（仅当 collaboration 组已挂载时注入，未挂载则零提示词）
   const claudeAvailable = ctx.claudeAvailable !== false
-  if (!suppress.has('subagents') && !isStudyClass) {
+  if (!suppress.has('subagents') && !isStudyClass && capabilityMounted('collaboration')) {
   if (ctx.isPiRuntime) {
     sections.push(`## SubAgent 委派策略
 
@@ -534,7 +540,7 @@ CDUT Studio 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模�
 
 当前会话运行在 Pi Agent 运行时上。你仍然遵循 CDUT Studio Agent 的统一行为规范，但底层工具、权限和消息流由 CDUT Studio 的 Pi adapter 桥接：
 
-- 使用 CDUT Studio 暴露给你的 Read、Write、Edit、Bash、Grep、Glob、LS、Skill 和产品工具完成任务
+- 使用 CDUT Studio 暴露给你的 Read、Write、Edit、Bash、Grep、Glob、LS、read_document_artifact、Skill 和产品工具完成任务
 - 调用 \`write\` 时必须在同一次调用中同时提供 \`path\` 和完整的字符串 \`content\`；不要只提供路径。需要创建空文件时显式传入 \`content: ""\`
 - 遵循本提示词中的工作区、权限、计划模式、Context 和知识维护规则
 - 不要假设当前处于 Claude Code CLI 原生运行环境，也不要依赖只存在于 Claude runtime 的内置配置
@@ -548,8 +554,8 @@ CDUT Studio 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模�
 - **修改后必须闭环。** 根据风险执行最小相关验证：内容修改可重读确认，行为变化运行相关检查/测试，视觉交付检查实际渲染。检查通过后停止重复验证；系统不会自动追加验证轮次，须在当前任务内完成。
 - **失败如实说明。** 工具报错、验证失败或无法运行时，定位原因并合理重试；最终区分已完成、已验证和仍受阻的部分，绝不虚构“已验证通过”。`)
 
-    // Pi Runtime 文件记忆小节（极简类预设可隐藏；AI 速课堂不涉及工程文件记忆）
-    if (!suppress.has('memory') && !isStudyClass) {
+    // Pi Runtime 文件记忆小节（仅当 memory 组未禁用且已挂载时注入；AI 速课堂不涉及工程文件记忆）
+    if (!suppress.has('memory') && !isStudyClass && capabilityMounted('memory')) {
       sections.push(`### Pi Runtime 与文件记忆
 
 Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 CDUT Studio 已为 Pi 提供工作区文件工具；因此**不要等待 SDK 自动落盘，应由你按统一知识维护规则主动维护文件记忆**：
@@ -615,7 +621,7 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 CDUT Studio 已为 
 - 新会话开始时，如任务需要恢复上下文，先列出两个目录；只读取**实际存在且与当前任务相关**的文件。不得默认创建或读取 \`note.md\`、\`todo.md\`，目录为空或无关时直接跳过。`)
   }
 
-  if (ctx.isTeamWorkspace && ctx.teamMemoryAvailable !== false && !suppress.has('memory')) {
+  if (ctx.isTeamWorkspace && ctx.teamMemoryAvailable !== false && !suppress.has('memory') && capabilityMounted('memory')) {
     // 团队记忆工具名按 runtime 适配：Claude 走 in-process MCP 裸名，Pi 带 mcp__team-memory__ 前缀
     const teamMemoryPrefix = ctx.isPiRuntime ? 'mcp__team-memory__' : ''
     sections.push(`## 团队共享知识记忆
@@ -642,7 +648,7 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 CDUT Studio 已为 
   // 计划模式指令（始终注入计划文件路径规则）。WebSearch 是 Claude 原生工具，
   // 因此必须和 web 能力组同步，不能在禁用后仍出现在 Prompt 中。
   if (ctx.permissionMode === 'plan') {
-    const planResearchTools = ['WebSearch', 'WebFetch'].filter((toolName) => !capabilityDisabled('web') && !toolDisabled(toolName))
+    const planResearchTools = ['WebSearch', 'WebFetch'].filter((toolName) => capabilityMounted('web') && !toolDisabled(toolName))
     const planResearchToolsText = ['Read', 'Glob', 'Grep', ...planResearchTools].join('、')
     sections.push(`## 计划模式
 
@@ -680,7 +686,7 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 CDUT Studio 已为 
 - 委派任务须收齐影响结论的结果，核对后整合必要发现，不把子 Agent 的过程日志当作交付。
 - 回复长度由用户要求和任务复杂度决定；简单结果简短，报告和文稿保证内容完整。`)
 
-  // 交互规范（定时任务条目按预设可隐藏：automation 工具组禁用时同步隐藏，三层一致）
+  // 交互规范（定时任务条目按预设与实际挂载状态同步隐藏）
   sections.push(`## 交互规范
 
 1. 默认使用中文；用户明确要求其他语言时遵从。用自然、具体的表达，术语只在有助于理解时保留。
@@ -690,14 +696,14 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 CDUT Studio 已为 
 5. **会话恢复**：每次收到新任务时，先按需检查：① 如任务需要恢复当前任务状态，先列出当前 cwd 下的会话级 \`.context/\`；② 如任务需要跨会话资料，先列出工作区级 Context（\`${workspacePaths?.workspaceContextDir ?? 'workspace-files/.context/'}\`）；只读取实际存在且与当前任务相关的 \`todo.md\`、计划或主题文档，**不默认读取或创建 \`note.md\`**。随后按需检查 ③ CDUT Studio 工作区资料（\`${workspacePaths?.workspaceProfile ?? '工作区根目录/workspace-profile.md'}\`）；若不存在，再按需读取旧版 CDUT Studio 资料（\`${workspacePaths?.legacyWorkspaceProfile ?? '工作区根目录/CLAUDE.md'}\`）；④ Auto Memory 索引（\`${workspacePaths?.autoMemoryIndex ?? '.cdutai/memory/MEMORY.md'}\`）和相关 Skills。**目录为空、目标文件不存在或资料无关时直接跳过；不要读取当前 cwd 下不存在的相对路径 \`CLAUDE.md\`，也不要无差别全量读取。**
 6. **自检习惯**：复杂任务执行过程中，定期回顾 CDUT Studio 工作区资料 workspace-profile.md 和两级 .context/ 中的内容，确保行为与已记录的规范和计划保持一致`)
 
-  if (!suppress.has('automation') && !capabilityDisabled('automation') && !isStudyClass) {
-    sections.push(`7. **定时任务**：CDUT Studio 内置了持久化的定时任务系统（Automation），更适合长期反复、无人值守、有稳定价值的场景。**不要用 TaskCreate、CronCreate 或 Bash cron**，它们都不是真正的 CDUT Studio 定时任务。
+  if (!suppress.has('automation') && capabilityMounted('automation') && !isStudyClass) {
+    sections.push(`7. **定时任务**：CDUT Studio 内置了持久化的定时任务系统（Automation），更适合长期反复、无人值守、有稳定价值的场景。**不要用 CronCreate 或 Bash cron**，它们都不是真正的 CDUT Studio 定时任务。
    \`automation\` 是 CDUT Studio 内嵌 Skill，遇到可能反复、长期、持续关注、自动检查、定期汇总、运行记录复盘、已有任务维护等需求时，宁可先触发此 Skill 判断是否适合，也不要漏掉潜在的自动化机会；再通过 CDUT Studio 内置的 automation MCP 工具创建、查看、修改、暂停、删除或试运行任务。
    如果只是一次性任务、短期提醒、需要用户实时判断、执行结果没有长期价值，明确告诉用户不建议创建定时任务。
    创建后，用户可以在侧边栏的自动任务按钮进入定时任务管理页面查看和编辑。`)
   }
 
-  const imageGroupEnabled = !isStudyClass && !capabilityDisabled('image')
+  const imageGroupEnabled = !isStudyClass && capabilityMounted('image')
   const canSendLocalImage = imageGroupEnabled && !toolDisabled('send_local_image')
   const canGenerateImage = imageGroupEnabled && !toolDisabled('generate_image')
   const canCreateSkin = imageGroupEnabled && !toolDisabled('create_skin') && !!ctx.workspaceSlug && !!ctx.agentCwd
@@ -716,10 +722,10 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 CDUT Studio 已为 
 
   const browserToolNames = AGENT_PRESET_CAPABILITY_GROUPS.find((group) => group.id === 'browser')?.toolNames ?? []
   const availableBrowserTools = new Set(
-    browserToolNames.filter((toolName) => !capabilityDisabled('browser') && !toolDisabled(toolName)),
+    browserToolNames.filter((toolName) => capabilityMounted('browser') && !toolDisabled(toolName)),
   )
   const availableWebTools = new Set(
-    ['WebSearch', 'WebFetch'].filter((toolName) => !capabilityDisabled('web') && !toolDisabled(toolName)),
+    ['WebSearch', 'WebFetch'].filter((toolName) => capabilityMounted('web') && !toolDisabled(toolName)),
   )
   // AI 速课堂聚焦内网学习资料带教，不注入浏览器/网页检索指南，避免通用能力噪声。
   if (!isStudyClass) {

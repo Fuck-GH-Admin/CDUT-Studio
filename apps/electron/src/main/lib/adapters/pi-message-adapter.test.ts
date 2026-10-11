@@ -263,4 +263,43 @@ describe('sanitizePiContextMessages', () => {
     expect(result).toBe(messages)
     expect(result[0]).toBe(validImage)
   })
+
+  test('超过最近 6 步的历史超长 Write/Edit 参数与 ToolResult 文本被自动折叠瘦身，最近 6 步保持完整', () => {
+    const hugeContent = 'A'.repeat(4000)
+    const oldAssistantWrite = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'toolCall',
+          id: 'call-write-1',
+          name: 'write',
+          arguments: { path: 'paper.md', content: hugeContent },
+        },
+      ],
+    } as unknown as AgentMessage
+    const oldToolResult = {
+      role: 'toolResult',
+      toolCallId: 'call-read-1',
+      toolName: 'read',
+      isError: false,
+      content: [{ type: 'text', text: 'B'.repeat(4500) }],
+    } as unknown as AgentMessage
+
+    const recentMessages = Array.from({ length: 6 }, (_, idx) => ({
+      role: idx % 2 === 0 ? 'assistant' : 'toolResult',
+      content: [{ type: 'text', text: 'R'.repeat(3000) }],
+    })) as unknown as AgentMessage[]
+
+    const result = sanitizePiContextMessages([oldAssistantWrite, oldToolResult, ...recentMessages])
+    const maskedCall = (result[0] as any).content[0]
+    expect(maskedCall.arguments.content).toContain('历史写入内容已成功落盘并折叠')
+    expect(maskedCall.arguments.content.length).toBeLessThan(700)
+
+    const maskedResultText = (result[1] as any).content[0].text
+    expect(maskedResultText).toContain('历史工具输出已折叠')
+    expect(maskedResultText.length).toBeLessThan(1300)
+
+    // 最近 6 步不被折叠
+    expect((result[2] as any).content[0].text.length).toBe(3000)
+  })
 })

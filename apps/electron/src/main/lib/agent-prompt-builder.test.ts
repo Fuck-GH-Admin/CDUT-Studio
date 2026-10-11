@@ -786,4 +786,20 @@ describe('buildSystemPrompt 皮肤创建指引', () => {
     const prompt = buildSystemPrompt({ ...base, disabledTools: ['create_skin'] })
     expect(prompt).not.toContain('10. **创建 CDUT Studio 皮肤**')
   })
+
+  test('传入 activeToolGroups 空集合时，所有未挂载的 Tier 2 能力组 SOP 均零提示词（100% 同构）', () => {
+    const prompt = buildSystemPrompt({
+      ...base,
+      isPiRuntime: true,
+      activeToolGroups: new Set(),
+    })
+    expect(prompt).toContain('read_document_artifact')
+    expect(prompt).not.toContain('mcp__task-graph__proma_task_create')
+    expect(prompt).not.toContain('mcp__planning__create_todo')
+    expect(prompt).not.toContain('## SubAgent 委派策略')
+    expect(prompt).not.toContain('7. **定时任务**')
+    expect(prompt).not.toContain('9. **AI 生图**')
+    expect(prompt).not.toContain('10. **创建 CDUT Studio 皮肤**')
+    expect(prompt).not.toContain('## CDUT Studio 受管浏览器')
+  })
 })

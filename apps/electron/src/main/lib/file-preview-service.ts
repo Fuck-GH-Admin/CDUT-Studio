@@ -775,9 +775,71 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[]):
 <html><head><meta charset="utf-8">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: transparent; overflow: auto; padding: 16px; }
-  #c { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; width: fit-content; min-width: 100%; }
-  #c canvas { box-shadow: 0 2px 8px rgba(0,0,0,0.15); margin: 0 auto; display: block; }
+  body { background: transparent; overflow: auto; padding: 16px; scroll-behavior: smooth; }
+  #c { display: flex; flex-direction: column; align-items: center; gap: 16px; width: fit-content; min-width: 100%; }
+  .page-wrapper { position: relative; margin: 0 auto; box-shadow: 0 4px 16px rgba(0,0,0,0.16); border-radius: 4px; overflow: visible; background: #fff; }
+  .page-wrapper canvas { display: block; border-radius: 4px; }
+  .overlay-layer { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+  .bbox-spotlight {
+    position: absolute;
+    border-radius: 6px;
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(59, 130, 246, 0.18));
+    border: 2px solid rgba(245, 158, 11, 0.92);
+    box-shadow:
+      0 0 0 4px rgba(245, 158, 11, 0.24),
+      0 8px 24px -4px rgba(245, 158, 11, 0.35),
+      inset 0 0 12px rgba(255, 255, 255, 0.35);
+    animation: cdutSpotlightPulse 2.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    transform-origin: center center;
+  }
+  .bbox-spotlight-badge {
+    position: absolute;
+    top: -24px;
+    left: -2px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    background: linear-gradient(135deg, #f59e0b, #ea580c);
+    color: #fff;
+    font: 600 11px/1.4 system-ui, -apple-system, sans-serif;
+    white-space: nowrap;
+    box-shadow: 0 4px 10px rgba(234, 88, 12, 0.35);
+    letter-spacing: 0.02em;
+  }
+  @keyframes cdutSpotlightPulse {
+    0% {
+      opacity: 0;
+      transform: scale(0.96);
+      box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.65), 0 4px 12px rgba(245, 158, 11, 0.25);
+    }
+    12% {
+      opacity: 1;
+      transform: scale(1.012);
+      box-shadow: 0 0 0 8px rgba(245, 158, 11, 0.28), 0 10px 28px rgba(245, 158, 11, 0.45);
+    }
+    26% {
+      opacity: 0.92;
+      transform: scale(0.996);
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18), 0 6px 16px rgba(245, 158, 11, 0.3);
+    }
+    42% {
+      opacity: 1;
+      transform: scale(1.008);
+      box-shadow: 0 0 0 7px rgba(245, 158, 11, 0.25), 0 10px 26px rgba(245, 158, 11, 0.4);
+    }
+    75% {
+      opacity: 0.9;
+      transform: scale(1);
+      box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.16), 0 6px 16px rgba(245, 158, 11, 0.25);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(0.99);
+      box-shadow: 0 0 0 0 rgba(245, 158, 11, 0), 0 0 0 rgba(245, 158, 11, 0);
+    }
+  }
   .loading { color: #888; font: 12px/1.5 system-ui; padding: 40px; text-align: center; width: 100%; }
   .error { color: #f87171; font: 12px/1.5 system-ui; padding: 20px; text-align: center; width: 100%; }
   .page-info { color: #888; font: 11px/1.5 system-ui; text-align: center; padding: 4px; width: 100%; }
@@ -793,9 +855,75 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[]):
     const STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
     let stepIdx = 2;
     let pdfDoc = null;
+    let isRendered = false;
+    let pendingHighlight = null;
+    let spotlightTimer = null;
 
     function notifyZoom() {
       window.parent.postMessage({ type: 'pdf-zoom-changed', zoom: Math.round(STEPS[stepIdx] * 100) }, '*');
+    }
+
+    function clearSpotlights() {
+      if (spotlightTimer) {
+        clearTimeout(spotlightTimer);
+        spotlightTimer = null;
+      }
+      document.querySelectorAll('.bbox-spotlight').forEach((el) => el.remove());
+    }
+
+    function applyHighlight(payload) {
+      if (!payload || !isRendered) {
+        pendingHighlight = payload;
+        return;
+      }
+      const pageNum = Math.max(1, Number(payload.page) || 1);
+      const wrapper = container.querySelector('.page-wrapper[data-page="' + pageNum + '"]');
+      if (!wrapper) return;
+
+      clearSpotlights();
+      const overlay = wrapper.querySelector('.overlay-layer');
+      if (!overlay) return;
+
+      const bbox = Array.isArray(payload.bbox) && payload.bbox.length >= 4 ? payload.bbox : null;
+      const spotlight = document.createElement('div');
+      spotlight.className = 'bbox-spotlight';
+
+      if (bbox) {
+        const padX = 0.008;
+        const padY = 0.005;
+        const x0 = Math.max(0, Math.min(0.98, Number(bbox[0]) - padX));
+        const y0 = Math.max(0, Math.min(0.98, Number(bbox[1]) - padY));
+        const x1 = Math.max(x0 + 0.02, Math.min(1, Number(bbox[2]) + padX));
+        const y1 = Math.max(y0 + 0.015, Math.min(1, Number(bbox[3]) + padY));
+        spotlight.style.left = (x0 * 100).toFixed(2) + '%';
+        spotlight.style.top = (y0 * 100).toFixed(2) + '%';
+        spotlight.style.width = ((x1 - x0) * 100).toFixed(2) + '%';
+        spotlight.style.height = ((y1 - y0) * 100).toFixed(2) + '%';
+      } else {
+        spotlight.style.left = '4%';
+        spotlight.style.top = '4%';
+        spotlight.style.width = '92%';
+        spotlight.style.height = '14%';
+      }
+
+      const badgeText = payload.label || payload.blockId || ('第 ' + pageNum + ' 页');
+      if (badgeText) {
+        const badge = document.createElement('div');
+        badge.className = 'bbox-spotlight-badge';
+        badge.textContent = '📍 ' + badgeText;
+        spotlight.appendChild(badge);
+      }
+
+      overlay.appendChild(spotlight);
+
+      requestAnimationFrame(() => {
+        spotlight.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      });
+
+      spotlightTimer = setTimeout(() => {
+        spotlight.remove();
+        spotlightTimer = null;
+      }, 2850);
     }
 
     async function renderPages(pageNumbers) {
@@ -806,18 +934,37 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[]):
       for (const i of pageNumbers) {
         const page = await pdfDoc.getPage(i);
         const vp = page.getViewport({ scale: userScale * dpr });
+        const wrapper = document.createElement('div');
+        wrapper.className = 'page-wrapper';
+        wrapper.dataset.page = String(i);
+        wrapper.style.width = (vp.width / dpr) + 'px';
+        wrapper.style.height = (vp.height / dpr) + 'px';
+
         const canvas = document.createElement('canvas');
         canvas.width = vp.width; canvas.height = vp.height;
         canvas.style.width = (vp.width / dpr) + 'px';
         canvas.style.height = (vp.height / dpr) + 'px';
         await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-        container.appendChild(canvas);
+
+        const overlay = document.createElement('div');
+        overlay.className = 'overlay-layer';
+
+        wrapper.appendChild(canvas);
+        wrapper.appendChild(overlay);
+        container.appendChild(wrapper);
       }
       const info = document.createElement('div');
       info.className = 'page-info';
       info.textContent = '共 ' + pdfDoc.numPages + ' 页';
       container.appendChild(info);
+      isRendered = true;
       notifyZoom();
+
+      if (pendingHighlight) {
+        const toRun = pendingHighlight;
+        pendingHighlight = null;
+        applyHighlight(toRun);
+      }
     }
 
     async function renderAll() { return renderPages(Array.from({ length: pdfDoc?.numPages || 0 }, (_, i) => i + 1)); }
@@ -826,6 +973,9 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[]):
       if (e.data?.type === 'pdf-zoom') {
         if (e.data.direction === 'in' && stepIdx < STEPS.length - 1) { stepIdx++; renderAll(); }
         if (e.data.direction === 'out' && stepIdx > 0) { stepIdx--; renderAll(); }
+      }
+      if (e.data?.type === 'pdf-navigate-highlight') {
+        applyHighlight(e.data);
       }
       // 隐藏 Agent renderer 使用此窄消息协议逐页渲染；普通人类预览不会发送它。
       if (e.data?.type === 'agent-preview:select-pdf-page') {

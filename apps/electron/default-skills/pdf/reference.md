@@ -2,6 +2,8 @@
 
 This document contains advanced PDF processing features, detailed examples, and additional libraries not covered in the main skill instructions.
 
+> **Read-only text/table extraction is pre-ingested automatically by CDUT Studio's high-precision engine** and provided directly in your conversation context. Do not use pypdfium2, pdfplumber, pdftotext, pdfjs-dist, or any other library to extract text or tables from a PDF. The libraries below are for rendering, modification, image extraction, OCR of scanned pages, or PDF generation.
+
 ## pypdfium2 Library (Apache/BSD License)
 
 ### Overview
@@ -31,16 +33,6 @@ for i, page in enumerate(pdf):
     bitmap = page.render(scale=1.5)
     img = bitmap.to_pil()
     img.save(f"page_{i+1}.jpg", "JPEG", quality=90)
-```
-
-### Extract Text with pypdfium2
-```python
-import pypdfium2 as pdfium
-
-pdf = pdfium.PdfDocument("document.pdf")
-for i, page in enumerate(pdf):
-    text = page.get_text()
-    print(f"Page {i+1} text length: {len(text)} chars")
 ```
 
 ## JavaScript Libraries
@@ -205,42 +197,6 @@ async function renderPDF() {
 }
 ```
 
-#### Extract Text with Coordinates
-```javascript
-import * as pdfjsLib from 'pdfjs-dist';
-
-async function extractText() {
-    const loadingTask = pdfjsLib.getDocument('document.pdf');
-    const pdf = await loadingTask.promise;
-
-    let fullText = '';
-
-    // Extract text from all pages
-    for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-
-        const pageText = textContent.items
-            .map(item => item.str)
-            .join(' ');
-
-        fullText += `\n--- Page ${i} ---\n${pageText}`;
-
-        // Get text with coordinates for advanced processing
-        const textWithCoords = textContent.items.map(item => ({
-            text: item.str,
-            x: item.transform[4],
-            y: item.transform[5],
-            width: item.width,
-            height: item.height
-        }));
-    }
-
-    console.log(fullText);
-    return fullText;
-}
-```
-
 #### Extract Annotations and Forms
 ```javascript
 import * as pdfjsLib from 'pdfjs-dist';
@@ -265,14 +221,6 @@ async function extractAnnotations() {
 ## Advanced Command-Line Operations
 
 ### poppler-utils Advanced Features
-
-#### Extract Text with Bounding Box Coordinates
-```bash
-# Extract text with bounding box coordinates (essential for structured data)
-pdftotext -bbox-layout document.pdf output.xml
-
-# The XML output contains precise coordinates for each text element
-```
 
 #### Advanced Image Conversion
 ```bash
@@ -341,46 +289,6 @@ qpdf --password=secret123 --decrypt encrypted.pdf decrypted.pdf
 ```
 
 ## Advanced Python Techniques
-
-### pdfplumber Advanced Features
-
-#### Extract Text with Precise Coordinates
-```python
-import pdfplumber
-
-with pdfplumber.open("document.pdf") as pdf:
-    page = pdf.pages[0]
-    
-    # Extract all text with coordinates
-    chars = page.chars
-    for char in chars[:10]:  # First 10 characters
-        print(f"Char: '{char['text']}' at x:{char['x0']:.1f} y:{char['y0']:.1f}")
-    
-    # Extract text by bounding box (left, top, right, bottom)
-    bbox_text = page.within_bbox((100, 100, 400, 200)).extract_text()
-```
-
-#### Advanced Table Extraction with Custom Settings
-```python
-import pdfplumber
-import pandas as pd
-
-with pdfplumber.open("complex_table.pdf") as pdf:
-    page = pdf.pages[0]
-    
-    # Extract tables with custom settings for complex layouts
-    table_settings = {
-        "vertical_strategy": "lines",
-        "horizontal_strategy": "lines",
-        "snap_tolerance": 3,
-        "intersection_tolerance": 15
-    }
-    tables = page.extract_tables(table_settings)
-    
-    # Visual debugging for table extraction
-    img = page.to_image(resolution=150)
-    img.save("debug_layout.png")
-```
 
 ### reportlab Advanced Features
 
@@ -487,23 +395,6 @@ def batch_process_pdfs(input_dir, operation='merge'):
         
         with open("batch_merged.pdf", "wb") as output:
             writer.write(output)
-    
-    elif operation == 'extract_text':
-        for pdf_file in pdf_files:
-            try:
-                reader = PdfReader(pdf_file)
-                text = ""
-                for page in reader.pages:
-                    text += page.extract_text()
-                
-                output_file = pdf_file.replace('.pdf', '.txt')
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    f.write(text)
-                logger.info(f"Extracted text from: {pdf_file}")
-                
-            except Exception as e:
-                logger.error(f"Failed to extract text from {pdf_file}: {e}")
-                continue
 ```
 
 ### Advanced PDF Cropping
@@ -533,9 +424,7 @@ with open("cropped.pdf", "wb") as output:
 - Process pages individually with pypdfium2
 
 ### 2. For Text Extraction
-- `pdftotext -bbox-layout` is fastest for plain text extraction
-- Use pdfplumber for structured data and tables
-- Avoid `pypdf.extract_text()` for very large documents
+- Consume the preprocessed `<attached_documents>` context directly. Do not extract text or tables with `pdftotext`, `pdfplumber`, `pypdfium2`, or `pypdf`.
 
 ### 3. For Image Extraction
 - `pdfimages` is much faster than rendering pages

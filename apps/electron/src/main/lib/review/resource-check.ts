@@ -43,8 +43,13 @@ export function resourceCheck(resourcesRoot: string): ResourceCheckReport {
     status: existsSync(ocrChi) ? 'available' : 'deferred',
     detail: existsSync(ocrChi) ? ocrChi : 'chi_sim.traineddata 待随包',
   })
-  // 文档解析（基座已有依赖）
-  items.push({ name: '文档解析（pdf/office/文本）', required: true, status: 'available', detail: 'document-parser 基座依赖已随包' })
+  // 文档解析（PDF 走高精引擎；Office/文本走基座解析器，依赖均已随包）
+  items.push({
+    name: '文档解析（pdf/office/文本）',
+    required: true,
+    status: 'available',
+    detail: 'PDF 走 @profer/core 高精解析引擎；Office/文本走 document-parser 基座依赖（均已随包）',
+  })
   return { items, allRequiredAvailable: items.every((item) => !item.required || item.status === 'available') }
 }
 

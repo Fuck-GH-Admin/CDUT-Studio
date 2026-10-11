@@ -166,6 +166,7 @@ import {
   MAX_CONTEXT_MESSAGES,
 } from './agent-prompt-utils'
 import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
+import { buildAttachedDocumentsContext } from './document-parse-tools'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getOrCreateShellSnapshot } from './shell-snapshot'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
@@ -791,6 +792,7 @@ export class AgentOrchestrator {
       pptCapabilityActive?: boolean
       triggeredBy?: string
       disabledToolGroups?: readonly string[]
+      hasAttachedDocuments?: boolean
     },
   ): Set<string> {
     const meta = getAgentSessionMeta(sessionId)
@@ -844,7 +846,16 @@ export class AgentOrchestrator {
       activeGroups.add('web')
     }
 
-    // 10. 速课堂专属
+    // 10. 文件预览与版面检视探测（附件文档、预览/版面关键词）
+    if (
+      options.hasAttachedDocuments ||
+      (meta?.attachedFiles && meta.attachedFiles.length > 0) ||
+      /(?:预览|preview|inspect_preview|open_file_preview|版面|原件|页面渲染|\.pdf\b|\.docx?\b|\.xlsx?\b|\.pptx?\b)/i.test(text)
+    ) {
+      activeGroups.add('preview')
+    }
+
+    // 11. 速课堂专属
     if (options.isStudyClass) {
       activeGroups.add('study')
     }
@@ -1383,6 +1394,25 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 注入 mentioned_tools: ${toolLines.length} 条（原始 ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP）`)
       }
 
+      // 11.6 内核前置摄入：把随会话/消息携带的本地文档（PDF、Office）前置解析为高保真
+      // Markdown 并直接注入消息上下文。文档解析不再作为外置工具交给大模型决策，
+      // 模型一睁眼即拿到带双平行拓扑锚点的全文，0 Token 工具纠结。
+      const attachedDocumentsBlock = await buildAttachedDocumentsContext({
+        filePaths: [
+          ...(sessionMeta?.attachedFiles ?? []),
+          ...(input.additionalDirectories ?? []),
+        ],
+        userMessage: input.userMessage,
+        context: {
+          agentCwd: agentCwd ?? '',
+          allowedRoots: collectAttachedDirectories({ extraDirs: input.additionalDirectories, sessionMeta, workspaceSlug }),
+        },
+      })
+      if (attachedDocumentsBlock) {
+        enrichedMessage = `${attachedDocumentsBlock}\n\n${enrichedMessage}`
+        console.log(`[内核摄入] 已前置注入附件文档上下文（${attachedDocumentsBlock.length} 字符）`)
+      }
+
       // Context Sandwich 动态后缀：动态环境块追加在当轮最新用户消息末尾，绝不污染历史前缀。
       let contextualMessage = `${enrichedMessage}
 
@@ -1448,19 +1478,20 @@ ${dynamicCtx}`
           ].filter((root): root is string => typeof root === 'string' && root.length > 0),
         ),
       ]
+      const activeToolGroups = this.resolveActiveToolGroups(sessionId, userMessage, {
+        isStudyClass,
+        userBrowserContext: browserController.getUserContext(sessionId),
+        pptCapabilityActive,
+        triggeredBy: input.triggeredBy,
+        disabledToolGroups: [...disabledToolGroups],
+        hasAttachedDocuments: Boolean(attachedDocumentsBlock),
+      })
       // Pi 通过 customTools 接收内置与外部 MCP 能力。
       // 在这里复用已完成的 Profer MCP 注入和过滤流程，避免两套配置来源漂移。
       const piCustomTools =
         agentRuntime === 'pi'
         ? await (async () => {
             const piSdk = await import('@earendil-works/pi-coding-agent')
-            const activeToolGroups = this.resolveActiveToolGroups(sessionId, userMessage, {
-              isStudyClass,
-              userBrowserContext: browserController.getUserContext(sessionId),
-              pptCapabilityActive,
-              triggeredBy: input.triggeredBy,
-              disabledToolGroups: [...disabledToolGroups],
-            })
             const builtin = await buildPiBuiltinTools(piSdk, {
               sessionId,
               channelId,
@@ -1487,6 +1518,13 @@ ${dynamicCtx}`
               presetOperationUserMessage: userMessage,
               pendingPresetChange: userConfirmedPresetChange ? pendingPresetChange : undefined,
               activeToolGroups, // ← 传入当前轮次计算所得的激活组！
+              onActivateToolGroup: (groupId) => {
+                if (disabledToolGroups.has(groupId as import('@profer/shared').AgentPresetToolGroup)) return
+                activeToolGroups.add(groupId)
+                const currentMeta = getAgentSessionMeta(sessionId)
+                const merged = Array.from(new Set([...(currentMeta?.activatedToolGroups ?? []), ...activeToolGroups]))
+                updateAgentSessionMeta(sessionId, { activatedToolGroups: merged })
+              },
               disabledToolGroups: [...disabledToolGroups],
               disabledTools,
               pptCapabilityActive,
@@ -1578,16 +1616,12 @@ ${dynamicCtx}`
         'Read',
         'Glob',
         'Grep',
+        'read_document_artifact',
+        'discover_tools',
         'WebSearch',
         'WebFetch',
         'Agent',
-        'TodoRead',
-        'TodoWrite',
         'TaskOutput',
-        'TaskCreate',
-        'TaskUpdate',
-        'TaskList',
-        'TaskGet',
         'ListMcpResourcesTool',
         'ReadMcpResourceTool',
       ])
@@ -1831,6 +1865,7 @@ ${dynamicCtx}`
         teamMemoryAvailable: workspace?.type === 'team' && !disabledToolGroups.has('memory'),
         disabledToolGroups: [...disabledToolGroups].filter((group): group is import('@profer/shared').AgentPresetToolGroup => AGENT_PRESET_CAPABILITY_GROUPS.some((item) => item.id === group)),
         disabledTools: disabledTools ? [...disabledTools] : undefined,
+        activeToolGroups,
         pptCapabilityActive: presetPolicy.pptCapabilityActive,
         platform: process.platform,
         shellPath: promptShellPath,

@@ -2222,10 +2222,13 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     // 1. 如果有 pending 文件，先保存到 session 目录
     let fileReferences = ''
     if (pendingFilesSnapshot.length > 0) {
+      // 非项目会话（无绑定工作区）回退到默认工作区沙箱，与主进程编排的 ensureDefaultWorkspace 保持一致：
+      // 统一落到 ~/.cdutai/agent-workspaces/default/{sessionId}，避免附件上传被误拦截。
       const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
+        ?? workspaces.find((w) => w.slug === 'default')
       if (!workspace) {
         toast.warning('暂时无法发送附件', {
-          description: '当前 Agent 会话没有绑定有效工作区。请在顶部选择工作区，或新建 Agent 会话后重新上传。',
+          description: '当前 Agent 会话没有绑定有效工作区，且默认工作区暂不可用。请稍后重试或新建 Agent 会话。',
         })
         return
       }

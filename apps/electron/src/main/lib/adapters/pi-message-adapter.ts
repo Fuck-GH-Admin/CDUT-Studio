@@ -134,23 +134,135 @@ function isEmptyImageBlock(block: unknown): boolean {
   return typeof record.data !== 'string' || record.data.length === 0
 }
 
+const HISTORICAL_WRITE_PAYLOAD_MAX_CHARS = 1_500
+const HISTORICAL_TOOL_RESULT_TEXT_MAX_CHARS = 2_000
+const HISTORICAL_TOOL_RESULT_KEEP_CHARS = 1_200
+/** 保留末尾最近 N 条消息完整不折叠，保证当前正在进行的工具推理步完整 */
+const RECENT_UNMASKED_MESSAGE_COUNT = 6
+
+function maskLargeWriteString(value: unknown): { value: unknown; masked: boolean } {
+  if (typeof value === 'string' && value.length > HISTORICAL_WRITE_PAYLOAD_MAX_CHARS) {
+    return {
+      value: `[...历史写入内容已成功落盘并折叠 (共 ${value.length} 字符)，请勿重复写入...]`,
+      masked: true,
+    }
+  }
+  return { value, masked: false }
+}
+
+function maskHistoricalAssistantWriteCalls(message: AssistantMessage): AssistantMessage {
+  if (!Array.isArray(message.content)) return message
+  let blockChanged = false
+  const nextContent = message.content.map((block) => {
+    if (!block || typeof block !== 'object' || block.type !== 'toolCall') return block
+    const toolName = String(block.name ?? '').toLowerCase()
+    if (toolName !== 'write' && toolName !== 'edit' && toolName !== 'multiedit') return block
+    const args = block.arguments
+    if (!args || typeof args !== 'object') return block
+    const rawArgs = args as Record<string, unknown>
+    let argsChanged = false
+    const nextArgs: Record<string, unknown> = { ...rawArgs }
+    for (const key of ['content', 'new_string', 'old_string', 'newText', 'oldText']) {
+      if (key in nextArgs) {
+        const res = maskLargeWriteString(nextArgs[key])
+        if (res.masked) {
+          nextArgs[key] = res.value
+          argsChanged = true
+        }
+      }
+    }
+    if (Array.isArray(nextArgs.edits)) {
+      let editsChanged = false
+      const nextEdits = nextArgs.edits.map((item) => {
+        if (!item || typeof item !== 'object') return item
+        const editObj = { ...(item as Record<string, unknown>) }
+        let itemChanged = false
+        for (const key of ['new_string', 'old_string', 'newText', 'oldText']) {
+          if (key in editObj) {
+            const res = maskLargeWriteString(editObj[key])
+            if (res.masked) {
+              editObj[key] = res.value
+              itemChanged = true
+            }
+          }
+        }
+        if (itemChanged) editsChanged = true
+        return itemChanged ? editObj : item
+      })
+      if (editsChanged) {
+        nextArgs.edits = nextEdits
+        argsChanged = true
+      }
+    }
+    if (!argsChanged) return block
+    blockChanged = true
+    return { ...block, arguments: nextArgs }
+  })
+  return blockChanged ? ({ ...message, content: nextContent } as AssistantMessage) : message
+}
+
 /**
- * 请求前历史消毒：工具若把空图像块（例如视图不可见时 capturePage 返回的空截图）写进会话历史，
- * 部分模型上游收到带空 data 的 image part 会挂起直到客户端超时（实测 kimi-k3 每次 ~105s 无响应
- * 后被自动重试，表现为“模型连不上”式死循环）。每轮构建请求前把空图像块替换为文本说明，
- * 既保护新写入的历史，也让已被污染的既有会话恢复可用。无空图时原样返回（不复制数组）。
+ * 请求前历史消毒与载荷遮罩：
+ * 1. 工具若把空图像块写进会话历史，部分模型上游收到带空 data 的 image part 会挂起直到客户端超时。
+ *    每轮构建请求前把空图像块替换为文本说明。
+ * 2. 对距离当前末尾超过 RECENT_UNMASKED_MESSAGE_COUNT (6) 条的历史步骤：
+ *    - 折叠超大 Write/Edit 工具调用入参（>1,500 字符），避免模型当打字机连续写入时触发 160K 上下文爆炸；
+ *    - 折叠超大 ToolResult 文本输出（>2,000 字符）。
+ * 无任何变更时原样返回原数组引用（零拷贝）。
  */
 export function sanitizePiContextMessages(messages: AgentMessage[]): AgentMessage[] {
   let changed = false
-  const next = messages.map((message) => {
-    if (!message || typeof message !== 'object' || (message as { role?: unknown }).role !== 'toolResult') return message
+  const total = messages.length
+  const next = messages.map((message, index) => {
+    if (!message || typeof message !== 'object') return message
+    const isHistoricalStep = index < total - RECENT_UNMASKED_MESSAGE_COUNT
+    const role = (message as { role?: unknown }).role
+
+    if (role === 'assistant' && isHistoricalStep) {
+      const maskedAssistant = maskHistoricalAssistantWriteCalls(message as AssistantMessage)
+      if (maskedAssistant !== message) {
+        changed = true
+        return maskedAssistant as unknown as AgentMessage
+      }
+      return message
+    }
+
+    if (role !== 'toolResult') return message
     const toolResult = message as ToolResultMessage
     const content = toolResult.content as unknown
-    if (!Array.isArray(content) || !content.some(isEmptyImageBlock)) return message
+    if (!Array.isArray(content)) return message
+
+    let localChanged = false
+    const nextContent = content.map((block) => {
+      if (isEmptyImageBlock(block)) {
+        localChanged = true
+        return { type: 'text', text: EMPTY_IMAGE_PLACEHOLDER_TEXT }
+      }
+      if (
+        isHistoricalStep &&
+        block &&
+        typeof block === 'object' &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string'
+      ) {
+        const text = (block as { text: string }).text
+        if (text.length > HISTORICAL_TOOL_RESULT_TEXT_MAX_CHARS) {
+          localChanged = true
+          const omitted = text.length - HISTORICAL_TOOL_RESULT_KEEP_CHARS
+          return {
+            ...block,
+            text: `${text.slice(0, HISTORICAL_TOOL_RESULT_KEEP_CHARS)}\n\n[...历史工具输出已折叠，共省略 ${omitted} 字符以节省上下文...]`,
+          }
+        }
+      }
+      return block
+    })
+
+    if (!localChanged) return message
     changed = true
     return {
       ...toolResult,
-      content: content.map((block) => (isEmptyImageBlock(block) ? { type: 'text', text: EMPTY_IMAGE_PLACEHOLDER_TEXT } : block)),
+      content: nextContent,
     } as unknown as AgentMessage
   })
   return changed ? next : messages

@@ -93,3 +93,6 @@ export * from './cdut'
 
 // AI 速课堂（学习资料大纲与学生认知档案）相关类型
 export * from './study'
+
+// 下一代高精 PDF 解析引擎（全要素文档 AST 契约）
+export * from './pdf'

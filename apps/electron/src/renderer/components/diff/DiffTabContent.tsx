@@ -13,6 +13,7 @@ import { File as PierreFile } from '@pierre/diffs/react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom } from '@/atoms/agent-atoms'
+import { pdfHighlightTargetAtom } from '@/atoms/preview-atoms'
 import { resolvedThemeAtom } from '@/atoms/theme'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { useShortcut } from '@/hooks/useShortcut'
@@ -392,15 +393,61 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     setMarkdownSaving(false)
   }, [filePath, sessionId, previewOnly, isLegacyOffice, resetImageZoom])
 
-  // 监听 PDF iframe 发回的缩放百分比
+  const [pdfHighlightTarget, setPdfHighlightTarget] = useAtom(pdfHighlightTargetAtom)
+  const [pdfReadyTick, setPdfReadyTick] = React.useState(0)
+
+  // 监听 PDF iframe 发回的缩放百分比与就绪通知
   React.useEffect(() => {
     if (!isPdf) return
     const handler = (e: MessageEvent) => {
       if (e.data?.type === 'pdf-zoom-changed') setPdfZoom(e.data.zoom)
+      if (e.data?.type === 'agent-preview:pdf-ready') setPdfReadyTick((n) => n + 1)
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
   }, [isPdf])
+
+  // 当用户点击消息中的学术溯源胶囊（#f1:p1-b11 / #p1-b11）时，向目标 PDF iframe 发送精确坐标聚光灯定位指令
+  React.useEffect(() => {
+    if (!isPdf || !pdfSrc || !pdfHighlightTarget) return
+    const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+    const isSameFile =
+      norm(pdfHighlightTarget.filePath) === norm(filePath) ||
+      getFileBaseName(pdfHighlightTarget.filePath).toLowerCase() === getFileBaseName(filePath).toLowerCase()
+    if (!isSameFile) return
+
+    const win = pdfIframeRef.current?.contentWindow
+    if (!win) return
+
+    win.postMessage(
+      {
+        type: 'pdf-navigate-highlight',
+        page: pdfHighlightTarget.pageNumber,
+        bbox: pdfHighlightTarget.bbox,
+        label: pdfHighlightTarget.label,
+        blockId: pdfHighlightTarget.blockId,
+        requestId: pdfHighlightTarget.requestId,
+      },
+      '*',
+    )
+
+    // 若 PDF 已完成渲染（pdfReadyTick > 0）或短暂延迟后再次确保送达并消费本次高亮请求
+    const timer = setTimeout(() => {
+      pdfIframeRef.current?.contentWindow?.postMessage(
+        {
+          type: 'pdf-navigate-highlight',
+          page: pdfHighlightTarget.pageNumber,
+          bbox: pdfHighlightTarget.bbox,
+          label: pdfHighlightTarget.label,
+          blockId: pdfHighlightTarget.blockId,
+          requestId: pdfHighlightTarget.requestId,
+        },
+        '*',
+      )
+      setPdfHighlightTarget((prev) => (prev?.requestId === pdfHighlightTarget.requestId ? null : prev))
+    }, 180)
+    return () => clearTimeout(timer)
+  }, [isPdf, pdfSrc, pdfReadyTick, pdfHighlightTarget, filePath, setPdfHighlightTarget])
 
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
   const lastNewContentRef = React.useRef('')

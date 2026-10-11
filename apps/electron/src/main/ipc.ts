@@ -131,7 +131,7 @@ import type {
   BrowserAddBookmarkInput,
 } from '@profer/shared'
 import { KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { browserController } from './lib/browser-controller'
@@ -171,6 +171,8 @@ import {
   ingestStudyDocuments,
   listStudyDocuments,
   removeStudyDocument,
+  setStudyDocumentActive,
+  setStudyDocumentsActive,
 } from './lib/study/study-document-indexer'
 import {
   listChannels,
@@ -4940,6 +4942,56 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标 PDF 文件路径、页码与归一化 BBox 坐标
+  ipcMain.handle(
+    'file:resolve-document-anchor',
+    async (
+      _,
+      anchor: string,
+      access?: (FileAccessOptions & { label?: string }) | string[],
+    ): Promise<import('./lib/document-parse-tools').ResolvedDocumentAnchor | null> => {
+      if (typeof anchor !== 'string' || !anchor.trim()) return null
+      const { resolveDocumentAnchor } = await import('./lib/document-parse-tools')
+      const options = normalizeFileAccessOptions(access)
+      const label =
+        access && !Array.isArray(access) && typeof access === 'object' && typeof access.label === 'string'
+          ? access.label
+          : undefined
+
+      const candidateDirs: string[] = []
+      const fallbackFiles: string[] = []
+      const addDir = (dir?: string) => {
+        if (dir && !candidateDirs.includes(dir)) candidateDirs.push(dir)
+      }
+
+      if (options?.sessionId) {
+        const meta = getAgentSessionMeta(options.sessionId)
+        const workspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+        const slug = workspace?.slug || 'default'
+        addDir(getAgentSessionWorkspacePath(slug, options.sessionId))
+        for (const root of getFileSearchRoots(options.sessionId)) addDir(root)
+        if (meta?.attachedFiles) fallbackFiles.push(...meta.attachedFiles)
+        if (workspace?.slug) {
+          fallbackFiles.push(...getWorkspaceAttachedFiles(workspace.slug))
+        }
+      }
+
+      for (const base of getAllowedCandidateBasePaths(options) ?? []) {
+        addDir(base)
+      }
+
+      const resolved = resolveDocumentAnchor(anchor, {
+        candidateDirs,
+        fallbackFiles,
+        label,
+      })
+      if (!resolved || !isPreviewPathAllowed(resolved.filePath, options)) {
+        return null
+      }
+      return resolved
+    },
+  )
+
   // DOCX 转 HTML（内联预览使用 mammoth）
   ipcMain.handle(
     'file:docx-to-html',
@@ -6261,6 +6313,19 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(STUDY_IPC_CHANNELS.REMOVE_DOCUMENT, (_event, input: StudyDocumentQueryInput) => {
     return { success: removeStudyDocument(input.sessionId, input.documentId) }
+  })
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.TOGGLE_DOCUMENT_ACTIVE, (_event, input: StudyToggleDocumentActiveInput) => {
+    const enabled = setStudyDocumentActive(input.sessionId, input.documentId, Boolean(input.enabled))
+    // 激活状态变化后立即失效检索缓存，确保下一次检索严格按最新勾选状态执行。
+    getGlobalStudyRetriever().invalidate(input.sessionId)
+    return { success: true, enabled }
+  })
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.SET_DOCUMENTS_ACTIVE, (_event, input: StudySetDocumentsActiveInput) => {
+    setStudyDocumentsActive(input.sessionId, input.documentIds ?? [], Boolean(input.enabled))
+    getGlobalStudyRetriever().invalidate(input.sessionId)
+    return { success: true }
   })
 
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====

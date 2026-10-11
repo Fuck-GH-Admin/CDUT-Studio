@@ -2,34 +2,30 @@
   <img src="assets/README.svg" width="100%" alt="CDUT Studio Banner" />
 </p>
 
-<div align="center">
-
 # CDUT Studio 🦖
 ### 成都理工大学定制 AI 智能体工作台
 
 <p align="center">
   <strong>“穷究于理，成就于工”</strong><br>
-  专为成理师生打造的下一代端侧智能体协同平台：期末高效智能带教 · 智能材料审核 · 砚湖易办自动化 · 特区账户一键接入 · 校园知识库 RAG
+  专为成理师生打造的下一代端侧智能体协同平台：高效 AI 带教 · 智能材料审核 · 智能化浏览器 · 特区账户接入 · RAG 检索辅助
 </p>
 
 <p align="center">
   <a href="#-cdut-专区三大核心模块"><img src="https://img.shields.io/badge/成都理工大学-定制工作台-8B0000?style=for-the-badge&logo=target&logoColor=white" alt="CDUT Customized"/></a>
-  <a href="#-技术栈构成"><img src="https://img.shields.io/badge/TypeScript-90.9%25-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript"/></a>
-  <a href="#-快速上手"><img src="https://img.shields.io/badge/平台版本-v1.0.0-FF5722?style=for-the-badge&logo=rocket&logoColor=white" alt="Version"/></a>
-  <a href="#-安全与隐私防线-security--privacy"><img src="https://img.shields.io/badge/数据安全-沙盒本地隔离-2ECC71?style=for-the-badge&logo=shield&logoColor=white" alt="Security"/></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/开源协议-GPL--3.0-FFA000?style=for-the-badge&logo=gnu&logoColor=white" alt="License"/></a>
+  <a href="#multihop-rag-benchmark"><img src="https://img.shields.io/badge/MultiHop--RAG-Hit%4010%2098.85%25%20-2ECC71?style=for-the-badge&logo=google-scholar&logoColor=white" alt="MultiHop-RAG Benchmark"/></a>
+  <a href="#-技术栈构成"><img src="https://img.shields.io/badge/TypeScript-92.1%25-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript"/></a>
+  <a href="#security-and-privacy"><img src="https://img.shields.io/badge/数据安全-沙盒本地隔离-2ECC71?style=for-the-badge&logo=shield&logoColor=white" alt="Security"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/开源协议-AGPL v3-FFA000?style=for-the-badge&logo=gnu&logoColor=white" alt="License"/></a>
 </p>
 
 <p align="center">
   <a href="#-cdut-专区三大核心模块">🌟 核心三大模块</a> •
-  <a href="#-工作台架构流程">🏗️ 架构原理解析</a> •
+  <a href="#multihop-rag-benchmark">🏗️ 架构原理解析</a> •
   <a href="#-快速上手">⚡ 一分钟启动</a> •
-  <a href="#-安全与隐私防线-security--privacy">🛡️ 网络安全防护</a> •
+  <a href="#security-and-privacy">🛡️ 网络安全防护</a> •
   <a href="#-遇见砚小龙">🦖 认识砚小龙</a> •
-  <a href="#-开发团队-development-team">👥 开发团队</a>
+  <a href="#-开发团队">👥 开发团队</a>
 </p>
-
-</div>
 
 ---
 
@@ -47,16 +43,17 @@
         <p>输入考纲与课件，智能拆解思维导图，实时追踪掌握边界，靶向提分带教。</p>
       </td>
       <td width="33%" align="center">
-        <h3>🌐 砚湖秒通</h3>
-        <p>内置自动化浏览器，请假、课表、空教室、查分全流程自动化免登录交互。</p>
+        <h3>🌐 智联万站</h3>
+        <p>内置定制浏览器，视频平台、学校系统等各种网站全面支持 AI 自动化操作。</p>
       </td>
       <td width="33%" align="center">
-        <h3>📑 材料审查</h3>
+        <h3>📑 材料审核</h3>
         <p>标准栏 × 待审栏 × AI 研判栏，高效率完成比对校级评优与提交材料偏差。</p>
       </td>
     </tr>
   </table>
 </div>
+
 
 ---
 
@@ -151,9 +148,13 @@
 
 离线演示入口与最终独立验收见[批量审核复验报告](docs/design/review-agent/24-batch-review-independent-final-acceptance.md)：失败提示包含真实失败数量，全部执行失败时待人工分流为零，旧自动处置单独显示为历史回执。
 
+测试仓库现已整合上游 PDF/RAG 更新与审核模块，整合依据和冲突处理见[上游整合记录](docs/design/review-agent/25-upstream-review-integration.md)。当前用于继续开发，尚未向上游提交 PR。
+
 同一份合成综测案卷的基线与能力库复跑记录见 [审核 Agent 能力库对照](outputs/template-review-suite-2026-10-08/run-results-deepseek-capabilities/COMPARISON.md)。该单案测试显示材料覆盖从 0/4 个被记为已读提高到 4/4、修正了一个错误自动通过；总 token 约下降 6.6%，耗时约增加 1.9 秒。基线把文本材料预注入提示，但没有逐份读取日志，故 0/4 指能力覆盖记账，不表示模型完全没看到文本材料。
 
 ---
+
+<a id="multihop-rag-benchmark"></a>
 
 ## 🏗️ 工作台架构流程
 
@@ -228,7 +229,7 @@ graph TD
 
 ---
 
-## 🛡️ 安全与隐私防线
+## <a id="security-and-privacy"></a>🛡️ 安全与隐私防线
 
 <div align="center">
   <table>
@@ -265,45 +266,67 @@ graph TD
 
 </div>
 
-<!-- 2-1-2 无边框网格卡片布局（已填入团队真实信息与头像路径） -->
-<table border="0" cellpadding="8" cellspacing="0" width="100%" style="border: none; border-collapse: collapse; width: 100%;">
-  <tr style="border: none;">
-    <td width="50%" valign="top" style="border: none; padding: 14px 12px;">
-      <img src="assets/team/team-1.jpg" width="70" height="70" align="left" hspace="10" alt="队长 马晨超" style="border-radius: 50%; margin-right: 14px; object-fit: cover;" />
-      <b>马晨超</b><br/>
-      <sub>成都理工大学学生 &nbsp;·&nbsp; 队长</sub><br/>
-      <sub>在本项目中负责：Base Client 改造、自主学习带教模块开发、「砚小龙」IP 视觉形象设计</sub>
+<!-- 2-1-2 团队成员与致谢（无边框卡片布局） -->
+<div align="center">
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <img src="assets/team/team-1.jpg" width="68" height="68" style="border-radius: 50%; object-fit: cover;" alt="队长头像" />
+        <div>
+          <b>队长</b><br/>
+          <sub>成都理工大学学生 &nbsp;·&nbsp; 队长</sub><br/>
+          <sub><b>负责方向：</b>智联万站模块研发、 AI 速课堂模块研发、 RAG 算法设计开发、特区账户技术支持、「砚小龙」IP 形象设计</sub>
+        </div>
+      </div>
     </td>
-    <td width="50%" valign="top" style="border: none; padding: 14px 12px;">
-      <img src="assets/team/team-3.png" width="70" height="70" align="left" hspace="10" alt="队员 汤兴言" style="border-radius: 50%; margin-right: 14px; object-fit: cover;" />
-      <b>汤兴言</b><br/>
-      <sub>成都理工大学学生 &nbsp;·&nbsp; 核心队员</sub><br/>
-      <sub>在本项目中负责：三栏材料审核模块工程落地、客户端 UI 与项目视觉设计规范制定</sub>
+    <td width="50%" valign="top">
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <img src="assets/team/team-3.png" width="68" height="68" style="border-radius: 50%; object-fit: cover;" alt="核心成员头像" />
+        <div>
+          <b>核心成员</b><br/>
+          <sub>成都理工大学学生 &nbsp;·&nbsp; 核心队员</sub><br/>
+          <sub><b>负责方向：</b>材料审核模块研发、项目图像资源设计、客户端 UI 与项目视觉设计</sub>
+        </div>
+      </div>
     </td>
   </tr>
-  <tr style="border: none;">
-    <td colspan="2" valign="middle" style="border: none; padding: 22px 14px;">
-      <img src="assets/team/team-2.gif" width="90" height="90" align="left" hspace="12" alt="特别鸣谢 陈思源" style="border-radius: 50%; margin-right: 18px; object-fit: cover;" />
-      <font size="4"><b>陈思源</b></font> &nbsp; <a href="https://github.com/Yuan-lai-ru-ci/ProferAI" target="_blank"><img src="https://img.shields.io/badge/🌟-特别鸣谢-FF5722?style=flat-square" alt="Special Thanks"/></a><br/>
-      <b>特别鸣谢 & 核心成员</b><br/>
-      <sub><b>特别鸣谢与突出贡献：</b>衷心感谢陈思源同学为本项目提供优秀的 Base Client 底座支持，并在客户端通信与架构选型中提供支持！在这里我也要推荐大家关注他的开源 Agent 项目 👉 <a href="https://github.com/Yuan-lai-ru-ci/ProferAI" target="_blank"><b>ProferAI</b></a>。</sub>
+  <tr>
+    <td colspan="2" valign="top">
+      <div style="display: flex; gap: 14px; align-items: flex-start;">
+        <img src="assets/team/team-2.gif" width="76" height="76" style="border-radius: 50%; object-fit: cover;" alt="特别鸣谢头像" />
+        <div>
+          <b style="font-size: 16px;">特别鸣谢成员</b> &nbsp; <a href="https://github.com/Yuan-lai-ru-ci/ProferAI" target="_blank"><img src="https://img.shields.io/badge/🌟-特别鸣谢-FF5722?style=flat-square" alt="Special Thanks"/></a><br/>
+          <sub><b>特别鸣谢 & 核心成员</b></sub><br/>
+          <sub><b>突出贡献：</b>衷心感谢该成员为本项目提供优秀的基座支持，并在客户端通信与架构选型中提供优秀的技术基础！在这里也推荐大家关注其开源 Agent 项目 👉 <a href="https://github.com/Yuan-lai-ru-ci/ProferAI" target="_blank"><b>ProferAI</b></a>。</sub>
+        </div>
+      </div>
     </td>
   </tr>
-  <tr style="border: none;">
-    <td width="50%" valign="top" style="border: none; padding: 14px 12px;">
-      <img src="assets/team/team-4.png" width="70" height="70" align="left" hspace="10" alt="队员 王涛" style="border-radius: 50%; margin-right: 14px; object-fit: cover;" />
-      <b>王涛</b><br/>
-      <sub>成都理工大学学生 &nbsp;·&nbsp; 核心队员</sub><br/>
-      <sub>在本项目中负责：核心交互功能设计、成理专属 RAG 知识库构建设计、全流程技术架构与部署文档撰写</sub>
+  <tr>
+    <td width="50%" valign="top">
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <img src="assets/team/team-4.png" width="68" height="68" style="border-radius: 50%; object-fit: cover;" alt="核心成员头像" />
+        <div>
+          <b>核心成员</b><br/>
+          <sub>成都理工大学学生 &nbsp;·&nbsp; 核心队员</sub><br/>
+          <sub><b>负责方向：</b>核心交互功能设计、 RAG 知识库功能构思设计、全流程技术架构与部署文档撰写</sub>
+        </div>
+      </div>
     </td>
-    <td width="50%" valign="top" style="border: none; padding: 14px 12px;">
-      <img src="assets/team/team-5.jpg" width="70" height="70" align="left" hspace="10" alt="队员 李晓薇" style="border-radius: 50%; margin-right: 14px; object-fit: cover;" />
-      <b>李晓薇</b><br/>
-      <sub>成都理工大学学生 &nbsp;·&nbsp; 核心队员</sub><br/>
-      <sub>在本项目中负责：砚湖易办业务流逻辑梳理、学业场景需求设计、系统功能手册与用户操作手册设计</sub>
+    <td width="50%" valign="top">
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <img src="assets/team/team-5.jpg" width="68" height="68" style="border-radius: 50%; object-fit: cover;" alt="核心成员头像" />
+        <div>
+          <b>核心成员</b><br/>
+          <sub>成都理工大学学生 &nbsp;·&nbsp; 核心队员</sub><br/>
+          <sub><b>负责方向：</b>砚湖易办业务流逻辑梳理、学业场景需求设计、系统功能手册与用户操作手册设计</sub>
+        </div>
+      </div>
     </td>
   </tr>
 </table>
+</div>
 
 <br/>
 

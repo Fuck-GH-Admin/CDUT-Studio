@@ -1,74 +1,35 @@
 ---
 name: pdf
-description: "Use this skill whenever the user mentions a PDF file or asks to produce/edit one. For read-only tasks such as reading, summarizing, extracting plain text, or answering questions from a PDF, follow this skill's read-only routing rules: use the built-in Read tool first, do not write code or scripts, and prefer markitdown for PDFs over 100 pages. Use PDF processing libraries/scripts only for modification tasks such as merging, splitting, rotating, watermarking, filling forms, encrypting/decrypting, extracting images, OCR, or creating PDFs."
+description: "Use this skill whenever the user mentions a PDF file or asks to inspect, summarize, query, modify or create one. CRITICAL KERNEL CONTRACT: Attached PDFs are pre-parsed by CDUT Studio's high-precision kernel engine into dual-state workspace artifacts (<attached_documents>): (1) clean_markdown_path in the working directory is an already-materialized, zero-HTML-anchor clean Markdown file ready for direct user delivery; (2) read_document_artifact is a core Tier 0 tool for on-demand page slicing (pages) or keyword/regex retrieval (query) with interactive citation anchors [第X页·位置](#blockId). Never call discover_tools for PDF parsing and never run Python/CLI scripts to extract text from pre-ingested PDFs."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.0.5"
+version: "1.2.0"
 ---
 
 # PDF Processing Guide
 
 ## Overview
 
-This guide defines how to handle PDF files. Read-only tasks must be handled with built-in tools first. Python libraries and scripts are fallback tools for PDF modification, OCR, form filling, or other operations that cannot be completed by direct reading.
+This guide defines how to handle PDF files in CDUT Studio.
 
-## Read-Only Routing Rules
+## Read-Only & Markdown Export Operations (Dual-State Kernel Artifacts)
 
-Use this section for requests like "read this PDF", "summarize this PDF", "answer questions from this PDF", or "extract the main points".
+Use this section for requests like "read this PDF", "summarize this PDF", "answer questions from this PDF", "extract the main points", or "parse to Markdown in workspace".
 
-1. Prefer the built-in Read tool on the PDF path.
-   - Do not write Python, JavaScript, shell scripts, or temporary extraction files for simple reading.
-   - Do not use the Python examples below for read-only tasks unless the built-in Read tool fails or the user explicitly asks for a generated file.
+1. **Dual-State Kernel Pre-Ingestion (`<attached_documents>`)**:
+   - Before your turn starts, CDUT Studio's non-autoregressive kernel engine automatically parses attached PDFs and materializes two artifacts on disk:
+     - **`clean_markdown_path` (`<cwd>/<stem>.md`)**: A clean, deliverables-ready Markdown file in the working directory with multi-column reading order, GFM tables, and LaTeX display equations (no HTML comment anchors).
+     - **`anchored_markdown_path` (`<cwd>/.context/artifacts/<stem>.anchored.md`)**: An anchored index with dual-parallel interactive citation markers (`[第X页·位置](#blockId)`), accessible via the core tool `read_document_artifact`.
+   - **There is NO `parse_document` external tool**. Do NOT call `discover_tools` to look for PDF parsers, and do NOT run Python or CLI scripts (`pdfplumber`, `pypdf`, `pypdfium2`, `pymupdf`, `fitz`, `pdftotext`) to extract text.
 
-2. If the PDF has more than 100 pages, prefer markitdown before Python libraries.
-   - First check whether a global `markitdown` command is available.
-   - If global `markitdown` exists, use it directly.
-   - If global `markitdown` is missing, install it globally for the user, then use it.
-   - Do not create wrapper scripts around markitdown.
-   - If installation fails because of network, permissions, or missing Python tooling, say so briefly and fall back to the built-in Read tool or ask which page range to inspect.
+2. **Immediate Task Execution**:
+   - **When asked to "parse/convert PDF to Markdown in workspace"**: The file at `clean_markdown_path` is ALREADY written in the working directory! Report its path and summary directly (or refine it with `Edit`/`Write` if the user requested custom formatting).
+   - **When asked to summarize, analyze, or answer questions**: Call `read_document_artifact` with `pages` (e.g., `"1-5"`) or `query` (keywords/regex) to inspect the relevant sections, and cite sources using `[第X页·位置/图表名](#blockId)`.
 
-3. Only move to PDF processing libraries or scripts when the task needs document transformation, complex table extraction, OCR, form filling, image extraction, or PDF generation.
+3. **Visual Preview**:
+   - Use `inspect_preview` / `open_file_preview` only when you need visual output (rendered page images or user-visible viewer), not for extracting plain text.
 
-### Page Count Check
-
-Use the cheapest available command. Try `pdfinfo` first:
-
-```bash
-pdfinfo input.pdf | grep '^Pages:'
-```
-
-If `pdfinfo` is unavailable, use the built-in Read tool and infer whether the document is long from the tool result. Avoid writing a custom page-count script just to decide the reading path.
-
-### markitdown for Long PDFs
-
-For PDFs over 100 pages, first check for a globally available markitdown command:
-
-```bash
-command -v markitdown
-```
-
-If it exists, convert to Markdown directly:
-
-```bash
-markitdown input.pdf
-```
-
-If `markitdown` is not installed, install it globally before converting. Prefer direct `pip` installation because it is usually faster and has fewer network/toolchain dependencies than Homebrew-based flows.
-
-Before installing, quickly verify the package source/version if tooling is available:
-
-```bash
-python3 -m pip index versions markitdown
-```
-
-Then install:
-
-```bash
-python3 -m pip install --user "markitdown[all]"
-```
-
-After installation, run `markitdown input.pdf`. If the command is not on PATH, try `python3 -m markitdown input.pdf` or use the user's Python user-base bin path.
-
-If the output is too long for the response, inspect or summarize relevant sections instead of dumping the full text. When saving a converted Markdown file is useful, ask only if the user did not already request a file output.
+4. **Scanned Documents (Fallback Only)**:
+   - If the attached document explicitly states it has no text layer, treat it as a scanned document and follow the OCR section below.
 
 ## Modification and Advanced Processing
 
@@ -123,48 +84,6 @@ writer.add_page(page)
 
 with open("rotated.pdf", "wb") as output:
     writer.write(output)
-```
-
-### pdfplumber - Text and Table Extraction
-
-#### Extract Text with Layout
-```python
-import pdfplumber
-
-with pdfplumber.open("document.pdf") as pdf:
-    for page in pdf.pages:
-        text = page.extract_text()
-        print(text)
-```
-
-#### Extract Tables
-```python
-with pdfplumber.open("document.pdf") as pdf:
-    for i, page in enumerate(pdf.pages):
-        tables = page.extract_tables()
-        for j, table in enumerate(tables):
-            print(f"Table {j+1} on page {i+1}:")
-            for row in table:
-                print(row)
-```
-
-#### Advanced Table Extraction
-```python
-import pandas as pd
-
-with pdfplumber.open("document.pdf") as pdf:
-    all_tables = []
-    for page in pdf.pages:
-        tables = page.extract_tables()
-        for table in tables:
-            if table:  # Check if table is not empty
-                df = pd.DataFrame(table[1:], columns=table[0])
-                all_tables.append(df)
-
-# Combine all tables
-if all_tables:
-    combined_df = pd.concat(all_tables, ignore_index=True)
-    combined_df.to_excel("extracted_tables.xlsx", index=False)
 ```
 
 ### reportlab - Create PDFs
@@ -236,18 +155,6 @@ squared = Paragraph("x<super>2</super> + y<super>2</super>", styles['Normal'])
 For canvas-drawn text (not Paragraph objects), manually adjust font the size and position rather than using Unicode subscripts/superscripts.
 
 ## Command-Line Tools
-
-### pdftotext (poppler-utils)
-```bash
-# Extract text
-pdftotext input.pdf output.txt
-
-# Extract text preserving layout
-pdftotext -layout input.pdf output.txt
-
-# Extract specific pages
-pdftotext -f 1 -l 5 input.pdf output.txt  # Pages 1-5
-```
 
 ### qpdf
 ```bash
@@ -348,10 +255,9 @@ with open("encrypted.pdf", "wb") as output:
 |------|-----------|--------------|
 | Merge PDFs | pypdf | `writer.add_page(page)` |
 | Split PDFs | pypdf | One page per file |
-| Read or summarize PDFs | Built-in Read tool | Use Read first; no scripts |
-| Long PDF text extraction (>100 pages) | markitdown | `markitdown input.pdf` |
-| Extract text after Read fails | pdfplumber | `page.extract_text()` |
-| Extract tables after Read fails | pdfplumber | `page.extract_tables()` |
+| Export PDF to Markdown | Kernel clean artifact | Already written at `clean_markdown_path` in `<attached_documents>` |
+| Read, summarize, or query PDFs | `read_document_artifact` | Slice by `pages` or search by `query` |
+| Get page count or outline | `<attached_documents>` | Present in `<attached_document>` attributes and `<outline>` |
 | Create PDFs | reportlab | Canvas or Platypus |
 | Command line merge | qpdf | `qpdf --empty --pages ...` |
 | OCR scanned PDFs | pytesseract | Convert to image first |

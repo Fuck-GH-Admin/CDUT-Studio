@@ -18,11 +18,12 @@
  */
 
 import * as React from 'react'
+import { useSetAtom } from 'jotai'
 import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download, MessageSquareText, Link2, Copy, Check, ListChecks, X, Play, Code } from 'lucide-react'
+import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download, MessageSquareText, Link2, Copy, Check, ListChecks, X, Play, Code, MapPin, Sigma, Table2, Image as ImageIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
 import { normalizeMarkdownEmphasisWhitespace } from '@/lib/normalize-markdown-emphasis'
@@ -41,6 +42,7 @@ import { detectLanguage } from '@profer/core'
 import { FilePathChip, isAbsoluteFilePath, isRelativeFilePath } from './file-path-chip'
 import { useFileAccessSessionId } from './file-access-context'
 import { useOpenPreview } from '@/components/diff/preview-opener'
+import { pdfHighlightTargetAtom } from '@/atoms/preview-atoms'
 import type { HTMLAttributes, ComponentProps, ReactNode } from 'react'
 import type { FileAttachment } from '@profer/shared'
 import {
@@ -528,7 +530,10 @@ const WIKILINK_URL_RE = /^wikilink:\/\/(.+)$/
 /** mention:// URL 匹配 */
 const MENTION_URL_RE = /^mention:\/\/(file|skill|mcp|session)\/(.+)$/
 
-/** 外部链接 / mention chip 渲染器 */
+/** 双平行拓扑文档锚点匹配（如 #f1:p1-b11, #f2-p3-b4, #p1-b11, #p2） */
+const DOCUMENT_ANCHOR_RE = /^#(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-b\d+)?)$/i
+
+/** 外部链接 / mention chip / 学术溯源胶囊 渲染器 */
 const MarkdownLink = React.memo(function MarkdownLink({
   href,
   children: linkChildren,
@@ -537,14 +542,17 @@ const MarkdownLink = React.memo(function MarkdownLink({
   const ctxBasePaths = React.useContext(BasePathsContext)
   const sessionId = useFileAccessSessionId()
   const openPreview = useOpenPreview()
+  const setPdfHighlightTarget = useSetAtom(pdfHighlightTargetAtom)
   const onWikilinkClick = React.useContext(WikilinkClickContext)
 
-  // mention:// 协议 → 渲染为 MentionChip
   if (href) {
+    // 1. mention:// 协议 → 渲染为 MentionChip
     const mentionMatch = MENTION_URL_RE.exec(href)
     if (mentionMatch) {
       return <MentionChip type={mentionMatch[1] as MentionType} value={mentionMatch[2] ?? ''} />
     }
+
+    // 2. wikilink:// 协议 → 渲染为记忆双链
     const wikilinkMatch = WIKILINK_URL_RE.exec(href)
     if (wikilinkMatch) {
       const name = safeDecode(wikilinkMatch[1] ?? '')
@@ -566,6 +574,95 @@ const MarkdownLink = React.memo(function MarkdownLink({
           <Link2 className="size-3 inline shrink-0" />
           {name}
         </span>
+      )
+    }
+
+    // 3. 双平行拓扑定位锚点（#f1:p1-b11 / #p1-b11）→ 渲染为「学术溯源胶囊（Academic Citation Pill）」
+    const anchorMatch = DOCUMENT_ANCHOR_RE.exec(href.trim())
+    if (anchorMatch) {
+      const scopedFileId = anchorMatch[1]?.toLowerCase()
+      const blockId = anchorMatch[2]!.toLowerCase()
+      const rawText = extractText(linkChildren).trim()
+      const cleanLabel = rawText.replace(/^\[+|\]+$/g, '').trim() || `第${anchorMatch[3]}页`
+      const badgeTag = scopedFileId ? `${scopedFileId}·${blockId}` : blockId
+
+      const IconComp = cleanLabel.includes('公式')
+        ? Sigma
+        : cleanLabel.includes('表格') || cleanLabel.includes('表')
+          ? Table2
+          : cleanLabel.includes('插图') || cleanLabel.includes('图')
+            ? ImageIcon
+            : MapPin
+
+      const handleCitationClick = async (e: React.MouseEvent | React.KeyboardEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!sessionId) return
+        try {
+          const resolved = await window.electronAPI.resolveDocumentAnchor(href.trim(), {
+            sessionId,
+            candidateBasePaths: ctxBasePaths,
+            label: cleanLabel,
+          })
+          if (!resolved) return
+
+          setPdfHighlightTarget({
+            requestId: Date.now() + Math.floor(Math.random() * 1000),
+            sessionId,
+            fileId: resolved.fileId,
+            filePath: resolved.filePath,
+            pageNumber: resolved.pageNumber,
+            blockId: resolved.blockId,
+            bbox: resolved.bbox,
+            label: cleanLabel || resolved.label,
+          })
+
+          openPreview(sessionId, {
+            filePath: resolved.filePath,
+            dirPath: ctxBasePaths?.[0],
+            previewOnly: true,
+            readOnly: true,
+            basePaths: ctxBasePaths,
+          })
+        } catch (err) {
+          console.warn('[AcademicCitationPill] 解析文档拓扑锚点失败:', err)
+        }
+      }
+
+      return (
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={handleCitationClick}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    void handleCitationClick(e)
+                  }
+                }}
+                className={cn(
+                  'group/cite inline-flex items-center gap-1 rounded-full px-2 py-[1.5px] mx-0.5 align-baseline',
+                  'text-[12px] leading-[1.35] font-medium no-underline select-none cursor-pointer',
+                  'bg-primary/12 text-primary dark:bg-primary/20 dark:text-primary',
+                  'shadow-[0_1px_2px_rgba(0,0,0,0.07),inset_0_1px_0_rgba(255,255,255,0.22)]',
+                  'hover:bg-primary/20 dark:hover:bg-primary/28 hover:shadow-[0_3px_8px_rgba(0,0,0,0.12)] hover:-translate-y-[0.5px]',
+                  'active:translate-y-0 transition-all duration-150',
+                )}
+              >
+                <IconComp className="size-3 shrink-0 opacity-85 transition-transform duration-150 group-hover/cite:scale-110" />
+                <span>{cleanLabel}</span>
+                <span className="ml-0.5 rounded-full bg-primary/14 dark:bg-primary/25 px-1.5 py-[0.5px] font-mono text-[10px] leading-tight tracking-tight opacity-85">
+                  {badgeTag}
+                </span>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              点击在右侧定位原文区域 · {cleanLabel} ({href})
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )
     }
   }
