@@ -119,7 +119,7 @@ async function selectValue(selector, value) {
 }
 async function loginAndOpenBatch() {
   await eventually('preload ready', '!!window.reviewAPI && !!window.reviewAPI.createCaseV2', 90000)
-  if (!(await evaluate('document.body?.innerText?.includes("批量审核")'))) {
+  if (!(await evaluate('document.body?.innerText?.includes("QA 补件历史")'))) {
     await clickText('CDUT 专区')
     await delay(650)
     const loginVisible = await evaluate('!!document.querySelector("input[type=password]")')
@@ -132,7 +132,7 @@ async function loginAndOpenBatch() {
         'setter.call(el,value);el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}))}' +
         'return true })()')
       if (!ok) throw new Error('Demo login fields not located')
-      await clickText('登录')
+      await clickText('一键连接特区账户')
     }
     await eventually('material review entry', 'document.body?.innerText?.includes("材料审核")', 35000)
     await clickText('材料审核')
