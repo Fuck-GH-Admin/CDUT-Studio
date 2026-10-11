@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libgbm1 libasound2t64
+          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libgbm1 libasound2t64 fonts-noto-cjk
           bun install --frozen-lockfile
       - name: Generate synthetic fixtures and build Electron
         shell: bash
