@@ -120,6 +120,7 @@ async function selectValue(selector, value) {
 async function loginAndOpenBatch() {
   await eventually('preload ready', '!!window.reviewAPI && !!window.reviewAPI.createCaseV2', 90000)
   if (!(await evaluate('document.body?.innerText?.includes("QA 补件历史")'))) {
+    await eventually('real navigation ready', 'document.body?.innerText?.includes("CDUT 专区")', 90000)
     await clickText('CDUT 专区')
     await delay(650)
     const loginVisible = await evaluate('!!document.querySelector("input[type=password]")')
