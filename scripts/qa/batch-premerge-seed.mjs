@@ -8,6 +8,9 @@ const root = process.env.PROFER_CONFIG_DIR
 if (!root || !resolve(root).includes('batch-premerge-qa-')) throw new Error('Refusing to seed a non-QA profile')
 if (existsSync(join(root, 'review-batches'))) throw new Error('QA profile must start clean')
 const now = '2026-10-11T12:00:00.000Z'
+writeFileSync(join(root, 'settings.json'), JSON.stringify({
+  onboardingCompleted: true, coachTourVersion: 9999, reviewAgentAutoApproval: false,
+}, null, 2))
 const templateId = 'qa-review-template'
 const cases = [
   ['qa-history-case', 'QA 补件回流案'],
