@@ -168,7 +168,9 @@ cmd.exe /c ".\apps\electron\out\win-unpacked\CDUT Studio.exe --enable-logging"
 
 批量审核复验入口见 [24 号独立验收](docs/design/review-agent/24-batch-review-independent-final-acceptance.md)。队列失败提示须保留失败数量；无已完成案卷时待人工分流明确为零。Electron 回放的缺模型负例须核对持久化错误原因，不能仅检查 `failed` 状态。
 
-上游整合基线与冲突处理见 [25 号整合记录](docs/design/review-agent/25-upstream-review-integration.md)，后续同步与真实 dev 记录见 [26 号复验](docs/design/review-agent/26-upstream-refresh-dev-acceptance.md)。PDF 走上游高精解析引擎，同时保留审核的 DOCX/Excel 结构与 HTML/EML 读取。Pi 自动压缩统一在任务结束、会话空闲后执行；审核会话保留约 70% 阈值、运行账本与审核压缩指令，普通会话按共享阈值处理。本阶段交付到测试仓库继续开发，用户明确要求不向上游创建 PR。
+上游整合基线与冲突处理见 [25 号整合记录](docs/design/review-agent/25-upstream-review-integration.md)，后续同步与真实 dev 记录见 [26 号复验](docs/design/review-agent/26-upstream-refresh-dev-acceptance.md)。PDF 走上游高精解析引擎，同时保留审核的 DOCX/Excel 结构与 HTML/EML 读取。Pi 自动压缩统一在任务结束、会话空闲后执行；审核会话保留约 70% 阈值、运行账本与审核压缩指令，普通会话按共享阈值处理。
+
+2026-10-11 使用者已授权向上游提交当前阶段成果的 Draft PR，取代此前不提交 PR 的安排；本轮不合并上游 main。范围、验证边界及模板/解析保留项见 [28 号交付状态](docs/design/review-agent/28-review-stage-delivery-status.md)。模块化模板仅完成初次验证，大批试测模板未纳入提交，富文本完整解析等待上游；后台审核会话只有 [27 号修改建议](docs/design/review-agent/27-background-review-session-proposal.md)，尚未实现。
 
 ---
 

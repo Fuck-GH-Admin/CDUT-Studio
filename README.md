@@ -148,7 +148,9 @@
 
 离线演示入口与最终独立验收见[批量审核复验报告](docs/design/review-agent/24-batch-review-independent-final-acceptance.md)：失败提示包含真实失败数量，全部执行失败时待人工分流为零，旧自动处置单独显示为历史回执。
 
-测试仓库现已整合上游 PDF/RAG 更新与审核模块，整合依据和冲突处理见[上游整合记录](docs/design/review-agent/25-upstream-review-integration.md)。当前用于继续开发，尚未向上游提交 PR。
+测试仓库现已整合上游 PDF/RAG 更新与审核模块，整合依据和冲突处理见[上游整合记录](docs/design/review-agent/25-upstream-review-integration.md)。当前阶段产物将以 Draft PR 提交上游评审，已完成与未完成部分见[阶段交付状态](docs/design/review-agent/28-review-stage-delivery-status.md)：模块化模板完成初次验证后仍在开发，大批试测模板未纳入提交，富文本完整解析等待上游更新。
+
+直接审核当前仍会打开普通 Agent 会话。[后台审核会话方案](docs/design/review-agent/27-background-review-session-proposal.md)分析归属、展示、设置和交互改动，本轮只提交建议，没有实现隐藏功能。
 
 上游后续照片蒙版与空闲态压缩已同步，离线审核入口和批量页面已通过实际 `bun run dev` 回放，结果见[dev 复验记录](docs/design/review-agent/26-upstream-refresh-dev-acceptance.md)。
 

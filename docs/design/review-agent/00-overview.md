@@ -1,6 +1,6 @@
 # 通用审核 Agent 设计文档导航
 
-> **当前开发入口：** 批量审核 A/B 与受授权的 C 阶段自动处理已在 `feat/batch-review-triage-v1` 实现并完成专项本地验证。新接手者先读[审核当前状态与开发者交接](17-current-state-and-handoff.md)，再读对应设计与验收文档。下文中的历史差距、路线和旧设计不能直接当成当前待办。
+> **当前开发入口（2026-10-11）：** 批量审核 A/B 与受授权的 C 阶段自动处理已合入测试仓库 main，整合上游后的工程 CI 和离线 dev 已通过。先读 [28 号阶段交付状态](28-review-stage-delivery-status.md)了解上游 Draft PR 范围与保留项，再读[开发者交接](17-current-state-and-handoff.md)和对应验收。模块化模板仍在开发；[27 号后台会话建议](27-background-review-session-proposal.md)仅是方案。下文的历史差距、路线和旧设计不能直接当成当前待办。
 
 初版日期：2026-10-03，初版代码基线：`422aacdc`。补完设计更新：2026-10-04，设计核对基线为 `c6d92732`（已合入协作者 `6a386e4b`）；N1–N7 复查基线为 `c2f4d901`，最新 G01–G13 实施复查基线为 `ddd9b1e3`，包含本次尚未提交的局部修复。本文档组是**目标设计与验收契约**，不是功能已完成声明。
 
@@ -36,6 +36,8 @@ N1–N7 与 G01–G13 段落记录的是 2026-10-04 至 10-10 的历史复查快
 
 | 文档 | 用来决定什么 |
 | --- | --- |
+| [28 阶段交付状态](28-review-stage-delivery-status.md) | 上游 Draft PR 范围、已做/未做、验证限制与最终交付步骤 |
+| [27 后台审核会话建议](27-background-review-session-proposal.md) | 隐藏会话需要改哪些链路、设置放置与复杂度；尚未实现 |
 | [17 审核当前状态与开发者交接](17-current-state-and-handoff.md) | 当前分支、实现边界、已跑验证、已知限制、接手命令与下一步 |
 | [16 B 阶段本地验收记录](16-batch-review-stage-b-local-acceptance.md) | B 阶段范围、人工集中处置场景与 B 阶段验证记录 |
 | [17 C 阶段自动化验收](17-batch-review-stage-c-local-acceptance.md) | 批次自动处理策略、通过/补件门槛、补件回流与定稿场景 |
