@@ -53,7 +53,7 @@ import type {
   ExtensionFactory,
 } from '@earendil-works/pi-coding-agent'
 import type { Transport as PiAgentTransport } from '@earendil-works/pi-ai'
-import type { AgentToolResult, AgentToolUpdateCallback } from '@earendil-works/pi-agent-core'
+import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage } from '@earendil-works/pi-ai/compat'
 import { Type, type TSchema } from 'typebox'
 import {
@@ -1307,6 +1307,55 @@ export async function compactCurrentSessionAfterTurn(
 }
 
 /**
+ * 估算当前上下文占用 token（Pi 原生口径）：取最近一次有效 assistant 回复的 usage，
+ * 优先 totalTokens，缺省回退 input+output+cacheRead+cacheWrite。
+ * aborted/error/全零 usage 视为无效并向前回溯，与内核 getAssistantUsage 的过滤口径一致。
+ */
+export function estimatePiContextTokens(messages: readonly AgentMessage[]): number | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    if (!message || !isAssistantPiMessage(message)) continue
+    if (message.stopReason === 'aborted' || message.stopReason === 'error') continue
+    const usage = message.usage
+    if (!usage) continue
+    const total = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+    if (total > 0) return total
+  }
+  return undefined
+}
+
+/**
+ * 空闲态自动压缩：只在任务（prompt 链）完全落定、会话回到空闲后调用。
+ * Pi 内核的两个原生自动压缩入口已通过 `compaction.enabled = false` 关闭，这里按同一阈值补做一次压缩，
+ * 从而保证自动压缩绝不打断正在进行的对话/任务；手动 /compact 与模型主动 CompactContext 不受影响。
+ * 压缩为尽力而为：失败仅记录日志，不会让已完成的本轮任务失败。
+ */
+export async function autoCompactWhenIdle(options: {
+  session: Pick<AgentSession, 'isIdle' | 'waitForIdle' | 'compact'> & {
+    agent: { state: { messages: readonly AgentMessage[] } }
+  }
+  contextWindow: number | undefined
+  reserveTokens: number
+  customInstructions?: string
+}): Promise<void> {
+  const { session, contextWindow, reserveTokens } = options
+  if (!contextWindow || contextWindow <= 0) return
+  // 双保险：确保没有任何进行中的 run/压缩，避免在任务中途触发。
+  if (!session.isIdle) await session.waitForIdle()
+  if (!session.isIdle) return
+  const contextTokens = estimatePiContextTokens(session.agent.state.messages)
+  if (contextTokens === undefined) return
+  if (contextTokens <= contextWindow - reserveTokens) return
+  try {
+    await session.compact(options.customInstructions)
+  } catch (error) {
+    if (!isCompactionNoopError(error)) {
+      console.warn('[Pi adapter] 空闲态自动压缩失败，已跳过（不影响本轮）：', error)
+    }
+  }
+}
+
+/**
  * 构建产品级核心交互工具（计划模式切换与用户结构化问答）。
  *
  * 注意：旧版纯内存伪工具 TaskCreate/TaskUpdate/TaskGet/TaskList/TodoRead/TodoWrite 已彻底移除，
@@ -2502,8 +2551,12 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       ]
 
       const settingsManager = sdk.SettingsManager.inMemory({
-        // 审核会话保留账本驱动的自动压缩；普通会话沿用上游暂时关闭自动压缩的设置。
-        compaction: { enabled: input.contextPolicy?.kind === 'review', reserveTokens: autoCompactionReserveTokens },
+        // 自动压缩时机定制：关闭 Pi 内核的两个自动压缩入口
+        // （回合间的 _compactBeforeNextAssistantResponse 与 run 结束/溢出的 _checkCompaction），
+        // 改由适配器在任务彻底落定、会话回到空闲时按阈值补做一次（见 autoCompactWhenIdle）。
+        // 这样自动压缩绝不打断正在进行的对话/任务；手动 /compact 与模型主动 CompactContext 走各自路径，不受影响。
+        // reserveTokens 仍保留，供空闲态压缩的阈值判定复用。
+        compaction: { enabled: false, reserveTokens: autoCompactionReserveTokens },
         // Continue the same transcript after transient failures so completed tools are not replayed.
         // Ollama 由 buildPiRetrySettings 单独关闭 native retry，避免兼容层重复提交工具上下文。
         retry: buildPiRetrySettings(input.provider, { isReviewRequest: input.toolProfile === 'review' }),
@@ -3057,7 +3110,16 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         }
 
         runCompactionAwareChain()
-          .then(() => {
+          .then(async () => {
+            // 空闲态自动压缩：任务链已落定、会话回到空闲后，再按阈值补做压缩，
+            // 确保自动压缩绝不打断对话过程（原生自动压缩已在 settings 中关闭）。
+            // 必须早于 queue.close()：否则 compacting/compact_boundary 会被队列丢弃，UI 无反馈。
+            await autoCompactWhenIdle({
+              session,
+              contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+              reserveTokens: autoCompactionReserveTokens,
+              customInstructions: input.contextPolicy?.kind === 'review' ? PI_REVIEW_COMPACTION_INSTRUCTIONS : undefined,
+            })
             // 若 agent_end 已把终态 result 存入 pendingTerminalResult（等待 overflow 压缩），
             // 在 prompt 链最终落定后必须 flush 出来，否则上层会因本轮无 result 而误判。
             if (pendingTerminalResult) {

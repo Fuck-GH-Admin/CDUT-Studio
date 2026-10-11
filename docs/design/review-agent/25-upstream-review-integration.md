@@ -1,5 +1,7 @@
 # 25｜上游项目与审核模块整合记录
 
+> 后续状态见 [26 号同步/dev 复验](26-upstream-refresh-dev-acceptance.md)：上游继续前进至 `f2c7347d`，自动压缩已从本文记载的旧设置调整为任务结束后的空闲态处理。本文保留 `a3305d4c` 初次整合的历史证据。
+
 > 2026-10-11；完整项目交付到 `Fuck-GH-Admin/cdut-studio-review-agent` 的 `main`，供继续开发。使用者明确要求不向 `Nya-Angle/CDUT-Studio` 创建 PR。
 
 ## 1. 整合基线

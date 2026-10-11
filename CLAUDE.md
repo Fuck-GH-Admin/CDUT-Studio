@@ -46,7 +46,7 @@ CDUT Studio（成都理工大学定制 AI 智能体工作台）是一个集成�
 CDUT-Studio/
 ├── packages/
 │   ├── shared/        # 共享类型、IPC 通道常量、配置与工具函数 (@profer/shared v0.1.45)
-│   ├── core/          # AI Provider 适配器、代码高亮服务 (@profer/core v0.2.12)
+│   ├── core/          # AI Provider 适配器、代码高亮、PDF 解析引擎 (@profer/core v0.2.12)
 │   ├── session-core/  # headless session 读取/分组/搜索/渲染 (@profer/session-core v0.1.1)
 │   ├── ui/            # 共享 UI 组件库 (@profer/ui v0.2.0)
 │   ├── agent-fabric/  # Agent 编排契约与纯函数行为 (@profer/agent-fabric v0.1.0)
@@ -72,9 +72,9 @@ CDUT-Studio/
 - **依赖**：无运行时依赖（仅 TypeScript）
 
 #### @profer/core (v0.2.12)
-- **导出模块**：`"."`、`./providers`、`./highlight`
-- **关键功能**：Provider 适配器注册表、代码高亮（Shiki）
-- **依赖**：`@profer/shared`、`highlight.js`、`shiki`
+- **导出模块**：`"."`、`./providers`、`./highlight`、`./pdf-engine`
+- **关键功能**：Provider 适配器注册表、代码高亮（Shiki）、自研高精 PDF 解析引擎（基于 `pdfjs-dist` 的源保持文档 AST）
+- **依赖**：`@profer/shared`、`highlight.js`、`pdfjs-dist`、`shiki`
 - **Peer 依赖**：`@anthropic-ai/sdk >=0.70.0`、`@modelcontextprotocol/sdk >=1.0.0`
 
 #### @profer/session-core (v0.1.1)
@@ -105,7 +105,7 @@ CDUT-Studio/
   - `@anthropic-ai/sdk`、`@modelcontextprotocol/sdk` - 协议层
   - `@larksuiteoapi/node-sdk`、`dingtalk-stream-sdk-nodejs` - 飞书/钉钉集成
   - Radix UI、TipTap、Tailwind CSS
-  - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`、`pdfjs-dist`、`mammoth`
+  - 文件解析：`pdfjs-dist`（PDF 经 `@profer/core/pdf-engine` 高精引擎解析）、`officeparser`、`word-extractor`、`mammoth`
 
 #### @profer/cli (v0.1.1)
 - **职责**：`profer` 命令行工具，面向有限上下文的 Agent 消费者，提供会话渐进式读取（list / info / outline / search / export）

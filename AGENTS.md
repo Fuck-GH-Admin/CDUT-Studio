@@ -49,7 +49,7 @@ CDUT-Studio/
 │   ├── agent-fabric/  # Agent 编排契约与纯函数行为 (@profer/agent-fabric)
 │   ├── project-core/  # 项目级图构建、状态重放与查询 (@profer/project-core)
 │   ├── session-core/  # headless session 读取/分组/搜索/渲染 (@profer/session-core)
-│   ├── core/          # AI Provider 适配器、代码高亮服务 (@profer/core)
+│   ├── core/          # AI Provider 适配器、代码高亮、PDF 解析引擎 (@profer/core)
 │   └── ui/            # 共享 UI 组件库 (@profer/ui)
 └── apps/
     ├── electron/      # Electron 桌面应用主体 (@profer/electron)
@@ -168,7 +168,7 @@ cmd.exe /c ".\apps\electron\out\win-unpacked\CDUT Studio.exe --enable-logging"
 
 批量审核复验入口见 [24 号独立验收](docs/design/review-agent/24-batch-review-independent-final-acceptance.md)。队列失败提示须保留失败数量；无已完成案卷时待人工分流明确为零。Electron 回放的缺模型负例须核对持久化错误原因，不能仅检查 `failed` 状态。
 
-上游整合基线与冲突处理见 [25 号整合记录](docs/design/review-agent/25-upstream-review-integration.md)。PDF 走上游高精解析引擎，同时保留审核的 DOCX/Excel 结构与 HTML/EML 读取。Pi 审核会话继续采用约 70% 阈值与运行账本压缩；普通会话暂沿用上游关闭自动压缩的设置。本阶段交付到测试仓库继续开发，用户明确要求不向上游创建 PR。
+上游整合基线与冲突处理见 [25 号整合记录](docs/design/review-agent/25-upstream-review-integration.md)，后续同步与真实 dev 记录见 [26 号复验](docs/design/review-agent/26-upstream-refresh-dev-acceptance.md)。PDF 走上游高精解析引擎，同时保留审核的 DOCX/Excel 结构与 HTML/EML 读取。Pi 自动压缩统一在任务结束、会话空闲后执行；审核会话保留约 70% 阈值、运行账本与审核压缩指令，普通会话按共享阈值处理。本阶段交付到测试仓库继续开发，用户明确要求不向上游创建 PR。
 
 ---
 

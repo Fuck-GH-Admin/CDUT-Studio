@@ -42,6 +42,7 @@ import { AiClassSessionPickerModal } from './AiClassSessionPickerModal'
 import { MutationConfirmModal } from './MutationConfirmModal'
 import { CdutAnniversaryBanner } from './CdutAnniversaryBanner'
 import { CdutProfileFields } from './CdutProfileFields'
+import { CdutPrivatePhoto } from './CdutPrivatePhoto'
 import { CdutHeroSection } from './CdutHeroSection'
 import { CdutQuickBar, type CdutQuickFeature } from './CdutQuickBar'
 import { CdutFeatureSheet } from './CdutFeatureSheet'
@@ -424,11 +425,7 @@ export function CdutZoneView(): React.ReactElement {
                     <div className="mt-3 flex items-center gap-3">
                       <div className="size-11 shrink-0 overflow-hidden rounded-xl border border-primary/20 bg-primary/5">
                         {savedAccount.avatar ? (
-                          <img
-                            src={savedAccount.avatar}
-                            alt="已保存账户头像"
-                            className="size-full object-cover"
-                          />
+                          <CdutPrivatePhoto src={savedAccount.avatar} alt="已保存账户头像" />
                         ) : (
                           <div className="flex size-full items-center justify-center text-primary/40">
                             <User size={20} />

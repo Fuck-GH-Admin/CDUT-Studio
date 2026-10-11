@@ -16,6 +16,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@profer/ui/primitives/tooltip'
+import { CdutPrivatePhoto } from './CdutPrivatePhoto'
 
 interface CdutProfileFieldsProps {
   account: CdutAccountProfile
@@ -56,10 +57,10 @@ export function CdutProfileFields({
         aria-hidden="true"
       />
       <div className="flex flex-wrap items-center gap-4">
-        {/* 真实头像 + 绿色在线脉冲灯 */}
+        {/* 真实头像 + 绿色在线脉冲灯（默认带隐私蒙版，单击切换） */}
         <div className="relative size-14 shrink-0 overflow-hidden rounded-2xl border border-primary/20 bg-primary/5 shadow-inner">
           {account.avatar ? (
-            <img src={account.avatar} alt="用户头像" className="size-full object-cover" />
+            <CdutPrivatePhoto src={account.avatar} alt="用户头像" />
           ) : (
             <div className="flex size-full items-center justify-center text-primary/40">
               <User size={26} />
