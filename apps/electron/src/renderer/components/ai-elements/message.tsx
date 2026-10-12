@@ -530,8 +530,8 @@ const WIKILINK_URL_RE = /^wikilink:\/\/(.+)$/
 /** mention:// URL 匹配 */
 const MENTION_URL_RE = /^mention:\/\/(file|skill|mcp|session)\/(.+)$/
 
-/** 双平行拓扑文档锚点匹配（如 #f1:p1-b11, #f2-p3-b4, #f1:p2-tbl1, #f3:p1-cB4, #p1-b11, #p2） */
-const DOCUMENT_ANCHOR_RE = /^#(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-(?:b\d+|tbl\d+|c[a-zA-Z0-9]+))?)$/i
+/** 双平行拓扑文档锚点匹配（如 #f1:p1-b11, #f2-p3-b4, #f1:p2-tbl1, #f3:p1-cB4, #f3:p3-cA10:B10, #f3:p3-r10, #p1-b11, #p2） */
+const DOCUMENT_ANCHOR_RE = /^#(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-(?:b\d+|tbl\d+|r\d+|c[a-zA-Z]+\d+(?::[a-zA-Z]+\d+)?))?)$/i
 
 /** 外部链接 / mention chip / 学术溯源胶囊 渲染器 */
 const MarkdownLink = React.memo(function MarkdownLink({
@@ -616,7 +616,7 @@ const MarkdownLink = React.memo(function MarkdownLink({
             blockId: resolved.blockId,
             bbox: resolved.bbox,
             cellRef: resolved.cellRef,
-            label: cleanLabel || resolved.label,
+            label: resolved.label || cleanLabel,
           })
 
           openPreview(sessionId, {

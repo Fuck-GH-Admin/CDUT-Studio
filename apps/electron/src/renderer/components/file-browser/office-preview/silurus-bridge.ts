@@ -185,44 +185,61 @@ function ensureSpotlightStyle(): void {
   style.textContent = `
     @keyframes proferOfficeSpotlightPulse {
       0% {
-        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55), 0 4px 18px rgba(245, 158, 11, 0.25);
-        background-color: rgba(245, 158, 11, 0.24);
+        opacity: 0;
+        transform: scale(0.96);
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.65), 0 4px 12px rgba(245, 158, 11, 0.25);
       }
-      50% {
-        box-shadow: 0 0 0 6px rgba(245, 158, 11, 0), 0 6px 22px rgba(245, 158, 11, 0.32);
-        background-color: rgba(245, 158, 11, 0.14);
+      12% {
+        opacity: 1;
+        transform: scale(1.012);
+        box-shadow: 0 0 0 8px rgba(245, 158, 11, 0.28), 0 10px 28px rgba(245, 158, 11, 0.45);
+      }
+      26% {
+        opacity: 0.94;
+        transform: scale(0.996);
+        box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18), 0 6px 16px rgba(245, 158, 11, 0.3);
+      }
+      42% {
+        opacity: 1;
+        transform: scale(1.008);
+        box-shadow: 0 0 0 7px rgba(245, 158, 11, 0.25), 0 10px 26px rgba(245, 158, 11, 0.4);
       }
       100% {
-        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0), 0 4px 14px rgba(245, 158, 11, 0.18);
-        background-color: rgba(245, 158, 11, 0.16);
+        opacity: 1;
+        transform: scale(1);
+        box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.22), 0 8px 24px -4px rgba(245, 158, 11, 0.35);
       }
     }
     .office-bbox-spotlight {
       position: absolute;
       pointer-events: none;
-      z-index: 25;
-      border: 2px solid #f59e0b;
+      z-index: 35;
       border-radius: 6px;
-      background-color: rgba(245, 158, 11, 0.16);
-      animation: proferOfficeSpotlightPulse 1.6s ease-out 3;
-      transition: all 0.2s ease-out;
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(59, 130, 246, 0.18));
+      border: 2px solid rgba(245, 158, 11, 0.92);
+      box-shadow:
+        0 0 0 4px rgba(245, 158, 11, 0.24),
+        0 8px 24px -4px rgba(245, 158, 11, 0.35),
+        inset 0 0 12px rgba(255, 255, 255, 0.35);
+      animation: proferOfficeSpotlightPulse 1.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      transform-origin: center center;
+      transition: opacity 0.25s ease-out;
     }
     .office-bbox-spotlight-badge {
       position: absolute;
-      top: -22px;
+      top: -24px;
       left: -2px;
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      padding: 1px 8px;
+      padding: 2px 8px;
       border-radius: 9999px;
-      background: #f59e0b;
+      background: linear-gradient(135deg, #f59e0b, #ea580c);
       color: #ffffff;
-      font-size: 11px;
-      font-weight: 600;
-      line-height: 18px;
+      font: 600 11px/1.4 system-ui, -apple-system, sans-serif;
       white-space: nowrap;
-      box-shadow: 0 2px 6px rgba(245, 158, 11, 0.35);
+      box-shadow: 0 4px 10px rgba(234, 88, 12, 0.35);
+      letter-spacing: 0.02em;
     }
   `
   document.head.appendChild(style)
@@ -259,9 +276,6 @@ function delay(ms: number): Promise<void> {
 
 /**
  * 多帧递增轮询：按给定毫秒间隔依次等待，直到 `predicate` 返回非空值。
- *
- * Silurus 的 XLSX 虚拟化表格在复杂样式或多行数据下，网格 DOM/Canvas 测量需要
- * 2~3 帧，单次 `await nextFrame()` 常返回 `null` 或 `width=0`，导致高亮框被静默丢弃。
  */
 async function pollFrames<T>(predicate: () => T | null, delaysMs: readonly number[]): Promise<T | null> {
   for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
@@ -279,30 +293,35 @@ function ensurePositioned(el: HTMLElement): void {
   }
 }
 
+interface SilurusPageSlot {
+  canvas?: HTMLCanvasElement
+  wrapper?: HTMLElement
+  textLayer?: HTMLElement | null
+  renderedPage?: number
+  renderedSlide?: number
+  renderedScale?: number
+}
+
 /**
- * 测量目标页 canvas 相对其槽 wrapper 的布局偏移与页面尺寸（均为 layout px，
- * 不受 InteractivePreviewViewport 外层 CSS transform 缩放影响）。
- * 归一化 bbox 必须落到页面画布上，而不是被当作 wrapper 的百分比——
- * 当 wrapper 与页之间存在 padding / 居中留白时，百分比会让高亮框跑偏。
+ * 测量目标页槽 wrapper 的页面尺寸（layout px，不受外层 CSS transform 缩放影响）。
+ *
+ * 注意：Silurus `DocxScrollViewer` 与 `PptxScrollViewer` 在 `_positionSlot` 中同步将
+ * `wrapper.style.width / height` 设为真实页面像素尺寸（`_pageWidthPx × _pageHeightPx`），
+ * 而未完成异步渲染的 `<canvas>` 默认是 HTML 原生 `300×150`！
+ * 因此必须优先信任 `wrapper.clientWidth / clientHeight`，仅在已渲染完成且尺寸一致时参考 canvas。
  */
 function measureSlotPageBox(
   wrapper: HTMLElement,
   canvas: HTMLCanvasElement | undefined,
 ): { left: number; top: number; width: number; height: number } {
-  const wrapperWidth = wrapper.clientWidth
-  const wrapperHeight = wrapper.clientHeight
-  if (!canvas) {
+  const wrapperWidth = wrapper.clientWidth || wrapper.offsetWidth
+  const wrapperHeight = wrapper.clientHeight || wrapper.offsetHeight
+  if (!canvas || wrapperWidth > 0) {
     return { left: 0, top: 0, width: wrapperWidth, height: wrapperHeight }
   }
-  // 外层可能带 transform scale：rect 宽度 / offsetWidth 即当前缩放系数，用于还原为 layout px。
-  const wrapperOffsetWidth = wrapper.offsetWidth
-  const rawScale = wrapperOffsetWidth > 0 ? wrapper.getBoundingClientRect().width / wrapperOffsetWidth : 1
-  const scale = rawScale > 0 ? rawScale : 1
-  const wrapperRect = wrapper.getBoundingClientRect()
-  const canvasRect = canvas.getBoundingClientRect()
   return {
-    left: (canvasRect.left - wrapperRect.left) / scale,
-    top: (canvasRect.top - wrapperRect.top) / scale,
+    left: 0,
+    top: 0,
     width: canvas.clientWidth || wrapperWidth,
     height: canvas.clientHeight || wrapperHeight,
   }
@@ -310,42 +329,54 @@ function measureSlotPageBox(
 
 /**
  * Silurus 滚动型 viewer 采用虚拟列表：目标页的 slot 只有在滚动/挂载后才进入 DOM，
- * 像素渲染还可能异步完成。这里轮询等待目标页 wrapper 与 canvas 就绪（最多 timeoutMs），
- * 否则会出现「已翻到该页却没有任何圈选框」的现象。
+ * 且 WASM 像素渲染与 `textLayer` span 注入在 `renderedScale > 0` 后才就绪。
  */
 async function waitForMountedPage(
-  slots: Map<number, { canvas?: HTMLCanvasElement; wrapper?: HTMLElement }> | undefined,
+  slots: Map<number, SilurusPageSlot> | undefined,
   pageIndex: number,
   timeoutMs = 1500,
-): Promise<{ wrapper: HTMLElement; canvas?: HTMLCanvasElement } | null> {
-  const resolveSlot = (): { wrapper: HTMLElement; canvas?: HTMLCanvasElement } | null => {
+): Promise<SilurusPageSlot | null> {
+  const resolveSlot = (requireRendered: boolean): SilurusPageSlot | null => {
     const slot = slots?.get(pageIndex)
     const canvas = slot?.canvas
-    const wrapper = slot?.wrapper ?? canvas?.parentElement ?? null
+    const wrapper = slot?.wrapper ?? canvas?.parentElement ?? undefined
     if (!wrapper || !wrapper.isConnected) return null
-    // canvas 像素可能尚未渲染完成（尺寸为 0），量到 0 会把框画成 0 尺寸，继续等待。
-    if (canvas && (canvas.clientWidth <= 0 || canvas.clientHeight <= 0)) return null
-    return { wrapper, canvas }
+    if (wrapper.clientWidth <= 0 || wrapper.clientHeight <= 0) return null
+    if (requireRendered && (slot?.renderedScale ?? -1) <= 0) return null
+    return { ...slot, wrapper, canvas }
   }
 
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const mounted = resolveSlot()
+    const mounted = resolveSlot(true)
     if (mounted) return mounted
     await nextFrame()
   }
-  // 超时兜底：即便 canvas 尺寸尚未就绪，只要 wrapper 已挂载也先画出框。
-  const slot = slots?.get(pageIndex)
-  const canvas = slot?.canvas
-  const wrapper = slot?.wrapper ?? canvas?.parentElement ?? null
-  return wrapper && wrapper.isConnected ? { wrapper, canvas } : null
+  // 超时兜底：即便 WASM 异步渲染尚未完成，只要 wrapper 已就绪也先按 wrapper 尺寸画框
+  return resolveSlot(false)
 }
 
-/** Silurus XLSX 内部可见的几何 API（版本私有，集中封装于此桥接层）。 */
+/** Silurus XLSX 内部可见的几何与选区 API（注意：`getCellRect` 返回 `{ x, y, w, h }`）。 */
+interface XlsxCellRect {
+  x: number
+  y: number
+  w?: number
+  h?: number
+  width?: number
+  height?: number
+}
+
 interface XlsxViewerInternals {
   _scrollCellIntoView?: (row: number, col: number) => void
-  getCellRect?: (row: number, col: number) => { x: number; y: number; width: number; height: number } | null
+  getCellRect?: (row: number, col: number) => XlsxCellRect | null
   canvasElement?: HTMLCanvasElement
+  canvasArea?: HTMLElement
+  selectionOverlay?: HTMLElement
+  anchorCell?: { row: number; col: number }
+  activeCell?: { row: number; col: number }
+  selectionMode?: string
+  updateSelectionOverlay?: () => void
+  renderCurrentSheet?: () => void
 }
 
 /** 圈选框几何（相对定位父节点的 layout px，不含外层 CSS transform 缩放）。 */
@@ -357,8 +388,8 @@ interface SpotlightGeometry {
   height: number
 }
 
-/** 读取 XLSX 单元格区域几何；虚拟网格未测量完成时返回 null（交给多帧轮询）。 */
-function readXlsxGeometry(
+/** 读取 XLSX 单元格区域几何；兼容 Silurus `{ x, y, w, h }` 与 `{ x, y, width, height }`。 */
+export function readXlsxGeometry(
   internals: XlsxViewerInternals,
   startAddr: { row: number; col: number } | null,
   endAddr: { row: number; col: number } | null,
@@ -367,42 +398,151 @@ function readXlsxGeometry(
   const start = internals.getCellRect(startAddr.row, startAddr.col)
   const end = internals.getCellRect(endAddr.row, endAddr.col)
   if (!start || !end) return null
-  if (start.width <= 0 || start.height <= 0) return null
-  const parent = internals.canvasElement?.parentElement
+  const startW = start.w ?? start.width ?? 0
+  const startH = start.h ?? start.height ?? 0
+  const endW = end.w ?? end.width ?? startW
+  const endH = end.h ?? end.height ?? startH
+  if (startW <= 0 || startH <= 0) return null
+  const parent = internals.canvasArea ?? internals.canvasElement?.parentElement
   if (!parent) return null
   const left = Math.min(start.x, end.x)
   const top = Math.min(start.y, end.y)
-  const right = Math.max(start.x + start.width, end.x + end.width)
-  const bottom = Math.max(start.y + start.height, end.y + end.height)
-  return { parent, left, top, width: Math.max(24, right - left), height: Math.max(18, bottom - top) }
+  const right = Math.max(start.x + startW, end.x + endW)
+  const bottom = Math.max(start.y + startH, end.y + endH)
+  return { parent, left, top, width: Math.max(28, right - left), height: Math.max(20, bottom - top) }
 }
 
-/** DOCX/PPTX：按页面画布真实布局尺寸把归一化 bbox 换算为圈选框几何。 */
+/**
+ * 从 `label` 中提取用于匹配 Silurus `textLayer` 真实渲染 span 的检索词。
+ */
+function extractSpotlightKeywords(label: string | undefined): string[] {
+  if (!label) return []
+  return label
+    .replace(/第\s*\d+\s*[页张行]/g, ' ')
+    .replace(/幻灯片\s*\d+/g, ' ')
+    .replace(/\bf\d+[:·]p\d+(?:-b\d+)?\b/gi, ' ')
+    .replace(/[·•|()（）\[\]【】：:，,、]/g, ' ')
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 2 && s !== '正文' && s !== '表格' && s !== '插图' && s !== '公式')
+}
+
+/**
+ * 在 Silurus `DocxScrollViewer` / `PptxScrollViewer` 的 `textLayer` 中匹配目标文本行，
+ * 直接读取 WASM 引擎渲染出的 `<span>` 精确像素坐标，彻底消除估算重排与真实渲染之间的行高累积误差。
+ */
+export function matchTextLayerGeometry(
+  wrapper: HTMLElement,
+  textLayer: HTMLElement | null | undefined,
+  label: string | undefined,
+  hintBbox?: [number, number, number, number],
+): SpotlightGeometry | null {
+  if (!textLayer || !textLayer.isConnected) return null
+  const keywords = extractSpotlightKeywords(label)
+  if (keywords.length === 0) return null
+
+  const spans = Array.from(textLayer.querySelectorAll<HTMLElement>('span'))
+  if (spans.length === 0) return null
+
+  interface LineGroup {
+    top: number
+    bottom: number
+    left: number
+    right: number
+    text: string
+  }
+
+  const lines: LineGroup[] = []
+  for (const span of spans) {
+    const txt = (span.textContent ?? '').trim()
+    if (!txt) continue
+    const left = Number.parseFloat(span.style.left) || span.offsetLeft || 0
+    const top = Number.parseFloat(span.style.top) || span.offsetTop || 0
+    const h = Number.parseFloat(span.style.lineHeight) || span.offsetHeight || 18
+    const w = Math.max(12, span.offsetWidth || txt.length * (h * 0.55))
+
+    const existing = lines.find((line) => Math.abs(line.top - top) <= Math.max(6, h * 0.55))
+    if (existing) {
+      existing.left = Math.min(existing.left, left)
+      existing.right = Math.max(existing.right, left + w)
+      existing.top = Math.min(existing.top, top)
+      existing.bottom = Math.max(existing.bottom, top + h)
+      existing.text += ` ${txt}`
+    } else {
+      lines.push({ top, bottom: top + h, left, right: left + w, text: txt })
+    }
+  }
+
+  if (lines.length === 0) return null
+
+  const pageHeight = Math.max(1, wrapper.clientHeight || wrapper.offsetHeight || 1)
+  const hintCenterY = hintBbox ? ((hintBbox[1] + hintBbox[3]) / 2) * pageHeight : null
+
+  let bestLine: LineGroup | null = null
+  let bestScore = 0
+
+  for (const line of lines) {
+    const normalizedLine = line.text.replace(/\s+/g, '')
+    let score = 0
+    for (const kw of keywords) {
+      const cleanKw = kw.replace(/\s+/g, '')
+      if (cleanKw && normalizedLine.includes(cleanKw)) {
+        score += cleanKw.length * 10
+      }
+    }
+    if (score > 0 && hintCenterY !== null) {
+      const distRatio = Math.abs((line.top + line.bottom) / 2 - hintCenterY) / pageHeight
+      score += Math.max(0, 5 - distRatio * 5)
+    }
+    if (score > bestScore) {
+      bestScore = score
+      bestLine = line
+    }
+  }
+
+  if (!bestLine) return null
+
+  const padX = 6
+  const padY = 4
+  return {
+    parent: wrapper,
+    left: Math.max(0, bestLine.left - padX),
+    top: Math.max(0, bestLine.top - padY),
+    width: Math.max(36, bestLine.right - bestLine.left + padX * 2),
+    height: Math.max(18, bestLine.bottom - bestLine.top + padY * 2),
+  }
+}
+
+/** DOCX/PPTX：优先采用 `textLayer` 像素级精确匹配，未命中时回退至归一化 bbox 换算。 */
 function readPageGeometry(
   wrapper: HTMLElement,
   canvas: HTMLCanvasElement | undefined,
+  textLayer: HTMLElement | null | undefined,
   bbox: [number, number, number, number] | undefined,
+  label: string | undefined,
 ): SpotlightGeometry {
+  const exactFromTextLayer = matchTextLayerGeometry(wrapper, textLayer, label, bbox)
+  if (exactFromTextLayer) return exactFromTextLayer
+
   const layout = measureSlotPageBox(wrapper, canvas)
   const [x0, y0, x1, y1] = bbox ?? [0.06, 0.08, 0.94, 0.24]
+  const padX = 0.008
+  const padY = 0.005
+  const sx0 = Math.max(0, Math.min(0.98, x0 - padX))
+  const sy0 = Math.max(0, Math.min(0.98, y0 - padY))
+  const sx1 = Math.max(sx0 + 0.02, Math.min(1, x1 + padX))
+  const sy1 = Math.max(sy0 + 0.015, Math.min(1, y1 + padY))
   return {
     parent: wrapper,
-    left: layout.left + x0 * layout.width,
-    top: layout.top + y0 * layout.height,
-    width: Math.max(24, (x1 - x0) * layout.width),
-    height: Math.max(12, (y1 - y0) * layout.height),
+    left: layout.left + sx0 * layout.width,
+    top: layout.top + sy0 * layout.height,
+    width: Math.max(24, (sx1 - sx0) * layout.width),
+    height: Math.max(16, (sy1 - sy0) * layout.height),
   }
 }
 
 /**
- * 在 Silurus OfficeViewer 中执行页码/幻灯片/工作表跳转，并渲染琥珀色脉冲聚光灯高亮框。
- *
- * 与 PDF 预览一致，高亮框需要精确贴合「页面画布」：
- * - DOCX / PPTX：等待目标页 slot 挂载后，按页面 canvas 的真实布局尺寸换算归一化 bbox；
- * - XLSX：使用 viewer 原生单元格选择高亮，并在多帧轮询确认几何稳定后补画圈选框。
- *
- * 高韧性自愈：挂载后监听视口 resize 与 DOM 变更，当外层重绘/虚拟列表复用导致
- * 高亮节点被清理或错位时，自动重新测量并重新锚定，直至淡出计时结束。
+ * 在 Silurus OfficeViewer 中执行页码/幻灯片/工作表跳转，并渲染与 PDF 完全同构的琥珀色脉冲聚光灯高亮框。
  */
 export async function applyOfficeCitationSpotlight(
   viewer: ZoomableViewer,
@@ -412,12 +552,24 @@ export async function applyOfficeCitationSpotlight(
   ensureSpotlightStyle()
   hostContainer.querySelectorAll('.office-bbox-spotlight').forEach((el) => el.remove())
 
-  const pageIndex = Math.max(0, (target.pageNumber || 1) - 1)
+  const totalCount =
+    target.format === 'docx'
+      ? viewer.pageCount
+      : target.format === 'pptx'
+        ? viewer.slideCount
+        : viewer.sheetCount
+  const rawPageIndex = Math.max(0, (target.pageNumber || 1) - 1)
+  let activePageIndex =
+    typeof totalCount === 'number' && totalCount > 0
+      ? Math.min(rawPageIndex, totalCount - 1)
+      : rawPageIndex
+
   const disposers: Array<() => void> = []
   let active = true
   let faded = false
   let fadeTimer: ReturnType<typeof setTimeout> | null = null
   let spotlightEl: HTMLDivElement | null = null
+  let badgeEl: HTMLDivElement | null = null
   let labelText = target.label ?? ''
   let computeGeometry: () => SpotlightGeometry | null = () => null
 
@@ -425,26 +577,36 @@ export async function applyOfficeCitationSpotlight(
   const mountBox = (geom: SpotlightGeometry): void => {
     if (!active) return
     ensurePositioned(geom.parent)
+    const formattedLabel = labelText.startsWith('📍') ? labelText : `📍 ${labelText}`
     if (!spotlightEl) {
       const box = document.createElement('div')
       box.className = 'office-bbox-spotlight'
       const badge = document.createElement('div')
       badge.className = 'office-bbox-spotlight-badge'
-      badge.textContent = labelText
+      badge.textContent = formattedLabel
       box.appendChild(badge)
       spotlightEl = box
+      badgeEl = badge
+    } else if (badgeEl && badgeEl.textContent !== formattedLabel) {
+      badgeEl.textContent = formattedLabel
     }
-    spotlightEl.style.left = `${Math.max(0, geom.left - 2)}px`
-    spotlightEl.style.top = `${Math.max(0, geom.top - 2)}px`
+    const boxLeft = Math.max(0, geom.left - 2)
+    const boxTop = Math.max(0, geom.top - 2)
+    spotlightEl.style.left = `${boxLeft}px`
+    spotlightEl.style.top = `${boxTop}px`
     spotlightEl.style.width = `${geom.width + 4}px`
     spotlightEl.style.height = `${geom.height + 4}px`
+    if (badgeEl) {
+      // 若高亮框紧贴画布顶部（如 Excel 第 1 行），将胶囊标签置于框下方，防止被父容器 overflow:hidden 裁切
+      badgeEl.style.top = boxTop < 26 ? `${geom.height + 6}px` : '-24px'
+    }
     if (spotlightEl.parentElement !== geom.parent) geom.parent.appendChild(spotlightEl)
   }
 
   let scrollHost: HTMLElement | undefined
 
   if (target.format === 'xlsx') {
-    await viewer.goToSheet?.(pageIndex)
+    await viewer.goToSheet?.(activePageIndex)
     viewer.setSelectionColor?.('#f59e0b')
 
     const parts = (target.cellRef ?? '').trim().split(':').map((part) => part.trim()).filter(Boolean)
@@ -452,11 +614,27 @@ export async function applyOfficeCitationSpotlight(
     const endRef = parts[1] || startRef
     const startAddr = parseA1CellAddress(startRef)
     const endAddr = parseA1CellAddress(endRef) ?? startAddr
-    labelText = target.label || `${startRef}${endRef !== startRef ? `:${endRef}` : ''}`
+    const rangeLabel = `${startRef}${endRef !== startRef ? `:${endRef}` : ''}`
+    labelText = target.label
+      ? target.label.includes(startRef)
+        ? target.label
+        : `${target.label} · ${rangeLabel}`
+      : rangeLabel
 
     if (parts[0]) viewer.select?.(startRef)
 
     const internals = viewer as unknown as XlsxViewerInternals
+    if (startAddr && endAddr) {
+      internals.anchorCell = { row: startAddr.row, col: startAddr.col }
+      internals.activeCell = { row: endAddr.row, col: endAddr.col }
+      internals.selectionMode = 'cells'
+      try {
+        internals.updateSelectionOverlay?.()
+        internals.renderCurrentSheet?.()
+      } catch {
+        // 忽略内部选区同步异常
+      }
+    }
     if (startAddr && typeof internals._scrollCellIntoView === 'function') {
       try {
         internals._scrollCellIntoView(startAddr.row, startAddr.col)
@@ -466,43 +644,66 @@ export async function applyOfficeCitationSpotlight(
     }
 
     computeGeometry = () => readXlsxGeometry(internals, startAddr, endAddr)
-    // 切换工作表 / 滚动单元格后几何异步更新：多帧递增轮询直到网格测量稳定，避免量到旧位置。
-    await pollFrames(computeGeometry, [16, 48, 120, 240])
+    // 切换工作表 / 滚动单元格后几何异步更新：多帧递增轮询直到网格测量稳定
+    await pollFrames(computeGeometry, [16, 48, 120, 240, 400])
   } else {
     if (target.format === 'docx') {
-      viewer.scrollToPage?.(pageIndex, { behavior: 'auto' })
+      viewer.scrollToPage?.(activePageIndex, { behavior: 'auto' })
     } else {
-      viewer.scrollToSlide?.(pageIndex, { behavior: 'auto' })
+      viewer.scrollToSlide?.(activePageIndex, { behavior: 'auto' })
     }
 
     const internalScrollViewer = viewer as unknown as {
-      _slots?: Map<number, { canvas?: HTMLCanvasElement; wrapper?: HTMLElement }>
+      _slots?: Map<number, SilurusPageSlot>
       _scrollHost?: HTMLElement
     }
     scrollHost = internalScrollViewer._scrollHost
     labelText =
-      target.label || (target.format === 'pptx' ? `幻灯片 ${target.pageNumber}` : `第 ${target.pageNumber} 页`)
+      target.label || (target.format === 'pptx' ? `幻灯片 ${activePageIndex + 1}` : `第 ${activePageIndex + 1} 页`)
 
-    // 每次重锚都重新解析「当前活跃 slot」：虚拟列表复用会把旧 wrapper 从 DOM 摘除，
-    // 若沿用首次捕获的 wrapper，重锚会落到已分离节点上而永远不可见。
-    const resolveLiveSlot = (): { wrapper: HTMLElement; canvas?: HTMLCanvasElement } | null => {
-      const slot = internalScrollViewer._slots?.get(pageIndex)
+    // 等待目标页完成 WASM 渲染与 textLayer 注入
+    await waitForMountedPage(internalScrollViewer._slots, activePageIndex)
+
+    // 跨页自适应校准：若 DOCX 估算页与 WASM 实际分页相差 1 页，在已挂载相邻页的 textLayer 中自动寻址
+    if (target.format === 'docx' && internalScrollViewer._slots) {
+      const currentSlot = internalScrollViewer._slots.get(activePageIndex)
+      const matchedOnCurrent =
+        currentSlot?.wrapper &&
+        matchTextLayerGeometry(currentSlot.wrapper, currentSlot.textLayer, labelText, target.bbox)
+      if (!matchedOnCurrent) {
+        for (const [candidateIdx, candidateSlot] of internalScrollViewer._slots.entries()) {
+          if (candidateIdx === activePageIndex || !candidateSlot.wrapper) continue
+          const matchedOnCandidate = matchTextLayerGeometry(
+            candidateSlot.wrapper,
+            candidateSlot.textLayer,
+            labelText,
+          )
+          if (matchedOnCandidate) {
+            activePageIndex = candidateIdx
+            viewer.scrollToPage?.(activePageIndex, { behavior: 'auto' })
+            break
+          }
+        }
+      }
+    }
+
+    const resolveLiveSlot = (): SilurusPageSlot | null => {
+      const slot = internalScrollViewer._slots?.get(activePageIndex)
       const canvasRaw = slot?.canvas
-      const wrapper = slot?.wrapper ?? canvasRaw?.parentElement ?? null
+      const wrapper = slot?.wrapper ?? canvasRaw?.parentElement ?? undefined
       if (!wrapper || !wrapper.isConnected) return null
       const canvas = canvasRaw && canvasRaw.clientWidth > 0 && canvasRaw.clientHeight > 0 ? canvasRaw : undefined
-      return { wrapper, canvas }
+      return { ...slot, wrapper, canvas }
     }
     computeGeometry = () => {
       const live = resolveLiveSlot()
-      return live ? readPageGeometry(live.wrapper, live.canvas, target.bbox) : null
+      return live
+        ? readPageGeometry(live.wrapper!, live.canvas, live.textLayer, target.bbox, labelText)
+        : null
     }
-
-    // 等待目标页首次挂载（未挂载时后续观察器仍会重试）
-    await waitForMountedPage(internalScrollViewer._slots, pageIndex)
   }
 
-  // ---- 高韧性自适应重锚：几何或 DOM 变化时重新解析活跃 slot 并重新定位 ----
+  // ---- 高韧性自适应重锚：几何、滚动或 DOM 变化时重新解析活跃 slot 并重新定位 ----
   let resizeObserver: ResizeObserver | null = null
   let observedParent: HTMLElement | null = null
 
@@ -521,7 +722,7 @@ export async function applyOfficeCitationSpotlight(
   // 首次挂载
   reposition()
 
-  // DOCX 页面较高时，将目标块垂直居中到可视区（仅一次）
+  // 将目标高亮框平滑滚动至视口中央（与 PDF 行为一致）
   if (target.format === 'docx' && scrollHost) {
     const geometry = computeGeometry()
     if (geometry && geometry.parent.offsetHeight > 0) {
@@ -529,6 +730,24 @@ export async function applyOfficeCitationSpotlight(
       const desiredTop = Math.max(0, blockCenterY - scrollHost.clientHeight * 0.42)
       scrollHost.scrollTo?.({ top: desiredTop, behavior: 'smooth' })
     }
+  } else if (spotlightEl) {
+    requestAnimationFrame(() => {
+      spotlightEl?.scrollIntoView?.({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    })
+  }
+
+  // XLSX 滚轮/滚动时单元格相对 canvasArea 偏移会实时变化，需同步刷新圈选框位置
+  if (target.format === 'xlsx') {
+    const onWheelOrScroll = () => {
+      if (!active || faded) return
+      requestAnimationFrame(() => reposition())
+    }
+    hostContainer.addEventListener('wheel', onWheelOrScroll, { passive: true })
+    hostContainer.addEventListener('scroll', onWheelOrScroll, { passive: true, capture: true })
+    disposers.push(() => {
+      hostContainer.removeEventListener('wheel', onWheelOrScroll)
+      hostContainer.removeEventListener('scroll', onWheelOrScroll, { capture: true })
+    })
   }
 
   // 视口 resize / 缩放重绘时重新测量并定位
@@ -540,11 +759,17 @@ export async function applyOfficeCitationSpotlight(
     disposers.push(() => observer.disconnect())
   }
 
-  // 自愈重锚：外层重绘 / 虚拟列表复用导致高亮节点被清理或所在 wrapper 被替换时，自动重新挂载
+  // 自愈重锚：外层重绘 / WASM textLayer 注入 / 虚拟列表复用时，自动重新测量并挂载
   if (typeof MutationObserver === 'function') {
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((mutations) => {
       if (!active || faded) return
-      if (!spotlightEl || !spotlightEl.isConnected) reposition()
+      const hasExternalMutation = mutations.some((m) => {
+        if (spotlightEl && (m.target === spotlightEl || m.target === badgeEl)) return false
+        const addedNonSpotlight = Array.from(m.addedNodes).some((n) => n !== spotlightEl && n !== badgeEl)
+        const removedNonSpotlight = Array.from(m.removedNodes).some((n) => n !== spotlightEl && n !== badgeEl)
+        return addedNonSpotlight || removedNonSpotlight || !spotlightEl || !spotlightEl.isConnected
+      })
+      if (hasExternalMutation) reposition()
     })
     observer.observe(hostContainer, { childList: true, subtree: true })
     disposers.push(() => observer.disconnect())

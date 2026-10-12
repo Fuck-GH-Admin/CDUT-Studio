@@ -111,6 +111,13 @@ function parseRunFontSizePt(rPr: XmlElement | null): number | undefined {
   return undefined
 }
 
+function isWordOnOffEnabled(node: XmlElement | null | undefined): boolean {
+  if (!node) return false
+  const val = getAttr(node, 'val')?.trim().toLowerCase()
+  if (val === '0' || val === 'false' || val === 'off') return false
+  return true
+}
+
 function extractParagraphProps(pPr: XmlElement | null): Partial<DocxStyleResolved> {
   if (!pPr) return {}
   const out: Partial<DocxStyleResolved> = {}
@@ -147,9 +154,9 @@ function extractParagraphProps(pPr: XmlElement | null): Partial<DocxStyleResolve
     }
   }
 
-  if (getFirstDirectChild(pPr, 'keepNext')) out.keepNext = true
-  if (getFirstDirectChild(pPr, 'keepLines')) out.keepLines = true
-  if (getFirstDirectChild(pPr, 'pageBreakBefore')) out.pageBreakBefore = true
+  if (isWordOnOffEnabled(getFirstDirectChild(pPr, 'keepNext'))) out.keepNext = true
+  if (isWordOnOffEnabled(getFirstDirectChild(pPr, 'keepLines'))) out.keepLines = true
+  if (isWordOnOffEnabled(getFirstDirectChild(pPr, 'pageBreakBefore'))) out.pageBreakBefore = true
 
   return out
 }
@@ -544,7 +551,7 @@ function extractParagraphSegments(
 
   for (const child of getDirectChildren(pNode)) {
     if (child.localName === 'pPr') {
-      if (findFirstElement(child, 'pageBreakBefore')) {
+      if (isWordOnOffEnabled(findFirstElement(child, 'pageBreakBefore'))) {
         hasBreakBefore = true
       }
       continue
@@ -576,8 +583,8 @@ function extractParagraphSegments(
         const rPr = getFirstDirectChild(r, 'rPr')
         const rFont = parseRunFontSizePt(rPr)
         if (rFont && rFont > maxFontSizePt) maxFontSizePt = rFont
-        const isBold = Boolean(rPr && getFirstDirectChild(rPr, 'b') && getAttr(getFirstDirectChild(rPr, 'b'), 'val') !== '0')
-        const isItalic = Boolean(rPr && getFirstDirectChild(rPr, 'i') && getAttr(getFirstDirectChild(rPr, 'i'), 'val') !== '0')
+        const isBold = isWordOnOffEnabled(rPr ? getFirstDirectChild(rPr, 'b') : null)
+        const isItalic = isWordOnOffEnabled(rPr ? getFirstDirectChild(rPr, 'i') : null)
 
         for (const rChild of getDirectChildren(r)) {
           if (rChild.localName === 'lastRenderedPageBreak') {
@@ -661,8 +668,8 @@ function parseTableRows(
   for (let rIdx = 0; rIdx < trNodes.length; rIdx++) {
     const tr = trNodes[rIdx]!
     const trPr = getFirstDirectChild(tr, 'trPr')
-    const isHeader = Boolean(trPr && getFirstDirectChild(trPr, 'tblHeader')) || rIdx === 0
-    const cantSplit = Boolean(trPr && getFirstDirectChild(trPr, 'cantSplit'))
+    const isHeader = isWordOnOffEnabled(trPr ? getFirstDirectChild(trPr, 'tblHeader') : null) || rIdx === 0
+    const cantSplit = isWordOnOffEnabled(trPr ? getFirstDirectChild(trPr, 'cantSplit') : null)
     const trHeightNode = trPr ? getFirstDirectChild(trPr, 'trHeight') : null
     const explicitHeightTwips = Number(getAttr(trHeightNode, 'val'))
 
@@ -925,6 +932,7 @@ export function solveDocxReflow(
         }
 
         const blockIdx = currentBlocks.length + 1
+        const cleanSnippet = seg.text.replace(/\s+/g, ' ').trim().slice(0, 24)
         const locSuffix =
           blockType === 'heading'
             ? seg.text.slice(0, 24)
@@ -932,7 +940,7 @@ export function solveDocxReflow(
               ? '公式'
               : blockType === 'figure'
                 ? '插图'
-                : currentSectionTitle || '正文'
+                : cleanSnippet || currentSectionTitle || '正文'
 
         currentBlocks.push({
           id: `p${currentPageNumber}-b${blockIdx}`,

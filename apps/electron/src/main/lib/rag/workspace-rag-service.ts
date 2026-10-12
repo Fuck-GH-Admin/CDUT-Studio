@@ -14,8 +14,12 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
-import type { DocumentAnchorBlockMeta, MaterializedDocumentIndex } from '../document-parse-tools'
+import { join, resolve } from 'node:path'
+import {
+  upgradeStaleOfficeIndexIfNeeded,
+  type DocumentAnchorBlockMeta,
+  type MaterializedDocumentIndex,
+} from '../document-parse-tools'
 import { buildEntityIndex, findRelationalBridges, type EntityIndex } from './entity-graph'
 
 // ===== 检索参数常量 =====
@@ -26,10 +30,10 @@ const BM25_K1 = 1.5
 const BM25_B = 0.75
 /** 默认召回切片数 */
 const DEFAULT_TOP_K = 5
-/** 单切片注入 `<document_evidence>` 的字符上限 */
-const EVIDENCE_EXCERPT_MAX_CHARS = 480
+/** 单切片注入 `<document_evidence>` 的字符上限（覆盖完整单页花名册/任职名单，避免截断丢失尾部实体） */
+const EVIDENCE_EXCERPT_MAX_CHARS = 1200
 /** `<document_evidence>` 块的总字符预算 */
-const EVIDENCE_BLOCK_MAX_CHARS = 3600
+const EVIDENCE_BLOCK_MAX_CHARS = 5200
 
 /** 中文 / 英文常见停用词（检索噪音，直接剔除） */
 const STOP_WORDS = new Set([
@@ -44,7 +48,8 @@ const STOP_WORDS = new Set([
  * 例：`马晨超` → 马 / 晨 / 超 / 马晨 / 晨超。
  */
 function tokenize(text: string): string[] {
-  const lower = text.toLowerCase()
+  const cleaned = text.replace(/\[#[a-zA-Z]+\d+:p\d+-b\d+(?:\s*\([^\)]*\))?\]/g, ' ')
+  const lower = cleaned.toLowerCase()
   const tokens: string[] = []
   for (const word of lower.match(/[a-z0-9]{2,}/g) ?? []) {
     if (!STOP_WORDS.has(word)) tokens.push(word)
@@ -111,7 +116,7 @@ function bareBlockId(scopedId: string | undefined): string {
   return idx >= 0 ? scopedId.slice(idx + 1) : scopedId
 }
 
-/** 读取工作区已落盘的文档索引产物 */
+/** 读取工作区已落盘的文档索引产物（如遇旧版 Office 索引则静默原地升级） */
 function readArtifactIndices(artifactsDir: string): MaterializedDocumentIndex[] {
   const indices: MaterializedDocumentIndex[] = []
   let files: string[] = []
@@ -122,7 +127,9 @@ function readArtifactIndices(artifactsDir: string): MaterializedDocumentIndex[] 
   }
   for (const file of files) {
     try {
-      indices.push(JSON.parse(readFileSync(join(artifactsDir, file), 'utf-8')) as MaterializedDocumentIndex)
+      const fullPath = resolve(artifactsDir, file)
+      const parsed = JSON.parse(readFileSync(fullPath, 'utf-8')) as MaterializedDocumentIndex
+      indices.push(upgradeStaleOfficeIndexIfNeeded(parsed, fullPath))
     } catch {
       // 忽略损坏的索引
     }
@@ -151,6 +158,33 @@ function computeFingerprint(artifactsDir: string): string {
   return parts.length > 0 ? parts.join('|') : 'empty'
 }
 
+/**
+ * 将带 `<!-- anchor: fN:pX-bY ... -->` 的页面 Markdown 压缩为带行内块锚点 `[#fN:pX-bY]` 的紧凑正文，
+ * 使模型在 `<document_evidence>` 中能直接看到每个段落/形状的精确块级锚点。
+ */
+function buildInlineAnchoredContent(
+  anchoredText: string | undefined,
+  cleanText: string | undefined,
+  fileId: string,
+): string {
+  const rawAnchored = (anchoredText ?? '').trim()
+  if (rawAnchored && rawAnchored.includes('<!-- anchor:')) {
+    const inlined = rawAnchored
+      .replace(/<span\s+id="[^"]*"[^>]*><\/span>\s*/g, '')
+      .replace(
+        /<!--\s*anchor:\s*(?:([a-zA-Z]+\d+):)?(p\d+-b\d+)\s*\[[^\]]*\](?:[^>]*?cell="([^"]*)")?[^>]*-->\s*/g,
+        (_m, fId: string | undefined, blockId: string, cell: string | undefined) => {
+          const scoped = `${(fId || fileId).toLowerCase()}:${blockId}`
+          return cell ? `[#${scoped} (${cell})] ` : `[#${scoped}] `
+        },
+      )
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+    if (inlined) return inlined
+  }
+  return (cleanText ?? '').trim()
+}
+
 /** 由单份文档索引构建切片集合 */
 function buildChunksFromIndex(index: MaterializedDocumentIndex): WorkspaceRagChunk[] {
   const fileId = index.fileId || 'f1'
@@ -158,7 +192,7 @@ function buildChunksFromIndex(index: MaterializedDocumentIndex): WorkspaceRagChu
   const chunks: WorkspaceRagChunk[] = []
 
   for (const page of index.pages ?? []) {
-    const content = (page.cleanText ?? '').trim()
+    const content = buildInlineAnchoredContent(page.anchoredText, page.cleanText, fileId)
     if (!content) continue
 
     const blockKey = bareBlockId(page.firstBlockId)
@@ -232,10 +266,37 @@ export function invalidateWorkspaceRag(agentCwd?: string): void {
 
 // ===== 检索与显著性剪枝 =====
 
-/** 提取与 Query 最相关的关键片段（约 300~480 字黄金事实） */
-function buildExcerpt(content: string, queryTerms: string[]): string {
+/** 提取与 Query（及跨文档关联键）最相关的关键片段 */
+function buildExcerpt(
+  content: string,
+  queryTerms: readonly string[],
+  sharedKeys: readonly string[] = [],
+): string {
   const compact = content.replace(/[ \t]+\n/g, '\n').trim()
   if (compact.length <= EVIDENCE_EXCERPT_MAX_CHARS) return compact
+
+  // 当存在跨文档共享关联键（如学号/寝室号）且全文超长时，优先聚合所有命中关联键与查询词的行（保留表头），防止截断漏掉尾部关联实体
+  if (sharedKeys.length > 0) {
+    const lines = compact.split('\n')
+    const matchedLines: string[] = []
+    let chars = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!
+      const lower = line.toLowerCase()
+      const isHeader = i < 3 || line.startsWith('###') || line.includes('---')
+      const hitsShared = sharedKeys.some((k) => lower.includes(k.toLowerCase()))
+      const hitsQuery = queryTerms.some((t) => t.length >= 2 && lower.includes(t))
+      if (isHeader || hitsShared || hitsQuery) {
+        if (chars + line.length + 1 <= EVIDENCE_EXCERPT_MAX_CHARS) {
+          matchedLines.push(line)
+          chars += line.length + 1
+        }
+      }
+    }
+    if (matchedLines.length > 0) {
+      return matchedLines.join('\n')
+    }
+  }
 
   // 优先以命中词第一次出现的位置为中心开窗
   let anchor = -1
@@ -365,21 +426,30 @@ export function buildDocumentEvidenceForMessage(
   const ranked = scoreQuery(index, queryTerms).slice(0, topK)
   if (ranked.length === 0) return ''
 
-  const hits: WorkspaceRagHit[] = ranked.map(({ index: chunkIndex, score }) => {
-    const chunk = index.chunks[chunkIndex]!
-    return { chunk, score, excerpt: buildExcerpt(chunk.content, queryTerms) }
-  })
-
   // 跨文档关系 Join：以种子切片的高基数键为桥，召回其它文档的关联切片
   const bridges = findRelationalBridges(
     index.entityIndex,
     ranked.map((entry) => entry.index),
     (chunkIndex) => index.chunks[chunkIndex]?.fileId ?? '',
   )
+
+  const hits: WorkspaceRagHit[] = ranked.map(({ index: chunkIndex, score }) => {
+    const chunk = index.chunks[chunkIndex]!
+    return {
+      chunk,
+      score,
+      excerpt: buildExcerpt(chunk.content, queryTerms, bridges.sharedKeys),
+    }
+  })
+
   for (const bridgeIndex of bridges.bridgeIndices) {
     const chunk = index.chunks[bridgeIndex]
     if (!chunk) continue
-    hits.push({ chunk, score: 0, excerpt: buildExcerpt(chunk.content, [...queryTerms, ...bridges.sharedKeys]) })
+    hits.push({
+      chunk,
+      score: 0,
+      excerpt: buildExcerpt(chunk.content, [...queryTerms, ...bridges.sharedKeys], bridges.sharedKeys),
+    })
   }
 
   return formatDocumentEvidence(hits, bridges.sharedKeys)
