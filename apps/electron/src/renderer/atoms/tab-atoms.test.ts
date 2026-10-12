@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { closeTab, getPersistableTabState, openTab, selectSameModeCloseFallback, tabContextSessionId, type TabItem } from './tab-atoms'
+import { closeTab, getPersistableTabState, isMruEligibleId, openTab, orderTabsBySessionContext, promoteSessionMru, selectSameModeCloseFallback, tabContextSessionId, type TabItem } from './tab-atoms'
 
 const tab = (id: string): TabItem => ({ id, type: 'agent', sessionId: id, title: id })
 
@@ -15,18 +15,18 @@ test('关闭非当前标签不改变活动标签', () => {
   expect(result.mru).toEqual(['a'])
 })
 
-test('同一会话可同时打开多个文件预览 Tab，重复打开同一文件只聚焦', () => {
+test('同一会话可同时打开多个浏览器页 Tab，重复打开同一页只聚焦', () => {
   const agent = tab('s1')
-  let state = openTab([agent], { type: 'preview', sessionId: 's1', title: '预览：a.ts', filePath: '/w/a.ts' })
-  state = openTab(state.tabs, { type: 'preview', sessionId: 's1', title: '预览：b.ts', filePath: '/w/b.ts' })
-  const previewTabs = state.tabs.filter((t) => t.type === 'preview')
-  expect(previewTabs).toHaveLength(2)
-  // 新预览 Tab 插在 owner 会话 Tab 之后
+  let state = openTab([agent], { type: 'browser', sessionId: 's1', title: '页 A', browserTabId: 'a' })
+  state = openTab(state.tabs, { type: 'browser', sessionId: 's1', title: '页 B', browserTabId: 'b' })
+  const browserTabs = state.tabs.filter((t) => t.type === 'browser')
+  expect(browserTabs).toHaveLength(2)
+  // owner 会话 Tab 位于首位（scratch 之后的第 2 位），工作 Tab 紧跟其后
   expect(state.tabs[1]?.id).toBe('s1')
-  // 重复打开同一文件：数量不变，聚焦既有 Tab
-  const again = openTab(state.tabs, { type: 'preview', sessionId: 's1', title: '预览：a.ts', filePath: '/w/a.ts' })
-  expect(again.tabs.filter((t) => t.type === 'preview')).toHaveLength(2)
-  expect(again.activeTabId).toBe(state.tabs.find((t) => t.filePath === '/w/a.ts')!.id)
+  // 重复打开同一页：数量不变，聚焦既有 Tab
+  const again = openTab(state.tabs, { type: 'browser', sessionId: 's1', title: '页 A', browserTabId: 'a' })
+  expect(again.tabs.filter((t) => t.type === 'browser')).toHaveLength(2)
+  expect(again.activeTabId).toBe(browserTabs.find((t) => t.browserTabId === 'a')!.id)
 })
 
 test('浏览器 Tab 每会话单例，重复打开只聚焦', () => {
@@ -37,22 +37,21 @@ test('浏览器 Tab 每会话单例，重复打开只聚焦', () => {
   expect(second.activeTabId).toBe(first.activeTabId)
 })
 
-test('关闭会话 Tab 时连带关闭其全部工作 Tab（预览×N + 浏览器）', () => {
+test('关闭会话 Tab 时连带关闭其全部工作 Tab（浏览器×N）', () => {
   const agent = tab('s1')
-  let state = openTab([agent], { type: 'preview', sessionId: 's1', title: '预览：a.ts', filePath: '/w/a.ts' })
-  state = openTab(state.tabs, { type: 'preview', sessionId: 's1', title: '预览：b.ts', filePath: '/w/b.ts' })
-  state = openTab(state.tabs, { type: 'browser', sessionId: 's1', title: '浏览器' })
+  let state = openTab([agent], { type: 'browser', sessionId: 's1', title: '页 A', browserTabId: 'a' })
+  state = openTab(state.tabs, { type: 'browser', sessionId: 's1', title: '页 B', browserTabId: 'b' })
   // 其它会话的工作 Tab 不受影响
   state = openTab(state.tabs, { type: 'agent', sessionId: 's2', title: 's2' })
-  state = openTab(state.tabs, { type: 'preview', sessionId: 's2', title: '预览：c.ts', filePath: '/w/c.ts' })
+  state = openTab(state.tabs, { type: 'browser', sessionId: 's2', title: '页 C', browserTabId: 'c' })
   const result = closeTab(state.tabs, 's1', 's1', ['s2', 's1'])
   expect(result.tabs.some((t) => t.sessionId === 's1')).toBe(false)
-  expect(result.tabs.some((t) => t.sessionId === 's2' && t.type === 'preview')).toBe(true)
+  expect(result.tabs.some((t) => t.sessionId === 's2' && t.type === 'browser')).toBe(true)
 })
 
 test('工作 Tab 不参与持久化，激活工作 Tab 时持久化回退到 owner 会话', () => {
   const agent = tab('s1')
-  const state = openTab([agent], { type: 'preview', sessionId: 's1', title: '预览：a.ts', filePath: '/w/a.ts' })
+  const state = openTab([agent], { type: 'browser', sessionId: 's1', title: '页 A', browserTabId: 'a' })
   const persisted = getPersistableTabState(state.tabs, state.activeTabId)
   expect(persisted.tabs.map((t) => t.id)).toEqual(['s1'])
   expect(persisted.activeTabId).toBe('s1')
@@ -60,10 +59,10 @@ test('工作 Tab 不参与持久化，激活工作 Tab 时持久化回退到 own
 
 test('打开会话不再丢弃其工作 Tab', () => {
   const agent = tab('s1')
-  let state = openTab([agent], { type: 'preview', sessionId: 's1', title: '预览：a.ts', filePath: '/w/a.ts' })
+  let state = openTab([agent], { type: 'browser', sessionId: 's1', title: '页 A', browserTabId: 'a' })
   state = openTab(state.tabs, { type: 'agent', sessionId: 's1', title: 's1' })
   expect(state.activeTabId).toBe('s1')
-  expect(state.tabs.some((t) => t.type === 'preview' && t.sessionId === 's1')).toBe(true)
+  expect(state.tabs.some((t) => t.type === 'browser' && t.sessionId === 's1')).toBe(true)
 })
 
 // ===== 子会话 Tab（parentSessionId 血缘）=====
@@ -136,9 +135,76 @@ test('关闭回退：引擎结果已是同类/关闭工作 Tab/非激活关闭�
   const remaining = [scratch, agentA, agentB]
   // 引擎已选同类 agent-b
   expect(selectSameModeCloseFallback(remaining, tab('agent-x'), true, ['agent-b'], 'agent-b')).toBeNull()
-  // 关闭工作 Tab（preview）
-  const preview: TabItem = { ...tab('p1'), type: 'preview' }
-  expect(selectSameModeCloseFallback(remaining, preview, true, ['agent-b'], 'agent-b')).toBeNull()
+  // 关闭工作 Tab（browser）
+  const browser: TabItem = { ...tab('b1'), type: 'browser' }
+  expect(selectSameModeCloseFallback(remaining, browser, true, ['agent-b'], 'agent-b')).toBeNull()
   // 非激活关闭（active 没变）
   expect(selectSameModeCloseFallback(remaining, tab('agent-x'), false, ['chat-c'], 'chat-c')).toBeNull()
+})
+
+// ===== 全局多会话顶栏模型 =====
+
+test('orderTabsBySessionContext 把子会话紧跟父会话排列', () => {
+  const tabs: TabItem[] = [
+    tab('root'),
+    tab('other'),
+    { ...tab('child'), parentSessionId: 'root' },
+  ]
+  expect(orderTabsBySessionContext(tabs).map((t) => t.id)).toEqual(['root', 'child', 'other'])
+})
+
+test('isMruEligibleId 排除后台常驻与工作 Tab', () => {
+  expect(isMruEligibleId('session-1')).toBe(true)
+  expect(isMruEligibleId('__scratch-pad__')).toBe(false)
+  expect(isMruEligibleId('__tutorial__')).toBe(false)
+  expect(isMruEligibleId('__browser__:s1:tab-1')).toBe(false)
+  expect(isMruEligibleId(null)).toBe(false)
+})
+
+test('promoteSessionMru 只记录真实会话 ID', () => {
+  expect(promoteSessionMru(['a'], '__scratch-pad__')).toEqual(['a'])
+  expect(promoteSessionMru(['a'], 'b')).toEqual(['b', 'a'])
+})
+
+test('新打开带 parentSessionId 的子会话 Tab 时直接插入到父会话簇之后，同时保留手动排序顺序', () => {
+  const initial: TabItem[] = [
+    tab('parent-1'),
+    tab('other-2'),
+  ]
+  const afterChild1 = openTab(initial, {
+    type: 'agent',
+    sessionId: 'child-1',
+    title: '子会话 1',
+    parentSessionId: 'parent-1',
+  })
+  expect(afterChild1.tabs.filter((t) => t.type === 'agent').map((t) => t.id)).toEqual([
+    'parent-1',
+    'child-1',
+    'other-2',
+  ])
+  const afterChild2 = openTab(afterChild1.tabs, {
+    type: 'agent',
+    sessionId: 'child-2',
+    title: '子会话 2',
+    parentSessionId: 'parent-1',
+  })
+  expect(afterChild2.tabs.filter((t) => t.type === 'agent').map((t) => t.id)).toEqual([
+    'parent-1',
+    'child-1',
+    'child-2',
+    'other-2',
+  ])
+})
+
+test('关闭当前激活的浏览器工作 Tab 时优先回退到所属宿主会话 Tab', () => {
+  let state = openTab([tab('s1'), tab('s2')], {
+    type: 'browser',
+    sessionId: 's1',
+    title: '浏览器页',
+    browserTabId: 'page-1',
+  })
+  const browserTabId = state.activeTabId!
+  // 即使 MRU 中 s2 在前，关闭 s1 的浏览器工作 Tab 也应优先回到宿主会话 s1
+  const closed = closeTab(state.tabs, browserTabId, browserTabId, ['s2', 's1'])
+  expect(closed.activeTabId).toBe('s1')
 })

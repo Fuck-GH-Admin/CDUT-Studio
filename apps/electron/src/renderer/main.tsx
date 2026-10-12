@@ -87,6 +87,7 @@ import {
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
 import { tabsAtom, activeTabIdAtom, ensureScratchPadTab, getPersistableTabState, scratchPadContentAtom, scratchPadLoadedAtom, SCRATCH_PAD_ID } from './atoms/tab-atoms'
+import { syncActiveTabSideEffectsForStore } from './lib/active-tab-side-effects'
 import {
   fromPersistedTabGroup,
   fromPersistedTabGroups,
@@ -846,7 +847,17 @@ function TabStatePersistenceInitializer(): null {
         return
       }
 
-      const validTabIds = new Set(validTabs.map((t) => t.id))
+      // 从 agentSessions 回填 parentSessionId 血缘：持久化的 Tab 只存了自身，子会话血缘
+      // 依赖会话元数据，缺失会导致顶栏分组/组合上下文认不出父子关系。
+      const sessionMetaById = new Map(agentSessions.map((session) => [session.id, session]))
+      const restoredTabs = validTabs.map((tab) => {
+        if (tab.parentSessionId) return tab
+        const meta = sessionMetaById.get(tab.sessionId)
+        const parentSessionId = meta?.parentSessionId ?? meta?.explorationParentSessionId
+        return parentSessionId ? { ...tab, parentSessionId } : tab
+      })
+
+      const validTabIds = new Set(restoredTabs.map((t) => t.id))
 
       // 恢复 activeTabId（校验有效性）
       let restoredActiveTabId: string | null = null
@@ -858,13 +869,18 @@ function TabStatePersistenceInitializer(): null {
         if (legacyId && validTabIds.has(legacyId)) {
           restoredActiveTabId = legacyId
         } else {
-          restoredActiveTabId = validTabs[0]?.id ?? null
+          restoredActiveTabId = restoredTabs[0]?.id ?? null
         }
       }
 
-      const activeTab = validTabs.find((t) => t.id === restoredActiveTabId) ?? validTabs[0] ?? null
-      store.set(tabsAtom, ensureScratchPadTab(validTabs))
-      store.set(activeTabIdAtom, activeTab?.id ?? SCRATCH_PAD_ID)
+      const activeTab = restoredTabs.find((t) => t.id === restoredActiveTabId) ?? restoredTabs[0] ?? null
+      store.set(tabsAtom, ensureScratchPadTab(restoredTabs))
+      // scratchPadActive 由本恢复流水线统一裁决，避免 ScratchPadPersistence 并发覆盖：
+      // 上次退出停在草稿纸 → 保持草稿纸；否则回到恢复出的会话。
+      store.set(
+        activeTabIdAtom,
+        settings.scratchPadActive ? SCRATCH_PAD_ID : (activeTab?.id ?? SCRATCH_PAD_ID),
+      )
       // 新版支持多个组合；旧版单个 group 自动包装迁移。
       const persistedGroups = tabState.groups?.length
         ? fromPersistedTabGroups(tabState.groups)
@@ -882,6 +898,12 @@ function TabStatePersistenceInitializer(): null {
         }
       }
 
+      if (settings.scratchPadActive) {
+        syncActiveTabSideEffectsForStore(
+          store,
+          store.get(tabsAtom).find((t) => t.id === SCRATCH_PAD_ID) ?? null,
+        )
+      }
       console.log(`[TabRestore] 已恢复 ${validTabs.length} 个标签页`)
     }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
       .finally(() => { restoredRef.current = true })
@@ -988,6 +1010,10 @@ function ScratchPadPersistence(): null {
         // 不改变 appMode，保留原有的 chat/agent 侧边栏状态
         if (settings.scratchPadActive) {
           store.set(activeTabIdAtom, SCRATCH_PAD_ID)
+          syncActiveTabSideEffectsForStore(
+            store,
+            store.get(tabsAtom).find((t) => t.id === SCRATCH_PAD_ID) ?? null,
+          )
         }
 
         console.log('[ScratchPad] 初始化完成，已加载内容:', !!loadedMd)
@@ -1042,6 +1068,7 @@ function ScratchPadPersistence(): null {
   // 监听 activeTabIdAtom 变化，持久化 scratchPadActive 到 settings
   useEffect(() => {
     const unsub = store.sub(activeTabIdAtom, () => {
+      if (!loadedRef.current) return
       const activeTabId = store.get(activeTabIdAtom)
       const isScratchActive = activeTabId === SCRATCH_PAD_ID
       window.electronAPI.updateSettings({

@@ -17,6 +17,8 @@ export interface SmoothZoom {
   reset: (zoom?: number) => void
   /** 按钮缩放：乘 step（>1 放大，<1 缩小），围绕元素中心。 */
   zoomBy: (step: number) => void
+  /** 外部手势平移：按屏幕像素增量移动（供预览视口抓手/中键拖拽调用）。 */
+  panBy: (dx: number, dy: number) => void
   /** 指针按下开始拖拽平移（绑定到元素 onMouseDown）。任何缩放级别都可拖。 */
   onPanMouseDown: (event: React.MouseEvent) => void
 }
@@ -214,6 +216,15 @@ export function useSmoothZoom(options: SmoothZoomOptions = {}): SmoothZoom {
     setBoundEl((prev) => (prev === node ? prev : node))
   }, [])
 
+  // 外部手势平移：直接改 translate（不走平滑，保证跟手）。
+  const panBy = React.useCallback((dx: number, dy: number): void => {
+    const cur = targetRef.current
+    const next: View = { scale: cur.scale, tx: cur.tx + dx, ty: cur.ty + dy }
+    targetRef.current = next
+    currentRef.current = next
+    setView(next)
+  }, [])
+
   const reset = React.useCallback(
     (nextZoom = 1): void => {
       stopRaf()
@@ -231,6 +242,7 @@ export function useSmoothZoom(options: SmoothZoomOptions = {}): SmoothZoom {
     bindRef,
     reset,
     zoomBy,
+    panBy,
     onPanMouseDown,
   }
 }

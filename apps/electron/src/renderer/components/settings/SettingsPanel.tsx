@@ -6,7 +6,7 @@
  */
 
 import * as React from "react";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { cn } from "@/lib/utils";
 import {
   Settings,
@@ -30,7 +30,7 @@ import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, sett
 import type { SettingsTab } from "@/atoms/settings-tab";
 import { appModeAtom } from "@/atoms/app-mode";
 import { authStatusAtom } from "@/atoms/identity-atoms";
-import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from "@/atoms/tab-atoms";
+import { openTutorialTab } from "@/lib/tab-activation";
 import { hasEnvironmentIssuesAtom } from "@/atoms/environment";
 import { developerModeEnabledAtom } from "@/atoms/developer-mode";
 import {
@@ -158,8 +158,7 @@ export function SettingsPanel({
   const appMode = useAtomValue(appModeAtom);
   const hasEnvironmentIssues = useAtomValue(hasEnvironmentIssuesAtom);
   const developerModeEnabled = useAtomValue(developerModeEnabledAtom);
-  const [mainTabs, setMainTabs] = useAtom(tabsAtom);
-  const setMainActiveTabId = useSetAtom(activeTabIdAtom);
+  const store = useStore();
   const authStatus = useAtomValue(authStatusAtom);
 
   /** 统一的退出拦截对话框状态 */
@@ -170,9 +169,7 @@ export function SettingsPanel({
   /** 完成导航（仅在无需确认或用户明确放弃后调用）。 */
   const navigateToTab = (tabId: SettingsTab): void => {
     if (tabId === 'tutorial') {
-      const result = openTab(mainTabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'CDUT Studio 使用教程' })
-      setMainTabs(result.tabs)
-      setMainActiveTabId(result.activeTabId)
+      openTutorialTab(store)
       setSettingsOpen(false)
       return
     }

@@ -1102,7 +1102,7 @@ export interface ElectronAPI {
   /** 为内联 PDF 预览生成临时 HTML 文件，返回文件路径 */
   preparePdfPreview: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ tmpHtmlUrl: string } | null>
 
-  /** 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标 PDF 文件路径、页码与归一化 BBox 坐标 */
+  /** 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标文档文件路径、页码与坐标 */
   resolveDocumentAnchor: (
     anchor: string,
     access?: import('@profer/shared').FileAccessOptions & { label?: string },
@@ -1114,16 +1114,13 @@ export interface ElectronAPI {
     blockId: string
     bbox?: [number, number, number, number]
     label?: string
+    format?: 'pdf' | 'docx' | 'pptx' | 'xlsx'
+    sheetName?: string
+    cellRef?: string
   } | null>
 
   /** 读取文件为 base64（带路径校验，供内联图片预览等） */
   readBinaryBase64: (filePath: string, access?: import('@profer/shared').FileAccessOptions, maxSize?: number) => Promise<string | null>
-
-  /** DOCX 转 HTML（内联预览） */
-  docxToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ resolvedPath: string; html: string } | null>
-
-  /** XLSX/PPTX 转 HTML（内联预览） */
-  officeToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').OfficePreviewResult | null>
 
   /** 截图导出：将 HTML 渲染为 PNG 并复制到剪贴板或保存文件 */
   screenshotCapture: (input: { html: string; isDark: boolean; width?: number; mode: 'clipboard' | 'file'; css?: string; themeClass?: string }) => Promise<{ success: boolean; message: string; filePath?: string }>
@@ -2983,19 +2980,14 @@ const electronAPI: ElectronAPI = {
       blockId: string
       bbox?: [number, number, number, number]
       label?: string
+      format?: 'pdf' | 'docx' | 'pptx' | 'xlsx'
+      sheetName?: string
+      cellRef?: string
     } | null>
   },
 
   readBinaryBase64: (filePath: string, access?: import('@profer/shared').FileAccessOptions, maxSize?: number) => {
     return ipcRenderer.invoke('file:read-binary-base64', filePath, access, maxSize) as Promise<string | null>
-  },
-
-  docxToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke('file:docx-to-html', filePath, access) as Promise<{ resolvedPath: string; html: string } | null>
-  },
-
-  officeToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke('file:office-to-html', filePath, access) as Promise<import('@profer/shared').OfficePreviewResult | null>
   },
 
   screenshotCapture: (input: { html: string; isDark: boolean; width?: number; mode: 'clipboard' | 'file'; css?: string; themeClass?: string }) => {

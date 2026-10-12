@@ -793,7 +793,7 @@ describe('buildSystemPrompt 皮肤创建指引', () => {
       isPiRuntime: true,
       activeToolGroups: new Set(),
     })
-    expect(prompt).toContain('read_document_artifact')
+    expect(prompt).toContain('文档事实与证据互信原则')
     expect(prompt).not.toContain('mcp__task-graph__proma_task_create')
     expect(prompt).not.toContain('mcp__planning__create_todo')
     expect(prompt).not.toContain('## SubAgent 委派策略')

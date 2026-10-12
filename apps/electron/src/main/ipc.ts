@@ -311,7 +311,7 @@ import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
 import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath, getStudySessionDir } from './lib/config-paths'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import { compactAgentSessionStorage, previewAgentSessionCompaction } from './lib/agent-session-compaction'
 import { resolveMessageBlobs } from './lib/agent-session-manager'
@@ -4918,7 +4918,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标 PDF 文件路径、页码与归一化 BBox 坐标
+  // 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标文档（PDF/DOCX/PPTX/XLSX）路径、页码与坐标
   ipcMain.handle(
     'file:resolve-document-anchor',
     async (
@@ -4945,6 +4945,7 @@ export function registerIpcHandlers(): void {
         const workspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
         const slug = workspace?.slug || 'default'
         addDir(getAgentSessionWorkspacePath(slug, options.sessionId))
+        addDir(getStudySessionDir(options.sessionId))
         for (const root of getFileSearchRoots(options.sessionId)) addDir(root)
         if (meta?.attachedFiles) fallbackFiles.push(...meta.attachedFiles)
         if (workspace?.slug) {
@@ -4966,39 +4967,6 @@ export function registerIpcHandlers(): void {
       }
       return resolved
     },
-  )
-
-  // DOCX 转 HTML（内联预览使用 mammoth）
-  ipcMain.handle(
-    'file:docx-to-html',
-    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<{ resolvedPath: string; html: string } | null> => {
-      const { convertDocxToHtml, resolveFilePath } = await import('./lib/file-preview-service')
-      const options = normalizeFileAccessOptions(access)
-      const allowedBasePaths = getAllowedCandidateBasePaths(options)
-      const resolved = resolveFilePath(filePath, allowedBasePaths)
-      if (!resolved || !isPreviewPathAllowed(resolved, options)) {
-        console.warn('[IPC] file:docx-to-html 拒绝系统/凭据敏感路径:', resolved ?? filePath)
-        return null
-      }
-      const result = await convertDocxToHtml(resolved)
-      return result
-    }
-  )
-
-  // XLSX/PPTX 转 HTML（内联预览使用 OOXML 解析）
-  ipcMain.handle(
-    'file:office-to-html',
-    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<import('@profer/shared').OfficePreviewResult | null> => {
-      const { convertOfficeToHtml, resolveFilePath } = await import('./lib/file-preview-service')
-      const options = normalizeFileAccessOptions(access)
-      const allowedBasePaths = getAllowedCandidateBasePaths(options)
-      const resolved = resolveFilePath(filePath, allowedBasePaths)
-      if (!resolved || !isPreviewPathAllowed(resolved, options)) {
-        console.warn('[IPC] file:office-to-html 拒绝系统/凭据敏感路径:', resolved ?? filePath)
-        return null
-      }
-      return convertOfficeToHtml(resolved)
-    }
   )
 
   // 注册文件路径到 cdut-file:// 协议（只读预览）

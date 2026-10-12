@@ -161,32 +161,45 @@ async function extractLegacyWord(filePath: string): Promise<string> {
 /**
  * 提取 Office/OpenDocument 文本（DOCX, XLSX, PPTX, ODT, ODP, ODS 及宏/模板变体）
  *
- * officeparser 仅按扩展名分发，且只认 docx/xlsx/pptx/odt/odp/ods/pdf 七种。
- * 但宏启用（.docm/.xlsm/.pptm）、模板（.dotx/.xltx/.potx 等）、放映（.ppsx/.ppsm）
- * 本质都是标准 OOXML zip 包，仅扩展名不同。officeparser 在收到 Buffer 时改用
- * file-type 按文件内容嗅探类型，从而绕过扩展名白名单、正确路由这些变体。
- * 因此这里统一以 Buffer 传入，让所有 OOXML 变体都能被解析。
+ * 统一使用 `@profer/core/office-engine` 双平面流式重排引擎按 ZIP 包内容自动嗅探并解析，
+ * 零外部 mammoth/officeparser 依赖，支持全部宏启用（.docm/.xlsm/.pptm）、模板（.dotx/.xltx/.potx）与放映（.ppsx/.ppsm）变体。
  */
 async function extractOffice(filePath: string): Promise<string> {
-  const ext = extname(filePath).toLowerCase()
-  if (ext === '.docx' || ext === '.docm' || ext === '.dotx' || ext === '.dotm') {
-    try {
-      const text = await extractDocxWithMammoth(filePath)
-      if (text.trim()) {
-        console.log(`[文档解析] DOCX 提取完成: ${text.length} 字符`)
-        return text
-      }
-    } catch (error) {
-      console.warn(`[文档解析] mammoth 提取失败，尝试 officeparser 兜底: ${filePath}`, error)
-    }
+  const buffer = readFileSync(filePath)
+  const {
+    OoxmlZipReader,
+    parseOfficeBuffer,
+    findElements,
+    getTextContent,
+  } = await import('@profer/core/office-engine')
+
+  if (!OoxmlZipReader.isZipBuffer(buffer)) {
+    return extractLegacyWord(filePath)
   }
 
-  // 以 Buffer 传入，officeparser 会按内容（而非扩展名）嗅探并路由。
-  const buffer = readFileSync(filePath)
-  const officeParser = await import('officeparser') as unknown as OfficeParserModule
-  const text = await officeParser.parseOfficeAsync(buffer)
-  console.log(`[文档解析] Office 提取完成: ${text.length} 字符`)
-  return text
+  const zip = new OoxmlZipReader(buffer)
+  // 兼容 OpenDocument (.odt / .odp / .ods)
+  if (zip.has('content.xml') && !zip.has('word/document.xml') && !zip.has('xl/workbook.xml') && !zip.has('ppt/presentation.xml')) {
+    const contentRoot = zip.readXml('content.xml')
+    const paragraphs = contentRoot
+      ? findElements(contentRoot, 'p')
+          .map((p) => getTextContent(p).trim())
+          .filter(Boolean)
+      : []
+    const text = paragraphs.join('\n\n')
+    console.log(`[文档解析] OpenDocument 提取完成: ${text.length} 字符`)
+    return text
+  }
+
+  const ext = extname(filePath).toLowerCase()
+  const result = parseOfficeBuffer(buffer, ext, {
+    fileName: basename(filePath),
+    includeAnchors: false,
+  })
+  console.log(
+    `[文档解析] Office 双平面引擎解析完成 (${result.format}): ${result.ast.pageCount} 页/表, ${result.cleanMarkdown.length} 字符`,
+  )
+  return result.cleanMarkdown
 }
 
 /**
@@ -362,20 +375,6 @@ function parseRtf(rtf: string): string {
     .trim()
 }
 
-interface MammothModule {
-  extractRawText(input: { path?: string, buffer?: Buffer }): Promise<{ value: string }>
-}
-
-interface OfficeParserModule {
-  parseOfficeAsync(file: string | Buffer): Promise<string>
-}
-
-async function extractDocxWithMammoth(filePath: string): Promise<string> {
-  const mammoth = await import('mammoth') as unknown as MammothModule
-  const result = await mammoth.extractRawText({ path: filePath })
-  return result.value
-}
-
 /**
  * 从附件相对路径提取文本（IPC 层使用）
  *
@@ -389,3 +388,4 @@ export async function extractTextFromAttachment(localPath: string): Promise<stri
   const fullPath = resolveAttachmentPath(localPath)
   return extractTextFromFile(fullPath)
 }
+

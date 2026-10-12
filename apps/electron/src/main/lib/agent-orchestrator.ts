@@ -163,10 +163,10 @@ import {
   buildReferencedSessionsPrompt,
   DEFAULT_SESSION_TITLE,
   DEFAULT_MODEL_ID,
-  MAX_CONTEXT_MESSAGES,
 } from './agent-prompt-utils'
 import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
 import { buildAttachedDocumentsContext } from './document-parse-tools'
+import { buildDocumentEvidenceForMessage } from './rag/workspace-rag-service'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getOrCreateShellSnapshot } from './shell-snapshot'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
@@ -677,7 +677,7 @@ export class AgentOrchestrator {
    *
    * 适用于 SDK session 过期、thinking signature 跨模型不兼容等场景。
    * 使用 <session_recovery> 标签指向当前会话的 JSONL 历史文件，Agent 会自动读取并恢复上下文，
-   * 比 buildContextPrompt（仅注入 20 条摘要）提供完整得多的上下文连续性。
+   * 比 buildContextPrompt（仅注入紧邻上一轮 + 相关历史检索）提供完整得多的上下文连续性。
    */
   private prepareResumeFallbackRecovery(
     sessionId: string,
@@ -1396,6 +1396,20 @@ export class AgentOrchestrator {
         console.log(`[内核摄入] 已前置注入附件文档上下文（${attachedDocumentsBlock.length} 字符）`)
       }
 
+      // 11.7 工作区静默 RAG：对工作区已解析文档执行 BM25 前置检索，注入带真实锚点的
+      // 最相关原文切片，使模型首轮即可直接作答并携带定位胶囊，无需再做工具试探。
+      if (agentCwd) {
+        try {
+          const evidenceBlock = buildDocumentEvidenceForMessage(agentCwd, runtimeUserMessage)
+          if (evidenceBlock) {
+            enrichedMessage = `${evidenceBlock}\n\n${enrichedMessage}`
+            console.log(`[工作区 RAG] 已前置注入文档证据切片（${evidenceBlock.length} 字符）`)
+          }
+        } catch (error) {
+          console.warn('[工作区 RAG] 前置检索失败，已跳过:', error)
+        }
+      }
+
       // Context Sandwich 动态后缀：动态环境块追加在当轮最新用户消息末尾，绝不污染历史前缀。
       let contextualMessage = `${enrichedMessage}
 
@@ -1409,14 +1423,14 @@ ${dynamicCtx}`
           ? contextualMessage
           : goalIsolated || isSingleTurnFocus
             ? contextualMessage
-            : buildContextPrompt(sessionId, contextualMessage, { agentCwd })
+            : buildContextPrompt(sessionId, contextualMessage, { agentCwd }, runtimeUserMessage)
 
       if (existingSdkSessionId) {
         console.log(`[Agent 编排] 使用 resume 模式，SDK session ID: ${existingSdkSessionId}`)
       } else if (isSingleTurnFocus) {
         console.log(`[Agent 编排] 单轮聚焦模式：跳过历史回填，本轮仅携带当前提问与系统指令`)
       } else if (finalPrompt !== contextualMessage) {
-        console.log(`[Agent 编排] 无 resume，已回填历史上下文（最近 ${MAX_CONTEXT_MESSAGES} 条消息）`)
+        console.log('[Agent 编排] 无 resume，已回填紧邻上一轮对话，并按需检索相关历史上下文')
       }
 
       // 12. 读取应用设置并确定权限模式
@@ -1599,7 +1613,6 @@ ${dynamicCtx}`
         'Read',
         'Glob',
         'Grep',
-        'read_document_artifact',
         'discover_tools',
         'WebSearch',
         'WebFetch',

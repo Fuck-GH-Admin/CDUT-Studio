@@ -14,9 +14,9 @@ import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
-import { highlightCode, highlightToTokens, getDisplayName } from '@profer/core'
+import { highlightCode, highlightToTokens, getDisplayName } from '@profer/core/highlight'
 import { MermaidBlock } from '@profer/ui'
-import type { HighlightTokensResult } from '@profer/core'
+import type { HighlightTokensResult } from '@profer/core/highlight'
 import type { FileAccessOptions } from '@profer/shared'
 import { extractCodeText } from '../../lib/markdown-rich-text'
 import { shouldRenderMermaidCodeBlock } from '@profer/ui'
@@ -1044,7 +1044,7 @@ export const TaskList = TaskListExt.configure({
 
 export const TaskItem = TaskItemExt.configure({
   nested: true,
-  HTMLAttributes: { class: 'flex items-start gap-2' },
+  HTMLAttributes: { class: 'flex items-start gap-2 pointer-events-none' },
 })
 
 export const tableExtensions = [

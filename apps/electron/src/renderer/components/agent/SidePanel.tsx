@@ -36,6 +36,7 @@ import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
+import { SidebarFilePreview } from '@/components/diff/SidebarFilePreview'
 import {
   agentSidePanelOpenAtom,
   workspaceFilesVersionAtom,
@@ -619,7 +620,11 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             onClose={() => setAgentPanelOpen(false)}
           />
 
-          {activeTab === 'changes' ? (
+          {activeTab === 'preview' ? (
+            <div className="flex-1 min-h-0 flex flex-col pt-0.5">
+              <SidebarFilePreview sessionId={sessionId} />
+            </div>
+          ) : activeTab === 'changes' ? (
             sessionPath ? (
               <DiffChangesList
                 key={sessionId}

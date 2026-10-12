@@ -338,26 +338,13 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       if (local) {
         onFilePreview?.(local)
       } else {
-        window.dispatchEvent(new CustomEvent('profer:file-preview', {
-          detail: { path: entry.path, name: entry.name, download: () => ensureTeamFileLocal(entry) },
-        }))
+        toast.error(`无法下载团队文件「${entry.name}」进行预览`)
       }
       return
     }
 
     onFilePreview?.(entry.path)
   }, [ensureTeamFileLocal, isTeamMode, onFilePreview])
-
-  const dispatchInlinePreview = React.useCallback((entry: FileEntry): void => {
-    if (entry.isDirectory) return
-    window.dispatchEvent(new CustomEvent('profer:file-preview', {
-      detail: {
-        path: isTeamMode ? entry.path : entry.path,
-        name: entry.name,
-        download: isTeamMode ? () => ensureTeamFileLocal(entry) : undefined,
-      },
-    }))
-  }, [ensureTeamFileLocal, isTeamMode])
 
   /** 拖拽事件 */
   const handleDragOver = React.useCallback((e: React.DragEvent) => {

@@ -9,6 +9,10 @@
 
 import { atom } from 'jotai'
 import type { PanelVisibility } from '@/lib/panel-layout'
+import { appModeAtom } from '@/atoms/app-mode'
+import { automationFormAtom } from '@/atoms/automation-atoms'
+import { activeViewAtom } from '@/atoms/active-view'
+import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 
 /** 当前窗口宽度（px）。初始取渲染进程当前内宽；由 usePanelAutoLayout 的 resize 监听维护。 */
 export const windowWidthAtom = atom<number>(
@@ -27,3 +31,20 @@ export const layoutScopeActiveAtom = atom<boolean>(true)
  * 初始视为「曾可见」，避免冷启动窗口刚好够宽时因滞后带产生死区（需多 50px 才显示）。
  */
 export const panelVisibilityAtom = atom<PanelVisibility>({ filePanel: true })
+
+/**
+ * 右侧边栏容器是否应渲染（Agent 个人视图 + 有当前会话 + 非定时表单 + 对话视图）。
+ * 单一事实源：AppShell 渲染容器、TabBar 预留窗口按钮槽位都读它，杜绝 138px 错位。
+ */
+export const rightSidePanelContainerAtom = atom<boolean>((get) => {
+  if (get(appModeAtom) !== 'agent') return false
+  if (!get(currentAgentSessionIdAtom)) return false
+  if (get(automationFormAtom).open) return false
+  if (get(activeViewAtom) !== 'conversations') return false
+  return true
+})
+
+/** 右侧边栏是否真正可见（容器条件 + 窗口宽度足够的面板布局判定）。 */
+export const rightSidePanelVisibleAtom = atom<boolean>((get) => {
+  return get(rightSidePanelContainerAtom) && get(panelVisibilityAtom).filePanel
+})

@@ -31,7 +31,11 @@ import {
   studyDocumentsAtom,
   studyIngestingAtom,
   studyRightPanelCollapsedAtom,
+  studyRightPanelWidthAtom,
 } from '@/atoms/study-atoms'
+import { previewFileMapAtom } from '@/atoms/preview-atoms'
+import { SidebarFilePreview } from '@/components/diff/SidebarFilePreview'
+import { useOpenPreview } from '@/components/diff/preview-opener'
 import { AiClassChatPanel } from './AiClassChatPanel'
 import { AiClassKnowledgeTree } from './AiClassKnowledgeTree'
 import { AiClassCognitionButton } from './AiClassCognitionButton'
@@ -45,8 +49,29 @@ export function AiClassView(): React.ReactElement {
   const [documents, setDocuments] = useAtom(studyDocumentsAtom)
   const [activeDocumentId, setActiveDocumentId] = useAtom(studyActiveDocumentIdAtom)
   const [rightCollapsed, setRightCollapsed] = useAtom(studyRightPanelCollapsedAtom)
+  const [rightWidth, setRightWidth] = useAtom(studyRightPanelWidthAtom)
   const setIngesting = useSetAtom(studyIngestingAtom)
   const ingesting = useAtomValue(studyIngestingAtom)
+  const previewFile = useAtomValue(previewFileMapAtom).get(sessionId ?? '') ?? null
+  const openPreview = useOpenPreview()
+
+  // 右栏左边缘拖拽调宽（320px ~ 60vw），松手后持久化
+  const startRightPanelResize = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = rightWidth
+    const maxWidth = Math.max(320, Math.floor(window.innerWidth * 0.6))
+    const onMove = (ev: MouseEvent): void => {
+      const next = Math.min(maxWidth, Math.max(320, startWidth - (ev.clientX - startX)))
+      setRightWidth(next)
+    }
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [rightWidth, setRightWidth])
 
   const [dragging, setDragging] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
@@ -262,7 +287,13 @@ export function AiClassView(): React.ReactElement {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setActiveDocumentId(doc.documentId)}
+                      onClick={() => {
+                        setActiveDocumentId(doc.documentId)
+                        // 点击课件同时在其右侧预览栏打开高保真只读预览
+                        if (sessionId && doc.sourcePath) {
+                          openPreview(sessionId, { filePath: doc.sourcePath, previewOnly: true, readOnly: true })
+                        }
+                      }}
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
                       <FileText size={14} className="shrink-0 text-muted-foreground" />
@@ -326,10 +357,20 @@ export function AiClassView(): React.ReactElement {
           使其对左下角落款立绘（恐龙娘）的遮挡观感与输入框保持一致 */}
       <aside
         className={cn(
-          'relative flex shrink-0 flex-col border-l border-border/60 bg-background/70 backdrop-blur-sm transition-[width] duration-300',
-          rightCollapsed ? 'w-10' : 'w-72',
+          'relative flex shrink-0 flex-col border-l border-border/60 bg-background/70 backdrop-blur-sm',
+          rightCollapsed ? 'w-10 transition-[width] duration-300' : '',
         )}
+        style={rightCollapsed ? undefined : { width: rightWidth }}
       >
+        {!rightCollapsed && (
+          <div
+            onMouseDown={startRightPanelResize}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整课程资料预览栏宽度"
+            className="absolute -left-1 top-0 bottom-0 z-20 w-2 cursor-col-resize"
+          />
+        )}
         <button
           type="button"
           onClick={() => setRightCollapsed((value) => !value)}
@@ -339,18 +380,24 @@ export function AiClassView(): React.ReactElement {
           {rightCollapsed ? <ChevronLeft size={13} /> : <ChevronRight size={13} />}
         </button>
         {!rightCollapsed ? (
-          <div className="flex min-h-0 flex-1 flex-col p-3">
-            <div className="flex shrink-0 justify-center">
-              <span className="inline-flex items-center rounded-full bg-muted/60 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                预留扩展区
-              </span>
+          previewFile ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <SidebarFilePreview sessionId={sessionId ?? ''} />
             </div>
-            <div className="mt-2 flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 text-center">
-              <p className="px-4 text-[11px] leading-relaxed text-muted-foreground">
-                此处留白，预留学习进度面板、错题本与知识图谱等后续扩展。
-              </p>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col p-3">
+              <div className="flex shrink-0 justify-center">
+                <span className="inline-flex items-center rounded-full bg-muted/60 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  课程资料预览
+                </span>
+              </div>
+              <div className="mt-2 flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 text-center">
+                <p className="px-4 text-[11px] leading-relaxed text-muted-foreground">
+                  点击左侧已上传课件，或对话中的引用胶囊，即可在此处对照原文并高亮定位。
+                </p>
+              </div>
             </div>
-          </div>
+          )
         ) : null}
       </aside>
     </div>

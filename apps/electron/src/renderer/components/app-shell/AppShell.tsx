@@ -15,7 +15,7 @@ import { TabBar } from '@/components/tabs/TabBar'
 import { WindowControlsTemplateProvider } from '@/components/WindowControlsTemplate'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { agentSidePanelOpenAtom, agentSidePanelWidthAtom, currentAgentSessionIdAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom, agentDiffPanelTabAtom } from '@/atoms/agent-atoms'
+import { agentSidePanelOpenAtom, agentSidePanelWidthAtom, agentPreviewPanelWidthAtom, currentAgentSessionIdAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom, agentDiffPanelTabAtom } from '@/atoms/agent-atoms'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
+const MIN_PREVIEW_PANEL_WIDTH = 340
 
 const MIN_LEFT_SIDEBAR_WIDTH = 300
 const MAX_LEFT_SIDEBAR_WIDTH = 420
@@ -95,13 +96,23 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     } catch { /* ignore */ }
   }, [])
 
-  // 右侧面板可拖拽宽度
-  const [rightPanelWidth, setRightPanelWidth] = useAtom(agentSidePanelWidthAtom)
+  // 右侧面板可拖拽宽度：文件列表态与预览态分档记忆。
+  // 预览态使用舒适阅读宽度（340px ~ 62vw），列表态保持 300 ~ 560px。
+  const [listPanelWidth, setListPanelWidth] = useAtom(agentSidePanelWidthAtom)
+  const [previewPanelWidth, setPreviewPanelWidth] = useAtom(agentPreviewPanelWidthAtom)
+  const isPreviewTab = activeRightPanelTab === 'preview'
+  const rightPanelWidth = isPreviewTab ? previewPanelWidth : listPanelWidth
+  const setRightPanelWidth = isPreviewTab ? setPreviewPanelWidth : setListPanelWidth
   const dragging = React.useRef(false)
-  const rightPanelMinimumWidth = MIN_RIGHT_PANEL_WIDTH
+  const rightPanelMinimumWidth = isPreviewTab ? MIN_PREVIEW_PANEL_WIDTH : MIN_RIGHT_PANEL_WIDTH
   const clampCurrentRightPanelWidth = React.useCallback(
-    (width: number) => Math.max(rightPanelMinimumWidth, Math.min(MAX_RIGHT_PANEL_WIDTH, width)),
-    [rightPanelMinimumWidth],
+    (width: number) => {
+      const max = isPreviewTab
+        ? Math.max(MIN_PREVIEW_PANEL_WIDTH, Math.floor(window.innerWidth * 0.62))
+        : MAX_RIGHT_PANEL_WIDTH
+      return Math.max(rightPanelMinimumWidth, Math.min(max, width))
+    },
+    [isPreviewTab, rightPanelMinimumWidth],
   )
   const clampedRightPanelWidth = clampCurrentRightPanelWidth(rightPanelWidth)
 
