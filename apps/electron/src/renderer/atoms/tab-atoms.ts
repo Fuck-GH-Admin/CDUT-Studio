@@ -168,7 +168,9 @@ export const tabIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((ge
 /**
  * 顶栏实际渲染的标签序列（全局多会话模型，单一事实源）：
  * - 展示所有已打开的真实会话 Tab（agent / chat）与会话绑定的浏览器工作 Tab；
- * - 后台常驻的 Scratch Pad / 教程 Tab 只在被激活时出现，避免长期占用顶栏；
+ * - 后台常驻的 Scratch Pad 只在被激活时出现，避免长期占用顶栏；
+ * - 教程 Tab 与真实标签一样常驻显示：用户切走后仍可点回，关闭会话后也不会「无处可回」
+ *   （历史缺陷：教程仅在被激活时可见，一旦切走即从顶栏消失且无法再次进入）；
  * - 子会话（探索分支 / 委派子会话）按 parentSessionId 血缘紧跟父会话排列，
  *   顶栏、Ctrl+Tab、Cmd+1~9 与拖拽排序全部消费同一份列表，杜绝顺序撕裂。
  */
@@ -176,7 +178,8 @@ export const visibleTopBarTabsAtom = atom<TabItem[]>((get) => {
   const tabs = get(tabsAtom)
   const activeTabId = get(activeTabIdAtom)
   const visible = tabs.filter((tab) => {
-    if (tab.id === SCRATCH_PAD_ID || tab.id === TUTORIAL_TAB_ID) return tab.id === activeTabId
+    // 仅 Scratch Pad 保持「未激活即隐藏」；教程 Tab 常驻可见。
+    if (tab.id === SCRATCH_PAD_ID) return tab.id === activeTabId
     return true
   })
   return visible

@@ -28,7 +28,7 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
 import { cn } from '@/lib/utils'
-import { resolveContentTabId } from '@/lib/active-tab-content'
+import { resolveContentTabId, shouldShowWelcomeLauncher } from '@/lib/active-tab-content'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { EmptyPanePlaceholder } from './EmptyPanePlaceholder'
 import {
@@ -64,11 +64,9 @@ export function MainArea(): React.ReactElement {
   // 内容必须跟随同步 activeTabId 渲染。useDeferredValue 会让 TabBar 已高亮新会话时，
   // 主区域仍长期保留旧会话；昂贵子树应自行优化，不能以旧会话内容作为过渡态。
   const contentTabId = resolveContentTabId(tabs, activeTabId)
-  // 是否存在真实会话标签（排除后台常驻的 Scratch Pad / 教程）
-  const hasNonScratchTabs = React.useMemo(
-    () => tabs.some((tab) => tab.id !== SCRATCH_PAD_ID && tab.type !== 'tutorial'),
-    [tabs],
-  )
+  // 主区空态判定：只有「没有任何真实内容标签」且「当前不同后台常驻 Tab（Scratch Pad / 教程）」
+  // 时才显示新建会话启动页。教程 Tab 是有效内容，必须交给 TabContent 渲染。
+  const showWelcomeLauncher = shouldShowWelcomeLauncher(tabs, activeTabId)
 
   // ===== 受管浏览器（Tab 化）=====
   const setBrowserStateMap = useSetAtom(browserStateMapAtom)
@@ -353,7 +351,7 @@ export function MainArea(): React.ReactElement {
                   {automationFormOpen ? (
                     // 兼容从会话内入口打开任务设置的场景。
                     <AutomationFormView />
-                  ) : !hasNonScratchTabs && activeTabId !== SCRATCH_PAD_ID ? (
+                  ) : showWelcomeLauncher ? (
                     <WelcomeView />
                   ) : leftPaneTabId ? (
                     <div className="flex-1 min-h-0 titlebar-no-drag">
