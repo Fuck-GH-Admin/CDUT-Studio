@@ -20,10 +20,19 @@
  */
 
 import { createHash } from 'node:crypto'
-import { extname, basename, join, resolve, isAbsolute } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { extname, basename, dirname, join, resolve, isAbsolute } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
+import {
+  OoxmlZipReader,
+  inferOfficeFormatFromExtension,
+  parseOfficeBuffer,
+  serializeOfficePageToMarkdown,
+} from '@profer/core/office-engine'
 import { resolveAuthorizedFile, type PreviewInspectionContext } from './preview-inspection-service'
+
+/** Office 双态索引 Schema 版本号：当 DOCX 分页或 XLSX 行坐标格式升级时自动触发旧索引静默重建 */
+export const OFFICE_INDEX_SCHEMA_VERSION = 'v2'
 
 /** 单次返回给模型的文本上限（字符），超出截断并显式标注，避免上下文爆炸。 */
 export const MAX_DOCUMENT_CHARS = 160_000
@@ -504,7 +513,7 @@ export async function executeParseDocumentTool(
 
   const buffer = await readFile(resolved)
   const metadata = await stat(resolved)
-  const revision = `sha256:${createHash('sha256').update(buffer).digest('hex')}`
+  const revision = `sha256:${OFFICE_INDEX_SCHEMA_VERSION}:${createHash('sha256').update(buffer).digest('hex')}`
   const file = {
     name: basename(resolved),
     size: metadata.size,
@@ -577,12 +586,6 @@ export async function executeParseDocumentTool(
   }
 
   // OOXML Office 文档（DOCX / PPTX / XLSX 及其宏/模板变体）：走 @profer/core/office-engine 双平面重排引擎
-  const {
-    OoxmlZipReader,
-    inferOfficeFormatFromExtension,
-    parseOfficeBuffer,
-    serializeOfficePageToMarkdown,
-  } = await import('@profer/core/office-engine')
   const officeFormatHint = inferOfficeFormatFromExtension(ext)
   if (officeFormatHint && OoxmlZipReader.isZipBuffer(buffer)) {
     const officeResult = parseOfficeBuffer(buffer, officeFormatHint, {
@@ -1101,8 +1104,119 @@ export async function executeReadDocumentArtifact(
 }
 
 /**
- * 解析形如 `#f1:p1-b11`、`#f1-p1-b11` 或 `#p1-b11` 的双平行拓扑定位锚点，
- * 反查目标 PDF/文档的绝对路径、页码以及块级归一化 BBox 坐标 `[x0, y0, x1, y1]`。
+ * 自动升级旧版 Office `.index.json`（如 v1 时期未处理 `<w:pageBreakBefore w:val="0"/>` 导致页码膨胀，
+ * 或 XLSX 尚未生成行坐标列的缓存索引）。由于 `parseOfficeBuffer` 为纯同步内存计算（<5ms），
+ * 可在点击溯源胶囊或 RAG 读取索引时无感完成原地升级。
+ */
+export function upgradeStaleOfficeIndexIfNeeded(
+  idx: MaterializedDocumentIndex,
+  fullIndexPath: string,
+): MaterializedDocumentIndex {
+  const expectedPrefix = `sha256:${OFFICE_INDEX_SCHEMA_VERSION}:`
+  if (idx.revision?.startsWith(expectedPrefix)) return idx
+  if (!idx.sourcePath || !existsSync(idx.sourcePath)) return idx
+
+  const ext = extname(idx.sourcePath).toLowerCase()
+  const officeFormatHint = inferOfficeFormatFromExtension(ext)
+  if (!officeFormatHint) return idx
+
+  try {
+    const buffer = readFileSync(idx.sourcePath)
+    if (!OoxmlZipReader.isZipBuffer(buffer)) return idx
+
+    const metadata = statSync(idx.sourcePath)
+    const revision = `${expectedPrefix}${createHash('sha256').update(buffer).digest('hex')}`
+    const officeResult = parseOfficeBuffer(buffer, officeFormatHint, {
+      fileName: basename(idx.sourcePath),
+      includeAnchors: true,
+    })
+    const { text, truncated } = truncate(officeResult.markdown)
+    const { text: cleanText } = truncate(officeResult.cleanMarkdown)
+
+    const outline: Array<{ title: string; level: number; page: number; blockId?: string }> = []
+    const pages: DocumentPageSlice[] = officeResult.ast.pages.map((page) => {
+      const anchoredPageText = serializeOfficePageToMarkdown(page, { includeAnchors: true })
+      const cleanPageText = serializeOfficePageToMarkdown(page, { includeAnchors: false })
+      const headings: string[] = []
+      for (const b of page.blocks) {
+        if (b.type === 'heading' && b.text.trim()) {
+          const title = b.text.trim().slice(0, 100)
+          headings.push(title)
+          outline.push({ title, level: b.headingLevel ?? 1, page: page.pageNumber, blockId: b.id })
+        }
+      }
+      if (headings.length === 0 && (page.sheetName || page.title)) {
+        const fallbackTitle = (page.sheetName || page.title || '').trim()
+        if (fallbackTitle) {
+          headings.push(fallbackTitle)
+          outline.push({ title: fallbackTitle, level: 1, page: page.pageNumber, blockId: page.blocks[0]?.id })
+        }
+      }
+      const hasFigure = page.blocks.some((b) => b.type === 'figure')
+      return {
+        pageNumber: page.pageNumber,
+        columnCount: 1,
+        blockCount: page.blocks.length,
+        charCount: cleanPageText.length,
+        firstBlockId: page.blocks[0]?.id,
+        lastBlockId: page.blocks[page.blocks.length - 1]?.id,
+        isFigureHeavy: page.blocks.length <= 3 && hasFigure,
+        headings,
+        anchoredText: anchoredPageText,
+        cleanText: cleanPageText,
+      }
+    })
+
+    const agentCwd = dirname(dirname(dirname(fullIndexPath)))
+    const upgraded = materializeToWorkspace(
+      idx.sourcePath,
+      agentCwd,
+      {
+        file: {
+          name: basename(idx.sourcePath),
+          size: metadata.size,
+          modifiedAt: metadata.mtime.toISOString(),
+          revision,
+        },
+        format: officeResult.format,
+        text,
+        cleanText,
+        truncated,
+        pageCount: officeResult.ast.pageCount,
+        columnCounts: officeResult.ast.pages.map(() => 1),
+        outline,
+        pages,
+      },
+      idx.fileId,
+    )
+    return upgraded ?? idx
+  } catch {
+    return idx
+  }
+}
+
+/**
+ * 从标签文本中提取用于匹配具体段落/表格行的有效关键词（剔除通用页码/表名装饰词）。
+ */
+function extractLabelKeywords(label: string | undefined, sheetName?: string): string[] {
+  if (!label) return []
+  let cleaned = label
+    .replace(/第\s*\d+\s*[页张行]/g, ' ')
+    .replace(/幻灯片\s*\d+/g, ' ')
+    .replace(/[A-Za-z]{1,2}\d{1,4}(?::[A-Za-z]{1,2}\d{1,4})?/g, ' ')
+    .replace(/[·•|()（）\[\]【】：:，,、]/g, ' ')
+  if (sheetName) {
+    cleaned = cleaned.split(sheetName).join(' ')
+  }
+  return cleaned
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 2 && s !== '正文' && s !== '表格' && s !== '插图' && s !== '公式')
+}
+
+/**
+ * 解析形如 `#f1:p1-b11`、`#f1-p1-b11`、`#f3:p3-cB10`、`#f3:p3-r10` 或 `#p1-b11` 的双平行拓扑定位锚点，
+ * 反查目标 PDF/Office 文档的绝对路径、页码、单元格以及块级归一化 BBox 坐标 `[x0, y0, x1, y1]`。
  */
 export function resolveDocumentAnchor(
   anchorInput: string,
@@ -1113,12 +1227,18 @@ export function resolveDocumentAnchor(
   },
 ): ResolvedDocumentAnchor | null {
   const cleaned = anchorInput.trim().replace(/^#/, '')
-  const match = /^(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-b\d+)?)$/i.exec(cleaned)
+  const match =
+    /^(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-(?:b(\d+)|tbl(\d+)|r(\d+)|c([a-zA-Z]+\d+(?::[a-zA-Z]+\d+)?)))?)$/i.exec(
+      cleaned,
+    )
   if (!match) return null
 
   const requestedFileId = match[1]?.toLowerCase()
-  const rawBlockId = match[2]!.toLowerCase()
   const pageNumber = Math.max(1, parseInt(match[3]!, 10) || 1)
+  const explicitBlockNum = match[4] ?? match[5]
+  const explicitRowNum = match[6] ? parseInt(match[6], 10) : undefined
+  const explicitCellRef = match[7]?.toUpperCase()
+  const rawBlockId = explicitBlockNum ? `p${pageNumber}-b${parseInt(explicitBlockNum, 10)}` : `p${pageNumber}`
   const label = options.label?.trim()
 
   const indices: MaterializedDocumentIndex[] = []
@@ -1143,10 +1263,11 @@ export function resolveDocumentAnchor(
       seenIndexPaths.add(fullIndexPath)
 
       try {
-        const idx = JSON.parse(readFileSync(fullIndexPath, 'utf-8')) as MaterializedDocumentIndex
+        let idx = JSON.parse(readFileSync(fullIndexPath, 'utf-8')) as MaterializedDocumentIndex
         if (!idx.fileId) {
           idx.fileId = `f${idxPos + 1}`
         }
+        idx = upgradeStaleOfficeIndexIfNeeded(idx, fullIndexPath)
         // 向下兼容旧版 .index.json：若尚未持久化 blocks 字典，从同目录 .anchored.md 即时提取 BBox
         if (!idx.blocks || Object.keys(idx.blocks).length === 0) {
           const anchoredPath =
@@ -1193,38 +1314,128 @@ export function resolveDocumentAnchor(
   }
 
   if (selectedIndex && selectedIndex.sourcePath && existsSync(selectedIndex.sourcePath)) {
+    const docFormat = normalizeDocumentFormat(selectedIndex.format ?? selectedIndex.sourceName)
     let blockMeta = selectedIndex.blocks?.[rawBlockId]
-    // 智能容错：若 rawBlockId 无具体的 -bN（例如模型输出了 #f1:p2 或 #p2），或者带前导零（如 p2-b01）：
-    if (!blockMeta && selectedIndex.blocks) {
-      // 1. 尝试去除/规整前导零匹配（如 p2-b01 -> p2-b1）
-      const normalizedBlockKey = rawBlockId.replace(/^p(\d+)-b0*(\d+)$/, 'p$1-b$2')
-      if (selectedIndex.blocks[normalizedBlockKey]) {
-        blockMeta = selectedIndex.blocks[normalizedBlockKey]
-      }
-      // 2. 若仍未命中且该页存在 blocks：按 label 语义匹配，或兜底取该页首个 block 的 BBox，确保高亮圈选框永不落空！
-      if (!blockMeta) {
-        const pageBlocks = Object.values(selectedIndex.blocks).filter((b) => b.pageNumber === pageNumber)
-        if (pageBlocks.length > 0) {
-          if (label) {
-            blockMeta = pageBlocks.find((b) => label.includes(b.loc) || b.loc.includes(label))
+    const allBlocks = selectedIndex.blocks ? Object.values(selectedIndex.blocks) : []
+    const pageBlocks = allBlocks.filter((b) => b.pageNumber === pageNumber)
+    const keywords = extractLabelKeywords(label, pageBlocks[0]?.sheetName)
+
+    // 智能匹配具体段落/形状块：
+    // 1) 当 rawBlockId 未命中（例如模型输出了 #f1:p2、或旧版页码 #f1:p24-b1 超出重建后的总页数）
+    // 2) 或当模型套用了页面首个块 #f1:p1-b1，但胶囊文本 label 实际指向同页的其它段落/形状块
+    const labelMatchesCurrentBlock =
+      blockMeta &&
+      keywords.length > 0 &&
+      keywords.some((kw) => blockMeta!.loc.includes(kw))
+
+    if ((!blockMeta || (keywords.length > 0 && !labelMatchesCurrentBlock)) && allBlocks.length > 0) {
+      const candidatePool = pageBlocks.length > 0 ? pageBlocks : allBlocks
+      let matchedByLabel: DocumentAnchorBlockMeta | undefined
+
+      if (keywords.length > 0) {
+        // 先按块级 loc 标签匹配
+        matchedByLabel = candidatePool.find((b) => keywords.some((kw) => b.loc.includes(kw)))
+        // 再按页面 anchoredText 中各锚点块的正文内容匹配
+        if (!matchedByLabel && selectedIndex.pages) {
+          const pagesToSearch =
+            pageBlocks.length > 0
+              ? selectedIndex.pages.filter((p) => p.pageNumber === pageNumber)
+              : selectedIndex.pages
+          for (const p of pagesToSearch) {
+            const segments = (p.anchoredText ?? '').split(/(?=<!--\s*anchor:\s*)/g)
+            for (const seg of segments) {
+              if (keywords.some((kw) => seg.includes(kw))) {
+                const m = /<!--\s*anchor:\s*(?:[a-zA-Z]+\d+:)?(p\d+-b\d+)/.exec(seg)
+                if (m && selectedIndex.blocks?.[m[1]!]) {
+                  matchedByLabel = selectedIndex.blocks[m[1]!]
+                  break
+                }
+              }
+            }
+            if (matchedByLabel) break
           }
-          if (!blockMeta) {
-            blockMeta = pageBlocks[0]
+        }
+      }
+
+      if (matchedByLabel) {
+        blockMeta = matchedByLabel
+      } else if (!blockMeta) {
+        if (pageBlocks.length > 0) {
+          blockMeta = pageBlocks[0]
+        } else if (pageNumber > (selectedIndex.pageCount || 1)) {
+          // 兼容旧版 1 段 1 页索引留存的历史消息（如 #f1:p24-b1 -> 映射到第 24 个块）
+          blockMeta = allBlocks[Math.min(allBlocks.length - 1, pageNumber)] ?? allBlocks[0]
+        }
+      }
+    }
+
+    // 针对 XLSX 表格：将整表范围（如 A1:B22）收敛到具体的目标行/单元格（如 A10:B10 或 B10）
+    let resolvedCellRef = explicitCellRef || blockMeta?.cellRef
+    if (docFormat === 'xlsx') {
+      const tableRangeMatch = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i.exec(blockMeta?.cellRef ?? 'A1:B22')
+      const minCol = tableRangeMatch?.[1]?.toUpperCase() ?? 'A'
+      const maxCol = tableRangeMatch?.[3]?.toUpperCase() ?? 'B'
+
+      if (explicitCellRef) {
+        resolvedCellRef = explicitCellRef
+      } else if (explicitRowNum && explicitRowNum >= 1) {
+        resolvedCellRef = `${minCol}${explicitRowNum}:${maxCol}${explicitRowNum}`
+      } else if (label) {
+        // 1. 检查 label 中是否显式带有单元格或范围（排除 B1-533 这类带连字符的寝室号）
+        const cellInLabel =
+          /(?<![A-Za-z0-9-])([A-Za-z]{1,2}\d{1,4}(?::[A-Za-z]{1,2}\d{1,4})?)(?![A-Za-z0-9-])/.exec(label)
+        const rowInLabel = /第\s*(\d+)\s*行|行\s*(\d+)/.exec(label)
+        if (cellInLabel) {
+          const rawCell = cellInLabel[1]!.toUpperCase()
+          // 若仅写了单单元格（如 B10），保留单单元格或扩展为整行？若模型写 B10，高亮 A10:B10 整行更醒目直观
+          const singleCellRow = /^([A-Z]+)(\d+)$/.exec(rawCell)
+          resolvedCellRef = singleCellRow
+            ? `${minCol}${singleCellRow[2]}:${maxCol}${singleCellRow[2]}`
+            : rawCell
+        } else if (rowInLabel) {
+          const rNum = parseInt(rowInLabel[1] ?? rowInLabel[2]!, 10)
+          if (rNum >= 1) {
+            resolvedCellRef = `${minCol}${rNum}:${maxCol}${rNum}`
+          }
+        } else if (keywords.length > 0 && selectedIndex.pages) {
+          // 2. 在目标工作表的行文本中检索关键词（如学生姓名/学号），提取该行的精确行坐标 A10:B10
+          const targetPage = selectedIndex.pages.find(
+            (p) => p.pageNumber === (blockMeta?.pageNumber ?? pageNumber),
+          )
+          if (targetPage?.cleanText) {
+            const lines = targetPage.cleanText.split(/\r?\n/)
+            for (const line of lines) {
+              if (!line.startsWith('|') || line.includes('---')) continue
+              if (keywords.some((kw) => line.includes(kw))) {
+                const rowCoordMatch = /^\|\s*([A-Z]+\d+(?::[A-Z]+\d+)?)\s*\|/i.exec(line)
+                if (rowCoordMatch) {
+                  resolvedCellRef = rowCoordMatch[1]!.toUpperCase()
+                  break
+                }
+              }
+            }
           }
         }
       }
     }
+
+    const resolvedPageNumber = blockMeta?.pageNumber ?? pageNumber
+    const resolvedLabel =
+      label && !/^第\s*\d+\s*页$/.test(label)
+        ? label
+        : blockMeta?.loc || `第${resolvedPageNumber}页`
+
     return {
       fileId: selectedIndex.fileId || 'f1',
       filePath: selectedIndex.sourcePath,
       fileName: selectedIndex.sourceName || basename(selectedIndex.sourcePath),
-      pageNumber: blockMeta?.pageNumber ?? pageNumber,
+      pageNumber: resolvedPageNumber,
       blockId: blockMeta?.blockId ?? rawBlockId,
       bbox: blockMeta?.bbox,
-      label: label || blockMeta?.loc || `第${pageNumber}页`,
-      format: normalizeDocumentFormat(selectedIndex.format ?? selectedIndex.sourceName),
+      label: resolvedLabel,
+      format: docFormat,
       ...(blockMeta?.sheetName ? { sheetName: blockMeta.sheetName } : {}),
-      ...(blockMeta?.cellRef ? { cellRef: blockMeta.cellRef } : {}),
+      ...(resolvedCellRef ? { cellRef: resolvedCellRef } : {}),
     }
   }
 

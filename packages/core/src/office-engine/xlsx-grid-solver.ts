@@ -686,9 +686,14 @@ export function solveXlsxGrid(
 
         const colCount = Math.max(1, region.maxCol - region.minCol + 1)
         const firstRow = matrix[0] ?? Array.from({ length: colCount }, () => '')
-        const headerLine = `| ${firstRow.map((v, i) => v || colHeaders[i] || `Col${i + 1}`).join(' | ')} |`
-        const sepLine = `| ${Array.from({ length: colCount }, () => '---').join(' | ')} |`
-        const bodyLines = matrix.slice(1).map((row) => `| ${row.join(' | ')} |`)
+        const headerRowRef = formatRangeAddress(chunkMinRow, region.minCol, chunkMinRow, region.maxCol)
+        const headerLine = `| 行坐标 (${headerRowRef}) | ${firstRow.map((v, i) => v || colHeaders[i] || `Col${i + 1}`).join(' | ')} |`
+        const sepLine = `| --- | ${Array.from({ length: colCount }, () => '---').join(' | ')} |`
+        const bodyLines = matrix.slice(1).map((row, idx) => {
+          const r = chunkRows[idx + 1] ?? chunkMinRow + idx + 1
+          const rowRef = formatRangeAddress(r, region.minCol, r, region.maxCol)
+          return `| ${rowRef} | ${row.join(' | ')} |`
+        })
 
         const mdParts = [
           `### ${sheetInfo.name} (${cellRef})`,
@@ -700,7 +705,11 @@ export function solveXlsxGrid(
           mdParts.push(`\n> 公式依赖 (${cellRef}): \`${formulasInChunk.slice(0, 6).join('`, `')}\``)
         }
 
-        const plainLines = matrix.map((row) => row.join('\t'))
+        const plainLines = matrix.map((row, idx) => {
+          const r = chunkRows[idx] ?? chunkMinRow + idx
+          const rowRef = formatRangeAddress(r, region.minCol, r, region.maxCol)
+          return `[${rowRef}]\t${row.join('\t')}`
+        })
         const x0Px = (colOffsetsPx[region.minCol] ?? activeStartX) - activeStartX
         const x1Px = (colOffsetsPx[region.maxCol + 1] ?? activeEndX) - activeStartX
         const y0Px = (rowOffsetsPx[chunkMinRow] ?? activeStartY) - activeStartY
