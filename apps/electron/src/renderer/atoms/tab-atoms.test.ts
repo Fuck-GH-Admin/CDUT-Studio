@@ -208,3 +208,11 @@ test('关闭当前激活的浏览器工作 Tab 时优先回退到所属宿主会
   const closed = closeTab(state.tabs, browserTabId, browserTabId, ['s2', 's1'])
   expect(closed.activeTabId).toBe('s1')
 })
+
+test('关闭非当前会话标签时保持教程 Tab 激活，教程不被连带关闭', () => {
+  const scratch: TabItem = { id: '__scratch-pad__', type: 'scratch', sessionId: '__scratch-pad__', title: 'Scratch' }
+  const tutorial: TabItem = { id: '__tutorial__', type: 'tutorial', sessionId: '__tutorial__', title: 'CDUT Studio 使用教程' }
+  const closed = closeTab([scratch, tutorial, tab('a')], '__tutorial__', 'a', ['a'])
+  expect(closed.activeTabId).toBe('__tutorial__')
+  expect(closed.tabs.some((t) => t.id === '__tutorial__')).toBe(true)
+})
