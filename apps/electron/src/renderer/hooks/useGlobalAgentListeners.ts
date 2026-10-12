@@ -60,8 +60,8 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
-import { planFollowWorkTab, tabGroupsAtom } from '@/atoms/tab-group-atoms'
+import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle, closeTab, tabMruAtom } from '@/atoms/tab-atoms'
+import { syncActiveTabSideEffectsForStore } from '@/lib/active-tab-side-effects'
 import { openFilePreviewTab } from '@/components/diff/preview-opener'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
@@ -655,17 +655,8 @@ export function useGlobalAgentListeners(): void {
             return m
           })
           if (openSurface) {
-            // Tab 化：后台开/更新该文件的预览 Tab，并让用户当前布局「跟随最新文件」
-            // （对话左 + 预览右；用户自定义布局不打扰，焦点始终留在对话）。
-            const tabId = openFilePreviewTab(store, sid, previewFile, { activate: false })
-            const next = planFollowWorkTab({
-              groups: store.get(tabGroupsAtom),
-              tabs: store.get(tabsAtom),
-              agentTabId: sid,
-              workTabId: tabId,
-              activeTabId: store.get(activeTabIdAtom),
-            })
-            if (next) store.set(tabGroupsAtom, next)
+            // 文件预览统一进入右侧边栏：不再创建顶栏预览 Tab，也不改写用户的分屏布局。
+            openFilePreviewTab(store, sid, previewFile, { activate: false })
           }
           return previewFile
         })
@@ -788,8 +779,8 @@ export function useGlobalAgentListeners(): void {
                 next.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
                 return next
               })
-              // 正式预览（PPTX 回执链路）：开成预览 Tab 并激活——OfficePreview 必须在
-              // 可见 pane 里渲染并回执 ready/error，激活保证它落在当前渲染的 pane 上。
+              // 正式预览（PPTX 回执链路）：在右侧边栏渲染该文件——OfficePreview 必须在
+              // 可见 pane 里渲染并回执 ready/error，展开侧栏保证它落在当前渲染的容器上。
               openFilePreviewTab(store, sessionId, nextFile)
             }).catch((error: unknown) => {
               if (!effectActive) return
@@ -848,6 +839,21 @@ export function useGlobalAgentListeners(): void {
             // 委派子会话的后台 Tab 由会话列表与流指示统一补齐；本事件只负责收敛会话和权限状态。
           } else if (proferEvent.type === 'session_deleted') {
             store.set(agentSessionsAtom, (previous) => previous.filter((session) => session.id !== proferEvent.sessionId))
+            // 同步关闭该会话的顶栏 Tab（closeTab 会级联清除其浏览器工作标签），避免僵尸 Tab。
+            const currentTabs = store.get(tabsAtom)
+            const currentActiveTabId = store.get(activeTabIdAtom)
+            const result = closeTab(currentTabs, currentActiveTabId, proferEvent.sessionId, store.get(tabMruAtom))
+            if (result.tabs !== currentTabs) {
+              store.set(tabsAtom, result.tabs)
+              store.set(activeTabIdAtom, result.activeTabId)
+              store.set(tabMruAtom, result.mru)
+              if (result.activeTabId !== currentActiveTabId) {
+                const newActiveTab = result.activeTabId
+                  ? result.tabs.find((t) => t.id === result.activeTabId) ?? null
+                  : null
+                syncActiveTabSideEffectsForStore(store, newActiveTab)
+              }
+            }
           }
         }
 

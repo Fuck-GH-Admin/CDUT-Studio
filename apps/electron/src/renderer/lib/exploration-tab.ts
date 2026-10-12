@@ -10,8 +10,9 @@
  */
 
 import { useStore } from 'jotai'
-import { activeTabIdAtom, openTab, tabsAtom } from '@/atoms/tab-atoms'
+import { openTab, tabsAtom } from '@/atoms/tab-atoms'
 import { createGroup, findTabGroup, replaceTabGroup, tabGroupsAtom } from '@/atoms/tab-group-atoms'
+import { activateTabWithSideEffects } from '@/lib/tab-activation'
 
 /** Jotai store 类型（从 useStore 推导，避免直接 import 内部 Store 类型） */
 type JotaiStore = ReturnType<typeof useStore>
@@ -37,7 +38,6 @@ export function openExplorationBranchTab(
     parentSessionId,
   })
   store.set(tabsAtom, result.tabs)
-  store.set(activeTabIdAtom, result.activeTabId)
 
   if (options.autoGroup === true) {
     const groups = store.get(tabGroupsAtom)
@@ -51,5 +51,9 @@ export function openExplorationBranchTab(
       if (group) store.set(tabGroupsAtom, replaceTabGroup(groups, null, group))
     }
   }
+
+  // 统一激活入口：同步 currentAgentSessionId / workspace / 前台所有权，
+  // 保证右侧边栏立即切换到探索分支会话（而不是仍显示旧会话的文件）。
+  activateTabWithSideEffects(store, result.activeTabId)
   return branch.sessionId
 }

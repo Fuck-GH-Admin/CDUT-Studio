@@ -9,9 +9,9 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { Blocks, BookOpen, Bot, FileText, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
+import { BookOpen, Bot, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
+import type { TabType } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { TabPreviewPanel } from './TabPreviewPanel'
@@ -28,6 +28,8 @@ export interface TabBarItemProps {
   hideRenameControl?: boolean
   isActive: boolean
   isStreaming: SessionIndicatorStatus
+  /** 该会话正在等待权限审批 / 提问回答（渲染琥珀色呼吸指示点） */
+  needsAttention?: boolean
   /** 是否显示 hover 预览面板（由父级管理） */
   isHovered: boolean
   /** 预览面板是否正在退出动画 */
@@ -65,6 +67,7 @@ export function TabBarItem({
   hideRenameControl = false,
   isActive,
   isStreaming,
+  needsAttention,
   isHovered,
   isLeaving,
   isTearingOff,
@@ -89,7 +92,9 @@ export function TabBarItem({
   const [draftTitle, setDraftTitle] = React.useState(title)
   const [savingTitle, setSavingTitle] = React.useState(false)
   const titleInputRef = React.useRef<HTMLInputElement>(null)
-  const minimapCache = useAtomValue(tabMinimapCacheAtom)
+  // 重命名互斥：Enter/Check 提交后 DOM 卸载会再触发一次 onBlur，双提交会重复发 IPC。
+  const isSubmittingRenameRef = React.useRef(false)
+  const cancelingRenameRef = React.useRef(false)
 
   React.useEffect(() => {
     const el = buttonRef.current
@@ -155,6 +160,8 @@ export function TabBarItem({
   const startRename = (e: React.MouseEvent): void => {
     e.stopPropagation()
     if (!onRename) return
+    isSubmittingRenameRef.current = false
+    cancelingRenameRef.current = false
     setDraftTitle(title)
     setEditingTitle(true)
     requestAnimationFrame(() => {
@@ -167,19 +174,34 @@ export function TabBarItem({
   }
 
   const finishRename = async (): Promise<void> => {
+    // 互斥锁：Enter/Check 提交后输入框卸载会再触发一次 onBlur，必须只提交一次。
+    if (isSubmittingRenameRef.current) return
+    if (cancelingRenameRef.current) {
+      cancelingRenameRef.current = false
+      setEditingTitle(false)
+      return
+    }
     const nextTitle = draftTitle.trim()
     if (!nextTitle || nextTitle === title || !onRename) {
       setEditingTitle(false)
       return
     }
+    isSubmittingRenameRef.current = true
     setSavingTitle(true)
     try {
       await onRename(nextTitle)
       setEditingTitle(false)
+    } catch {
+      isSubmittingRenameRef.current = false
     } finally {
       setSavingTitle(false)
     }
   }
+
+  // 外部标题更新时不覆盖正在编辑的输入草稿
+  React.useEffect(() => {
+    if (!editingTitle) setDraftTitle(title)
+  }, [title, editingTitle])
 
   const isScratch = type === 'scratch'
   const tabTypeIcon = type === 'agent'
@@ -190,11 +212,9 @@ export function TabBarItem({
         : <Bot className="size-3.5 shrink-0" aria-hidden="true" />
     : type === 'chat'
       ? <MessageSquare className="size-3.5 shrink-0" aria-hidden="true" />
-      : type === 'preview'
-        ? <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        : type === 'browser'
-          ? <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-          : type === 'tutorial'
+      : type === 'browser'
+        ? <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        : type === 'tutorial'
           ? <BookOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           : null
   // 状态优先于聚焦态；所有边框都直接应用到 Tab 本体，确保完整贴合圆角。
@@ -207,9 +227,9 @@ export function TabBarItem({
         : isActive
           ? 'topbar-tab-focused'
           : undefined
-  const previewItems = minimapCache.get(id) ?? []
-  // 仅会话 Tab 有消息预览价值；浏览器、文件预览等工作区 Tab 不显示空态面板。
-  const canShowPreview = (type === 'chat' || type === 'agent') && previewItems.length > 0
+  // hover 预览面板下沉到 TabPreviewDropdown 内部按需读取 minimap 缓存，
+  // 避免顶栏每个 Token 都因缓存变更而整条重渲染。
+  const canShowPreview = type === 'chat' || type === 'agent'
   const showPreview = isHovered && !isActive && canShowPreview
 
   // Scratch Pad 是固定草稿入口
@@ -286,6 +306,13 @@ export function TabBarItem({
         onPointerCancel={handlePointerUp}
       >
         {tabTypeIcon}
+        {needsAttention && (
+          <span
+            className="size-1.5 shrink-0 rounded-full bg-amber-500 animate-pulse"
+            title="等待你的处理"
+            aria-hidden="true"
+          />
+        )}
 
         {/* 标题（窄状态下隐藏，用 spacer 撑开让关闭按钮靠右） */}
         {isNarrow ? (
@@ -316,6 +343,9 @@ export function TabBarItem({
                     void finishRename()
                   } else if (event.key === 'Escape') {
                     event.preventDefault()
+                    // 先置取消标志再退出编辑：随后的 onBlur 会被 finishRename 识别为取消，
+                    // 不会把输入草稿当作新标题保存。
+                    cancelingRenameRef.current = true
                     setEditingTitle(false)
                   }
                 }}
@@ -343,7 +373,8 @@ export function TabBarItem({
                 aria-label="保存会话标题"
                 className="flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted-foreground/20"
                 onPointerDown={(event) => event.stopPropagation()}
-                onMouseDown={(event) => event.stopPropagation()}
+                // preventDefault 阻止按钮在 mousedown 时抢走输入框焦点（避免先触发 onBlur 双提交）
+                onMouseDown={(event) => { event.preventDefault(); event.stopPropagation() }}
                 onClick={(event) => { event.stopPropagation(); void finishRename() }}
               >
                 <Check className="size-2.5" />
@@ -389,8 +420,8 @@ export function TabBarItem({
       {showPreview && (
         <TabPreviewDropdown
           buttonRef={buttonRef}
+          tabId={id}
           title={title}
-          items={previewItems}
           isLeaving={isLeaving}
           onMouseEnter={onPanelHoverEnter}
           onMouseLeave={onPanelHoverLeave}
@@ -403,19 +434,23 @@ export function TabBarItem({
 /** 使用 Portal 渲染到 body，避免被容器 overflow 裁剪或被内容区遮盖 */
 function TabPreviewDropdown({
   buttonRef,
+  tabId,
   title,
-  items,
   isLeaving,
   onMouseEnter,
   onMouseLeave,
 }: {
   buttonRef: React.RefObject<HTMLButtonElement | null>
+  tabId: string
   title: string
-  items: TabMinimapItem[]
   isLeaving: boolean
   onMouseEnter: () => void
   onMouseLeave: () => void
 }): React.ReactElement | null {
+  // 仅在面板真正挂载（悬停 300ms 后）时按需读取 minimap 缓存，
+  // 避免顶栏在流式输出期间每个 Token 都订阅并重渲染。
+  const minimapCache = useAtomValue(tabMinimapCacheAtom)
+  const items = minimapCache.get(tabId) ?? []
   const panelWidth = 280
   const [pos, setPos] = React.useState<{ top: number; left: number } | null>(null)
 
@@ -423,6 +458,8 @@ function TabPreviewDropdown({
     const btn = buttonRef.current
     if (!btn) return
     const rect = btn.getBoundingClientRect()
+    // 首帧布局尚未完成（宽高为 0）时不定位，避免悬停卡片在左上角闪现一帧。
+    if (rect.width <= 0 || rect.height <= 0) return
     const viewportWidth = window.innerWidth
     const top = rect.bottom
     // 原生 WebContentsView 在 DOM 之上：面板不能压到原生网页区，否则相交部分被盖住。
@@ -438,7 +475,7 @@ function TabPreviewDropdown({
     setPos({ top, left })
   }, [buttonRef])
 
-  if (!pos) return null
+  if (!pos || items.length === 0) return null
 
   return createPortal(
     <div

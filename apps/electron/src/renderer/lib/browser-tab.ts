@@ -25,6 +25,7 @@ import { planAutoGroupWorkTab, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import type { BrowserViewState } from '@profer/shared'
+import { activateTabWithSideEffects } from '@/lib/tab-activation'
 
 /** Jotai store 类型（从 useStore 推导，避免直接 import 内部 Store 类型） */
 type JotaiStore = ReturnType<typeof useStore>
@@ -130,5 +131,5 @@ export function openBrowserTabManually(sessionId: string, state: BrowserViewStat
   const topTabId = browserTabId
     ? createBrowserTabId(sessionId, browserTabId)
     : activeBrowserTopTabId(sessionId, state)
-  if (topTabId) store.set(activeTabIdAtom, topTabId)
+  if (topTabId) activateTabWithSideEffects(store, topTabId)
 }

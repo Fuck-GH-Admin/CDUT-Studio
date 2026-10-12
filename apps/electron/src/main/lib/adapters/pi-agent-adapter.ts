@@ -1077,7 +1077,7 @@ function buildPinnedArtifactsContinuationBlock(cwd?: string): string {
         }
         if (meta.sourceName) {
           lines.push(
-            `- 文档《${meta.sourceName}》(artifact_id="${meta.artifactId ?? ''}", 共 ${meta.pageCount ?? 1} 页, ${meta.totalChars ?? 0} 字符): 纯净版 Markdown 已完整落盘于 \`${meta.cleanMarkdownPath ?? ''}\`（无需再用 Write/Edit 重写）；如需按页或关键词检阅原文，请调用 \`read_document_artifact\`。`,
+            `- 文档《${meta.sourceName}》(artifact_id="${meta.artifactId ?? ''}", 共 ${meta.pageCount ?? 1} 页, ${meta.totalChars ?? 0} 字符): 纯净版 Markdown 已完整落盘于 \`${meta.cleanMarkdownPath ?? ''}\`（无需再用 Write/Edit 重写）；可直接 Read 该 Markdown，提问时系统也会自动注入 \`<document_evidence>\` 相关切片。`,
           )
         }
       } catch {
@@ -1183,7 +1183,7 @@ function installCurrentSessionCompactionHooks(session: AgentSession, cwd?: strin
           return {
             block: true,
             reason:
-              '【内核熔断保护】当前工作区的附件文档已由客户端内核高精解析引擎完成 100% 物理落盘（完整无损的纯净版 Markdown 已直接写入工作目录 clean_markdown_path，带锚点索引位于 .context/artifacts/）。严禁调用 pdftotext/pdfplumber/pypdf/fitz 等外部脚本重复提取！请直接使用已落盘的 Markdown 文件或调用 `read_document_artifact` 按页/关键词查阅。',
+              '【内核熔断保护】当前工作区的附件文档已由客户端内核高精解析引擎完成 100% 物理落盘（完整无损的纯净版 Markdown 已直接写入工作目录 clean_markdown_path，带锚点索引位于 .context/artifacts/）。严禁调用 pdftotext/pdfplumber/pypdf/fitz 等外部脚本重复提取！请直接读取已落盘的 Markdown 文件，或信任系统自动注入的 `<document_evidence>` 证据切片。',
           }
         }
       }

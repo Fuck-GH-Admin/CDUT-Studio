@@ -10,7 +10,6 @@ import { useAtomValue } from 'jotai'
 import { tabsAtom } from '@/atoms/tab-atoms'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { AgentView } from '@/components/agent'
-import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
 import { BrowserTabContent } from '@/components/browser/BrowserTabContent'
 import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
@@ -46,14 +45,6 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
 
   if (tab.type === 'tutorial') {
     return <TutorialTabContent />
-  }
-
-  if (tab.type === 'preview') {
-    return (
-      <TabErrorBoundary key={tab.id} sessionId={tab.sessionId}>
-        <PreviewTabContent tabId={tab.id} sessionId={tab.sessionId} filePath={tab.filePath ?? ''} />
-      </TabErrorBoundary>
-    )
   }
 
   if (tab.type === 'browser') {

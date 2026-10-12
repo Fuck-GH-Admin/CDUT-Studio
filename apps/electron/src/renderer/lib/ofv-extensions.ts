@@ -9,13 +9,12 @@
  * - 老式 Office（.doc/.xls/.ppt）：此前渲染 null（一片空白）；
  * - 此前归入 `UNSUPPORTED_EXTS` 的长尾格式（归档 / 设计文件 / 3D / GIS / 电子书 / 邮件 / 数据…）；
  * - `OFV_EXTRA_EXTS`：OFV 有插件但历史上漏在清单外、当下会渲成乱码的那批（见该处注释）；
- * - `.xlsx`：SheetJS 路径，不需要页数/抓图回执；
- * - **不含 `.docx` / `.pptx`**：见 DiffTabContent 与 preview-opener 里的说明（注入面 / Agent 回执）。
+ * - **不含 `.docx` / `.xlsx` / `.pptx` 及其 OOXML 变体**：统一走 Silurus WASM `<OfficePreview>`。
  */
 import { NON_PREVIEWABLE_BINARY_EXTS, IMAGE_PREVIEW_EXTS, UNSUPPORTED_EXTS } from './preview-extension-sets'
 
-/** OFV 承担的 Office 格式（不含 docx/pptx） */
-export const OFV_OFFICE_EXTS: ReadonlySet<string> = new Set(['.xlsx', '.doc', '.xls', '.ppt'])
+/** OFV 承担的 Office 格式（仅 97-2003 二进制 CFB；OOXML 三件套走 Silurus） */
+export const OFV_OFFICE_EXTS: ReadonlySet<string> = new Set(['.doc', '.xls', '.ppt'])
 
 /**
  * OFV 有插件、但历史上漏在清单外的格式（2026-09-18 补齐）。
@@ -42,10 +41,10 @@ export const OFV_EXTRA_EXTS: ReadonlySet<string> = new Set([
   '.epub', '.ofd', '.xps', '.oxps', '.eml', '.msg', '.mbox', '.xmind',
   // 需要解码器的图片
   '.tif', '.tiff', '.heic', '.heif', '.jxl', '.cur',
-  // Office 家族其余扩展名
-  '.docm', '.dot', '.dotm', '.dotx',
-  '.xlsb', '.xlsm', '.xlt', '.xltm', '.xltx',
-  '.potx', '.potm', '.pps', '.ppsx', '.ppsm', '.pptm',
+  // Office 家族其余扩展名（OOXML 的 .docm/.dotx/.xlsm/.pptx 变体走 Silurus，不在此列）
+  '.dot',
+  '.xlsb', '.xlt',
+  '.pps',
   '.odt', '.ods', '.odp', '.fodt', '.fods', '.fodp', '.rtf',
   '.wps', '.et', '.dps', '.numbers', '.key',
   // 设计 / 资产

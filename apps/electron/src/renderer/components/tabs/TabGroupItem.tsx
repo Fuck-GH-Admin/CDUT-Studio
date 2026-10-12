@@ -11,11 +11,10 @@
  * - 会话改名会通过 tabsAtom → title → 重新测量自然宽度，自动重新分配（无需额外逻辑）；
  * - 右标题之后放一个 `flex-1` 弹性空隙，把解散/关闭按钮稳定压到条目右缘。
  *
- * 其余样式差异（相对普通 TabBarItem）：
- * - 固定 `Columns2` 图标 + 左缘 2px 组合色条；右侧标题压暗表示主次；
- * - 两个会话各有自己的状态点；
- * - 焦点侧加粗 + 色条点亮，与组内栏头/当前会话一致；
- * - hover 才出现「解散组合」，关闭按钮关闭整组。
+ * 交互约定：
+ * - 点击左/右半区分别聚焦对应分屏（onActivateLeft / onActivateRight）；
+ * - 内部按钮补齐 onMouseDown 冒泡拦截，避免误触发父按钮的拖动/激活；
+ * - 两个成员各有自己的状态点与「需处理」琥珀色呼吸指示点。
  */
 
 import * as React from 'react'
@@ -33,9 +32,17 @@ export interface TabGroupItemProps {
   rightTitle: string | null
   leftStatus: SessionIndicatorStatus
   rightStatus: SessionIndicatorStatus
+  /** 左/右成员是否正在等待权限审批 / 提问回答（渲染琥珀色呼吸指示点） */
+  leftNeedsAttention?: boolean
+  rightNeedsAttention?: boolean
   isActive: boolean
   /** 当前焦点侧（焦点 = activeTabId 属于哪一侧） */
   focusedSide: TabGroupSide
+  /** 点击左半区聚焦左分屏 */
+  onActivateLeft: () => void
+  /** 点击右半区聚焦右分屏 */
+  onActivateRight: () => void
+  /** 点击组合条目（回退到焦点成员） */
   onActivate: () => void
   /** 解散组合（两个标签都保留） */
   onDissolve: () => void
@@ -44,11 +51,24 @@ export interface TabGroupItemProps {
   /** 关闭整组（两个标签都关闭） */
   onCloseGroup: () => void
   onDragStart: (e: React.PointerEvent) => void
-  onHoverEnter: () => void
-  onHoverLeave: () => void
 }
 
-function StatusDot({ status }: { status: SessionIndicatorStatus }): React.ReactElement | null {
+function StatusDot({
+  status,
+  needsAttention,
+}: {
+  status: SessionIndicatorStatus
+  needsAttention?: boolean
+}): React.ReactElement | null {
+  if (needsAttention) {
+    return (
+      <span
+        className="size-1.5 shrink-0 rounded-full bg-amber-500 animate-pulse"
+        title="等待你的处理"
+        aria-hidden="true"
+      />
+    )
+  }
   if (status === 'idle') return null
   return (
     <span
@@ -65,15 +85,17 @@ export function TabGroupItem({
   rightTitle,
   leftStatus,
   rightStatus,
+  leftNeedsAttention,
+  rightNeedsAttention,
   isActive,
   focusedSide,
+  onActivateLeft,
+  onActivateRight,
   onActivate,
   onDissolve,
   onMiddleClick,
   onCloseGroup,
   onDragStart,
-  onHoverEnter,
-  onHoverLeave,
 }: TabGroupItemProps): React.ReactElement {
   const pointerStartRef = React.useRef<{ x: number; y: number } | null>(null)
   const suppressClickRef = React.useRef(false)
@@ -120,6 +142,14 @@ export function TabGroupItem({
     pointerStartRef.current = null
   }
 
+  /** 点击左/右半区：聚焦对应分屏，避免拖动/中键误判 */
+  const activateSide = (side: TabGroupSide) => (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    if (suppressClickRef.current) return
+    if (side === 'left') (leftTitle ? onActivateLeft : onActivate)()
+    else (rightTitle ? onActivateRight : onActivate)()
+  }
+
   return (
     <div
       data-tab-id={id}
@@ -130,8 +160,6 @@ export function TabGroupItem({
         'relative w-fit flex-none titlebar-no-drag',
         isActive ? 'min-w-[168px] max-w-[420px]' : 'min-w-[152px] max-w-[400px] hover:min-w-[168px]',
       )}
-      onMouseEnter={onHoverEnter}
-      onMouseLeave={onHoverLeave}
     >
       <button
         type="button"
@@ -162,7 +190,12 @@ export function TabGroupItem({
         />
         <Columns2 className="size-3.5 shrink-0 opacity-80" aria-hidden="true" />
 
-        <span className="flex min-w-0 shrink items-center gap-1">
+        {/* 左半区：点击聚焦左分屏 */}
+        <span
+          role="presentation"
+          className="flex min-w-0 shrink items-center gap-1"
+          onClick={activateSide('left')}
+        >
           <span
             className={cn(
               'truncate',
@@ -172,12 +205,17 @@ export function TabGroupItem({
           >
             {leftLabel}
           </span>
-          <StatusDot status={leftStatus} />
+          <StatusDot status={leftStatus} needsAttention={leftNeedsAttention} />
         </span>
 
         <span aria-hidden="true" className={cn('h-3 w-px shrink-0', isActive ? 'bg-tab/35' : 'bg-border/60')} />
 
-        <span className="flex min-w-0 shrink items-center gap-1">
+        {/* 右半区：点击聚焦右分屏 */}
+        <span
+          role="presentation"
+          className="flex min-w-0 shrink items-center gap-1"
+          onClick={activateSide('right')}
+        >
           <span
             className={cn(
               'truncate',
@@ -187,7 +225,7 @@ export function TabGroupItem({
           >
             {rightLabel}
           </span>
-          <StatusDot status={rightStatus} />
+          <StatusDot status={rightStatus} needsAttention={rightNeedsAttention} />
         </span>
 
         {/* 弹性空隙：两个标题按自然宽度排完后剩余的宽度都给它（fit-content 下不占自然宽），
@@ -201,6 +239,7 @@ export function TabGroupItem({
           aria-label="解散组合"
           title="解散组合（两个标签都保留）"
           className="hidden size-4 shrink-0 items-center justify-center rounded-sm group-hover:flex hover:bg-muted-foreground/20"
+          onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => {
             event.stopPropagation()
             onDissolve()
@@ -217,6 +256,7 @@ export function TabGroupItem({
               tabIndex={-1}
               aria-label="关闭组合（关闭两个标签）"
               className="flex size-4 shrink-0 items-center justify-center rounded-sm opacity-60 transition-opacity hover:bg-muted-foreground/20 hover:opacity-100"
+              onMouseDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation()
                 onCloseGroup()

@@ -28,7 +28,7 @@ import { resolveAuthorizedFile, type PreviewInspectionContext } from './preview-
 /** 单次返回给模型的文本上限（字符），超出截断并显式标注，避免上下文爆炸。 */
 export const MAX_DOCUMENT_CHARS = 160_000
 
-/** 单次切片读取（read_document_artifact）返回的最大字符数。 */
+/** 单次切片读取（文档透明重定向内部使用）返回的最大字符数。 */
 export const MAX_ARTIFACT_SLICE_CHARS = 16_000
 
 /** 轻量句柄中内联预览的最大字符数。 */
@@ -41,10 +41,21 @@ export const PREINGEST_DOCUMENT_EXTENSIONS = new Set([
   '.pdf',
   '.doc',
   '.docx',
+  '.docm',
+  '.dotx',
+  '.dotm',
   '.xls',
   '.xlsx',
+  '.xlsm',
+  '.xltx',
+  '.xltm',
   '.ppt',
   '.pptx',
+  '.pptm',
+  '.potx',
+  '.potm',
+  '.ppsx',
+  '.ppsm',
   '.rtf',
 ])
 
@@ -63,6 +74,10 @@ export interface DocumentAnchorBlockMeta {
   bbox: [number, number, number, number]
   /** 人类可读位置标签（如 "第1页·左栏"） */
   loc: string
+  /** XLSX 专属：所属工作表名称 */
+  sheetName?: string
+  /** XLSX 专属：目标单元格/区域引用（如 "B4" 或 "A1:F12"） */
+  cellRef?: string
 }
 
 export interface SessionDocumentRegistryEntry {
@@ -82,6 +97,41 @@ export interface ResolvedDocumentAnchor {
   blockId: string
   bbox?: [number, number, number, number]
   label?: string
+  /** 目标文档格式（PDF / Word / PPT / Excel），用于聚光灯高亮分发到对应渲染器 */
+  format?: 'pdf' | 'docx' | 'pptx' | 'xlsx'
+  /** XLSX 专属：所属工作表名称 */
+  sheetName?: string
+  /** XLSX 专属：目标单元格/区域引用（如 "B4" 或 "A1:F12"） */
+  cellRef?: string
+}
+
+/** 归一化文档格式标识（兼容扩展名与 index.format 字段）。 */
+function normalizeDocumentFormat(value: string | undefined): 'pdf' | 'docx' | 'pptx' | 'xlsx' {
+  const v = (value ?? '').toLowerCase().replace(/^\./, '')
+  if (v === 'docx' || v === 'docm' || v === 'dotx' || v === 'dotm' || v === 'doc' || v.endsWith('.docx')) return 'docx'
+  if (
+    v === 'pptx' ||
+    v === 'pptm' ||
+    v === 'potx' ||
+    v === 'potm' ||
+    v === 'ppsx' ||
+    v === 'ppsm' ||
+    v === 'ppt' ||
+    v.endsWith('.pptx')
+  ) {
+    return 'pptx'
+  }
+  if (
+    v === 'xlsx' ||
+    v === 'xlsm' ||
+    v === 'xltx' ||
+    v === 'xltm' ||
+    v === 'xls' ||
+    v.endsWith('.xlsx')
+  ) {
+    return 'xlsx'
+  }
+  return 'pdf'
 }
 
 export interface DocumentPageSlice {
@@ -138,7 +188,7 @@ export interface ParseDocumentResult {
 function truncate(text: string): { text: string; truncated: boolean } {
   if (text.length <= MAX_DOCUMENT_CHARS) return { text, truncated: false }
   return {
-    text: `${text.slice(0, MAX_DOCUMENT_CHARS)}\n\n…（内容过长，已截断，如需后续内容请使用 read_document_artifact 按页读取）`,
+    text: `${text.slice(0, MAX_DOCUMENT_CHARS)}\n\n…（内容过长，已截断；完整纯净内容已落盘于 clean_markdown_path，可直接 Read）`,
     truncated: true,
   }
 }
@@ -152,7 +202,7 @@ export function extractAndNamespaceAnchors(
 ): { namespacedMarkdown: string; blocks: Record<string, DocumentAnchorBlockMeta> } {
   const blocks: Record<string, DocumentAnchorBlockMeta> = {}
   const anchorCommentRe =
-    /<!--\s*anchor:\s*(?:([a-zA-Z]+\d+):)?(p(\d+)-b\d+)\s*\[([^\]]+)\]\s*loc="([^"]*)"\s*-->/g
+    /<!--\s*anchor:\s*(?:([a-zA-Z]+\d+):)?(p(\d+)-b\d+)\s*\[([^\]]+)\]([^>]*)-->/g
 
   let match: RegExpExecArray | null
   while ((match = anchorCommentRe.exec(markdown)) !== null) {
@@ -166,24 +216,33 @@ export function extractAndNamespaceAnchors(
       coords.length >= 4
         ? [coords[0]!, coords[1]!, coords[2]!, coords[3]!]
         : [0, 0, 1, 1]
-    const loc = match[5] ?? `第${pageNum}页`
+    const attrTail = match[5] ?? ''
+    const locMatch = /loc="([^"]*)"/.exec(attrTail)
+    const sheetMatch = /sheet="([^"]*)"/.exec(attrTail)
+    const cellMatch = /cell="([^"]*)"/.exec(attrTail)
+    const loc = locMatch?.[1] ?? `第${pageNum}页`
+    const sheetName = sheetMatch?.[1] || undefined
+    const cellRef = cellMatch?.[1] || undefined
+
     blocks[rawBlockId] = {
       blockId: rawBlockId,
       scopedId: `${fileId}:${rawBlockId}`,
       pageNumber: pageNum,
       bbox,
       loc,
+      ...(sheetName ? { sheetName } : {}),
+      ...(cellRef ? { cellRef } : {}),
     }
   }
 
   const namespacedMarkdown = markdown
     .replace(
-      /<span id="(?:[a-zA-Z]+\d+:)?(p\d+-b\d+)" data-loc="([^"]*)"><\/span>/g,
-      `<span id="${fileId}:$1" data-loc="$2"></span>`,
+      /<span id="(?:[a-zA-Z]+\d+:)?(p\d+-b\d+)"([^>]*)><\/span>/g,
+      `<span id="${fileId}:$1"$2></span>`,
     )
     .replace(
-      /<!--\s*anchor:\s*(?:[a-zA-Z]+\d+:)?(p\d+-b\d+)\s*\[([^\]]+)\]\s*loc="([^"]*)"\s*-->/g,
-      `<!-- anchor: ${fileId}:$1 [$2] loc="$3" -->`,
+      /<!--\s*anchor:\s*(?:[a-zA-Z]+\d+:)?(p\d+-b\d+)\s*\[([^\]]+)\]([^>]*)-->/g,
+      `<!-- anchor: ${fileId}:$1 [$2]$3-->`,
     )
 
   return { namespacedMarkdown, blocks }
@@ -284,10 +343,11 @@ function allocateSessionFileId(
  * 1. `<agentCwd>/<stem>.md`：纯净无 HTML 锚点污染的交付版 Markdown
  * 2. `<agentCwd>/.context/artifacts/<stem>.anchored.md` 与 `.index.json`：带会话唯一 `fileId` 与双平行拓扑锚点的结构化索引版
  */
-function materializeToWorkspace(
+export function materializeToWorkspace(
   resolvedSourcePath: string,
   agentCwd: string,
   parsed: Omit<ParseDocumentResult, 'materialized'>,
+  preferredFileId?: string,
 ): MaterializedDocumentIndex | undefined {
   if (!agentCwd || !existsSync(agentCwd)) return undefined
   try {
@@ -306,7 +366,10 @@ function materializeToWorkspace(
       }
     }
 
-    const fileId = allocateSessionFileId(artifactsDir, stem, resolvedSourcePath, manifest)
+    const fileId =
+      preferredFileId && /^f\d+$/i.test(preferredFileId)
+        ? preferredFileId.toLowerCase()
+        : allocateSessionFileId(artifactsDir, stem, resolvedSourcePath, manifest)
 
     // 决定 Clean Markdown 的目标路径：优先使用工作目录根下的 `<stem>.md`；
     // 若该文件已存在且并非由内核生成（避免覆盖用户手写笔记），则回退至 `<stem>.parsed.md`
@@ -328,6 +391,7 @@ function materializeToWorkspace(
     if (
       existingRecord &&
       existingRecord.revision === parsed.file.revision &&
+      (!preferredFileId || existingRecord.fileId === fileId) &&
       existsSync(cleanMarkdownPath) &&
       existsSync(anchoredMarkdownPath) &&
       existsSync(indexJsonPath)
@@ -448,8 +512,10 @@ export async function executeParseDocumentTool(
     revision,
   }
 
+  const ext = extname(resolved).toLowerCase()
+
   // PDF：唯一路径 = 高精解析引擎
-  if (extname(resolved).toLowerCase() === '.pdf') {
+  if (ext === '.pdf') {
     const {
       parsePdfDocument,
       serializeLayoutToMarkdown,
@@ -510,11 +576,93 @@ export async function executeParseDocumentTool(
     return baseResult
   }
 
-  // 其余文档格式：基座解析器（DOCX/XLSX/PPTX/RTF/文本等）
+  // OOXML Office 文档（DOCX / PPTX / XLSX 及其宏/模板变体）：走 @profer/core/office-engine 双平面重排引擎
+  const {
+    OoxmlZipReader,
+    inferOfficeFormatFromExtension,
+    parseOfficeBuffer,
+    serializeOfficePageToMarkdown,
+  } = await import('@profer/core/office-engine')
+  const officeFormatHint = inferOfficeFormatFromExtension(ext)
+  if (officeFormatHint && OoxmlZipReader.isZipBuffer(buffer)) {
+    const officeResult = parseOfficeBuffer(buffer, officeFormatHint, {
+      fileName: basename(resolved),
+      includeAnchors: true,
+    })
+    const { text, truncated } = truncate(officeResult.markdown)
+    const { text: cleanText } = truncate(officeResult.cleanMarkdown)
+
+    const outline: Array<{ title: string; level: number; page: number; blockId?: string }> = []
+    const pages: DocumentPageSlice[] = officeResult.ast.pages.map((page) => {
+      const anchoredPageText = serializeOfficePageToMarkdown(page, { includeAnchors: true })
+      const cleanPageText = serializeOfficePageToMarkdown(page, { includeAnchors: false })
+      const headings: string[] = []
+
+      for (const b of page.blocks) {
+        if (b.type === 'heading' && b.text.trim()) {
+          const title = b.text.trim().slice(0, 100)
+          headings.push(title)
+          outline.push({
+            title,
+            level: b.headingLevel ?? 1,
+            page: page.pageNumber,
+            blockId: b.id,
+          })
+        }
+      }
+      if (headings.length === 0 && (page.sheetName || page.title)) {
+        const fallbackTitle = (page.sheetName || page.title || '').trim()
+        if (fallbackTitle) {
+          headings.push(fallbackTitle)
+          outline.push({
+            title: fallbackTitle,
+            level: 1,
+            page: page.pageNumber,
+            blockId: page.blocks[0]?.id,
+          })
+        }
+      }
+
+      const hasFigure = page.blocks.some((b) => b.type === 'figure')
+      const isFigureHeavy = page.blocks.length <= 3 && hasFigure
+
+      return {
+        pageNumber: page.pageNumber,
+        columnCount: 1,
+        blockCount: page.blocks.length,
+        charCount: cleanPageText.length,
+        firstBlockId: page.blocks[0]?.id,
+        lastBlockId: page.blocks[page.blocks.length - 1]?.id,
+        isFigureHeavy,
+        headings,
+        anchoredText: anchoredPageText,
+        cleanText: cleanPageText,
+      }
+    })
+
+    const baseResult: ParseDocumentResult = {
+      file,
+      format: officeResult.format,
+      text,
+      cleanText,
+      truncated,
+      pageCount: officeResult.ast.pageCount,
+      columnCounts: officeResult.ast.pages.map(() => 1),
+      outline,
+      pages,
+    }
+
+    if (context.agentCwd) {
+      baseResult.materialized = materializeToWorkspace(resolved, context.agentCwd, baseResult)
+    }
+
+    return baseResult
+  }
+
+  // 其余文档格式：基座解析器（旧版 .doc / RTF / 文本等）
   const { extractTextFromFile } = await import('./document-parser')
   const raw = await extractTextFromFile(resolved)
   const { text, truncated } = truncate(raw)
-  const ext = extname(resolved).toLowerCase()
   const format = ext.replace('.', '') || 'text'
   const isPreingestDoc = PREINGEST_DOCUMENT_EXTENSIONS.has(ext)
   const pages = isPreingestDoc ? buildVirtualPagesFromText(text) : undefined
@@ -633,7 +781,7 @@ export function formatDocumentArtifactHandle(result: ParseDocumentResult): strin
       ? `[内核直写已完成] 纯净无锚点污染的完整 Markdown 已由客户端内核直接写入工作目录：${cleanPath}（文件标识 file_id="${fileId}"，共 ${result.cleanText.length} 字符）。`
       : `[内核解析已完成] 共 ${result.cleanText.length} 字符。`,
     pageLines.length > 0 ? `<page_index>\n${pageLines.join('\n')}\n</page_index>` : '',
-    `<preview>\n${previewSnippet}${previewHasMore ? '\n...(后文已省略，请使用 read_document_artifact 按页或关键词检阅)' : ''}\n</preview>`,
+    `<preview>\n${previewSnippet}${previewHasMore ? '\n...(后文已省略，完整纯净 Markdown 已落盘于 clean_markdown_path，可直接 Read)' : ''}\n</preview>`,
     `</attached_document>`,
   ]
     .filter(Boolean)
@@ -694,7 +842,7 @@ export async function buildAttachedDocumentsContext(
     '<!-- 【客户端内核双态落盘与句柄协议 (Artifact-by-Reference)】 -->',
     '<!-- 1. 零中继落盘已完成：客户端内核高精解析引擎已将附件文档 100% 完整解析，并直接将纯净版 Markdown 写入 clean_markdown_path！ -->',
     '<!-- 2. 严禁打字机式重写：若用户要求“将 PDF 解析/转换为 Markdown 放到工作目录”，文件已经在 clean_markdown_path 落盘完毕！请直接向用户汇报该文件路径与解析摘要，严禁调用 Write/Edit 把全文再手敲一遍！（若用户指定了特殊文件名，仅需 mv/cp 重命名该文件）。 -->',
-    '<!-- 3. 按需切片精读：若用户要求总结全文、回答问题或核对实验数据/公式，请调用 `read_document_artifact` 工具按页码范围（如 pages="1-4"）或关键词（query="..."）读取带双轨定位锚点的原文，并用 [第X页·位置](#f1:pX-bY) 格式引用证据。 -->',
+    '<!-- 3. 证据互信：系统会在提问时自动检索并注入 <document_evidence> 相关切片（含真实锚点），请直接信任并据此作答；若需查阅完整原文，直接 Read 上方 clean_markdown_path 即可，无需任何解析工具。 -->',
     '',
     ...parts,
     '</attached_documents>',
@@ -817,7 +965,7 @@ async function resolveMaterializedIndex(
 }
 
 /**
- * 执行按页/按关键词的文档切片检阅（`read_document_artifact` 工具后端）。
+ * 执行按页/按关键词的文档切片读取（供二进制文档透明重定向内部调用）。
  */
 export async function executeReadDocumentArtifact(
   input: ReadDocumentArtifactInput,
@@ -934,7 +1082,7 @@ export async function executeReadDocumentArtifact(
 
   if (hasMorePages && nextSuggestedPages) {
     sections.push(
-      `\n[分页提示：当前已返回第 ${returnedPages.join(',')} 页（共 ${totalPages} 页）。如需继续阅读后续页面，请调用 read_document_artifact({ file: "${fileId}", pages: "${nextSuggestedPages}" })]`,
+      `\n[分页提示：当前已返回第 ${returnedPages.join(',')} 页（共 ${totalPages} 页）。完整纯净 Markdown 已落盘${index.cleanMarkdownPath ? `于 ${index.cleanMarkdownPath}` : ''}，可直接 Read 获取第 ${nextSuggestedPages} 页等后续内容。]`,
     )
   }
 
@@ -1045,21 +1193,44 @@ export function resolveDocumentAnchor(
   }
 
   if (selectedIndex && selectedIndex.sourcePath && existsSync(selectedIndex.sourcePath)) {
-    const blockMeta = selectedIndex.blocks?.[rawBlockId]
+    let blockMeta = selectedIndex.blocks?.[rawBlockId]
+    // 智能容错：若 rawBlockId 无具体的 -bN（例如模型输出了 #f1:p2 或 #p2），或者带前导零（如 p2-b01）：
+    if (!blockMeta && selectedIndex.blocks) {
+      // 1. 尝试去除/规整前导零匹配（如 p2-b01 -> p2-b1）
+      const normalizedBlockKey = rawBlockId.replace(/^p(\d+)-b0*(\d+)$/, 'p$1-b$2')
+      if (selectedIndex.blocks[normalizedBlockKey]) {
+        blockMeta = selectedIndex.blocks[normalizedBlockKey]
+      }
+      // 2. 若仍未命中且该页存在 blocks：按 label 语义匹配，或兜底取该页首个 block 的 BBox，确保高亮圈选框永不落空！
+      if (!blockMeta) {
+        const pageBlocks = Object.values(selectedIndex.blocks).filter((b) => b.pageNumber === pageNumber)
+        if (pageBlocks.length > 0) {
+          if (label) {
+            blockMeta = pageBlocks.find((b) => label.includes(b.loc) || b.loc.includes(label))
+          }
+          if (!blockMeta) {
+            blockMeta = pageBlocks[0]
+          }
+        }
+      }
+    }
     return {
       fileId: selectedIndex.fileId || 'f1',
       filePath: selectedIndex.sourcePath,
       fileName: selectedIndex.sourceName || basename(selectedIndex.sourcePath),
       pageNumber: blockMeta?.pageNumber ?? pageNumber,
-      blockId: rawBlockId,
+      blockId: blockMeta?.blockId ?? rawBlockId,
       bbox: blockMeta?.bbox,
       label: label || blockMeta?.loc || `第${pageNumber}页`,
+      format: normalizeDocumentFormat(selectedIndex.format ?? selectedIndex.sourceName),
+      ...(blockMeta?.sheetName ? { sheetName: blockMeta.sheetName } : {}),
+      ...(blockMeta?.cellRef ? { cellRef: blockMeta.cellRef } : {}),
     }
   }
 
-  // 保底：若工作区尚无 .index.json，回退查找候选目录或附加文件中的 PDF
+  // 保底：若工作区尚无 .index.json，回退查找候选目录或附加文件中的 PDF/DOCX/PPTX/XLSX
   for (const fb of options.fallbackFiles ?? []) {
-    if (fb && extname(fb).toLowerCase() === '.pdf' && existsSync(fb)) {
+    if (fb && PREINGEST_DOCUMENT_EXTENSIONS.has(extname(fb).toLowerCase()) && existsSync(fb)) {
       return {
         fileId: requestedFileId || 'f1',
         filePath: fb,
@@ -1067,6 +1238,7 @@ export function resolveDocumentAnchor(
         pageNumber,
         blockId: rawBlockId,
         label: label || `第${pageNumber}页`,
+        format: normalizeDocumentFormat(fb),
       }
     }
   }
@@ -1074,16 +1246,17 @@ export function resolveDocumentAnchor(
   for (const dir of options.candidateDirs) {
     if (!dir || !existsSync(dir)) continue
     try {
-      const pdfFile = readdirSync(dir).find((f) => extname(f).toLowerCase() === '.pdf')
-      if (pdfFile) {
-        const fullPdf = join(dir, pdfFile)
+      const docFile = readdirSync(dir).find((f) => PREINGEST_DOCUMENT_EXTENSIONS.has(extname(f).toLowerCase()))
+      if (docFile) {
+        const fullDoc = join(dir, docFile)
         return {
           fileId: requestedFileId || 'f1',
-          filePath: fullPdf,
-          fileName: pdfFile,
+          filePath: fullDoc,
+          fileName: docFile,
           pageNumber,
           blockId: rawBlockId,
           label: label || `第${pageNumber}页`,
+          format: normalizeDocumentFormat(docFile),
         }
       }
     } catch {

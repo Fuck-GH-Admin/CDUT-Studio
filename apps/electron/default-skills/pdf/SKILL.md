@@ -1,8 +1,8 @@
 ---
 name: pdf
-description: "Use this skill whenever the user mentions a PDF file or asks to inspect, summarize, query, modify or create one. CRITICAL KERNEL CONTRACT: Attached PDFs are pre-parsed by CDUT Studio's high-precision kernel engine into dual-state workspace artifacts (<attached_documents>): (1) clean_markdown_path in the working directory is an already-materialized, zero-HTML-anchor clean Markdown file ready for direct user delivery; (2) read_document_artifact is a core Tier 0 tool for on-demand page slicing (pages) or keyword/regex retrieval (query) with interactive citation anchors [第X页·位置](#blockId). Never call discover_tools for PDF parsing and never run Python/CLI scripts to extract text from pre-ingested PDFs."
+description: "Use this skill whenever the user mentions a PDF file or asks to inspect, summarize, query, modify or create one. CRITICAL KERNEL CONTRACT: Attached PDFs are pre-parsed by CDUT Studio's high-precision kernel engine into dual-state workspace artifacts (<attached_documents>): (1) clean_markdown_path in the working directory is an already-materialized, zero-HTML-anchor clean Markdown file ready for direct user delivery; (2) the workspace is indexed by silent RAG, which auto-retrieves the most relevant slices with real citation anchors ([第X页·位置](#blockId)) and injects them into <document_evidence> before your turn. Answer and cite directly from that evidence; never call discover_tools for PDF parsing and never run Python/CLI scripts to extract text from pre-ingested PDFs."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.2.0"
+version: "1.2.1"
 ---
 
 # PDF Processing Guide
@@ -18,12 +18,12 @@ Use this section for requests like "read this PDF", "summarize this PDF", "answe
 1. **Dual-State Kernel Pre-Ingestion (`<attached_documents>`)**:
    - Before your turn starts, CDUT Studio's non-autoregressive kernel engine automatically parses attached PDFs and materializes two artifacts on disk:
      - **`clean_markdown_path` (`<cwd>/<stem>.md`)**: A clean, deliverables-ready Markdown file in the working directory with multi-column reading order, GFM tables, and LaTeX display equations (no HTML comment anchors).
-     - **`anchored_markdown_path` (`<cwd>/.context/artifacts/<stem>.anchored.md`)**: An anchored index with dual-parallel interactive citation markers (`[第X页·位置](#blockId)`), accessible via the core tool `read_document_artifact`.
+     - **`anchored_markdown_path` (`<cwd>/.context/artifacts/<stem>.anchored.md`)**: An anchored index with dual-parallel interactive citation markers (`[第X页·位置](#blockId)`). The system also auto-retrieves the most relevant slices into `<document_evidence>` before each turn.
    - **There is NO `parse_document` external tool**. Do NOT call `discover_tools` to look for PDF parsers, and do NOT run Python or CLI scripts (`pdfplumber`, `pypdf`, `pypdfium2`, `pymupdf`, `fitz`, `pdftotext`) to extract text.
 
 2. **Immediate Task Execution**:
    - **When asked to "parse/convert PDF to Markdown in workspace"**: The file at `clean_markdown_path` is ALREADY written in the working directory! Report its path and summary directly (or refine it with `Edit`/`Write` if the user requested custom formatting).
-   - **When asked to summarize, analyze, or answer questions**: Call `read_document_artifact` with `pages` (e.g., `"1-5"`) or `query` (keywords/regex) to inspect the relevant sections, and cite sources using `[第X页·位置/图表名](#blockId)`.
+   - **When asked to summarize, analyze, or answer questions**: Trust the auto-injected `<document_evidence>` slices (they already contain the most relevant 原文 with real anchors). For full text beyond the evidence, Read `clean_markdown_path` directly. Cite sources using `[第X页·位置/图表名](#blockId)`.
 
 3. **Visual Preview**:
    - Use `inspect_preview` / `open_file_preview` only when you need visual output (rendered page images or user-visible viewer), not for extracting plain text.
@@ -256,7 +256,7 @@ with open("encrypted.pdf", "wb") as output:
 | Merge PDFs | pypdf | `writer.add_page(page)` |
 | Split PDFs | pypdf | One page per file |
 | Export PDF to Markdown | Kernel clean artifact | Already written at `clean_markdown_path` in `<attached_documents>` |
-| Read, summarize, or query PDFs | `read_document_artifact` | Slice by `pages` or search by `query` |
+| Read, summarize, or query PDFs | `<document_evidence>` / Read `clean_markdown_path` | Auto-injected relevant slices; Read full clean Markdown |
 | Get page count or outline | `<attached_documents>` | Present in `<attached_document>` attributes and `<outline>` |
 | Create PDFs | reportlab | Canvas or Platypus |
 | Command line merge | qpdf | `qpdf --empty --pages ...` |

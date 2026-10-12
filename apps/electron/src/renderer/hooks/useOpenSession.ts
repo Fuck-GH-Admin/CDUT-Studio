@@ -6,13 +6,15 @@
  */
 
 import * as React from 'react'
-import { promoteMru } from '@profer/shared'
+
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   tabsAtom,
   activeTabIdAtom,
   openTab,
+  promoteSessionMru,
   tabMruAtom,
+
   type TabType,
 } from '@/atoms/tab-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
@@ -53,10 +55,10 @@ export function useOpenSession(): OpenSessionFn {
         return
       }
 
-      const knownSession = type === 'agent' || type === 'preview'
+      const knownSession = type === 'agent'
         ? agentSessions.find((session) => session.id === sessionId)
         : undefined
-      if ((type === 'agent' || type === 'preview')
+      if (type === 'agent'
         && !isAgentWorkspaceIdVisible(knownSession?.workspaceId, agentWorkspaces)) {
         return
       }
@@ -74,13 +76,13 @@ export function useOpenSession(): OpenSessionFn {
       })
       setTabs(result.tabs)
       setActiveTabId(result.activeTabId)
-      if (type === 'agent' || type === 'preview') {
-        setTabMru((previous) => promoteMru(previous, sessionId))
+      if (type === 'agent') {
+        setTabMru((previous) => promoteSessionMru(previous, sessionId))
       }
       setAutomationForm({ open: false, draft: null })
       setActiveView('conversations')
 
-      if (type === 'agent' || type === 'preview') {
+      if (type === 'agent') {
         setAppMode('agent')
         setCurrentAgentSessionId(sessionId)
 

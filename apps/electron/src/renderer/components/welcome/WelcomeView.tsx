@@ -10,11 +10,13 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useStore } from 'jotai'
 import { Loader2 } from 'lucide-react'
-import { currentAgentWorkspaceIdAtom, agentSettingsReadyAtom } from '@/atoms/agent-atoms'
-import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
+import { agentSessionsAtom, currentAgentWorkspaceIdAtom, agentSettingsReadyAtom } from '@/atoms/agent-atoms'
+import { upsertAgentSession } from '@/lib/agent-session-list'
+import { tabsAtom, openTab } from '@/atoms/tab-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { activateTabWithSideEffects } from '@/lib/tab-activation'
 import { useCreateSession } from '@/hooks/useCreateSession'
 
 export function WelcomeView(): React.ReactElement {
@@ -22,8 +24,8 @@ export function WelcomeView(): React.ReactElement {
   const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
   const [tabs, setTabs] = useAtom(tabsAtom)
-  const setActiveTabId = useSetAtom(activeTabIdAtom)
   const { createAgent } = useCreateSession()
+  const store = useStore()
   const initRef = React.useRef<string | null>(null)
 
   // 将高频变化的值收集到 ref 中，避免污染 useEffect 依赖数组（否则 tabs/draftSessionIds
@@ -33,7 +35,6 @@ export function WelcomeView(): React.ReactElement {
     draftSessionIds,
     currentWorkspaceId,
     setTabs,
-    setActiveTabId,
     createAgent,
   })
   latestRef.current = {
@@ -41,7 +42,6 @@ export function WelcomeView(): React.ReactElement {
     draftSessionIds,
     currentWorkspaceId,
     setTabs,
-    setActiveTabId,
     createAgent,
   }
 
@@ -59,7 +59,6 @@ export function WelcomeView(): React.ReactElement {
         draftSessionIds: currentDrafts,
         currentWorkspaceId: currentWs,
         setTabs: currentSetTabs,
-        setActiveTabId: currentSetActiveTabId,
         createAgent: currentCreateAgent,
       } = latestRef.current
 
@@ -72,8 +71,12 @@ export function WelcomeView(): React.ReactElement {
           sessionId: existing.id,
           title: existing.title,
         })
+        store.set(agentSessionsAtom, (prev) => upsertAgentSession(prev, existing))
+        store.set(tabsAtom, result.tabs)
         currentSetTabs(result.tabs)
-        currentSetActiveTabId(result.activeTabId)
+        // 统一激活入口：同步 currentAgentSessionId / workspace / 前台所有权，
+        // 否则复用空会话时右侧边栏拿不到当前会话，无法打开。
+        activateTabWithSideEffects(store, result.activeTabId)
         return
       }
       currentCreateAgent({ draft: true })

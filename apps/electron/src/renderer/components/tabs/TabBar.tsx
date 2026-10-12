@@ -17,30 +17,34 @@ import {
   tabsAtom,
   activeTabIdAtom,
   tabIndicatorMapAtom,
-  closeTab,
+  visibleTopBarTabsAtom,
   reorderTabs,
   updateTabTitle,
   tabMruAtom,
+  promoteSessionMru,
 } from "@/atoms/tab-atoms";
 import type { TabItem } from "@/atoms/tab-atoms";
 import type { SessionIndicatorStatus } from "@/atoms/agent-atoms";
-import { currentConversationIdAtom } from "@/atoms/conversation-atoms";
 import {
+  allPendingAskUserRequestsAtom,
+  allPendingExitPlanRequestsAtom,
+  allPendingPermissionRequestsAtom,
+  agentRunningSessionIdsAtom,
+  agentSessionPendingFilesAtom,
   agentSessionsAtom,
   agentSessionDraftsAtom,
   agentSessionDraftHtmlAtom,
   agentSidePanelOpenAtom,
+  agentStreamingStatesAtom,
   agentWorkspacesAtom,
-  currentAgentSessionIdAtom,
-  currentAgentWorkspaceIdAtom,
-  unviewedCompletedSessionIdsAtom,
+  liveMessagesMapAtom,
   workspaceFilesVersionAtom,
   seenFilesVersionAtom,
 } from "@/atoms/agent-atoms";
 import { browserStateMapAtom } from "@/atoms/browser-atoms";
 import { coachTourOpenAtom } from "@/atoms/coach-tour-atoms";
-import { appModeAtom } from "@/atoms/app-mode";
 import { openFilePanel } from "@/hooks/usePanelAutoLayout";
+import { activateTabWithSideEffects } from "@/lib/tab-activation";
 import { openBrowserTabManually } from "@/lib/browser-tab";
 import {
   findTabGroup,
@@ -50,12 +54,13 @@ import {
   isSessionConsistentGroup,
   planGroupDrop,
   removeTabGroup,
+  reorderRenderedTabItem,
   replaceTabGroup,
   tabGroupsAtom,
   tabGroupDragAtom,
   type TabGroupSide,
 } from "@/atoms/tab-group-atoms";
-import { panelVisibilityAtom } from "@/atoms/panel-layout-atoms";
+import { panelVisibilityAtom, rightSidePanelVisibleAtom } from "@/atoms/panel-layout-atoms";
 import { automationFormAtom } from "@/atoms/automation-atoms";
 import { Button } from "@profer/ui/primitives/button";
 import {
@@ -73,7 +78,6 @@ import { cn } from "@/lib/utils";
 import { replaceAgentSessionInFreshnessOrder } from "@/lib/agent-session-list";
 import { isAgentWorkspaceIdVisible } from "@/lib/product-feature-flags";
 
-import { promoteMru } from "@profer/shared";
 import { resolveWindowControlsRightInset } from "@/lib/window-controls-layout";
 import {
   TOPBAR_CONTENT_HEIGHT,
@@ -85,46 +89,18 @@ export function TabBar({
   teamMode = false,
 }: { teamMode?: boolean } = {}): React.ReactElement {
   const tabs = useAtomValue(tabsAtom);
+  const visibleTabs = useAtomValue(visibleTopBarTabsAtom);
   const setTabs = useSetAtom(tabsAtom);
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom);
   const agentSessions = useAtomValue(agentSessionsAtom);
-  const contextTabs = React.useMemo(() => {
-    const active = tabs.find((tab) => tab.id === activeTabId) ?? null
-    if (!active) return tabs
-    if (active.type === 'chat') return tabs.filter((tab) => tab.sessionId === active.sessionId)
-
-    if (active.type === 'agent' || active.type === 'preview' || active.type === 'browser') {
-      const sessionId = active.sessionId
-      const activeSession = agentSessions.find((session) => session.id === sessionId)
-      const ownerTab = tabs.find((tab) => (tab.type === 'chat' || tab.type === 'agent') && tab.sessionId === sessionId)
-      if (ownerTab?.type === 'chat') return tabs.filter((tab) => tab.sessionId === sessionId)
-      const rootSessionId = activeSession?.parentSessionId ?? activeSession?.explorationParentSessionId ?? sessionId
-      const sessionIds = new Set(
-        agentSessions
-          .filter((session) => session.id === rootSessionId || session.parentSessionId === rootSessionId || session.explorationParentSessionId === rootSessionId)
-          .map((session) => session.id),
-      )
-      sessionIds.add(rootSessionId)
-      return tabs.filter((tab) => sessionIds.has(tab.sessionId) || tab.parentSessionId === rootSessionId)
-    }
-    return tabs.filter((tab) => tab.id === active.id)
-  }, [activeTabId, agentSessions, tabs]);
   const indicatorMap = useAtomValue(tabIndicatorMapAtom);
   const setTabMru = useSetAtom(tabMruAtom);
   const isWindows = React.useMemo(() => detectIsWindows(), []);
 
-  // Tab 切换时同步 sidebar 状态
-  const appMode = useAtomValue(appModeAtom);
-  const setAppMode = useSetAtom(appModeAtom);
-  const setCurrentConversationId = useSetAtom(currentConversationIdAtom);
-  const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom);
   const agentWorkspaces = useAtomValue(agentWorkspacesAtom);
-  const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom);
-  const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom);
-  const setAutomationForm = useSetAtom(automationFormAtom);
 
-  // 统一关闭逻辑：关闭当前会话入口并回到 Scratch Pad，不停止后台 Agent
-  const { requestClose } = useCloseTab();
+  // 统一关闭逻辑：关闭当前会话入口并回到同类会话/Scratch Pad，不停止后台 Agent
+  const { requestClose, requestCloseGroup } = useCloseTab();
   const store = useStore();
 
   const workspaceNameBySessionId = React.useMemo(() => {
@@ -158,7 +134,7 @@ export function TabBar({
       ? tabs.find((tab) => tab.id === activeTabId)
       : undefined;
     if (activeTab)
-      setTabMru((previous) => promoteMru(previous, activeTab.sessionId));
+      setTabMru((previous) => promoteSessionMru(previous, activeTab.sessionId));
   }, [activeTabId, setTabMru, tabs]);
 
   React.useEffect(() => {
@@ -166,7 +142,9 @@ export function TabBar({
       ? (tabs.find((tab) => tab.id === activeTabId) ?? null)
       : null;
     const previousTab = previousActiveTabRef.current;
-    previousActiveTabRef.current = currentTab;
+    // 仅在当前确有激活标签时才推进基线：否则「激活标签被关闭 → 短暂为 null」会把基线
+    // 抹掉，下一次激活任意标签时误判为「离开 draft 会话」而错误关闭它。
+    if (currentTab) previousActiveTabRef.current = currentTab;
     if (
       !previousTab ||
       !currentTab ||
@@ -178,6 +156,15 @@ export function TabBar({
       (session) => session.id === previousTab.sessionId,
     );
     if (!previousSession?.draft) return;
+
+    // 发送进行中、正在流式输出、已有实时消息或有挂起附件的草稿会话禁止自动关闭，
+    // 避免在用户刚点击发送、主进程尚未完成 draft=false 晋升的窗口期内误关会话标签。
+    const isRunningOrPending =
+      store.get(agentRunningSessionIdsAtom).has(previousSession.id) ||
+      Boolean(store.get(agentStreamingStatesAtom).get(previousSession.id)?.running) ||
+      (store.get(liveMessagesMapAtom).get(previousSession.id)?.length ?? 0) > 0 ||
+      (store.get(agentSessionPendingFilesAtom).get(previousSession.id)?.length ?? 0) > 0;
+    if (isRunningOrPending) return;
 
     // 自动关闭只在离开标签时判断一次；不要订阅输入草稿 Map，避免用户每敲一个字
     // 都让整个 TabBar（以及所有标签项）重渲染。
@@ -216,92 +203,11 @@ export function TabBar({
 
   const handleActivate = React.useCallback(
     (tabId: string) => {
-      const tab = tabs.find((t) => t.id === tabId);
-      if (!tab) return;
-      if (tab.type === "agent" || tab.type === "preview") {
-        const session = agentSessions.find((s) => s.id === tab.sessionId);
-        if (!isAgentWorkspaceIdVisible(session?.workspaceId, agentWorkspaces)) return;
-      }
-
-      const setForeground = (
-        window.electronAPI as Partial<typeof window.electronAPI>
-      ).setAgentBrowserForeground;
-      if (typeof setForeground === "function") {
-        // agent / 预览 / 浏览器 Tab 都绑定在 agent 会话上，必须同步声明前台所有权。
-        // 只认 agent 会导致点击浏览器 Tab 把前台置成 null，而 MainArea 的同步 effect
-        // 以 browserSessionId 为依赖、同会话内切换不重跑，null 永久滞留 →
-        // 主进程对所有布局算出 visible=false，网页无论如何不渲染。
-        const foregroundSession = tab.type === "agent" || tab.type === "preview" || tab.type === "browser"
-          ? tab.sessionId
-          : null;
-        setForeground(foregroundSession);
-      }
-      // 浏览器页 Tab：激活 = 切换主进程当前页（原生视口按激活页渲染）
-      if (tab.type === "browser" && tab.browserTabId) {
-        const browserState = store.get(browserStateMapAtom).get(tab.sessionId);
-        if (browserState?.activeTabId !== tab.browserTabId) {
-          const select = (window.electronAPI as Partial<typeof window.electronAPI>).selectAgentBrowserTab;
-          if (typeof select === "function") {
-            void select({ sessionId: tab.sessionId, tabId: tab.browserTabId }).catch(() => undefined);
-          }
-        }
-      }
-      setActiveTabId(tabId);
-      setTabMru((previous) => promoteMru(previous, tab.sessionId));
-      // 点击任意 tab 都关闭定时任务编辑表单（overlay 否则会盖在内容区上）
-      setAutomationForm({ open: false, draft: null });
-
-      if (tab.type === "chat") {
-        setAppMode("chat");
-        setCurrentConversationId(tab.sessionId);
-      } else if (tab.type === "agent" || tab.type === "preview") {
-        setAppMode("agent");
-        setCurrentAgentSessionId(tab.sessionId);
-
-        // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。
-        setUnviewedCompleted((prev) => {
-          if (!prev.has(tab.sessionId)) return prev;
-          const next = new Set(prev);
-          next.delete(tab.sessionId);
-          return next;
-        });
-
-        const session = agentSessions.find((s) => s.id === tab.sessionId);
-        if (session?.workspaceId) {
-          setCurrentAgentWorkspaceId(session.workspaceId);
-          window.electronAPI
-            .updateSettings({
-              agentWorkspaceId: session.workspaceId,
-            })
-            .catch(console.error);
-        }
-      } else if (tab.type === "scratch" || tab.type === "tutorial") {
-        setCurrentConversationId(null);
-        // 个人 Agent 模式下保留 appMode，避免切到 Scratch 时收起右侧文件面板；
-        // 团队模式必须退出 TeamWorkspaceView，否则草稿/教程标签会被团队文件页遮住。
-        if (teamMode) {
-          setAppMode("scratch");
-          setCurrentAgentSessionId(null);
-        } else if (appMode !== "agent") {
-          setCurrentAgentSessionId(null);
-        }
-      }
+      // 单一权威入口：前台所有权、浏览器激活页、appMode/currentSessionId/MRU/表单收起
+      // 全部由 activateTabWithSideEffects 统一处理，避免顶栏与快捷键两处漂移。
+      activateTabWithSideEffects(store, tabId);
     },
-    [
-      setActiveTabId,
-      setAutomationForm,
-      setTabMru,
-      tabs,
-      agentSessions,
-      agentWorkspaces,
-      appMode,
-      teamMode,
-      setAppMode,
-      setCurrentConversationId,
-      setCurrentAgentSessionId,
-      setCurrentAgentWorkspaceId,
-      setUnviewedCompleted,
-    ],
+    [store],
   );
 
   const handleDragStart = React.useCallback(
@@ -384,13 +290,24 @@ export function TabBar({
           const fromIndex = previous.findIndex(
             (tab) => tab.id === current.tabId,
           );
-          const toIndex = fromIndex + direction;
-          const targetTab = previous[toIndex];
-          if (fromIndex === -1 || !targetTab || targetTab.id === current.tabId)
-            return previous;
+          if (fromIndex === -1) return previous;
+          // 以顶栏实际渲染的 DOM 锚点序列为准找相邻项：跳过隐藏 Tab（未激活的
+          // scratch/tutorial）与组合内折叠的成员，避免 targetNode === null 卡死拖拽。
+          const scrollContainer = draggedNode.closest('.topbar-tabs-scroll') as HTMLElement | null;
+          const renderedIds = Array.from(
+            scrollContainer?.querySelectorAll<HTMLElement>("[data-tab-id]") ?? [],
+          )
+            .map((node) => node.dataset.tabId)
+            .filter((id): id is string => !!id);
+          const renderedIndex = renderedIds.indexOf(current.tabId);
+          if (renderedIndex === -1) return previous;
+          const neighborId = renderedIds[renderedIndex + direction];
+          if (!neighborId) return previous;
+          const targetIndex = previous.findIndex((tab) => tab.id === neighborId);
+          if (targetIndex === -1) return previous;
 
           const targetNode = document.querySelector<HTMLElement>(
-            `[data-tab-id="${CSS.escape(targetTab.id)}"]`,
+            `[data-tab-id="${CSS.escape(neighborId)}"]`,
           );
           if (!targetNode) return previous;
           const targetCenter =
@@ -401,7 +318,13 @@ export function TabBar({
               : draggedCenter >= targetCenter;
           if (!crossedTargetCenter) return previous;
 
-          return reorderTabs(previous, fromIndex, toIndex);
+          return reorderRenderedTabItem(
+            previous,
+            store.get(tabGroupsAtom),
+            current.tabId,
+            neighborId,
+            direction,
+          );
         });
         // React 提交新顺序后，重新按新的自然位置计算偏移；否则长标签换位后
         // 旧 transform 会残留一帧，造成被拖标签短暂跳一下。
@@ -485,18 +408,21 @@ export function TabBar({
       document.addEventListener("pointerup", handleUp);
       document.addEventListener("pointercancel", handleUp);
     },
-    [setTabs, tabs],
+    [setTabs, store, tabs],
   );
 
   React.useEffect(() => {
     return () => {
+      // 组件卸载时强制释放进行中的排序拖拽监听器，避免遗留全局 pointermove/pointerup。
+      sortCancelRef.current?.();
+      sortCancelRef.current = null;
       if (dragSettleCleanupRef.current !== null) {
         clearTimeout(dragSettleCleanupRef.current);
       }
     };
   }, []);
 
-  if (contextTabs.length === 0)
+  if (visibleTabs.length === 0)
     return (
       <div
         className="topbar-editorial relative tabbar-bg"
@@ -512,19 +438,87 @@ export function TabBar({
   return (
     <>
       <TabBarInner
-        tabs={contextTabs}
+        tabs={visibleTabs}
         activeTabId={activeTabId}
         streamingMap={indicatorMap}
         workspaceNameBySessionId={workspaceNameBySessionId}
         automationSessionIds={automationSessionIds}
         onActivate={handleActivate}
         onClose={requestClose}
+        onCloseGroup={requestCloseGroup}
         onDragStart={handleDragStart}
         onCancelSort={() => sortCancelRef.current?.()}
         teamMode={teamMode}
       />
     </>
   );
+}
+
+/** 单个标签（完整展开态）的大致宽度参数，区分 CJK 与 ASCII 字符宽度并计入图标与按钮固定内距。 */
+const TAB_ESTIMATE_MIN_WIDTH = 132
+const TAB_ESTIMATE_MAX_WIDTH = 280
+const TAB_ESTIMATE_ASCII_CHAR_PX = 7.5
+const TAB_ESTIMATE_CJK_CHAR_PX = 13
+const TAB_ESTIMATE_PADDING = 56
+const TAB_ESTIMATE_WORKSPACE_BADGE = 94
+const TAB_ESTIMATE_GAP = 4
+
+function measureEstimatedTextPx(text: string): number {
+  let px = 0
+  for (const ch of text) {
+    px += (ch.codePointAt(0) ?? 0) > 255 ? TAB_ESTIMATE_CJK_CHAR_PX : TAB_ESTIMATE_ASCII_CHAR_PX
+  }
+  return px
+}
+
+/**
+ * 确定性估算「完整展开态」下所有标签的总宽度（替代旧的单向锁死峰值缓存）。
+ * 组合的两名成员在顶栏折叠为一个条目：左标题 + 分隔线 + 右标题。
+ */
+function estimateFullTabsWidth(
+  tabs: readonly TabItem[],
+  workspaceNameBySessionId: Map<string, string>,
+  tabGroups: readonly { leftTabId: string | null; rightTabId: string | null }[],
+): number {
+  const foldedMemberIds = new Set<string>()
+  for (const group of tabGroups) {
+    for (const memberId of [group.leftTabId, group.rightTabId]) if (memberId) foldedMemberIds.add(memberId)
+  }
+  const groupByAnchorId = new Map<string, { leftTabId: string | null; rightTabId: string | null }>()
+  for (const group of tabGroups) {
+    const anchorId = [group.leftTabId, group.rightTabId].find((id): id is string => !!id)
+    if (anchorId) groupByAnchorId.set(anchorId, group)
+  }
+
+  const widthOfTitle = (title: string): number =>
+    Math.max(
+      TAB_ESTIMATE_MIN_WIDTH,
+      Math.min(TAB_ESTIMATE_MAX_WIDTH, TAB_ESTIMATE_PADDING + measureEstimatedTextPx(title)),
+    )
+
+  let total = 0
+  const emittedGroupAnchors = new Set<string>()
+  for (const tab of tabs) {
+    const group = groupByAnchorId.get(tab.id)
+    if (group) {
+      if (emittedGroupAnchors.has(tab.id)) continue
+      emittedGroupAnchors.add(tab.id)
+      const left = tabs.find((item) => item.id === group.leftTabId)
+      const right = tabs.find((item) => item.id === group.rightTabId)
+      const leftWidth = left ? widthOfTitle(left.title) : 96
+      const rightWidth = right ? widthOfTitle(right.title) : 96
+      total += 40 + leftWidth + rightWidth + TAB_ESTIMATE_GAP
+      continue
+    }
+    if (foldedMemberIds.has(tab.id)) continue
+    let entryWidth = widthOfTitle(tab.title)
+    const workspaceName = tab.type === 'agent' ? workspaceNameBySessionId.get(tab.sessionId) : undefined
+    if (workspaceName) {
+      entryWidth += Math.max(TAB_ESTIMATE_WORKSPACE_BADGE, 24 + measureEstimatedTextPx(workspaceName))
+    }
+    total += entryWidth + TAB_ESTIMATE_GAP
+  }
+  return total
 }
 
 /** 内部组件：管理全局 hover 状态，确保同一时刻只有一个预览面板 */
@@ -536,6 +530,7 @@ function TabBarInner({
   automationSessionIds,
   onActivate,
   onClose,
+  onCloseGroup,
   onDragStart,
   onCancelSort,
   teamMode,
@@ -547,6 +542,8 @@ function TabBarInner({
   automationSessionIds: Set<string>;
   onActivate: (tabId: string) => void;
   onClose: (tabId: string) => void;
+  /** 一次性批量关闭一组标签（分屏组合的关闭按钮） */
+  onCloseGroup: (tabIds: readonly string[]) => void;
   onDragStart: (tabId: string, e: React.PointerEvent) => void;
   /** 取消进行中的标签排序（合并手势中途接管时调用） */
   onCancelSort: () => void;
@@ -578,28 +575,35 @@ function TabBarInner({
   );
   const [tabGroups, setTabGroups] = useAtom(tabGroupsAtom);
   const activeGroup = findTabGroup(tabGroups, activeTabId);
+  // 等待权限审批 / 提问回答 / 计划确认的会话集合：顶栏与分屏胶囊据此渲染琥珀色呼吸指示点。
+  const allPendingPermission = useAtomValue(allPendingPermissionRequestsAtom);
+  const allPendingAskUser = useAtomValue(allPendingAskUserRequestsAtom);
+  const allPendingExitPlan = useAtomValue(allPendingExitPlanRequestsAtom);
+  const needsAttentionSessionIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    for (const [sessionId, requests] of allPendingPermission) if (requests.length > 0) ids.add(sessionId);
+    for (const [sessionId, requests] of allPendingAskUser) if (requests.length > 0) ids.add(sessionId);
+    for (const [sessionId, requests] of allPendingExitPlan) if (requests.length > 0) ids.add(sessionId);
+    return ids;
+  }, [allPendingPermission, allPendingAskUser, allPendingExitPlan]);
   // 顶栏右侧工具是「会话上下文」动作，不是「会话 Tab」动作：
-  // 预览/浏览器等工作 Tab 激活时，入口仍归口到其宿主会话，不能凭空消失。
+  // 浏览器等工作 Tab 激活时，入口仍归口到其宿主会话，不能凭空消失。
   const activeSessionId = !activeTab
     ? null
-    : (activeTab.type === 'chat' || activeTab.type === 'agent' || activeTab.type === 'preview' || activeTab.type === 'browser')
+    : (activeTab.type === 'chat' || activeTab.type === 'agent' || activeTab.type === 'browser')
       ? activeTab.sessionId
       : null
   const activeAgentSessionId = !activeTab
     ? null
     : activeTab.type === "agent"
       ? activeTab.sessionId
-      : (activeTab.type === "preview" || activeTab.type === "browser") &&
-          agentSessions.some((session) => session.id === activeTab.sessionId)
+      : activeTab.type === "browser" && agentSessions.some((session) => session.id === activeTab.sessionId)
         ? activeTab.sessionId
         : null;
-  // 实际可见性（B = 展开意图 A && 窗口足够），由 usePanelAutoLayout 统一计算
-  const visibility = useAtomValue(panelVisibilityAtom);
-  const filePanelVisible = visibility.filePanel;
-  // 文件栏开关跨会话保留；草稿/Chat 等非 Agent 标签不会实际渲染右侧栏，
-  // 不能因此让 TabBar 隐藏窗口控制按钮或预留不存在的侧栏空间。
-  const rightSidePanelIsVisible =
-    filePanelVisible && activeTab?.type === "agent";
+  // 右侧边栏实际可见性由单一事实源 rightSidePanelVisibleAtom 决定，
+  // 与 AppShell 渲染容器条件保持一致，避免窗口按钮槽位错位。
+  const rightSidePanelIsVisible = useAtomValue(rightSidePanelVisibleAtom);
+  const filePanelVisible = useAtomValue(panelVisibilityAtom).filePanel;
   const showOpenPanelButton = !filePanelVisible && activeAgentSessionId !== null;
   const filePanelForcedHidden = isPanelOpen && !filePanelVisible;
   // 受管浏览器入口：仅当当前标签是 Agent 会话时展示。主进程按会话隔离浏览器。
@@ -706,12 +710,12 @@ function TabBarInner({
     setTabGroups((previous) => removeTabGroup(previous, group));
   }, [setTabGroups]);
 
-  // 关闭整组：两个标签都关闭（运行中的会话仍按既有语义保留在后台）
+  // 关闭整组：一次性批量关闭两个标签（基于 store 实时状态，不会复活已关闭的成员）
   const closeGroup = React.useCallback((group: ReturnType<typeof findTabGroup>) => {
     if (!group) return;
     setTabGroups((previous) => removeTabGroup(previous, group));
-    for (const tabId of groupTabIds(group)) onClose(tabId);
-  }, [onClose, setTabGroups]);
+    onCloseGroup(groupTabIds(group));
+  }, [onCloseGroup, setTabGroups]);
 
   const topBarTools: TopBarTool[] = [
     {
@@ -793,15 +797,25 @@ function TabBarInner({
     return () => observer.disconnect();
   }, [visibleTopBarToolIds, showTabBarWindowControls]);
 
-  // Tab ??????????????????????????????
-  // ????????????? flex-shrink ????????
   type TabCompressionLevel = "full" | "title-only";
   const [tabCompressionLevel, setTabCompressionLevel] =
     React.useState<TabCompressionLevel>("full");
-  const fullTabsWidthRef = React.useRef<number | null>(null);
-  const tabLayoutKey = tabs
-    .map((tab) => `${tab.id}:${tab.type}:${tab.title}`)
-    .join("|");
+  const tabLayoutKey = React.useMemo(() => {
+    const tabsPart = tabs
+      .map(
+        (tab) =>
+          `${tab.id}:${tab.type}:${tab.title}:${tab.type === "agent" ? (workspaceNameBySessionId.get(tab.sessionId) ?? "") : ""}`,
+      )
+      .join("|");
+    const groupsPart = tabGroups
+      .map((g) => `${g.leftTabId ?? ""}:${g.rightTabId ?? ""}:${g.focusedTabId}`)
+      .join("|");
+    return `${tabsPart}##${groupsPart}`;
+  }, [tabs, workspaceNameBySessionId, tabGroups]);
+  const lastMeasuredFullWidthRef = React.useRef<{ key: string; width: number }>({
+    key: "",
+    width: 0,
+  });
 
   React.useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -809,23 +823,26 @@ function TabBarInner({
 
     const measure = (): void => {
       const availableWidth = el.clientWidth + 2;
+      // 确定性算术估算完整展开宽度，结合当前布局 key 下实测 full 宽度与迟滞余量，
+      // 防止中文标题估算偏小导致 full <-> title-only 在 useLayoutEffect 内同步死循环振荡。
+      const estimatedFullWidth = estimateFullTabsWidth(tabs, workspaceNameBySessionId, tabGroups);
 
       if (tabCompressionLevel === "full") {
-        fullTabsWidthRef.current = el.scrollWidth;
+        lastMeasuredFullWidthRef.current = {
+          key: tabLayoutKey,
+          width: el.scrollWidth,
+        };
         if (el.scrollWidth > availableWidth) {
           setTabCompressionLevel("title-only");
-        } else if (el.scrollLeft !== 0) {
-          // 内容恢复到单行可见时清除旧的横向滚动位置，避免左端留下无法解释的空白。
-          el.scrollLeft = 0;
         }
         return;
       }
 
-      // ??????????????????????????
-      if (
-        fullTabsWidthRef.current !== null &&
-        availableWidth >= fullTabsWidthRef.current
-      ) {
+      const requiredFullWidth =
+        lastMeasuredFullWidthRef.current.key === tabLayoutKey
+          ? Math.max(lastMeasuredFullWidthRef.current.width, estimatedFullWidth)
+          : estimatedFullWidth;
+      if (availableWidth >= requiredFullWidth + 16) {
         setTabCompressionLevel("full");
       }
     };
@@ -834,12 +851,13 @@ function TabBarInner({
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [tabLayoutKey, tabCompressionLevel]);
+  }, [tabLayoutKey, tabCompressionLevel, tabs, workspaceNameBySessionId, tabGroups]);
 
-  // ?? TabBar ?? ref????? tear-off ????????? TabBar ??
+  // 顶栏根容器 ref：用于判断拖拽合并手势是否越过顶栏底边
   const barRef = React.useRef<HTMLDivElement>(null);
+  const groupDragCleanupRef = React.useRef<(() => void) | null>(null);
 
-  // 拖出 TabBar 区域时给出视觉提示（仅 preview Tab 可 tear-off）
+  // 拖出 TabBar 区域时给出视觉提示
   const [tearingOff, setTearingOff] = React.useState<string | null>(null);
 
   /** 落定前需要在标签栏下方越过的距离，避免一次潦草的纵向拖动就误合并 */
@@ -856,6 +874,8 @@ function TabBarInner({
   const handleGroupTabDrag = React.useCallback(
     (tabId: string, e: React.PointerEvent): void => {
       if (e.button !== 0) return;
+      groupDragCleanupRef.current?.();
+
       const startX = e.clientX;
       const startY = e.clientY;
       let mode: "pending" | "group" | "sorting" = "pending";
@@ -924,10 +944,15 @@ function TabBarInner({
         setTabGroupDrag({ draggingTabId: tabId, hoveredPosition: hoveredSide });
       };
 
-      const handleUp = (): void => {
+      const detachListeners = (): void => {
         document.removeEventListener("pointermove", handleMove);
         document.removeEventListener("pointerup", handleUp);
         document.removeEventListener("pointercancel", handleUp);
+        groupDragCleanupRef.current = null;
+      };
+
+      const handleUp = (): void => {
+        detachListeners();
         setTearingOff(null);
 
         const side = committable ? hoveredSide : null;
@@ -945,26 +970,37 @@ function TabBarInner({
           position: side,
         });
         if (!plan) return;
-        // 产品边界：顶栏 Tab 属于同一会话，组合只允许同会话成员并排，跨会话落定直接拒绝。
-        if (!isSessionConsistentGroup(plan.group, store.get(tabsAtom))) {
-          toast.info("组合只允许同一会话的标签并排");
+        const currentTabs = store.get(tabsAtom);
+        if (!isSessionConsistentGroup(plan.group, currentTabs)) {
           return;
         }
         store.set(tabGroupsAtom, replaceTabGroup(groups, currentGroup, plan.group));
-        store.set(activeTabIdAtom, plan.activeTabId);
-        // 宽度不在这里动：分栏宽度只归分栏缝拖动（tabGroupRatioAtom，持久化）。
-        // 用户上次调到多少，新分栏就是多少；MainArea 的虚线投放区与真实两栏用同一个 geometry
-        // 渲染，所以虚线画的就是落定后的宽度。别在这里按指针位置或空栏模板分配宽度（历史上
-        // 两种做法都因此产生过"预览与实际不一致"，见 tab-group-atoms 模块头）。
-        setTabMru((previous) => promoteMru(previous, plan.activeTabId));
+        activateTabWithSideEffects(store, plan.activeTabId);
+        const activatedTab = currentTabs.find((t) => t.id === plan.activeTabId);
+        if (activatedTab) {
+          setTabMru((previous) => promoteSessionMru(previous, activatedTab.sessionId));
+        }
+      };
+
+      groupDragCleanupRef.current = (): void => {
+        detachListeners();
+        setTearingOff(null);
+        clearDropState();
       };
 
       document.addEventListener("pointermove", handleMove);
       document.addEventListener("pointerup", handleUp);
       document.addEventListener("pointercancel", handleUp);
     },
-    [onCancelSort, onDragStart, setTabGroupDrag, setTabMru],
+    [onCancelSort, onDragStart, setTabGroupDrag, setTabMru, store],
   );
+
+  React.useEffect(() => {
+    return () => {
+      groupDragCleanupRef.current?.();
+      groupDragCleanupRef.current = null;
+    };
+  }, []);
 
   /**
    * 标签拖拽入口：可组合的标签统一交给合并手势，落点决定结果。
@@ -1102,20 +1138,25 @@ function TabBarInner({
     };
   }, []);
 
-  // 新增 tab 时自动滚动到最右；其他布局变化回到左端，避免旧 scrollLeft 把首个 Tab 裁掉。
+  // 新增 tab 或切换激活标签时，只把当前激活节点平滑滚动进视野；
+  // 若激活标签属于分屏组合中折叠隐藏的右侧成员，则解析为其顶栏锚点 DOM 节点。
   const prevTabCount = React.useRef(tabs.length);
-  const prevTabLayoutKey = React.useRef(tabLayoutKey);
+  const prevActiveTabId = React.useRef(activeTabId);
   React.useLayoutEffect(() => {
     const el = scrollRef.current;
-    const layoutChanged = prevTabLayoutKey.current !== tabLayoutKey;
-    if (el && tabs.length > prevTabCount.current) {
-      el.scrollTo({ left: el.scrollWidth, behavior: "smooth" });
-    } else if (el && layoutChanged) {
-      el.scrollLeft = 0;
+    if (el) {
+      const shouldReveal = tabs.length > prevTabCount.current || prevActiveTabId.current !== activeTabId;
+      const domTabId = activeTabId ? (groupAnchorByMemberId.get(activeTabId) ?? activeTabId) : null;
+      const activeNode = domTabId
+        ? el.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(domTabId)}"]`)
+        : null;
+      if (shouldReveal && activeNode) {
+        activeNode.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+      }
     }
     prevTabCount.current = tabs.length;
-    prevTabLayoutKey.current = tabLayoutKey;
-  }, [tabLayoutKey, tabs.length]);
+    prevActiveTabId.current = activeTabId;
+  }, [tabLayoutKey, tabs.length, activeTabId, groupAnchorByMemberId]);
 
   React.useEffect(() => {
     return () => {
@@ -1234,15 +1275,17 @@ function TabBarInner({
                       rightTitle={rightTab?.title ?? null}
                       leftStatus={leftTab ? streamingMap.get(leftTab.id) ?? "idle" : "idle"}
                       rightStatus={rightTab ? streamingMap.get(rightTab.id) ?? "idle" : "idle"}
+                      leftNeedsAttention={leftTab?.type === "agent" && needsAttentionSessionIds.has(leftTab.sessionId)}
+                      rightNeedsAttention={rightTab?.type === "agent" && needsAttentionSessionIds.has(rightTab.sessionId)}
                       isActive={isGroupActive(tabGroup, activeTabId)}
                       focusedSide={rightTab && activeTabId === rightTab.id ? "right" : "left"}
+                      onActivateLeft={() => onActivate(leftTab?.id ?? tabGroup.focusedTabId)}
+                      onActivateRight={() => onActivate(rightTab?.id ?? tabGroup.focusedTabId)}
                       onActivate={() => onActivate(tabGroup.focusedTabId)}
                       onDissolve={() => dissolveGroup(tabGroup)}
                       onMiddleClick={() => dissolveGroup(tabGroup)}
                       onCloseGroup={() => closeGroup(tabGroup)}
                       onDragStart={(e) => handleDragStartWithTearOff(tab.id, e)}
-                      onHoverEnter={() => handleTabHoverEnter(tab.id)}
-                      onHoverLeave={handleTabHoverLeave}
                     />
                   );
                 }
@@ -1285,6 +1328,7 @@ function TabBarInner({
                 }
                 isActive={tab.id === activeTabId}
                 isStreaming={streamingMap.get(tab.id) ?? "idle"}
+                needsAttention={tab.type === "agent" && needsAttentionSessionIds.has(tab.sessionId)}
                 isHovered={hoveredTabId === tab.id}
                 isLeaving={hoveredTabId === tab.id && isLeaving}
                 isTearingOff={tearingOff === tab.id}

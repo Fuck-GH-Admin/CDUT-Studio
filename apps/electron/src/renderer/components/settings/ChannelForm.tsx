@@ -45,7 +45,7 @@ import type {
   FetchModelsResult,
   ProviderType,
 } from '@profer/shared'
-import { isAnthropicShapedEndpoint, normalizeAnthropicProviderUrl } from '@profer/core'
+import { isAnthropicShapedEndpoint, normalizeAnthropicProviderUrl } from '@profer/core/providers'
 import { getProviderLogo } from '@/lib/model-logo'
 import { applyModelDiscoveryResult, buildModelDiscoveryAttemptKey, shouldAutoDiscoverModels } from '@/lib/channel-model-discovery'
 import { addManualModel } from '@/lib/channel-manual-model'

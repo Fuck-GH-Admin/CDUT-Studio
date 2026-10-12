@@ -1,4 +1,5 @@
 import { promoteMru } from '@profer/shared'
+import { isMruEligibleId } from '@/atoms/tab-atoms'
 
 const DEFAULT_TAB_MRU_LIMIT = 50
 
@@ -17,7 +18,7 @@ export function promoteTabMru(
   tabId: string | null,
   limit = DEFAULT_TAB_MRU_LIMIT,
 ): string[] {
-  if (!tabId) return mru
+  if (!isMruEligibleId(tabId)) return mru
 
   const next = promoteMru(mru, tabId, limit)
 

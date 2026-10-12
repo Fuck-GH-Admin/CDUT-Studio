@@ -746,7 +746,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
 
   // 迷你地图数据 — 直接使用统一的 allGroups（无需去重）
   const minimapItems: MinimapItem[] = React.useMemo(
-    () => visibleGroups.map((group) => ({
+    () => streaming ? [] : visibleGroups.map((group) => ({
       id: getGroupId(group),
       role: group.type === 'user' ? 'user' as const
         : group.type === 'system' ? 'status' as const
@@ -755,11 +755,12 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
       avatar: group.type === 'user' ? userProfile.avatar : undefined,
       model: group.type === 'assistant-turn' ? group.model : undefined,
     })),
-    [visibleGroups, userProfile.avatar]
+    [streaming, visibleGroups, userProfile.avatar]
   )
 
   // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）
   React.useEffect(() => {
+    if (streaming) return
     if (minimapItems.length > 0) {
       setMinimapCache((prev) => {
         const next = new Map(prev)
@@ -767,7 +768,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
         return next
       })
     }
-  }, [sessionId, minimapItems, setMinimapCache])
+  }, [streaming, sessionId, minimapItems, setMinimapCache])
 
   // 所有用户消息的数据 — 供 StickyUserMessage 使用（Goal 迭代分隔条不是用户发言，不参与）
   const allUserMessagesData = React.useMemo(() => {

@@ -23,16 +23,21 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
+    alias: [
       // Node 专用原生 canvas：Open File Viewer（emf-converter）有一段运行期守卫的可选 import，
       // 构建期必须给出替身，否则 @napi-rs/canvas 会把浏览器构建打挂。详见 stub 文件注释。
-      '@napi-rs/canvas': resolve(__dirname, 'src/renderer/lib/node-canvas-stub.ts'),
-      canvas: resolve(__dirname, 'src/renderer/lib/node-canvas-stub.ts'),
-      '@/types': resolve(__dirname, 'src/types'),
-      '@': resolve(__dirname, 'src/renderer'),
+      { find: '@napi-rs/canvas', replacement: resolve(__dirname, 'src/renderer/lib/node-canvas-stub.ts') },
+      { find: 'canvas', replacement: resolve(__dirname, 'src/renderer/lib/node-canvas-stub.ts') },
+      // Node 专用 node:zlib：@profer/core 的 PDF/Office 解析引擎只应由主进程通过 subpath 消费。
+      // 这里给浏览器构建一个「可解析、import 期不抛错」的替身，避免未来第三方库深层引入 node:zlib
+      // 时把客户端打挂（访问即抛异常的浏览器外部化 Stub 会在首屏 import 阶段直接崩溃）。详见 stub 注释。
+      { find: /^node:zlib$/, replacement: resolve(__dirname, 'src/renderer/lib/node-zlib-stub.ts') },
+      { find: /^zlib$/, replacement: resolve(__dirname, 'src/renderer/lib/node-zlib-stub.ts') },
+      { find: '@/types', replacement: resolve(__dirname, 'src/types') },
+      { find: '@', replacement: resolve(__dirname, 'src/renderer') },
       // 根目录 assets 别名：供 CDUT 专区等渲染组件干净引用校徽与校宠立绘等静态资产
-      '@assets': resolve(__dirname, '../../assets'),
-    },
+      { find: '@assets', replacement: resolve(__dirname, '../../assets') },
+    ],
   },
   server: {
     port: resolveDevVitePort(),

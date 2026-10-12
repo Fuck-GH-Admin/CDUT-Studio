@@ -67,7 +67,7 @@ import {
   allPendingExitPlanRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
-import { previewFileMapAtom, previewFilesByTabAtom } from '@/atoms/preview-atoms'
+import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import {
   browserPanelDismissedSessionIdsAtom,
   browserStateMapAtom,
@@ -80,8 +80,10 @@ import {
   sidebarCollapsedAtom,
   closeTab,
   updateTabTitle,
+  tabMinimapCacheAtom,
   tabMruAtom,
 } from '@/atoms/tab-atoms'
+
 import { userProfileAtom } from '@/atoms/user-profile'
 import { authStatusAtom } from '@/atoms/identity-atoms'
 import { sidebarViewModeAtom, workspaceSortModeAtom } from '@/atoms/sidebar-atoms'
@@ -392,7 +394,6 @@ export function useLeftSidebar() {
   const setConvParallel = useSetAtom(conversationParallelModeAtom)
   const setConvPromptId = useSetAtom(conversationPromptIdAtom)
   const setPreviewFile = useSetAtom(previewFileMapAtom)
-  const setPreviewFilesByTab = useSetAtom(previewFilesByTabAtom)
   const setBrowserState = useSetAtom(browserStateMapAtom)
   const setBrowserDismissed = useSetAtom(browserPanelDismissedSessionIdsAtom)
   const setDiffPanelTab = useSetAtom(agentDiffPanelTabAtom)
@@ -440,16 +441,6 @@ export function useLeftSidebar() {
     setSessionModelMap(deleteKey)
     // 会话工作目录路径：不清理会导致右侧文件面板继续用已删除目录请求 list-directory
     setSessionPathMap(deleteKey)
-    // 预览 Tab 元数据：删除/归档是终态，清掉该会话全部预览 Tab 条目，避免孤立
-    setPreviewFilesByTab((prev) => {
-      const prefix = `__preview__:${id}:`
-      if (![...prev.keys()].some((key) => key.startsWith(prefix))) return prev
-      const next = new Map(prev)
-      for (const key of next.keys()) {
-        if (key.startsWith(prefix)) next.delete(key)
-      }
-      return next
-    })
 
     // 重型流式数据：streamingStates（累积 content + toolActivities）与 liveMessages（SDK 消息数组）
     setStreamingStates(deleteKey)
@@ -497,10 +488,11 @@ export function useLeftSidebar() {
     agentPendingFilesAtomFamily.remove(id)
     backgroundTasksAtomFamily.remove(id)
     sessionPersistedPermissionModeAtom.remove(id)
+    store.set(tabMinimapCacheAtom, deleteKey)
     sessionExistsAtom.remove(id)
 
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewFile, setPreviewFilesByTab, setBrowserState, setBrowserDismissed, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store, setAgentMessagesCache, setResolvedBlobMessages])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewFile, setBrowserState, setBrowserDismissed, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store, setAgentMessagesCache, setResolvedBlobMessages])
 
 
   const currentWorkspaceSlug = React.useMemo(() => {
@@ -811,13 +803,14 @@ export function useLeftSidebar() {
       if (updated.archived) {
         const currentTabs = store.get(tabsAtom)
         const currentActiveTabId = store.get(activeTabIdAtom)
-        const wasActive = currentActiveTabId === id
         const tabResult = closeTab(currentTabs, currentActiveTabId, id, store.get(tabMruAtom))
         setTabs(tabResult.tabs)
         setActiveTabId(tabResult.activeTabId)
         store.set(tabMruAtom, tabResult.mru)
         cleanupMapAtoms(id)
-        if (wasActive) {
+        // 只要激活 Tab 发生了变化（直接关掉当前会话，或关掉导致回退目标改变），
+        // 就重建附属状态，避免文件面板/工具栏残留旧会话。
+        if (tabResult.activeTabId !== currentActiveTabId) {
           const newActiveTab = tabResult.activeTabId
             ? tabResult.tabs.find((t) => t.id === tabResult.activeTabId) ?? null
             : null
@@ -848,8 +841,8 @@ export function useLeftSidebar() {
     const removeDeletedClientState = (): void => {
       // 关闭对应的标签页：setTabs 与 setActiveTabId 成组更新，避免在删除
       // 事务失败时误关闭仍存在的父/子会话标签。
-      const wasActive = activeTabId !== null && deletedSessionIds.has(activeTabId)
-      let tabResult = { tabs, activeTabId, mru: store.get(tabMruAtom) }
+      const prevActiveTabId = store.get(activeTabIdAtom)
+      let tabResult = { tabs: store.get(tabsAtom), activeTabId: prevActiveTabId, mru: store.get(tabMruAtom) }
       for (const sessionId of deletedSessionIds) {
         tabResult = closeTab(tabResult.tabs, tabResult.activeTabId, sessionId, tabResult.mru)
       }
@@ -857,7 +850,7 @@ export function useLeftSidebar() {
       setActiveTabId(tabResult.activeTabId)
       store.set(tabMruAtom, tabResult.mru)
 
-      if (wasActive) {
+      if (tabResult.activeTabId !== prevActiveTabId) {
         const newActiveTab = tabResult.activeTabId
           ? tabResult.tabs.find((t) => t.id === tabResult.activeTabId) ?? null
           : null
@@ -1072,18 +1065,20 @@ export function useLeftSidebar() {
       })
       setAutomations((prev) => prev.filter((automation) => automation.workspaceId !== workspaceId))
 
-      const currentTabs = store.get(tabsAtom)
-      const currentActiveTabId = store.get(activeTabIdAtom)
-      const nextTabs = currentTabs.filter((tab) => (
-        (tab.type !== 'agent' && tab.type !== 'preview') || !deletedSessionIds.has(tab.sessionId)
-      ))
-      const nextActiveTabId = currentActiveTabId && nextTabs.some((tab) => tab.id === currentActiveTabId)
-        ? currentActiveTabId
-        : nextTabs[0]?.id ?? null
-
-      setTabs(nextTabs)
-      setActiveTabId(nextActiveTabId)
-      syncActiveTabSideEffects(nextActiveTabId ? nextTabs.find((tab) => tab.id === nextActiveTabId) ?? null : null)
+      // 删除工作区时，关闭其全部会话 Tab：统一走 closeTab（内部级联清除该会话绑定的
+      // 浏览器工作标签并隐藏 agentBrowser），避免残留孤儿浏览器 Tab 与原生视图。
+      let tabResult = {
+        tabs: store.get(tabsAtom),
+        activeTabId: store.get(activeTabIdAtom),
+        mru: store.get(tabMruAtom),
+      }
+      for (const sessionId of deletedSessionIds) {
+        tabResult = closeTab(tabResult.tabs, tabResult.activeTabId, sessionId, tabResult.mru)
+      }
+      setTabs(tabResult.tabs)
+      setActiveTabId(tabResult.activeTabId)
+      store.set(tabMruAtom, tabResult.mru)
+      syncActiveTabSideEffects(tabResult.activeTabId ? tabResult.tabs.find((tab) => tab.id === tabResult.activeTabId) ?? null : null)
 
       const [remainingWorkspaces, sessions] = await Promise.all([
         window.electronAPI.listAgentWorkspaces(),
@@ -1412,6 +1407,43 @@ export function useLeftSidebar() {
               : undefined,
         })
 
+        if (nextArchived) {
+          // 收纳工作区时关闭其全部会话 Tab（含绑定的浏览器工作标签与原生浏览器视图）
+          const archivedSessionIds = new Set(
+            agentSessions
+              .filter((session) => session.workspaceId === workspaceId)
+              .map((session) => session.id),
+          )
+          const prevTabs = store.get(tabsAtom)
+          let tabResult = {
+            tabs: prevTabs,
+            activeTabId: store.get(activeTabIdAtom),
+            mru: store.get(tabMruAtom),
+          }
+          for (const sessionId of archivedSessionIds) {
+            tabResult = closeTab(tabResult.tabs, tabResult.activeTabId, sessionId, tabResult.mru)
+          }
+          if (tabResult.tabs !== prevTabs) {
+            for (const prevTab of prevTabs) {
+              if (
+                prevTab.type === 'browser' &&
+                prevTab.sessionId &&
+                !tabResult.tabs.some((t) => t.id === prevTab.id)
+              ) {
+                window.electronAPI.hideAgentBrowser(prevTab.sessionId).catch(() => {})
+              }
+            }
+            setTabs(tabResult.tabs)
+            setActiveTabId(tabResult.activeTabId)
+            store.set(tabMruAtom, tabResult.mru)
+            syncActiveTabSideEffects(
+              tabResult.activeTabId
+                ? tabResult.tabs.find((tab) => tab.id === tabResult.activeTabId) ?? null
+                : null,
+            )
+          }
+        }
+
         // 收纳的是当前项目时必须切走，否则会停留在不在切换器里的项目上
         if (nextArchived && workspaceId === currentWorkspaceId) {
           const fallback =
@@ -1424,7 +1456,7 @@ export function useLeftSidebar() {
         toast.error(error instanceof Error ? error.message : '操作失败')
       }
     },
-    [automations, currentWorkspaceId, handleSelectProject, setWorkspaces, workspaces],
+    [agentSessions, automations, currentWorkspaceId, handleSelectProject, setActiveTabId, setTabs, setWorkspaces, store, syncActiveTabSideEffects, workspaces],
   )
 
   /** 重命名 Agent 会话标题 */
@@ -1468,19 +1500,21 @@ export function useLeftSidebar() {
 
   const closeArchivedAgentTabs = React.useCallback((sessionIds: string[]): void => {
     const ids = new Set(sessionIds)
-    const currentTabs = store.get(tabsAtom)
-    const currentActiveTabId = store.get(activeTabIdAtom)
-    const nextTabs = currentTabs.filter((tab) => (
-      (tab.type !== 'agent' && tab.type !== 'preview') || !ids.has(tab.sessionId)
-    ))
-    const nextActiveTabId = currentActiveTabId && nextTabs.some((tab) => tab.id === currentActiveTabId)
-      ? currentActiveTabId
-      : nextTabs[0]?.id ?? null
+    let tabResult = {
+      tabs: store.get(tabsAtom),
+      activeTabId: store.get(activeTabIdAtom),
+      mru: store.get(tabMruAtom),
+    }
+    for (const sessionId of sessionIds) {
+      tabResult = closeTab(tabResult.tabs, tabResult.activeTabId, sessionId, tabResult.mru)
+    }
+    const nextActiveTabId = tabResult.activeTabId
 
-    setTabs(nextTabs)
+    setTabs(tabResult.tabs)
     setActiveTabId(nextActiveTabId)
+    store.set(tabMruAtom, tabResult.mru)
     for (const sessionId of ids) cleanupMapAtoms(sessionId)
-    syncActiveTabSideEffects(nextActiveTabId ? nextTabs.find((tab) => tab.id === nextActiveTabId) ?? null : null)
+    syncActiveTabSideEffects(nextActiveTabId ? tabResult.tabs.find((tab) => tab.id === nextActiveTabId) ?? null : null)
   }, [cleanupMapAtoms, setActiveTabId, setTabs, store, syncActiveTabSideEffects])
 
   /** 切换 Agent 会话置顶状态 */
@@ -1596,13 +1630,14 @@ export function useLeftSidebar() {
   /** 迁移会话到另一个项目后的回调 */
   const handleSessionMoved = (updatedSession: AgentSessionMeta, targetWorkspaceName: string): void => {
     setAgentSessions((prev) => replaceAgentSessionInFreshnessOrder(prev, updatedSession))
-    // 如果迁移的是当前选中的会话，取消选中并关闭标签页
+    // 如果迁移的是当前选中的会话，关闭其标签页并按回退后的新激活标签同步状态
+    // （而不是硬编码置 null，否则会与回退到的真实会话状态撕裂）。
     if (currentAgentSessionId === updatedSession.id) {
-      const tabResult = closeTab(tabs, activeTabId, updatedSession.id, store.get(tabMruAtom))
+      const tabResult = closeTab(store.get(tabsAtom), store.get(activeTabIdAtom), updatedSession.id, store.get(tabMruAtom))
       setTabs(tabResult.tabs)
       setActiveTabId(tabResult.activeTabId)
       store.set(tabMruAtom, tabResult.mru)
-      setCurrentAgentSessionId(null)
+      syncActiveTabSideEffects(tabResult.activeTabId ? tabResult.tabs.find((tab) => tab.id === tabResult.activeTabId) ?? null : null)
     }
     setMoveTargetId(null)
     toast.success('会话已迁移', {

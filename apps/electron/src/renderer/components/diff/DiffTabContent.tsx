@@ -26,6 +26,7 @@ import { getPreviewCandidateBasePaths, isAbsoluteFilePath } from './preview-open
 import { PreviewFindBar } from './PreviewFindBar'
 import { PreviewDirectoryView } from './PreviewDirectoryView'
 import { MarkdownToc } from './MarkdownToc'
+import { usePreviewViewport } from './preview-viewport-context'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
 import { PIERRE_FILE_CSS } from '@/components/agent/tool-result-renderers/pierre-styles'
 import { OfficePreview } from '@/components/file-browser/office-preview/OfficePreview'
@@ -35,21 +36,20 @@ import { isOfvBackedPath } from '@/lib/ofv-extensions'
 
 const MD_EXTS = new Set(['.md', '.markdown'])
 const HTML_EXTS = new Set(['.html', '.htm'])
-/** .docx 仍走 silurus WASM：原因见 OFFICE_PREVIEW_EXTS 上方的说明 */
-const DOCX_EXTS = new Set(['.docx'])
+/** 旧式 DOCX 分支已退役：DOCX 统一并入下方 OFFICE_PREVIEW_EXTS（Silurus WASM）。 */
+const DOCX_EXTS = new Set<string>()
 const PDF_EXTS = new Set(['.pdf'])
 /**
- * 仍走 silurus WASM 的 Office 格式：**DOCX 与 PPTX**（xlsx 已交给 Open File Viewer）。
+ * 统一走 Silurus WASM `<OfficePreview>` 的 Office 格式：**DOCX / XLSX / PPTX**。
  *
- * - **PPTX**：Agent 的「正式预览」回执挂在**可见的** silurus viewer 上 —— `official-preview-session.ts`
- *   需要 `slideCount` / `scrollToSlide` / 每页 canvas 抓图（`getRenderedPptxSlideCanvas`）+ 空白页检测；
- *   而 OFV 的公开 API 只有 `goToPage` / `command` / `preparePrint`，既没有页数也没有每页 canvas。
- *   换 PPTX 需先补等价的「页数 + 跳页 + 抓图」能力（或改走主进程 capturePage 截图）。
- * - **DOCX**：OFV 的 docx 主路径（docx-preview）**不过 DOMPurify**（其 issue #140，源码 `office.ts:641`），
- *   且它渲染进宿主同源 DOM；在渲染进程里跑就等于把一条注入面带回 app（preload/IPC 可达，需用户点击恶意链接触发）。
- *   等预览面搬到浏览器视图（sandbox + 无 preload）后这条风险归零，那时再换 docx。
+ * 依据板块三方案，标准 OOXML（.docx/.xlsx/.pptx 及其 macro/template 变体）全部收敛到
+ * Silurus 高保真渲染器；旧的 mammoth(docxToHtml) 与 officeparser(officeToHtml) 链路退役。
  */
-const OFFICE_PREVIEW_EXTS = new Set(['.pptx'])
+const OFFICE_PREVIEW_EXTS = new Set([
+  '.docx', '.docm', '.dotx', '.dotm',
+  '.xlsx', '.xlsm', '.xltx', '.xltm',
+  '.pptx', '.pptm', '.potx', '.potm', '.ppsx', '.ppsm',
+])
 const LEGACY_OFFICE_EXTS = new Set(['.doc', '.xls', '.ppt'])
 
 const FILE_FIND_SHORTCUT_OPTIONS = { exclusive: true }
@@ -222,9 +222,11 @@ interface DiffTabContentProps {
   baseRef?: string
   /** Agent 正式预览请求上下文；只透传给当前用户可见的 PPTX OfficePreview。 */
   agentPreviewSession?: { requestId: string; revision: string }
+  /** 打开后需要定位的初始行号（1-based），代码/文本文件跳转定位 */
+  initialTargetLine?: number
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions, hideToolbar = false, baseRef, agentPreviewSession }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions, hideToolbar = false, baseRef, agentPreviewSession, initialTargetLine }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const [oldContent, setOldContent] = React.useState('')
   const [newContent, setNewContent] = React.useState('')
@@ -257,11 +259,29 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     bindRef: bindImageEl,
     reset: resetImageZoom,
     zoomBy: imageZoomBy,
+    panBy: imagePanBy,
     onPanMouseDown: onImagePanMouseDown,
   } = useSmoothZoom({ minZoom: 0.5, maxZoom: 5 })
+  // 右侧栏预览视口上下文：仅预览视口内存在；主区 tab 为 null，所有注册均为空操作。
+  const previewViewport = usePreviewViewport()
+  const pdfZoomRef = React.useRef(1)
+  pdfZoomRef.current = pdfZoom / 100
+  const imageZoomRef = React.useRef(1)
+  imageZoomRef.current = imageZoom
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const [findOpen, setFindOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
+
+  // 初始行号定位：内容加载完成后，把目标行滚动到视口中央（代码/文本跳转）。
+  React.useEffect(() => {
+    if (!initialTargetLine || loading) return
+    const container = scrollContainerRef.current
+    if (!container) return
+    const target = container.querySelector<HTMLElement>(
+      `[data-line-number="${initialTargetLine}"], [data-line="${initialTargetLine}"]`,
+    )
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [initialTargetLine, loading])
   const [copied, setCopied] = React.useState(false)
   // 文件解析失败（主进程 resolveAndReadFile 返回 null）：区别于「文件存在但内容为空」
   const [notFound, setNotFound] = React.useState(false)
@@ -406,6 +426,44 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
   }, [isPdf])
+
+  // 上报当前缩放给预览视口（刷新右上角百分比显示）
+  React.useEffect(() => {
+    if (isPdf) previewViewport?.reportScale(pdfZoom / 100)
+  }, [previewViewport, isPdf, pdfZoom])
+  React.useEffect(() => {
+    if (isImage) previewViewport?.reportScale(imageZoom)
+  }, [previewViewport, isImage, imageZoom])
+
+  // 向预览视口注册原生缩放/平移控制器：缩放交给内容自身实现，平移交给 iframe 内滚动 / 图片平移，
+  // 视口不再对整屏做 CSS 缩放（避免把行列号栏、工具栏一起缩放）。
+  React.useEffect(() => {
+    if (!previewViewport) return
+    if (isPdf && pdfSrc) {
+      return previewViewport.register({
+        zoomIn: () => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'in' }, '*'),
+        zoomOut: () => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'out' }, '*'),
+        getScale: () => pdfZoomRef.current,
+        panBy: (dx, dy) => {
+          pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-scroll', dx, dy }, '*')
+          return true
+        },
+      })
+    }
+    if (isImage && imageDataUrl) {
+      return previewViewport.register({
+        zoomIn: () => imageZoomBy(1.2),
+        zoomOut: () => imageZoomBy(1 / 1.2),
+        reset: () => resetImageZoom(1),
+        getScale: () => imageZoomRef.current,
+        panBy: (dx, dy) => {
+          imagePanBy(dx, dy)
+          return true
+        },
+      })
+    }
+    return
+  }, [previewViewport, isPdf, pdfSrc, isImage, imageDataUrl, imageZoomBy, resetImageZoom, imagePanBy])
 
   // 当用户点击消息中的学术溯源胶囊（#f1:p1-b11 / #p1-b11）时，向目标 PDF iframe 发送精确坐标聚光灯定位指令
   React.useEffect(() => {
@@ -572,23 +630,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               }
               return
             }
-            if (isDocx) {
-              const result = await window.electronAPI.docxToHtml(filePath, fileAccess)
-              if (cancelled) return
-              const html = DOMPurify.sanitize(result?.html ?? '')
-              setDocxHtml(html)
-              cacheSet(cacheKey, { oldContent: '', newContent: '', docxHtml: html })
-              return
-            }
             if (isOfficePreview) {
-              const result = await window.electronAPI.officeToHtml(filePath, fileAccess)
-              if (cancelled) return
-              const html = DOMPurify.sanitize(result?.html ?? '')
-              const text = result?.text ?? ''
-              setOfficeHtml(html)
-              setOfficeText(text)
-              setOfficeFallbackHtml(html)
-              cacheSet(cacheKey, { oldContent: '', newContent: '', officeHtml: html, officeText: text })
+              // Office（DOCX / XLSX / PPTX）统一由 Silurus WASM <OfficePreview> 渲染，
+              // 不再预取 mammoth / officeparser 的 HTML 回退产物。
               return
             }
             if (isLegacyOffice) {
@@ -701,10 +745,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       message = `暂不支持 ${ext.toUpperCase().slice(1)} 格式内联预览`
     } else if (isPdf && pdfError) {
       message = pdfError
-    } else if (isDocx && !docxHtml) {
-      message = '无法加载 DOCX 预览'
-    } else if (isOfficePreview && !officeHtml) {
-      message = '无法加载 PPTX 预览'
     } else if (isImage && !imageDataUrl) {
       message = '图片文件过大，无法在此预览'
     }
@@ -712,7 +752,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       toastedPreviewFailRef.current = key
       toast.warning(message)
     }
-  }, [previewOnly, loading, filePath, ext, isLegacyOffice, isPdf, pdfSrc, pdfError, isDocx, docxHtml, isOfficePreview, officeHtml, isImage, imageDataUrl])
+  }, [previewOnly, loading, filePath, ext, isLegacyOffice, isPdf, pdfSrc, pdfError, isImage, imageDataUrl])
 
   // scrollPosition persistent: module-level Map keyed by sessionId:filePath
   // content changes (refreshVersion bump) → delete stored position;
@@ -799,14 +839,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
   const handleCopy = React.useCallback(async () => {
     try {
-      const copyText = markdownEditing ? markdownDraft : (isOfficePreview ? officeText : newContent)
+      const copyText = isOfficePreview ? officeText : newContent
       await navigator.clipboard.writeText(copyText)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
       // 复制失败
     }
-  }, [isOfficePreview, markdownDraft, markdownEditing, newContent, officeText])
+  }, [isOfficePreview, newContent, officeText])
 
   const handleCopyPath = React.useCallback(async () => {
     try {
@@ -817,94 +857,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     }
   }, [filePath])
 
-  const startMarkdownEdit = React.useCallback(() => {
-    if (!isEditableText) return
-    setMarkdownDraft(newContent)
-    lastSavedDraftRef.current = newContent
-    setAutosaveStatus('idle')
-    setMarkdownSourceMode(false)
-    setMarkdownEditing(true)
-  }, [isEditableText, newContent])
-
-  // ref 形式的 persist：避免 callback / effect 因 refreshVersion 频繁变化而重建
-  const persistRef = React.useRef<(draft: string, fp: string, fa: typeof fileAccess) => Promise<boolean>>(async () => false)
-
+  // 预览全局强制只读：禁止进入编辑模式或写回磁盘
+  const startMarkdownEdit = React.useCallback(() => {}, [])
   const exitMarkdownEdit = React.useCallback(() => {
-    // 退出前 flush 待保存的草稿，避免用户在 debounce 窗口内退出时丢失输入。
-    // 不再用 `draft !== ''` 过滤：清空整个文件也是合法编辑，依靠
-    // `draft !== lastSavedDraftRef.current` 已能避免初次进入时无意义写盘
-    // （startMarkdownEdit 时 lastSavedDraftRef = newContent）。
-    if (autosaveTimerRef.current !== null) {
-      window.clearTimeout(autosaveTimerRef.current)
-      autosaveTimerRef.current = null
-    }
-    if (markdownDraft !== lastSavedDraftRef.current) {
-      void persistRef.current(markdownDraft, filePath, fileAccess)
-    }
     setMarkdownSourceMode(false)
     setMarkdownEditing(false)
     setAutosaveStatus('idle')
-  }, [markdownDraft, filePath, fileAccess])
-
-  // 写盘核心：不退出编辑模式，被 autosave、saveMarkdownEdit、flush 共用。
-  // 接收显式参数（不依赖闭包），保证切换文件后 flush 用旧文件路径。
-  // 同一份 draft 重复触发会被 `draft === lastSavedDraftRef.current` 短路，
-  // 因此 autosave timer 与 unmount cleanup 偶发的双重 fire 不会真的写两次。
-  const persistMarkdownDraft = React.useCallback(async (
-    draft: string,
-    fp: string,
-    fa: typeof fileAccess,
-  ): Promise<boolean> => {
-    if (draft === lastSavedDraftRef.current) return true
-    setAutosaveStatus('saving')
-    try {
-      const ok = await window.electronAPI.writeTextFile(fp, draft, fa)
-      if (!ok) {
-        setAutosaveStatus('error')
-        return false
-      }
-      lastSavedDraftRef.current = draft
-      // 仅当当前展示的仍是这个文件时，才同步 UI state，避免覆盖刚切到的新文件
-      if (fp === filePathRef.current) {
-        lastNewContentRef.current = draft
-        lastOldContentRef.current = ''
-        setOldContent('')
-        setNewContent(draft)
-        cacheSet(getContentCacheKey('preview', refreshVersion + 1), { oldContent: '', newContent: draft })
-        setRefreshVersionMap((prev) => {
-          const m = new Map(prev)
-          m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
-          return m
-        })
-        setAutosaveStatus('saved')
-      }
-      return true
-    } catch (err) {
-      console.error('[DiffTabContent] Markdown save failed:', err)
-      setAutosaveStatus('error')
-      return false
-    }
-  }, [getContentCacheKey, refreshVersion, sessionId, setRefreshVersionMap])
-
-  const saveMarkdownEdit = React.useCallback(async () => {
-    if (!isEditableText || markdownSaving) return
-    // autosaveTimerRef 由 autosave effect 创建；这里手动清是为了避免
-    // "立即保存"返回后 effect cleanup 再次清掉一个已经 null 的句柄（无害但冗余），
-    // 同时也确保不会在 await 期间触发延迟回调
-    if (autosaveTimerRef.current !== null) {
-      window.clearTimeout(autosaveTimerRef.current)
-      autosaveTimerRef.current = null
-    }
-    setMarkdownSaving(true)
-    const ok = await persistMarkdownDraft(markdownDraft, filePath, fileAccess)
-    setMarkdownSaving(false)
-    if (!ok) {
-      window.alert('保存失败：没有写入权限或文件不存在')
-      return
-    }
-    setMarkdownSourceMode(false)
-    setMarkdownEditing(false)
-  }, [fileAccess, filePath, isEditableText, markdownDraft, markdownSaving, persistMarkdownDraft])
+  }, [])
+  const saveMarkdownEdit = React.useCallback(async () => {}, [])
 
   const handleManualRefresh = React.useCallback(() => {
     setRefreshVersionMap((prev) => {
@@ -920,66 +880,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     setPdfSrc('')
     handleManualRefresh()
   }, [getContentCacheKey, handleManualRefresh, previewContentVersion])
-
-  // persistRef 始终持有最新 persistMarkdownDraft，供 setTimeout / unmount cleanup 调用。
-  // 用 effect 而非渲染期赋值，避免 React 19 严格模式下并发渲染中途读到中间态。
-  React.useEffect(() => {
-    persistRef.current = persistMarkdownDraft
-  }, [persistMarkdownDraft])
-
-  // 自动保存：编辑模式下停止输入 1.5s 后写盘。
-  // timer 所有权：autosave effect 创建并在 cleanup 中清；saveMarkdownEdit / exitMarkdownEdit
-  // 也会主动清以抢占 debounce。多处清理都是幂等的（设 null 后再清是 no-op）。
-  React.useEffect(() => {
-    if (!markdownEditing || !isEditableText) return
-    if (markdownDraft === lastSavedDraftRef.current) return
-    if (autosaveTimerRef.current !== null) {
-      window.clearTimeout(autosaveTimerRef.current)
-    }
-    const draftSnapshot = markdownDraft
-    const fpSnapshot = filePath
-    const faSnapshot = fileAccess
-    autosaveTimerRef.current = window.setTimeout(() => {
-      autosaveTimerRef.current = null
-      void persistRef.current(draftSnapshot, fpSnapshot, faSnapshot)
-    }, 1500)
-    return () => {
-      if (autosaveTimerRef.current !== null) {
-        window.clearTimeout(autosaveTimerRef.current)
-        autosaveTimerRef.current = null
-      }
-    }
-  }, [markdownDraft, markdownEditing, isEditableText, filePath, fileAccess])
-
-  // saved → 1.5s 后回到 idle，避免指示器一直停在"已保存"
-  React.useEffect(() => {
-    if (autosaveStatus !== 'saved') return
-    const id = window.setTimeout(() => setAutosaveStatus('idle'), 1500)
-    return () => window.clearTimeout(id)
-  }, [autosaveStatus])
-
-  // 切换文件 / 卸载：若有未保存的 draft，fire-and-forget flush 到旧文件。
-  // persistMarkdownDraft 内的 short-circuit 保证即便 autosave timer 刚 fire 过、
-  // 这里又 flush 一次，也不会真的写两次盘。
-  const flushStateRef = React.useRef({ draft: '', editing: false, filePath, fileAccess })
-  flushStateRef.current = { draft: markdownDraft, editing: markdownEditing, filePath, fileAccess }
-  React.useEffect(() => {
-    return () => {
-      if (autosaveTimerRef.current !== null) {
-        window.clearTimeout(autosaveTimerRef.current)
-        autosaveTimerRef.current = null
-      }
-      const { draft, editing, filePath: fp, fileAccess: fa } = flushStateRef.current
-      // 不过滤空 draft：startMarkdownEdit 已把 lastSavedDraftRef 设为 newContent，
-      // 因此"原本就空、未编辑"的情况会被 dirty 比较自动跳过；而"非空清空"是合法操作必须落盘。
-      if (editing && isEditableText && draft !== lastSavedDraftRef.current) {
-        void persistRef.current(draft, fp, fa)
-      }
-    }
-    // 仅依赖 filePath/sessionId：切文件时执行 cleanup 触发 flush；
-    // draft/editing/fileAccess 通过 ref 读取最新值
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, sessionId])
 
   return (
     <div className="flex flex-col h-full">
@@ -1142,7 +1042,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             <TooltipContent side="right">展开目录</TooltipContent>
           </Tooltip>
         )}
-        <div ref={scrollContainerRef} onScroll={handleScroll} className="h-full flex-1 min-w-0 overflow-auto scrollbar-thin relative">
+        <div ref={scrollContainerRef} onScroll={handleScroll} data-preview-scroll-container className="h-full flex-1 min-w-0 overflow-auto scrollbar-thin relative">
           {loading ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
           ) : previewOnly ? (
@@ -1168,19 +1068,21 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             ) : isPdf ? (
               pdfSrc ? (
                 <div className="relative h-full">
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-filter backdrop-blur-sm border border-border/30 shadow-sm">
-                  <button
-                    type="button"
-                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'out' }, '*')}
-                  >−</button>
-                  <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{pdfZoom}%</span>
-                  <button
-                    type="button"
-                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'in' }, '*')}
-                  >+</button>
-                </div>
+                {!hideToolbar && (
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-filter backdrop-blur-sm border border-border/30 shadow-sm">
+                    <button
+                      type="button"
+                      className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                      onClick={() => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'out' }, '*')}
+                    >−</button>
+                    <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{pdfZoom}%</span>
+                    <button
+                      type="button"
+                      className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                      onClick={() => pdfIframeRef.current?.contentWindow?.postMessage({ type: 'pdf-zoom', direction: 'in' }, '*')}
+                    >+</button>
+                  </div>
+                )}
                 <iframe
                   ref={pdfIframeRef}
                   src={pdfSrc}
@@ -1205,47 +1107,38 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             ) : isImage ? (
               imageDataUrl ? (
                 <div className="relative h-full overflow-hidden">
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-blur-sm border border-border/30 shadow-sm">
-                  <button
-                    type="button"
-                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => imageZoomBy(1 / 1.2)}
-                  >−</button>
-                  <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{Math.round(imageZoom * 100)}%</span>
-                  <button
-                    type="button"
-                    className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => imageZoomBy(1.2)}
-                  >+</button>
-                </div>
-                <div className="h-full overflow-hidden p-4 pt-12 flex items-center justify-center">
+                {!hideToolbar && (
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-blur-sm border border-border/30 shadow-sm">
+                    <button
+                      type="button"
+                      className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                      onClick={() => imageZoomBy(1 / 1.2)}
+                    >−</button>
+                    <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{Math.round(imageZoom * 100)}%</span>
+                    <button
+                      type="button"
+                      className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
+                      onClick={() => imageZoomBy(1.2)}
+                    >+</button>
+                  </div>
+                )}
+                <div className="h-full overflow-hidden p-4 flex items-center justify-center">
                   <img
                     ref={bindImageEl}
                     src={imageDataUrl}
                     alt={getFileBaseName(filePath) || 'Image'}
                     draggable={false}
-                    onMouseDown={onImagePanMouseDown}
+                    onMouseDown={previewViewport || hideToolbar ? undefined : onImagePanMouseDown}
                     className="max-w-full max-h-full object-contain select-none"
                     style={{
                       transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`,
                       transformOrigin: '0 0',
-                      cursor: 'grab',
+                      cursor: previewViewport ? undefined : 'grab',
                     }}
-                    title="滚动滚轮缩放，拖拽平移"
                   />
                 </div>
               </div>
               ) : null
-            ) : isDocx ? (
-              <OfficePreview
-                filePath={filePath}
-                fileName={filePath}
-                access={fileAccess}
-                className="h-full"
-                fallback={docxHtml ? (
-                  <div className="prose prose-sm dark:prose-invert max-w-none px-4 py-3" dangerouslySetInnerHTML={{ __html: docxHtml }} />
-                ) : undefined}
-              />
             ) : isOfficePreview ? (
               <OfficePreview
                 filePath={filePath}
@@ -1253,9 +1146,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 access={fileAccess}
                 className="h-full"
                 agentPreviewSession={ext === '.pptx' && agentPreviewSession ? { sessionId, ...agentPreviewSession } : undefined}
-                fallback={officeFallbackHtml ? (
-                  <div className="office-preview-host" dangerouslySetInnerHTML={{ __html: officeFallbackHtml }} />
-                ) : undefined}
               />
             ) : isOfvBacked ? (
               <OfvPreview filePath={filePath} access={fileAccess} className="h-full" />
@@ -1274,33 +1164,18 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 </div>
               )
             ) : isMarkdown ? (
-              markdownEditing && markdownSourceMode ? (
-                <textarea
-                  value={markdownDraft}
-                  onChange={(e) => setMarkdownDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      e.preventDefault()
-                      exitMarkdownEdit()
-                    }
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault()
-                      void saveMarkdownEdit()
-                    }
-                  }}
-                  autoFocus
-                  spellCheck={false}
-                  className="w-full min-h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground outline-none focus:outline-none"
-                />
+              markdownSourceMode ? (
+                <pre className="w-full min-h-full whitespace-pre-wrap break-words border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground select-text">
+                  {newContent}
+                </pre>
               ) : (
                 <MarkdownRichEditor
-                  value={markdownEditing ? markdownDraft : newContent}
-                  editing={markdownEditing}
-                  onChange={setMarkdownDraft}
-                  onSave={() => void saveMarkdownEdit()}
-                  onCancel={exitMarkdownEdit}
-                  onRequestEdit={startMarkdownEdit}
-                  disabled={markdownSaving}
+                  value={newContent}
+                  editing={false}
+                  onChange={() => {}}
+                  onSave={() => {}}
+                  onCancel={() => {}}
+                  disabled={true}
                   fileAccess={markdownFileAccess}
                   shikiTheme={MD_SHIKI_THEME}
                 />
@@ -1308,18 +1183,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             ) : isPlainTextEditable && markdownEditing ? (
               <textarea
                 value={markdownDraft}
-                onChange={(e) => setMarkdownDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault()
-                    exitMarkdownEdit()
-                  }
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault()
-                    void saveMarkdownEdit()
-                  }
-                }}
-                autoFocus
+                readOnly
                 spellCheck={false}
                 className="w-full min-h-full resize-none border-0 bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground outline-none focus:outline-none"
               />

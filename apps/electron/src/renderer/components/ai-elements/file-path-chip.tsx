@@ -17,7 +17,7 @@ const CODE_EXTS = new Set([
   'py', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cs', 'sh', 'bash',
   'zsh', 'fish', 'css', 'scss', 'less', 'sql', 'rb', 'php', 'diff', 'patch',
 ])
-const DOC_EXTS = new Set(['pdf', 'docx'])
+const DOC_EXTS = new Set(['pdf', 'docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt'])
 const ALL_PREVIEWABLE_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS, ...CODE_EXTS, ...DOC_EXTS])
 
 function getExtension(filename: string): string {

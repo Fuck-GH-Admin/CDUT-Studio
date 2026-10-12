@@ -18,15 +18,18 @@ import {
 } from './agent-atoms'
 import type { SessionIndicatorStatus } from './agent-atoms'
 import { getFileBaseName } from '@/lib/file-utils'
-import { removeMruId, selectMruFallbackId } from '@profer/shared'
+import { promoteMru, removeMruId, selectMruFallbackId } from '@profer/shared'
 
 // basename 提取统一走 renderer/lib 公共实现（R1），此处转发以保持既有导入路径兼容
 export { getFileBaseName }
 
 // ===== 类型定义 =====
 
-/** 标签页类型（Settings 不作为 Tab，保留独立视图） */
-export type TabType = 'chat' | 'agent' | 'scratch' | 'preview' | 'browser' | 'tutorial'
+/**
+ * 标签页类型（Settings 不作为 Tab，保留独立视图）。
+ * 文件预览已迁入右侧边栏，不再拥有独立 Tab 类型（原 'preview' 退役）。
+ */
+export type TabType = 'chat' | 'agent' | 'scratch' | 'browser' | 'tutorial'
 
 /** Scratch Pad 专用的固定 sessionId */
 export const SCRATCH_PAD_ID = '__scratch-pad__'
@@ -34,9 +37,6 @@ export const SCRATCH_PAD_ID = '__scratch-pad__'
 /** 教程 Tab 固定 ID */
 export const TUTORIAL_TAB_ID = '__tutorial__'
 export const TUTORIAL_TAB_TITLE = 'CDUT Studio 使用教程'
-
-/** 会话文件预览 Tab 的 ID 前缀（每文件一个 Tab）：运行时临时入口，不参与持久化 */
-const PREVIEW_TAB_PREFIX = '__preview__:'
 
 /** 会话浏览器 Tab 的 ID 前缀（每网页一个，对应主进程浏览器内部标签）：运行时临时入口，不参与持久化 */
 const BROWSER_TAB_PREFIX = '__browser__:'
@@ -54,8 +54,6 @@ export interface TabItem {
   sessionId: string
   /** 标签页显示标题 */
   title: string
-  /** 预览文件路径，仅 type=preview 时存在（每文件一个 Tab 的身份依据） */
-  filePath?: string
   /** 浏览器内部标签 id，仅 type=browser 时存在（对应主进程 BrowserViewState.tabs[].tabId） */
   browserTabId?: string
   /**
@@ -167,7 +165,75 @@ export const tabIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((ge
   return map
 })
 
-// ===== 操作函数 =====
+/**
+ * 顶栏实际渲染的标签序列（全局多会话模型，单一事实源）：
+ * - 展示所有已打开的真实会话 Tab（agent / chat）与会话绑定的浏览器工作 Tab；
+ * - 后台常驻的 Scratch Pad / 教程 Tab 只在被激活时出现，避免长期占用顶栏；
+ * - 子会话（探索分支 / 委派子会话）按 parentSessionId 血缘紧跟父会话排列，
+ *   顶栏、Ctrl+Tab、Cmd+1~9 与拖拽排序全部消费同一份列表，杜绝顺序撕裂。
+ */
+export const visibleTopBarTabsAtom = atom<TabItem[]>((get) => {
+  const tabs = get(tabsAtom)
+  const activeTabId = get(activeTabIdAtom)
+  const visible = tabs.filter((tab) => {
+    if (tab.id === SCRATCH_PAD_ID || tab.id === TUTORIAL_TAB_ID) return tab.id === activeTabId
+    return true
+  })
+  return visible
+})
+
+/**
+ * 按会话血缘重排：子会话 Tab 紧跟其父会话，父会话缺失时保持原位。
+ * 采用稳定遍历（原始顺序为基准），仅把子会话移动到父会话之后，其余相对顺序不变。
+ */
+export function orderTabsBySessionContext(tabs: readonly TabItem[]): TabItem[] {
+  const sessionTabIds = new Set(
+    tabs
+      .filter((tab) => tab.type === 'agent' || tab.type === 'chat')
+      .map((tab) => tab.sessionId),
+  )
+  const childrenByParent = new Map<string, TabItem[]>()
+  for (const tab of tabs) {
+    if (tab.type !== 'agent') continue
+    const parentId = tab.parentSessionId
+    if (!parentId || !sessionTabIds.has(parentId)) continue
+    const list = childrenByParent.get(parentId) ?? []
+    list.push(tab)
+    childrenByParent.set(parentId, list)
+  }
+  if (childrenByParent.size === 0) return [...tabs]
+
+  const emitted = new Set<string>()
+  const out: TabItem[] = []
+  const emit = (tab: TabItem): void => {
+    if (emitted.has(tab.id)) return
+    emitted.add(tab.id)
+    out.push(tab)
+    for (const child of childrenByParent.get(tab.sessionId) ?? []) emit(child)
+  }
+  for (const tab of tabs) {
+    const parentId = tab.type === 'agent' ? tab.parentSessionId : undefined
+    if (parentId && sessionTabIds.has(parentId)) continue // 交由父节点递归发出
+    emit(tab)
+  }
+  // 兜底：血缘成环等未发出的标签追加到末尾，保证不漏项
+  for (const tab of tabs) emit(tab)
+  return out
+}
+
+/** 仅真实会话 ID 可进入顶栏 MRU（排除后台常驻 Tab 与带前缀的工作 Tab）。 */
+export function isMruEligibleId(tabId: string | null | undefined): boolean {
+  if (!tabId) return false
+  if (tabId === SCRATCH_PAD_ID || tabId === TUTORIAL_TAB_ID) return false
+  if (tabId.startsWith(BROWSER_TAB_PREFIX)) return false
+  return true
+}
+
+/** 带守卫的 MRU 提升：仅真实会话 ID 会进入记录，避免关闭 Tab 时异常跳往草稿纸。 */
+export function promoteSessionMru(mru: readonly string[], tabId: string | null | undefined): string[] {
+  if (!isMruEligibleId(tabId)) return [...mru]
+  return promoteMru(mru, tabId)
+}
 
 function createScratchPadTab(): TabItem {
   return {
@@ -178,21 +244,8 @@ function createScratchPadTab(): TabItem {
   }
 }
 
-/** 每文件一个预览 Tab：id 携带文件路径，同一文件重复打开时命中同一个 Tab。 */
-export function createPreviewTabId(sessionId: string, filePath: string): string {
-  return `${PREVIEW_TAB_PREFIX}${sessionId}:${encodeURIComponent(filePath)}`
-}
-
 export function createBrowserTabId(sessionId: string, browserTabId: string): string {
   return `${BROWSER_TAB_PREFIX}${sessionId}:${browserTabId}`
-}
-
-export function getPreviewTabTitle(filePath: string): string {
-  return `预览：${getFileBaseName(filePath)}`
-}
-
-export function isPreviewTab(tab: TabItem): boolean {
-  return tab.type === 'preview' || tab.id.startsWith(PREVIEW_TAB_PREFIX)
 }
 
 export function isBrowserTab(tab: TabItem): boolean {
@@ -200,11 +253,11 @@ export function isBrowserTab(tab: TabItem): boolean {
 }
 
 /**
- * 会话绑定的工作 Tab：文件预览与浏览器页面。
- * 它们属于某个 Agent 会话，跟随会话上下文展示，不参与持久化。
+ * 会话绑定的工作 Tab：目前仅浏览器页面。
+ * 文件预览已迁入右侧边栏，不再作为顶栏工作 Tab。
  */
 export function isSessionWorkTab(tab: TabItem): boolean {
-  return isPreviewTab(tab) || isBrowserTab(tab)
+  return isBrowserTab(tab)
 }
 
 function isSessionTab(tab: TabItem): boolean {
@@ -228,16 +281,6 @@ export function tabContextSessionId(tabs: readonly TabItem[], tab: TabItem): str
     current = parent
   }
   return current.sessionId
-}
-
-function insertSessionWorkTab(tabs: TabItem[], workTab: TabItem): TabItem[] {
-  const scratchTab = tabs.find((tab) => tab.id === SCRATCH_PAD_ID) ?? createScratchPadTab()
-  const baseTabs = tabs.some((tab) => tab.id === SCRATCH_PAD_ID) ? [...tabs] : [scratchTab, ...tabs]
-  const ownerIndex = baseTabs.findIndex((tab) => (tab.type === 'agent' || tab.type === 'chat') && tab.sessionId === workTab.sessionId)
-  if (ownerIndex < 0) return [...baseTabs, workTab]
-  let insertIndex = ownerIndex + 1
-  while (insertIndex < baseTabs.length && isSessionWorkTab(baseTabs[insertIndex]!) && baseTabs[insertIndex]!.sessionId === workTab.sessionId) insertIndex += 1
-  return [...baseTabs.slice(0, insertIndex), workTab, ...baseTabs.slice(insertIndex)]
 }
 
 function getPersistentTabs(tabs: TabItem[]): TabItem[] {
@@ -264,20 +307,38 @@ export function getPersistableTabState(
   }
 }
 
-/** openTab 的入参：文件预览 Tab 必须携带 filePath（id 与单例判定的身份依据）。 */
+/** openTab 的入参。 */
 export type OpenTabInput = {
   type: TabType
   sessionId: string
   title: string
-  /** 仅 type=preview 时必须提供 */
-  filePath?: string
   /** 仅 type=browser 时必须提供（对应主进程浏览器内部标签） */
   browserTabId?: string
   /** 子会话 Tab：传入父会话 sessionId（探索分支 / 委派子会话） */
   parentSessionId?: string
 }
 
-/** 打开或聚焦会话入口：保留已打开的 Tab，新会话追加到末尾。 */
+/** 新打开会话 Tab 时的插入规则：若存在父会话 Tab，则紧跟父会话簇（工作 Tab + 已有子会话）末尾插入，否则追加到末尾。 */
+function insertSessionTabAfterParentCluster(tabs: TabItem[], sessionTab: TabItem): TabItem[] {
+  if (!sessionTab.parentSessionId) return [...tabs, sessionTab]
+  const parentIndex = tabs.findIndex(
+    (tab) => (tab.type === 'agent' || tab.type === 'chat') && tab.sessionId === sessionTab.parentSessionId,
+  )
+  if (parentIndex === -1) return [...tabs, sessionTab]
+  let insertIndex = parentIndex + 1
+  while (
+    insertIndex < tabs.length
+    && (
+      (isSessionWorkTab(tabs[insertIndex]!) && tabs[insertIndex]!.sessionId === sessionTab.parentSessionId)
+      || tabs[insertIndex]!.parentSessionId === sessionTab.parentSessionId
+    )
+  ) {
+    insertIndex += 1
+  }
+  return [...tabs.slice(0, insertIndex), sessionTab, ...tabs.slice(insertIndex)]
+}
+
+/** 打开或聚焦会话入口：保留已打开的 Tab，新会话追加到末尾（子会话紧跟父会话簇）。 */
 export function openTab(
   tabs: TabItem[],
   item: OpenTabInput,
@@ -305,25 +366,15 @@ export function openTab(
     }
   }
 
-  // 会话绑定的工作 Tab（文件预览 / 浏览器）：挂在 owner 会话 Tab 之后。
-  // - preview：每文件一个实例（id 含 filePath），重复打开同一文件 = 聚焦既有 Tab；
-  // - browser：每会话单例。
-  if (item.type === 'preview' || item.type === 'browser') {
-    const workTab: TabItem = item.type === 'preview'
-      ? {
-        id: createPreviewTabId(item.sessionId, item.filePath ?? item.title),
-        type: 'preview',
-        sessionId: item.sessionId,
-        title: item.title,
-        filePath: item.filePath,
-      }
-      : {
-        id: createBrowserTabId(item.sessionId, item.browserTabId ?? ''),
-        type: 'browser',
-        sessionId: item.sessionId,
-        title: item.title,
-        ...(item.browserTabId ? { browserTabId: item.browserTabId } : {}),
-      }
+  // 会话绑定的工作 Tab（浏览器页面）：挂在 owner 会话 Tab 之后，每会话多页并存。
+  if (item.type === 'browser') {
+    const workTab: TabItem = {
+      id: createBrowserTabId(item.sessionId, item.browserTabId ?? ''),
+      type: 'browser',
+      sessionId: item.sessionId,
+      title: item.title,
+      ...(item.browserTabId ? { browserTabId: item.browserTabId } : {}),
+    }
     const existing = tabs.find((tab) => tab.id === workTab.id)
     if (existing) {
       return {
@@ -331,7 +382,7 @@ export function openTab(
         activeTabId: existing.id,
       }
     }
-    // owner 会话 Tab：优先复用同会话的 agent/chat 入口（chat 会话的文件预览不应造出幻影 agent Tab）
+    // owner 会话 Tab：优先复用同会话的 agent/chat 入口（chat 会话的浏览器页不应造出幻影 agent Tab）
     const ownerAgentTab = tabs.find((t) => (t.type === 'agent' || t.type === 'chat') && t.sessionId === item.sessionId) ?? {
       id: item.sessionId,
       type: 'agent' as const,
@@ -373,7 +424,7 @@ export function openTab(
 
   const existingIndex = tabs.findIndex((tab) => tab.id === sessionTab.id)
   const tabsWithSession = existingIndex === -1
-    ? [...tabs, sessionTab]
+    ? insertSessionTabAfterParentCluster(tabs, sessionTab)
     : tabs.map((tab) => tab.id === sessionTab.id ? sessionTab : tab)
   const tabsWithScratch = tabsWithSession.some((tab) => tab.id === SCRATCH_PAD_ID)
     ? tabsWithSession
@@ -446,7 +497,13 @@ export function closeTab(
     const targetTab = mruTarget
       ? newTabs.find((tab) => tab.id === mruTarget || tab.sessionId === mruTarget)
       : undefined
-    if (targetTab) {
+    const ownerTab = isSessionWorkTab(closingTab)
+      ? newTabs.find((tab) => tab.id === closingTab.sessionId && !isSessionWorkTab(tab))
+        ?? newTabs.find((tab) => tab.sessionId === closingTab.sessionId && !isSessionWorkTab(tab))
+      : undefined
+    if (ownerTab) {
+      newActiveTabId = ownerTab.id
+    } else if (targetTab) {
       newActiveTabId = targetTab.id
     } else if (newTabs.length > 0) {
       const nextIndex = Math.min(tabIndex, newTabs.length - 1)

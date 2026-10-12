@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./providers": "./src/providers/index.ts",
     "./highlight": "./src/highlight/index.ts",
-    "./pdf-engine": "./src/pdf-engine/index.ts"
+    "./pdf-engine": "./src/pdf-engine/index.ts",
+    "./office-engine": "./src/office-engine/index.ts"
   },
   "dependencies": {
     "@profer/shared": "workspace:*",

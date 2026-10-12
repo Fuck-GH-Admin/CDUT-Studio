@@ -29,7 +29,7 @@
 
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
-import type { TabItem } from './tab-atoms'
+import { SCRATCH_PAD_ID, tabContextSessionId, type TabItem } from './tab-atoms'
 
 // ===== 类型 =====
 
@@ -65,13 +65,12 @@ export type TabGroupsState = TabGroupState[]
 /**
  * 允许参与组合的 tab 类型白名单。
  * 判据是「这个标签有独立的内容身份、可以并排看」：
- * - agent / chat：会话；
- * - preview：文件（拖进分区 = 用一栏展示这个文件）；
+ * - agent / chat：会话（含探索分支 / 委派子会话，血缘相同即可并排）；
  * - browser：受管浏览器（Agent 推送时也会经 planAutoGroupWorkTab 自动与对话成组）；
  * - scratch / tutorial：单例固定 tab，不能有两份；
- * - preview：预览视口是独立宿主视口，同屏两份会冲突。
+ * - 文件预览已迁入右侧边栏，不再有独立预览 Tab。
  */
-export const GROUP_ELIGIBLE_TAB_TYPES: readonly string[] = ['agent', 'chat', 'preview', 'browser']
+export const GROUP_ELIGIBLE_TAB_TYPES: readonly string[] = ['agent', 'chat', 'browser']
 
 /** 组合内分栏缝宽度，与浏览器/预览分栏保持一致 */
 export const GROUP_SPLIT_GAP = 8
@@ -97,30 +96,43 @@ export function groupTabIds(group: TabGroupState | null): string[] {
 }
 
 /**
- * 组合的所属会话（产品边界：顶栏 Tab 属于同一会话，组合只允许同会话成员并排）。
+ * 组合的所属会话上下文（沿 parentSessionId 血缘取根会话）。
+ * 产品边界从「必须同一 sessionId」放宽为「同一会话上下文」，
+ * 使父会话与探索分支 / 委派子会话可以并排分屏。
  * 只看非空成员；成员在 tabs 中找不到时返回 null（该组合已失效，交给对账解散）。
  */
-export function groupSessionId(
+export function groupContextSessionId(
   group: TabGroupState | null,
-  tabs: readonly { id: string, sessionId: string }[],
+  tabs: readonly TabItem[],
 ): string | null {
   if (!group) return null
-  let sessionId: string | null = null
+  const byId = new Map(tabs.map((tab) => [tab.id, tab]))
+  let contextId: string | null = null
   for (const id of groupTabIds(group)) {
-    const tab = tabs.find((candidate) => candidate.id === id)
+    const tab = byId.get(id)
     if (!tab) return null
-    if (sessionId === null) sessionId = tab.sessionId
-    else if (sessionId !== tab.sessionId) return null
+    const context = tabContextSessionId(tabs, tab)
+    if (contextId === null) contextId = context
+    else if (contextId !== context) return null
   }
-  return sessionId
+  return contextId
 }
 
-/** 组合是否满足「同一会话」边界：成员都存在且 sessionId 一致。 */
+/** 组合是否合法：成员都存在且同属一个会话上下文（含父子血缘）。 */
 export function isSessionConsistentGroup(
   group: TabGroupState | null,
-  tabs: readonly { id: string, sessionId: string }[],
+  tabs: readonly TabItem[],
 ): boolean {
-  return groupSessionId(group, tabs) !== null
+  if (!group) return false
+  if (group.leftTabId && group.rightTabId && group.leftTabId === group.rightTabId) return false
+  const ids = groupTabIds(group)
+  if (ids.length === 0) return false
+  const byId = new Map(tabs.map((tab) => [tab.id, tab]))
+  for (const id of ids) {
+    const tab = byId.get(id)
+    if (!tab || !isGroupEligibleTab(tab)) return false
+  }
+  return true
 }
 
 /** 两侧是否都已就位（用于"空栏提示"的判定） */
@@ -190,6 +202,51 @@ export function removeTabGroup(
 ): TabGroupState[] {
   if (!target) return [...groups]
   return groups.filter((group) => group !== target)
+}
+
+/**
+ * 顶栏拖拽重排：将组合（TabGroup）的所有成员视作原子单元整体跨越目标条目（目标本身也可能是组合），
+ * 保持组合内部成员在 tabsAtom 中的相对顺序不变，防止拖拽中途组合锚点 ID 发生翻转。
+ */
+export function reorderRenderedTabItem(
+  tabs: TabItem[],
+  tabGroups: readonly TabGroupState[],
+  draggedAnchorId: string,
+  targetAnchorId: string,
+  direction: 1 | -1,
+): TabItem[] {
+  if (draggedAnchorId === targetAnchorId) return tabs
+  if (draggedAnchorId === SCRATCH_PAD_ID || targetAnchorId === SCRATCH_PAD_ID) return tabs
+
+  const draggedGroup = findTabGroup(tabGroups, draggedAnchorId)
+  const draggedTabs = draggedGroup
+    ? tabs.filter((tab) => isGroupMember(draggedGroup, tab.id))
+    : tabs.filter((tab) => tab.id === draggedAnchorId)
+  if (draggedTabs.length === 0) return tabs
+
+  const targetGroup = findTabGroup(tabGroups, targetAnchorId)
+  const targetMemberIds = new Set(targetGroup ? groupTabIds(targetGroup) : [targetAnchorId])
+  if (draggedTabs.some((tab) => targetMemberIds.has(tab.id))) return tabs
+
+  const draggedIdSet = new Set(draggedTabs.map((tab) => tab.id))
+  const remaining = tabs.filter((tab) => !draggedIdSet.has(tab.id))
+
+  if (direction === -1) {
+    const firstTargetIdx = remaining.findIndex((tab) => targetMemberIds.has(tab.id))
+    if (firstTargetIdx === -1) return tabs
+    if (firstTargetIdx === 0 && remaining[0]?.id === SCRATCH_PAD_ID) return tabs
+    return [...remaining.slice(0, firstTargetIdx), ...draggedTabs, ...remaining.slice(firstTargetIdx)]
+  }
+
+  let lastTargetIdx = -1
+  for (let i = remaining.length - 1; i >= 0; i -= 1) {
+    if (targetMemberIds.has(remaining[i]!.id)) {
+      lastTargetIdx = i
+      break
+    }
+  }
+  if (lastTargetIdx === -1) return tabs
+  return [...remaining.slice(0, lastTargetIdx + 1), ...draggedTabs, ...remaining.slice(lastTargetIdx + 1)]
 }
 
 /** 组合是否处于激活态（焦点标签是组内成员） */
@@ -266,30 +323,6 @@ export function planAutoGroupWorkTab(input: {
   if (findTabGroup(groups, workTabId)) return null
   const group = createGroup(agentTabId, workTabId, agentTabId)
   return group ? replaceTabGroup(groups, null, group) : null
-}
-
-/**
- * 「跟随最新文件」：自动预览连续产生新文件 Tab 时的布局规划。
- * - 没有组合 → 新建（对话左、文件右），同 planAutoGroupWorkTab；
- * - 已有「对话左 + 同会话预览右」组合 → 把右栏换成最新文件（焦点留在对话）；
- * - 其余布局（用户自己摆的）→ 不动。
- */
-export function planFollowWorkTab(input: {
-  groups: TabGroupsState
-  tabs: readonly TabItem[]
-  agentTabId: string
-  workTabId: string
-  activeTabId: string | null
-}): TabGroupsState | null {
-  const { groups, agentTabId, workTabId, activeTabId } = input
-  if (activeTabId !== agentTabId) return null
-  const existing = findTabGroup(groups, agentTabId)
-  if (!existing) return planAutoGroupWorkTab({ groups, agentTabId, workTabId, activeTabId })
-  if (existing.leftTabId !== agentTabId || existing.rightTabId === workTabId) return null
-  const rightTab = input.tabs.find((tab) => tab.id === existing.rightTabId)
-  if (rightTab?.type !== 'preview' || rightTab.sessionId !== agentTabId) return null
-  const followed = createGroup(agentTabId, workTabId, agentTabId)
-  return followed ? replaceTabGroup(groups, existing, followed) : null
 }
 
 /**

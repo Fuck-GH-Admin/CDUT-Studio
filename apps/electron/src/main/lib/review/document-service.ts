@@ -181,6 +181,59 @@ async function parsePdfLayoutBlocks(filePath: string, fileName: string): Promise
   }
 }
 
+/**
+ * 用 @profer/core/office-engine 双平面引擎解析 OOXML Office 文档（DOCX / PPTX / XLSX），
+ * 产出携带真实页码/幻灯片号/工作表号、归一化坐标与阅读顺序的结构化审核块。
+ */
+async function parseOfficeLayoutBlocks(filePath: string, fileName: string): Promise<ReviewDocumentBlock[] | null> {
+  try {
+    const { OoxmlZipReader, inferOfficeFormatFromExtension, parseOfficeBuffer } = await import('@profer/core/office-engine')
+    const ext = extname(fileName || filePath).toLowerCase()
+    const formatHint = inferOfficeFormatFromExtension(ext)
+    if (!formatHint) return null
+
+    const buffer = await readFile(filePath)
+    if (!OoxmlZipReader.isZipBuffer(buffer)) return null
+
+    const result = parseOfficeBuffer(buffer, formatHint, { fileName, includeAnchors: false })
+    const out: ReviewDocumentBlock[] = []
+
+    for (const page of result.ast.pages) {
+      for (const block of page.blocks) {
+        const kind: ReviewDocumentBlock['kind'] =
+          block.type === 'heading'
+            ? 'heading'
+            : block.type === 'list'
+              ? 'list-item'
+              : block.type === 'table'
+                ? 'table-cell'
+                : block.type === 'figure'
+                  ? 'image'
+                  : 'paragraph'
+
+        const reviewBlock: ReviewDocumentBlock = {
+          id: block.id,
+          kind,
+          text: block.text,
+          page: block.pageNumber,
+          bbox: block.bbox,
+          readingOrder: block.readingOrder,
+          confidence: 1,
+        }
+        if (block.rowCount && block.columnCount) {
+          reviewBlock.table = { row: block.rowCount, column: block.columnCount }
+        }
+        out.push(reviewBlock)
+      }
+    }
+
+    return out.length > 0 ? out : null
+  } catch (error) {
+    console.warn(`[审核专区] Office 双平面引擎解析失败，回退文本切块: ${filePath}`, error)
+    return null
+  }
+}
+
 /** SourceDocument 公共字段：各分支只决定 parseStatus / blocks / parseError */
 interface SourceDocumentDraft {
   fileName: string
@@ -218,7 +271,7 @@ function toSourceDocument(draft: SourceDocumentDraft): SourceDocument {
  *
  * - 文本类（.md/.txt/.csv/.json）：读文本 → parseTextIntoBlocks，parseStatus 'parsed'
  * - .svg：读文本 → 抽 <text> 进 imageAlt → 单个 image 块（text 为空串）
- * - PDF / Office：document-parser 提取文本 → parseTextIntoBlocks（parsed）；
+ * - PDF / Office：优先走高精双平面引擎提取结构化块；回退 document-parser 提取文本 → parseTextIntoBlocks（parsed）；
  *   提取为空 → partial + 中文原因（扫描件无文本层）；提取抛异常 → failed + 原始原因
  * - 图片（png/jpg/jpeg/gif/webp/bmp）：单个 image 块 + imageAssetPath，partial（待 Vision 识别）
  * - 其他二进制：单块 paragraph + text 空 + parseStatus 'failed' + parseError 中文说明
@@ -278,6 +331,12 @@ export async function parseFileIntoSourceDocument(
       const layoutBlocks = await parsePdfLayoutBlocks(filePath, fileName)
       if (layoutBlocks && layoutBlocks.length > 0) {
         return draftOf('parsed', layoutBlocks)
+      }
+    } else {
+      // OOXML Office 文档（DOCX / PPTX / XLSX）：优先走双平面重排引擎
+      const officeBlocks = await parseOfficeLayoutBlocks(filePath, fileName)
+      if (officeBlocks && officeBlocks.length > 0) {
+        return draftOf('parsed', officeBlocks)
       }
     }
 
