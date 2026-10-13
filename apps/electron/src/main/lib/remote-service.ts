@@ -946,23 +946,25 @@ export async function handleRemoteCommand(
       const limit = typeof parsed.limit === 'number' ? parsed.limit : undefined
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       const session = getAgentSessionMeta(sessionId)
-      if (!session?.workspaceId) return { ok: false, error: '会话不存在或未绑定工作区' }
-      const workspace = getAgentWorkspace(session.workspaceId)
-      if (!workspace) return { ok: false, error: '会话工作区不存在' }
+      if (!session) return { ok: false, error: '会话不存在或未绑定工作区' }
+      const workspace = session.workspaceId ? getAgentWorkspace(session.workspaceId) : undefined
+      if (session.workspaceId && !workspace) return { ok: false, error: '会话工作区不存在' }
+      // 非项目会话（未绑定工作区）回退默认工作区沙箱，与桌面端文件搜索同构。
+      const workspaceSlug = workspace?.slug ?? 'default'
       return {
         ok: true,
         data: searchRemoteWorkspaceFiles({
           query,
           limit,
-          sessionRoot: getAgentSessionWorkspacePath(workspace.slug, sessionId),
-          workspaceRoot: getWorkspaceFilesDir(workspace.slug),
+          sessionRoot: getAgentSessionWorkspacePath(workspaceSlug, sessionId),
+          workspaceRoot: getWorkspaceFilesDir(workspaceSlug),
           sessionAttachedPaths: [
             ...(session.attachedDirectories ?? []),
             ...(session.attachedFiles ?? []),
           ],
           workspaceAttachedPaths: [
-            ...getWorkspaceAttachedDirectories(workspace.slug),
-            ...getWorkspaceAttachedFiles(workspace.slug),
+            ...getWorkspaceAttachedDirectories(workspaceSlug),
+            ...getWorkspaceAttachedFiles(workspaceSlug),
           ],
         }),
       }
@@ -1713,21 +1715,23 @@ export async function handleRemoteCommand(
           : context?.activeSessionId ?? ''
       if (!filePath || !sessionId) return { ok: false, error: '缺少 filePath 或 sessionId' }
       const session = getAgentSessionMeta(sessionId)
-      if (!session?.workspaceId) return { ok: false, error: '会话不存在或未绑定工作区' }
-      const workspace = getAgentWorkspace(session.workspaceId)
-      if (!workspace) return { ok: false, error: '会话工作区不存在' }
+      if (!session) return { ok: false, error: '会话不存在或未绑定工作区' }
+      const workspace = session.workspaceId ? getAgentWorkspace(session.workspaceId) : undefined
+      if (session.workspaceId && !workspace) return { ok: false, error: '会话工作区不存在' }
+      // 非项目会话（未绑定工作区）回退默认工作区沙箱，与桌面端预览授权同构。
+      const workspaceSlug = workspace?.slug ?? 'default'
 
       const resolvedPath = resolveAuthorizedRemoteFilePath(filePath, {
         directoryRoots: [
-          getAgentSessionWorkspacePath(workspace.slug, sessionId),
-          getAgentWorkspacePath(workspace.slug),
-          getWorkspaceFilesDir(workspace.slug),
+          getAgentSessionWorkspacePath(workspaceSlug, sessionId),
+          getAgentWorkspacePath(workspaceSlug),
+          getWorkspaceFilesDir(workspaceSlug),
           ...(session.attachedDirectories ?? []),
-          ...getWorkspaceAttachedDirectories(workspace.slug),
+          ...getWorkspaceAttachedDirectories(workspaceSlug),
         ],
         exactFiles: [
           ...(session.attachedFiles ?? []),
-          ...getWorkspaceAttachedFiles(workspace.slug),
+          ...getWorkspaceAttachedFiles(workspaceSlug),
         ],
       })
       if (!resolvedPath) return { ok: false, error: '文件不存在或不在当前会话授权范围内' }
