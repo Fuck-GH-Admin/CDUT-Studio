@@ -28,6 +28,17 @@ import {
   type BidNodeRecord,
   type YanhuCollectedPage,
 } from './yanhu-dom-distillation'
+import {
+  buildVisualSnapScript,
+  buildVisualSnapshot,
+  getVisualSnapshot,
+  setVisualSnapshot,
+  visualToDip,
+  visualToPixel,
+  VISUAL_SNAP_RADIUS_PX,
+  type VisualAnchorSnapshot,
+  type VisualLandmark,
+} from './yanhu-visual-anchor'
 
 /** 单个工具的执行回调 */
 export interface YanhuToolExecutionResult {
@@ -651,6 +662,18 @@ function buildLegacyFillScript(
     }
     __unseal(el);
     __center(el);
+    // ===== 第四道防线：完备合成事件链（Vue / React 响应式解耦修复）=====
+    // 现代框架的 v-model / onChange 常依赖 pointer/mouse 序列与焦点态，缺任一环都可能导致
+    // 框架内部状态未同步而被回滚。统一下发完备事件链：
+    // PointerDown -> MouseDown -> Focus -> Value Setter -> Input -> Change -> PointerUp/MouseUp -> Blur
+    const __winRef = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    const __downOpts = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 };
+    const __upOpts = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 0 };
+    try {
+      const Ptr = __winRef.PointerEvent || (typeof PointerEvent !== 'undefined' ? PointerEvent : null);
+      if (Ptr) el.dispatchEvent(new Ptr('pointerdown', __downOpts));
+    } catch (e) {}
+    try { el.dispatchEvent(new __winRef.MouseEvent('mousedown', __downOpts)); } catch (e) {}
     try { el.focus(); } catch (e) {}
     const isField = tag === 'input' || tag === 'textarea';
     const prev = isField ? String(el.value != null ? el.value : '') : String(el.textContent || '');
@@ -723,6 +746,12 @@ function buildLegacyFillScript(
     el.dispatchEvent(new KeyboardEvent('keypress', ke));
     el.dispatchEvent(new KeyboardEvent('keyup', ke));`
       : ''}
+    // 事件链收尾：PointerUp -> MouseUp -> Blur，与前置 PointerDown/MouseDown 形成闭环
+    try {
+      const Ptr = __winRef.PointerEvent || (typeof PointerEvent !== 'undefined' ? PointerEvent : null);
+      if (Ptr) el.dispatchEvent(new Ptr('pointerup', __upOpts));
+    } catch (e) {}
+    try { el.dispatchEvent(new __winRef.MouseEvent('mouseup', __upOpts)); } catch (e) {}
     try { if (typeof el.blur === 'function') el.blur(); } catch (e) {}
     return { ok: true, tag: tag, type: type };
   })()`
@@ -1696,6 +1725,83 @@ async function distillCurrent(tabId: string): Promise<YanhuDistilledPage> {
   return yanhuDomDistillationEngine.distill(tabId, collected, axNodes)
 }
 
+/**
+ * 从当前蒸馏页构建视觉地标集合。
+ *
+ * 选取「可见、未被遮挡、位于视口内、具备可读名称」的控件作为地标基准点，
+ * 其视觉归一化坐标 u/v ∈ [0,1000]² 与 DOM DIP 坐标一一对应，供单应性矩阵求解。
+ */
+export function buildPageLandmarks(
+  page: YanhuDistilledPage,
+  dipWidth: number,
+  dipHeight: number,
+): VisualLandmark[] {
+  const out: VisualLandmark[] = []
+  if (dipWidth <= 0 || dipHeight <= 0) return out
+  for (const node of page.nodes) {
+    if (node.isOccluded) continue
+    if (!node.name) continue
+    const b = node.bounds
+    if (!b || b.width <= 0 || b.height <= 0) continue
+    const cx = b.x + b.width / 2
+    const cy = b.y + b.height / 2
+    if (cx < 0 || cy < 0 || cx > dipWidth || cy > dipHeight) continue
+    out.push({
+      u: Math.round((cx / dipWidth) * 1000),
+      v: Math.round((cy / dipHeight) * 1000),
+      x: Math.round(cx),
+      y: Math.round(cy),
+      label: node.name.slice(0, 24),
+    })
+    if (out.length >= 64) break
+  }
+  return out
+}
+
+/** 页面信息是否极度稀疏（文本 / 数据表格不足），用于视觉截图的隐式自动兜底判定 */
+export function isVisuallySparsePage(page: YanhuDistilledPage): boolean {
+  const hasTables = Array.isArray(page.dataTables) && page.dataTables.length > 0
+  return page.nodes.length < 5 && !hasTables
+}
+
+/**
+ * 截取视口并建立双平面标定快照（写入按标签缓存的快照，供 `yanhu_click_visual` 复用）。
+ */
+async function captureVisualSnapshot(
+  tabId: string,
+): Promise<{ snapshot: VisualAnchorSnapshot; dataUrl: string } | null> {
+  const shot = await yanhuExpressManager.captureViewport(tabId)
+  if (!shot) return null
+  const page = await distillCurrent(tabId)
+  const landmarks = buildPageLandmarks(page, shot.dipWidth, shot.dipHeight)
+  const snapshot = buildVisualSnapshot({
+    dipWidth: shot.dipWidth,
+    dipHeight: shot.dipHeight,
+    pixelWidth: shot.pixelWidth,
+    pixelHeight: shot.pixelHeight,
+    landmarks,
+  })
+  setVisualSnapshot(tabId, snapshot)
+  return { snapshot, dataUrl: shot.dataUrl }
+}
+
+/** 把标定快照渲染为模型可读的文本块（地标对照表） */
+function formatVisualSnapshot(snapshot: VisualAnchorSnapshot): string {
+  const lines: string[] = []
+  lines.push('[视觉标定 · 双平面平行坐标锚定]')
+  lines.push(
+    `视口 DIP: ${snapshot.dipWidth}×${snapshot.dipHeight} | 截图像素: ${snapshot.pixelWidth}×${snapshot.pixelHeight} | 地标: ${snapshot.landmarks.length} | 单应性: ${snapshot.homography ? '已求解' : '纯缩放回退'}`,
+  )
+  if (snapshot.landmarks.length > 0) {
+    lines.push('地标对照（视觉归一化 u,v ∈ [0,1000] → DOM DIP x,y）：')
+    for (const lm of snapshot.landmarks) {
+      lines.push(`  u=${lm.u},v=${lm.v} → x=${lm.x},y=${lm.y}${lm.label ? ` "${lm.label}"` : ''}`)
+    }
+  }
+  lines.push('若需点击视觉目标，请使用 yanhu_click_visual 传入 u,v（0~1000 归一化坐标）。')
+  return lines.join('\n')
+}
+
 /** 判定是否为宽字符（CJK / 全角标点等），用于 Token 估算加权 */
 function isWideChar(code: number): boolean {
   return (code >= 0x1100 && code <= 0x115f)
@@ -1729,7 +1835,10 @@ function capByTokens(text: string, maxTokens?: number): string {
  *
  * @param tabResolver 返回当前目标标签 ID 的解析器（通常为激活标签）
  */
-export function buildYanhuBrowserTools(tabResolver: () => string): YanhuBrowserTool[] {
+export function buildYanhuBrowserTools(
+  tabResolver: () => string,
+  options: { enableVision?: boolean } = {},
+): YanhuBrowserTool[] {
   const tools: YanhuBrowserTool[] = []
   /** 工具层熔断标记：记录「上一次 read_page 报告页面无变化」所属的标签 ID（按标签隔离，杜绝跨标签误熔断） */
   let unchangedBreakerTabId: string | null = null
@@ -1784,7 +1893,16 @@ export function buildYanhuBrowserTools(tabResolver: () => string): YanhuBrowserT
       unchangedBreakerTabId = null
       // Git-Diff 局部增量
       if (diffText) return { content: diffText }
-      return { content: capByTokens(page.digestText, budget) }
+      const digest = capByTokens(page.digestText, budget)
+      // 隐式视觉兜底：页面文本极度稀疏（可交互节点 < 5 且无数据表格）且已开启视觉感知时，
+      // 自动截取视口并附带地标锚点标定块，实现「页面看不清 → 自动视觉自愈」的透明兜底。
+      if (options.enableVision && isVisuallySparsePage(page)) {
+        const captured = await captureVisualSnapshot(tabId)
+        if (captured) {
+          return { content: `${digest}\n\n${formatVisualSnapshot(captured.snapshot)}` }
+        }
+      }
+      return { content: digest }
     },
   })
 
@@ -2467,6 +2585,108 @@ export function buildYanhuBrowserTools(tabResolver: () => string): YanhuBrowserT
       return { content: `未知标签操作：${action}`, isError: true }
     },
   })
+
+  // 15/16. 视觉截图辅助感知工具（仅当用户在设置中开启 enableVision 时才向模型挂载）
+  if (options.enableVision) {
+    // 16. yanhu_capture_visual — 截取视口并建立双平面标定
+    tools.push({
+      definition: {
+        name: 'yanhu_capture_visual',
+        description:
+          '截取当前网页视口，建立「视觉图像平面 ↔ DOM 物理平面」双平面平行坐标标定，返回视口截图（可选 Base64）与 4~8 个地标基准点的坐标对照表。当页面包含复杂图形 / 验证码 / Canvas 排课表，或 PageDigest 返回大量 [Occluded]、文本极度稀疏、无法用 [BID] 定位时调用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            includeImage: {
+              type: 'boolean',
+              description: '是否在结果中附带视口截图 Base64（默认 false，仅返回地标标定块以节省上下文）',
+            },
+          },
+        },
+      },
+      label: () => '👁 视觉截图与坐标标定',
+      execute: async (args) => {
+        const tabId = tabResolver()
+        const captured = await captureVisualSnapshot(tabId)
+        if (!captured) {
+          return { content: '截图失败：当前标签无可用视口（可能已休眠或正在加载中）。', isError: true }
+        }
+        const base = formatVisualSnapshot(captured.snapshot)
+        if (args.includeImage === true) {
+          return { content: `${base}\n\n[视口截图 dataURL]\n${captured.dataUrl}` }
+        }
+        return { content: base }
+      },
+    })
+
+    // 17. yanhu_click_visual — 视觉归一化坐标精确点击（含 DOM 磁吸对齐）
+    tools.push({
+      definition: {
+        name: 'yanhu_click_visual',
+        description:
+          '按视觉归一化坐标 u,v ∈ [0,1000]² 精确点击页面上无法通过 [BID] 定位的图形 / Canvas / 纯图片 / 验证码区域。坐标由 yanhu_capture_visual 的标定快照经单应性矩阵映射为 DOM DIP 坐标，并自动做半径 12px 的 DOM 磁吸对齐后派发物理点击。',
+        parameters: {
+          type: 'object',
+          properties: {
+            u: { type: 'number', description: '视觉归一化横坐标（0~1000）' },
+            v: { type: 'number', description: '视觉归一化纵坐标（0~1000）' },
+          },
+          required: ['u', 'v'],
+        },
+      },
+      label: (args) => `👆 视觉点击 (${asInt(args.u, 0)}, ${asInt(args.v, 0)})`,
+      execute: async (args) => {
+        const tabId = tabResolver()
+        const snapshot = getVisualSnapshot(tabId)
+        if (!snapshot) {
+          return {
+            content: '尚未建立视觉标定：请先调用 yanhu_capture_visual 截屏并建立地标对照。',
+            isError: true,
+          }
+        }
+        const rawU = asInt(args.u, -1)
+        const rawV = asInt(args.v, -1)
+        if (rawU < 0 || rawU > 1000 || rawV < 0 || rawV > 1000) {
+          return { content: '参数 u / v 必须为 0~1000 的整数（视觉归一化坐标）。', isError: true }
+        }
+        const dip = visualToDip(snapshot, rawU, rawV)
+        // DOM 磁吸对齐：半径 ε 内探测真实 DOM 并吸附到可交互控件几何中心
+        let targetX = dip.x
+        let targetY = dip.y
+        let hitTag = ''
+        let hitName = ''
+        let snapped = false
+        try {
+          const res = (await yanhuExpressManager.evalInPage(
+            tabId,
+            buildVisualSnapScript(dip.x, dip.y, VISUAL_SNAP_RADIUS_PX),
+          )) as { ok?: boolean; x?: number; y?: number; snapped?: boolean; hit?: { tag?: string; name?: string } | null } | null
+          if (res && res.ok) {
+            if (typeof res.x === 'number' && typeof res.y === 'number') {
+              targetX = res.x
+              targetY = res.y
+            }
+            snapped = res.snapped === true
+            if (res.hit) {
+              hitTag = res.hit.tag ?? ''
+              hitName = res.hit.name ?? ''
+            }
+          }
+        } catch {
+          /* 磁吸失败退回原始 DIP 坐标 */
+        }
+        await enforceYanhuHumanInterval(true)
+        await yanhuExpressManager.dispatchHumanClick(tabId, Math.round(targetX), Math.round(targetY))
+        yanhuDomDistillationEngine.markDirty(tabId)
+        markInteraction()
+        const pixel = visualToPixel(snapshot, rawU, rawV)
+        const hitText = hitTag ? `，吸附命中 <${hitTag}>${hitName ? `「${hitName}」` : ''}` : ''
+        return {
+          content: `已执行视觉点击：视觉(${rawU},${rawV}) ≈ 像素(${pixel.x},${pixel.y}) → DIP(${Math.round(targetX)},${Math.round(targetY)})${snapped ? '（已 DOM 磁吸对齐）' : ''}${hitText}。请调用 yanhu_read_page 验证结果。`,
+        }
+      },
+    })
+  }
 
   // 统一错误兜底：任何非 read_page 的工具一旦执行出错立即释放读屏熔断
   const markToolError = (): void => {

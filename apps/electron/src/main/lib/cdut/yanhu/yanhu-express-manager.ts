@@ -1483,6 +1483,48 @@ export class YanhuExpressManager {
   }
 
   /**
+   * 捕获目标标签的原生视口截图（视觉截图辅助感知的底层支撑）。
+   *
+   * 直接使用 Electron `webContents.capturePage()` 获取视口物理像素图，返回 JPEG Base64
+   * （质量 72，兼顾清晰度与上下文体积），并给出 DIP / 物理像素双尺寸，
+   * 供双平面平行坐标锚定引擎（`yanhu-visual-anchor`）换算视觉归一化坐标。
+   */
+  public async captureViewport(tabId?: string): Promise<{
+    dataUrl: string
+    dipWidth: number
+    dipHeight: number
+    pixelWidth: number
+    pixelHeight: number
+  } | null> {
+    const tab = this.resolveTab(tabId)
+    if (!tab?.view || tab.view.webContents.isDestroyed()) return null
+    const wc = tab.view.webContents
+    let image: Awaited<ReturnType<WebContents['capturePage']>>
+    try {
+      image = await wc.capturePage()
+    } catch {
+      return null
+    }
+    if (image.isEmpty()) return null
+    const size = image.getSize()
+    let bounds = { width: size.width, height: size.height }
+    try {
+      const b = tab.view.getBounds()
+      if (b.width > 0 && b.height > 0) bounds = { width: b.width, height: b.height }
+    } catch {
+      /* 退回物理像素尺寸 */
+    }
+    const dataUrl = `data:image/jpeg;base64,${image.toJPEG(72).toString('base64')}`
+    return {
+      dataUrl,
+      dipWidth: Math.max(1, Math.round(bounds.width)),
+      dipHeight: Math.max(1, Math.round(bounds.height)),
+      pixelWidth: size.width,
+      pixelHeight: size.height,
+    }
+  }
+
+  /**
    * 在页面主上下文中求值表达式（依赖 CDP Runtime.evaluate，附带 CDP 附着）。
    * 单次表达式上限 64,000 字符由 DevToolsHub 把关。
    */

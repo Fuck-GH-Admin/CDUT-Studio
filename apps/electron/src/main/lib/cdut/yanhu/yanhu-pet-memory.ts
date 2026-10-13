@@ -67,6 +67,8 @@ export function normalizeYanhuPetConfig(raw: unknown): YanhuPetConfig {
         : undefined,
     // 仅显式开启才暴露开发者级工具；缺省一律关闭
     devToolsEnabled: candidate.devToolsEnabled === true ? true : undefined,
+    // 仅显式开启才启用视觉截图辅助感知；缺省一律关闭
+    enableVision: candidate.enableVision === true ? true : undefined,
   }
 }
 

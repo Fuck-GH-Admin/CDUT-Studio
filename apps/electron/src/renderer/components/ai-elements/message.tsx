@@ -37,8 +37,10 @@ import {
   TooltipTrigger,
 } from '@profer/ui/primitives/tooltip'
 import { LoadingIndicator } from '@profer/ui/primitives/loading-indicator'
-import { CodeBlock, MermaidBlock, shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock } from '@profer/ui'
+import { CodeBlock, MermaidBlock, shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock, shouldRenderMindMapCodeBlock } from '@profer/ui'
 import { detectLanguage } from '@profer/core/highlight'
+import { parseMindMapText } from '@profer/shared'
+import { MindMapBlock } from './MindMapBlock'
 import { FilePathChip, isAbsoluteFilePath, isRelativeFilePath } from './file-path-chip'
 import { useFileAccessSessionId } from './file-access-context'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -856,6 +858,15 @@ const MarkdownPre = React.memo(function MarkdownPre({
     const codeProps = codeChild.props as { className?: string; children?: React.ReactNode }
     const className = codeProps.className ?? ''
     const hasExplicitLang = /\blanguage-\S+/.test(className)
+
+    // ```mindmap 思维导图代码块：对话流只读预览 + 全屏可拖拽大图（§7.2）。
+    // 解析失败时静默回退到后续通用代码块 / Mermaid 渲染路径。
+    if (shouldRenderMindMapCodeBlock(className, extractText(codeProps.children))) {
+      const mindmapCode = extractText(codeProps.children).replace(/\r\n?/g, '\n').replace(/\n$/, '')
+      if (parseMindMapText(mindmapCode)) {
+        return <MindMapBlock code={mindmapCode} />
+      }
+    }
 
     // 先用共享 mermaid 识别（覆盖 language-mermaid/mmd 以及未标语言但内容像 Mermaid 的情况）
     if (shouldInspectMermaidCodeBlock(className)) {

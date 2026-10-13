@@ -8,7 +8,7 @@
 import * as React from 'react'
 import type { Channel } from '@profer/shared'
 import { PROVIDER_LABELS } from '@profer/shared'
-import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
+import { SettingsSection, SettingsCard, SettingsRow, SettingsToggle } from './primitives'
 
 export interface YanhuPetModelSettingsProps {
   channels: Channel[]
@@ -21,6 +21,7 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
   const api = window.electronAPI?.yanhuExpress
   const [channelId, setChannelId] = React.useState('')
   const [modelId, setModelId] = React.useState('')
+  const [enableVision, setEnableVision] = React.useState(false)
   const [loaded, setLoaded] = React.useState(false)
 
   React.useEffect(() => {
@@ -35,6 +36,7 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
         if (!alive) return
         setChannelId(config.selectedChannelId ?? '')
         setModelId(config.selectedModelId ?? '')
+        setEnableVision(config.enableVision === true)
       })
       .catch(() => {})
       .finally(() => {
@@ -92,6 +94,12 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
     persist(channelId, value)
   }
 
+  const handleVisionToggle = (checked: boolean): void => {
+    setEnableVision(checked)
+    if (!api) return
+    void api.petSaveConfig({ enableVision: checked ? true : undefined }).catch(() => {})
+  }
+
   return (
     <SettingsSection
       title="智联万站专属模型"
@@ -128,6 +136,14 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
             ))}
           </select>
         </SettingsRow>
+        {/* 视觉截图辅助感知：页面信息不足时触发视口截图，交由多模态模型视觉认知 */}
+        <SettingsToggle
+          label="启用视觉截图辅助感知（Screenshot Recognition）"
+          description="开启后在页面信息不足时将触发视口截图分析；请确保所选模型渠道支持多模态图像输入 (Vision/Multimodal)。"
+          checked={enableVision}
+          disabled={!loaded}
+          onCheckedChange={handleVisionToggle}
+        />
       </SettingsCard>
     </SettingsSection>
   )

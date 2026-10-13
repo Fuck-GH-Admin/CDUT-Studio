@@ -1826,6 +1826,73 @@ describe('复杂布局与表单加固回归（Shadow DOM / 富文本 / 吸顶遮
     }
   })
 
+  test('yanhu_fill 降级脚本的下发事件链完备（PointerDown->MouseDown->Focus->Value->Input->Change->PointerUp->MouseUp->Blur）', async () => {
+    const originalEval = yanhuExpressManager.evalInPage
+    const originalAx = yanhuExpressManager.getFullAXTree
+    const originalStable = yanhuExpressManager.awaitStable
+    const originalTextInput = yanhuExpressManager.dispatchHumanTextInput
+    const exprs: string[] = []
+    try {
+      const elements = [
+        {
+          tag: 'input',
+          role: 'textbox',
+          name: '学号',
+          bounds: { x: 10, y: 20, width: 200, height: 28 },
+          visible: true,
+          ariaHidden: false,
+          occluded: false,
+          region: '业务表单',
+          actionable: true,
+        },
+      ]
+      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) => {
+        exprs.push(expr)
+        if (expr === buildYanhuCollectorScript()) return { url: 'https://x/y', title: 't', elements }
+        if (expr.includes('editableInput')) {
+          return { ok: true, editable: true, tag: 'input', type: 'text', role: 'textbox' }
+        }
+        if (expr.includes('hitOk')) return { ok: false, reason: 'not-found' }
+        return { ok: true }
+      }
+      yanhuExpressManager.getFullAXTree = async () => []
+      yanhuExpressManager.awaitStable = async () => ({
+        settled: true,
+        timedOut: false,
+        elapsedMs: 0,
+        inflight: 0,
+        frames: 0,
+        mutations: 0,
+        lastActivityAt: 0,
+      })
+      yanhuExpressManager.dispatchHumanTextInput = async () => {}
+
+      const tools = buildYanhuBrowserTools(() => 'tab-event-chain')
+      await tools.find((t) => t.definition.name === 'yanhu_read_page')!.execute({})
+      const fill = tools.find((t) => t.definition.name === 'yanhu_fill')!
+      await fill.execute({ bid: 1, value: '20210001' })
+
+      const legacy = exprs.find((e) => e.includes('HTMLInputElement.prototype')) ?? ''
+      expect(legacy).not.toBe('')
+      // 完备合成事件链：缺任一环都可能导致 Vue v-model / React onChange 未同步而被回滚
+      expect(legacy).toContain("'pointerdown'")
+      expect(legacy).toContain("'mousedown'")
+      expect(legacy).toContain("'pointerup'")
+      expect(legacy).toContain("'mouseup'")
+      expect(legacy).toContain("new Event('input'")
+      expect(legacy).toContain("new Event('change'")
+      // 原生原型 setter 写入（绝不直接 el.value = next，否则 Vue/React 感知不到）
+      expect(legacy).toContain("Object.getOwnPropertyDescriptor(proto, 'value')")
+      // 页面脚本必须可被 JS 引擎解析
+      expect(() => new Function('document', 'window', legacy)).not.toThrow()
+    } finally {
+      yanhuExpressManager.evalInPage = originalEval
+      yanhuExpressManager.getFullAXTree = originalAx
+      yanhuExpressManager.awaitStable = originalStable
+      yanhuExpressManager.dispatchHumanTextInput = originalTextInput
+    }
+  })
+
   test('跨域（OOPIF）框架元素采集失败时主框架感知不受影响', async () => {
     const originalEval = yanhuExpressManager.evalInPage
     const originalAx = yanhuExpressManager.getFullAXTree

@@ -10,10 +10,15 @@ import * as React from 'react'
 import { ShieldAlert } from 'lucide-react'
 import type { CdutMutationConfirmRequest } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
+import { Z_LAYER } from '@profer/ui'
+import { useGlobalOverlay } from '@/atoms/overlay-atoms'
 
 export function MutationConfirmModal(): React.ReactElement | null {
   const [request, setRequest] = React.useState<CdutMutationConfirmRequest | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
+
+  // 全局模态叠加登记：写操作二次确认弹出时，智联万站原生视口必须让位
+  useGlobalOverlay(!!request)
 
   React.useEffect(() => {
     const unsub = window.electronAPI.cdutZone.onMutationRequest((req) => {
@@ -37,7 +42,7 @@ export function MutationConfirmModal(): React.ReactElement | null {
   if (!request) return null
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+    <div className={`fixed inset-0 ${Z_LAYER.confirm} flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm`}>
       <div className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl">
         <div className="flex items-start gap-3">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600">

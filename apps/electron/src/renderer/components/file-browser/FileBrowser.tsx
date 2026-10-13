@@ -1200,7 +1200,7 @@ function FileTreeItem({
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+              <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
                 {onDownload && entry.syncStatus === 'cloud-only' && menuSelectedCount === 1 && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"

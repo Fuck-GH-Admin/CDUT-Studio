@@ -20,6 +20,7 @@ import { toast } from 'sonner'
 import { coachTourOpenAtom } from '@/atoms/coach-tour-atoms'
 import { activeViewAtom, type ActiveView } from '@/atoms/active-view'
 import { Button } from '@profer/ui/primitives/button'
+import { Z_LAYER } from '@profer/ui'
 import { cn } from '@/lib/utils'
 import { COACH_TOUR_STEPS, CURRENT_COACH_TOUR_VERSION, type CoachTourStep } from './coach-tour-steps'
 import { computeCardPosition, unionRects, type AnchorRect, type CardSize } from './coach-tour-position'
@@ -273,7 +274,7 @@ export function CoachTourOverlay(): React.ReactElement | null {
   const frame = rect ? clampFrameToViewport(rect) : null
 
   return createPortal(
-    <div className="pointer-events-none fixed inset-0 z-[9800]">
+    <div className={`pointer-events-none fixed inset-0 ${Z_LAYER.overlay}`}>
       {/* 点击捕获：手动步骤为整屏点击前进；交互步骤拆成锚点四周的四块惰性挡板，镂空区放行真实点击 */}
       {!interactive && (
         <div

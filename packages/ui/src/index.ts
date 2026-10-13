@@ -14,9 +14,13 @@ export { applyWheelZoom, DEFAULT_WHEEL_ZOOM } from './lib/wheel-zoom.ts'
 export type { WheelZoomOptions } from './lib/wheel-zoom.ts'
 export { cn } from './lib/cn.ts'
 export { detectIsMac, detectIsWindows } from './lib/platform.ts'
+export { Z_INDEX, Z_LAYER } from './lib/z-layers.ts'
+export type { ZLayerName } from './lib/z-layers.ts'
 export {
   isMermaidLanguage,
   looksLikeMermaidDefinition,
   shouldInspectMermaidCodeBlock,
   shouldRenderMermaidCodeBlock,
+  isMindMapLanguage,
+  shouldRenderMindMapCodeBlock,
 } from './mermaid-detection.ts'

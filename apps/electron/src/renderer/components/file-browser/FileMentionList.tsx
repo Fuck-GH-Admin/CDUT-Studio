@@ -519,7 +519,7 @@ function TreeNodeList({
           )}
         </button>
           </TooltipTrigger>
-          <TooltipContent side="right" className="z-[10000] max-w-xs break-all">
+          <TooltipContent side="right" className="max-w-xs break-all">
             <p>{node.path}</p>
           </TooltipContent>
         </Tooltip>

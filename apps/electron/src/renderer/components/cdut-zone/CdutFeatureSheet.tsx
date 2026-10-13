@@ -15,6 +15,7 @@ import {
   SheetTitle,
 } from '@profer/ui/primitives/sheet'
 import type { CdutQuickFeature } from './CdutQuickBar'
+import { useGlobalOverlay } from '@/atoms/overlay-atoms'
 
 interface CdutFeatureSheetProps {
   feature: CdutQuickFeature | null
@@ -27,6 +28,8 @@ export function CdutFeatureSheet({
   open,
   onOpenChange,
 }: CdutFeatureSheetProps): React.ReactElement {
+  // 全局模态叠加登记：抽屉拉起时，智联万站原生视口必须让位
+  useGlobalOverlay(open)
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent

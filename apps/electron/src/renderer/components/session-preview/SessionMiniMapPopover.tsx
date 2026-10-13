@@ -11,6 +11,7 @@ import { useAtom, useAtomValue } from 'jotai'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AlertTriangle, Bot, Loader2, MessageSquare } from 'lucide-react'
+import { Z_LAYER } from '@profer/ui'
 import { UserAvatar } from '@/components/shared/UserAvatar'
 import { tabMinimapCacheAtom, type TabMinimapItem } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
@@ -483,7 +484,7 @@ function SessionMiniMapPopoverContent({
 
   return createPortal(
     <div
-      className="fixed z-[9999] titlebar-no-drag transition-[top,height] duration-150 ease-out pointer-events-auto"
+      className={`fixed ${Z_LAYER.menu} titlebar-no-drag transition-[top,height] duration-150 ease-out pointer-events-auto`}
       style={{ top: position.top, left: position.left, width: PANEL_WIDTH, height: position.height }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}

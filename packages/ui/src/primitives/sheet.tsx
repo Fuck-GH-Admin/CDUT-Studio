@@ -5,6 +5,7 @@ import { X } from "lucide-react"
 
 import { cn } from "../lib/cn"
 import { detectIsWindows } from "../lib/platform"
+import { Z_LAYER } from "../lib/z-layers"
 
 const Sheet = SheetPrimitive.Root
 
@@ -20,8 +21,9 @@ const SheetOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SheetPrimitive.Overlay
     className={cn(
-      // 与 Dialog 同款：blur + 适度深色。z-[100] 需高于 AppShell 内容区的 z-[60]，否则抽屉被主区盖住
-      "fixed inset-0 z-[100] bg-overlay/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      // 与 Dialog 同款：blur + 适度深色。对话框层需高于 AppShell 内容区，否则抽屉被主区盖住
+      "fixed inset-0 bg-overlay/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      Z_LAYER.dialog,
       className
     )}
     {...props}
@@ -31,8 +33,8 @@ const SheetOverlay = React.forwardRef<
 SheetOverlay.displayName = SheetPrimitive.Overlay.displayName
 
 const sheetVariants = cva(
-  // shadow-xl 多层柔阴影 + dialog 背景 token + hairline 边框。z-[100] 与 Overlay 对齐，高于 AppShell z-[60]
-  "fixed z-[100] gap-4 border-surface-border/60 bg-dialog text-dialog-foreground p-6 shadow-xl transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out",
+  // shadow-xl 多层柔阴影 + dialog 背景 token + hairline 边框。抽屉层与 Overlay 对齐，高于 AppShell
+  `fixed ${Z_LAYER.dialog} gap-4 border-surface-border/60 bg-dialog text-dialog-foreground p-6 shadow-xl transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out`,
   {
     variants: {
       side: {

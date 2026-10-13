@@ -4,6 +4,7 @@ import * as React from "react"
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "../lib/cn"
+import { Z_LAYER } from "../lib/z-layers"
 import { buttonVariants } from "./button"
 
 const AlertDialog = AlertDialogPrimitive.Root
@@ -19,7 +20,8 @@ const AlertDialogOverlay = React.forwardRef<
   <AlertDialogPrimitive.Overlay
     className={cn(
       // 与 Dialog 同款：blur + 适度深色，制造焦点
-      "fixed inset-0 z-[100] bg-overlay/40 backdrop-blur-sm titlebar-no-drag",
+      "fixed inset-0 bg-overlay/40 backdrop-blur-sm titlebar-no-drag",
+      Z_LAYER.confirm,
       "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
@@ -38,7 +40,8 @@ const AlertDialogContent = React.forwardRef<
     <AlertDialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-[50%] top-[50%] z-[100] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4",
+        "fixed left-[50%] top-[50%] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4",
+        Z_LAYER.confirm,
         "border border-surface-border/60 bg-dialog text-dialog-foreground rounded-xl p-6 shadow-xl duration-200 titlebar-no-drag",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",

@@ -4,6 +4,7 @@ import { AppShell } from './components/app-shell/AppShell'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
 import { TooltipProvider } from '@profer/ui/primitives/tooltip'
+import { Z_LAYER } from '@profer/ui'
 import { useCreateSession } from './hooks/useCreateSession'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { openTutorialTab } from './lib/tab-activation'
@@ -177,7 +178,7 @@ function IntroReplayOverlay(): React.ReactElement | null {
   if (!open) return null
   return (
     <div
-      className="fixed inset-0 z-[9999]"
+      className={`fixed inset-0 ${Z_LAYER.overlay}`}
       role="dialog"
       aria-modal="true"
       aria-label="CDUT Studio 开屏动画"

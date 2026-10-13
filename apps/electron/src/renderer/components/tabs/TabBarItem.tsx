@@ -10,6 +10,7 @@ import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
 import { BookOpen, Bot, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
+import { Z_LAYER } from '@profer/ui'
 import { cn } from '@/lib/utils'
 import type { TabType } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -479,7 +480,7 @@ function TabPreviewDropdown({
 
   return createPortal(
     <div
-      className="fixed z-[9999] pt-1"
+      className={`fixed ${Z_LAYER.overlay} pt-1`}
       style={{ top: pos.top, left: pos.left }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
