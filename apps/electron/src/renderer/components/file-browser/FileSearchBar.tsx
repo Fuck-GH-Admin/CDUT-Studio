@@ -78,6 +78,9 @@ export function FileSearchBar({
     if (!trimmed || !hasAnyRoot) {
       setResults([])
       setIsOpen(false)
+      // 早退不新建 AbortController：被中止请求的 finally 会因 aborted 跳过复位，
+      // 这里必须显式复位，否则清空输入后 Loader 永久旋转。
+      setSearching(false)
       pendingShowRef.current = false
       return
     }
@@ -257,7 +260,7 @@ export function FileSearchBar({
                   const globalIdx = results.indexOf(entry)
                   return (
                     <ResultItem
-                      key={entry.path}
+                      key={`${entry.source}:${entry.path}`}
                       entry={entry}
                       isSelected={globalIdx === selectedIndex}
                       onClick={handleClick}
@@ -279,7 +282,7 @@ export function FileSearchBar({
                   const globalIdx = results.indexOf(entry)
                   return (
                     <ResultItem
-                      key={entry.path}
+                      key={`${entry.source}:${entry.path}`}
                       entry={entry}
                       isSelected={globalIdx === selectedIndex}
                       onClick={handleClick}

@@ -1,5 +1,5 @@
 /**
- * YanhuBlockedPage —— 砚湖秒通内置拦截卡片（双模自适应）
+ * YanhuBlockedPage —— 智联万站内置拦截卡片（双模自适应）
  *
  * 当主进程安全网关阻断非网页协议访问（如 `mailto:` / `javascript:` / `file:`）时，
  * 标签 url 被置为 `yanhu://blocked?target=...` 哨兵，

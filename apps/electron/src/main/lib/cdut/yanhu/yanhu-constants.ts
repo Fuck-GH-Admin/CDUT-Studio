@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通常量与基础契约
+ * 智联万站常量与基础契约
  *
  * 职责：集中定义默认入口、域名白名单正则、指纹伪装 UA / Client Hints、
  * 惰性休眠阈值、持久化路径与主题兜底样式，供主进程各服务模块共享。
@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { YANHU_DEFAULT_HOME_URL } from '@profer/shared'
 import { getConfigDir } from '../../config-paths'
 
-/** 砚湖秒通默认入口：办事大厅 */
+/** 智联万站默认入口：办事大厅 */
 export const YANHU_HOME_URL = YANHU_DEFAULT_HOME_URL
 
 /** 模拟的真实桌面 Chrome 版本（对齐 Chromium 133 稳定版） */
@@ -40,10 +40,13 @@ export const YANHU_CLIENT_HINTS: Readonly<Record<string, string>> = {
 }
 
 /**
- * 校园内网域名白名单正则。
+ * 校内域匹配正则（**不参与放行裁决**）。
+ *
+ * 智联万站的放行范围已放开为「任意 http/https」，本正则仅供校内专属逻辑复用：
+ * 瑞数 *P 签名清洗、教务主框架路由、证书豁免等。
  *
  * 严格匹配 `cdut.edu.cn` 本身及其任意子域，且必须为 http/https；端口可选。
- * 例如 `evil-cdut.edu.cn.phishing.com` 因顶级域不落 `.cdut.edu.cn` 而必然阻断。
+ * 例如 `evil-cdut.edu.cn.phishing.com` 因顶级域不落 `.cdut.edu.cn` 而必然不匹配。
  */
 export const CDUT_DOMAIN_REGEX = /^https?:\/\/([a-zA-Z0-9-]+\.)*cdut\.edu\.cn(:\d+)?(\/.*)?$/i
 
@@ -107,7 +110,7 @@ export const YANHU_SOFT_TAB_LIMIT = 30
 export const YANHU_WINDOW_OPEN_COALESCE_MS = 1500
 
 /**
- * 砚湖秒通持久化目录与标签拓扑文件路径。
+ * 智联万站持久化目录与标签拓扑文件路径。
  *
  * @returns ~/.cdutai/yanhu-express/tabs.json
  */
@@ -116,7 +119,7 @@ export function getYanhuTabsPath(): string {
 }
 
 /**
- * 砚湖秒通事件审计日志路径。
+ * 智联万站事件审计日志路径。
  *
  * @returns ~/.cdutai/yanhu-express/events.log
  *
@@ -130,7 +133,7 @@ export function getYanhuEventsLogPath(): string {
 /** 事件日志体积上限（字节）：超过后滚动为 events.log.1，避免无界增长 */
 export const YANHU_EVENTS_LOG_MAX_BYTES = 2 * 1024 * 1024
 
-/** 砚湖秒通拓扑文件格式版本 */
+/** 智联万站拓扑文件格式版本 */
 export const YANHU_TABS_STORE_VERSION = 1
 
 /** 主题兜底：网页 `prefers-color-scheme` 仿真失败时注入的细滚动条样式（深色） */

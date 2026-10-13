@@ -1,6 +1,6 @@
 /**
 /**
- * 砚湖秒通 · 最底层实时运行诊断控制台（YanhuDiagnosticConsole）
+ * 智联万站 · 最底层实时运行诊断控制台（YanhuDiagnosticConsole）
  *
  * 聚合方案：
  *   - 方法 2：捕获 WebContents 原生控制台（console.log / warn / error）、子框架加载失败（did-fail-load）、
@@ -25,6 +25,11 @@ export interface DiagnosticLogEntry {
   url?: string
 }
 
+/**
+ * NetLog 单文件上限（64MB）：仅在诊断控制台开启期间采集，且防止无界膨胀。
+ */
+const NETLOG_MAX_FILE_SIZE = 64 * 1024 * 1024
+
 class YanhuDiagnosticConsoleManager {
   private window: BrowserWindow | null = null
   private readonly logs: DiagnosticLogEntry[] = []
@@ -32,6 +37,7 @@ class YanhuDiagnosticConsoleManager {
   private attachedWebContents = new Set<number>()
   private attachedSessions = new Set<Session>()
   private netLogActive = false
+  private netLogSession: Session | null = null
   private netLogFilePath = ''
 
   /** 获取 NetLog 文件保存绝对路径 */
@@ -55,7 +61,7 @@ class YanhuDiagnosticConsoleManager {
       height: 680,
       minWidth: 800,
       minHeight: 480,
-      title: '【砚湖秒通 · 实时底层诊断控制台 (Console & Network)】',
+      title: '【智联万站 · 实时底层诊断控制台 (Console & Network)】',
       backgroundColor: '#0b0f19',
       autoHideMenuBar: true,
       webPreferences: {
@@ -70,9 +76,12 @@ class YanhuDiagnosticConsoleManager {
 
     win.on('closed', () => {
       this.window = null
+      this.stopNetLog()
     })
 
     this.window = win
+    // NetLog 仅在诊断控制台开启期间采集，关闭即停止（杜绝无界磁盘占用）
+    this.startNetLog()
 
     // 加载就绪后批量补发已有历史日志
     win.webContents.once('did-finish-load', () => {
@@ -97,14 +106,13 @@ class YanhuDiagnosticConsoleManager {
       this.logs.shift()
     }
 
-    // 终端标准输出备份（开发环境终端可见）
-    const prefix = `[砚湖诊断·${fullEntry.badge}]`
+    // 终端标准输出备份（开发环境终端可见）。
+    // 仅 warn / error 落终端：info 级（含每条网络请求）在繁忙页面上会刷屏并拖慢主进程。
+    const prefix = `[智联万站诊断·${fullEntry.badge}]`
     if (fullEntry.level === 'error') {
       console.error(prefix, fullEntry.title, fullEntry.details ?? '')
     } else if (fullEntry.level === 'warn') {
       console.warn(prefix, fullEntry.title, fullEntry.details ?? '')
-    } else {
-      console.log(prefix, fullEntry.title, fullEntry.details ?? '')
     }
 
     if (this.window && !this.window.isDestroyed()) {
@@ -220,30 +228,14 @@ class YanhuDiagnosticConsoleManager {
     if (this.attachedSessions.has(session)) return
     this.attachedSessions.add(session)
 
-    // 启动 Chromium 底层 NetLog 转储文件
-    if (!this.netLogActive) {
-      try {
-        const netLogPath = this.getNetLogPath()
-        void session.netLog.startLogging(netLogPath, { captureMode: 'everything' }).then(() => {
-          this.netLogActive = true
-          this.log({
-            category: 'system',
-            level: 'info',
-            badge: 'NETLOG',
-            badgeClass: 'badge-system',
-            title: `Chromium NetLog 底层抓包已激活，转储文件: ${netLogPath}`,
-          })
-        }).catch((err) => {
-          console.warn('[诊断控制台] 启动 NetLog 失败:', err)
-        })
-      } catch (err) {
-        console.warn('[诊断控制台] 初始化 NetLog 异常:', err)
-      }
-    }
+    // NetLog 不再随会话常驻开启：仅在诊断控制台窗口打开期间采集（见 open / stopNetLog），
+    // 避免「只要打开过智联万站就无界写盘」。
 
     // 实时网络事件监听（非阻塞监听，零业务入侵）
     try {
       session.webRequest.onSendHeaders({ urls: ['*://*/*'] }, (details) => {
+        // 诊断窗口未打开时直接丢弃采集，避免常驻开销
+        if (!this.window || this.window.isDestroyed()) return
         // 过滤常见的本地 hot-reload 与静态小图标，降低视觉噪音
         if (details.url.includes('/@vite/') || details.url.includes('/__vite_ping')) return
 
@@ -263,6 +255,7 @@ class YanhuDiagnosticConsoleManager {
       })
 
       session.webRequest.onResponseStarted({ urls: ['*://*/*'] }, (details) => {
+        if (!this.window || this.window.isDestroyed()) return
         if (details.url.includes('/@vite/') || details.url.includes('/__vite_ping')) return
 
         const code = details.statusCode
@@ -294,6 +287,7 @@ class YanhuDiagnosticConsoleManager {
       })
 
       session.webRequest.onErrorOccurred({ urls: ['*://*/*'] }, (details) => {
+        if (!this.window || this.window.isDestroyed()) return
         if (details.url.includes('/@vite/') || details.url.includes('/__vite_ping')) return
 
         this.log({
@@ -311,6 +305,50 @@ class YanhuDiagnosticConsoleManager {
     }
   }
 
+  /** 启动 Chromium 底层 NetLog 抓包（仅在诊断控制台开启期间） */
+  private startNetLog(): void {
+    if (this.netLogActive) return
+    const session = this.attachedSessions.values().next().value as Session | undefined
+    if (!session) return
+    try {
+      const netLogPath = this.getNetLogPath()
+      this.netLogSession = session
+      void session.netLog.startLogging(netLogPath, {
+        captureMode: 'default',
+        maxFileSize: NETLOG_MAX_FILE_SIZE,
+      }).then(() => {
+        this.netLogActive = true
+        this.log({
+          category: 'system',
+          level: 'info',
+          badge: 'NETLOG',
+          badgeClass: 'badge-system',
+          title: `Chromium NetLog 底层抓包已激活（仅控制台开启期间采集），转储文件: ${netLogPath}`,
+        })
+      }).catch((err) => {
+        console.warn('[诊断控制台] 启动 NetLog 失败:', err)
+      })
+    } catch (err) {
+      console.warn('[诊断控制台] 初始化 NetLog 异常:', err)
+    }
+  }
+
+  /** 停止 NetLog 抓包并复位状态（控制台关闭时调用） */
+  private stopNetLog(): void {
+    const session = this.netLogSession
+    this.netLogSession = null
+    if (!this.netLogActive || !session) {
+      this.netLogActive = false
+      return
+    }
+    try {
+      void session.netLog.stopLogging().catch(() => {})
+    } catch {
+      // 会话可能已销毁，忽略
+    }
+    this.netLogActive = false
+  }
+
   /** 将内存中的历史日志一次性推送到新打开的控制台窗口 */
   private flushHistoryToWindow(): void {
     if (!this.window || this.window.isDestroyed()) return
@@ -320,12 +358,13 @@ class YanhuDiagnosticConsoleManager {
 
   /** 构建单文件内联诊断控制台 HTML/CSS/JS */
   private buildConsoleHtml(): string {
-    const netLogPath = this.getNetLogPath().replace(/\\/g, '\\\\')
+    // 该路径插入 HTML 文本节点，仅需 HTML 转义（此前误用 JS 反斜杠转义，导致显示成双反斜杠）
+    const netLogPath = this.getNetLogPath().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>砚湖秒通 · 实时底层诊断控制台</title>
+  <title>智联万站 · 实时底层诊断控制台</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #080c14; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace; font-size: 12px; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -374,7 +413,7 @@ class YanhuDiagnosticConsoleManager {
   <div class="header">
     <div class="title-box">
       <div class="pulse"></div>
-      <div class="title">砚湖秒通 · 实时底层诊断控制台 (Console & Network Monitor)</div>
+      <div class="title">智联万站 · 实时底层诊断控制台 (Console & Network Monitor)</div>
     </div>
     <div class="toolbar">
       <button class="filter-btn active" data-filter="all">全部 (All)</button>
@@ -389,7 +428,7 @@ class YanhuDiagnosticConsoleManager {
   </div>
   <div class="info-bar">
     <span id="statText">日志统计: 0 条</span>
-    <span>Chromium NetLog 文件: <code id="netLogPathText">${netLogPath}</code> (可在 Chrome 访问 chrome://net-export 导入分析)</span>
+    <span>Chromium NetLog 文件: <code id="netLogPathText">${netLogPath}</code> (仅控制台开启期间采集；可在 Chrome 访问 chrome://net-export 导入分析)</span>
   </div>
   <div class="log-container" id="logContainer">
     <div class="empty-tip" id="emptyTip">正在等待网页加载并捕获底层事件...</div>

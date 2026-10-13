@@ -1946,7 +1946,7 @@ export interface PermissionRequest {
   toolInput: Record<string, unknown>
   /** 操作描述（人类可读，Profer 生成） */
   description: string
-  /** 具体命令（Bash 工具时有值��� */
+  /** 具体命令（Bash 工具时有值） */
   command?: string
   /** 危险等级 */
   dangerLevel: DangerLevel

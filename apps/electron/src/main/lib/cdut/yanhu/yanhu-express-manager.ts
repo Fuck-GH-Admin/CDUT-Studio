@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通主调度服务（YanhuExpressManager）
+ * 智联万站主调度服务（YanhuExpressManager）
  *
  * 职责（见规格书 4.3 / 4.4 / 4.6）：
  *   - 管理 `WebContentsView` 实例池：多标签新建 / 关闭 / 排序 / 激活切换；
@@ -213,7 +213,7 @@ export class YanhuExpressManager {
   private activeTabId = ''
 
   private initialized = false
-  /** 用户当前是否停留在砚湖秒通子页面（决定原生视图可见性） */
+  /** 用户当前是否停留在智联万站子页面（决定原生视图可见性） */
   private presented = false
   private lastLayout: AppliedLayout | null = null
   private sessionGuarded = false
@@ -232,7 +232,7 @@ export class YanhuExpressManager {
     this.owner = window
   }
 
-  /** 解析砚湖秒通专属分区（复用特区账户，实现免密共享） */
+  /** 解析智联万站专属分区（复用特区账户，实现免密共享） */
   private getSession(): Session {
     if (!this.session) {
       this.session = electronSession.fromPartition(CDUT_AUTH_PARTITION)
@@ -256,7 +256,7 @@ export class YanhuExpressManager {
         callback(false)
       })
     } catch (err) {
-      console.warn('[砚湖秒通] 安装会话权限守卫失败:', err)
+      console.warn('[智联万站] 安装会话权限守卫失败:', err)
     }
 
     // 第二道防线：被动捕获瑞数网关 HTTP 400（陈旧 *P 签名被判定篡改），
@@ -272,7 +272,7 @@ export class YanhuExpressManager {
         callback({ cancel: false })
       })
     } catch (err) {
-      console.warn('[砚湖秒通] 安装瑞数 400 自愈守卫失败:', err)
+      console.warn('[智联万站] 安装瑞数 400 自愈守卫失败:', err)
     }
 
     // 全部守卫安装流程结束后再置位：若中途抛错，标记不落地，后续调用可重试安装，避免守卫永久缺失
@@ -338,16 +338,18 @@ export class YanhuExpressManager {
       // 忽略清理异常
     }
 
-    const hasOneTimeTicket = /[?&]ticket=/i.test(url)
+    // 一次性票据判定统一走 yanhu-constants 的 hasOneTimeTicket（同时覆盖 ticket 与 qzticket）；
+    // 此前只用 /[?&]ticket=/ 会漏判 qzticket，导致携带一次性票据的地址被误判为可裸重载而白屏。
+    const ticketConsumed = hasOneTimeTicket(url)
     logYanhuEvent('self-heal-400', {
       tabId: tab.id,
       host: hostname,
       url,
       removedPCookies: removed,
-      action: hasOneTimeTicket ? 'blocked-reload' : 'reload',
+      action: ticketConsumed ? 'blocked-reload' : 'reload',
     })
 
-    if (hasOneTimeTicket) {
+    if (ticketConsumed) {
       // 一次性票据已消费：裸重载只会白屏，改为明确错误态，交由用户重新进入
       yanhuDiagnosticConsole.log({
         category: 'system',
@@ -389,7 +391,7 @@ export class YanhuExpressManager {
 
   /** 确保宿主 View 已挂载到主窗口 contentView */
   private ensureHostView(): View {
-    if (!this.owner || this.owner.isDestroyed()) throw new Error('主窗口尚未就绪，无法初始化砚湖秒通。')
+    if (!this.owner || this.owner.isDestroyed()) throw new Error('主窗口尚未就绪，无法初始化智联万站。')
     if (!this.hostView) {
       const host = new View()
       host.setVisible(false)
@@ -459,16 +461,16 @@ export class YanhuExpressManager {
   }
 
   /**
-   * 唤起「砚湖秒通 · 实时底层诊断控制台」。
+   * 唤起「智联万站 · 实时底层诊断控制台」。
    *
    * 仅供隐藏特权指令 `/development-DevTool-MCC` 通过 IPC 安全调用；
-   * 正常打开秒通时绝不弹窗打扰（见规格书 6.2 主进程静默加固）。
+   * 正常打开智联万站时绝不弹窗打扰（见规格书 6.2 主进程静默加固）。
    */
   public openDiagnosticConsole(): void {
     try {
       yanhuDiagnosticConsole.open()
     } catch (err) {
-      console.warn('[砚湖秒通] 唤起诊断控制台失败:', err)
+      console.warn('[智联万站] 唤起诊断控制台失败:', err)
     }
   }
 
@@ -523,10 +525,12 @@ export class YanhuExpressManager {
   /**
    * 实例化标签底层 WebContentsView 并挂载全部事件（幂等）。
    *
-   * `restoring`（默认 true）表示这是**休眠唤醒 / 进程重启恢复**路径。此时若标签指向
+   * `restoring`（默认 true）表示这是**进程重启恢复**路径。此时若标签指向
    * 「票据型 SSO 受保护应用页」，直接重载其 URL 会被网关踢去 CAS 换票，换票返回后 SPA
-   * 常常只渲染出空壳（只剩框架、内容空白）；故改为回到站内入口。仅在 createTab 中显式传 false
-   * （用户/模型主动新建标签、URL 是刚拿到的有效目标）才按原 URL 加载。
+   * 常常只渲染出空壳（只剩框架、内容空白）；故改为回到站内入口。
+   *
+   * 显式传 false 的两条路径：① createTab（用户/模型主动新建标签，URL 是刚拿到的有效目标）；
+   * ② navigate / 休眠唤醒（用户明确要回到该页面）。两者均按原 URL 加载，不做站内入口回退。
    */
   private instantiateTab(tab: YanhuTabRecord, options: { restoring?: boolean } = {}): void {
     const restoring = options.restoring !== false
@@ -792,7 +796,8 @@ export class YanhuExpressManager {
     this.applyLayoutToActive()
     this.emitTabs()
     this.persist()
-    console.log('[砚湖秒通] 已阻断非网页协议访问:', targetUrl)
+    logYanhuEvent('blocked', { tabId: tab.id, url: targetUrl, previous: tab.blockedPreviousUrl })
+    console.log('[智联万站] 已阻断非网页协议访问:', targetUrl)
   }
 
   /** 从拦截页返回上一页（恢复被拦截前页面） */
@@ -875,7 +880,7 @@ export class YanhuExpressManager {
     }
     const prev = this.recentWindowOpenTabs.get(key)
     if (prev && prev.tabId !== source.id && this.tabs.has(prev.tabId)) {
-      console.log('[砚湖秒通] 合并重复窗口打开，激活既有标签:', prev.tabId, url)
+      console.log('[智联万站] 合并重复窗口打开，激活既有标签:', prev.tabId, url)
       this.activateTab(prev.tabId)
       return
     }
@@ -894,8 +899,9 @@ export class YanhuExpressManager {
       this.emitTabs()
       return this.buildState()
     }
-    // 惰性唤醒休眠标签
-    if (!tab.view) this.instantiateTab(tab)
+    // 惰性唤醒休眠标签：按用户预期恢复原页面（restoring:false），
+    // 「回站内入口」的票据保护仅保留给进程重启恢复路径（见 instantiateTab 注释）。
+    if (!tab.view) this.instantiateTab(tab, { restoring: false })
     this.setActive(tabId)
     this.enforceDormancy()
     this.emitTabs()
@@ -999,12 +1005,18 @@ export class YanhuExpressManager {
       return this.buildState()
     }
 
-    if (!tab.view) this.instantiateTab(tab)
+    // 先落库目标 URL 再实例化视图：instantiateTab 会按 tab.item.url 发起首次加载，
+    // 否则休眠标签会先按旧 URL 加载一次（多余导航 + 标题闪回），随后才被真实目标覆盖。
     tab.item.url = decision.url
     tab.item.loading = true
-    const navigatingView = tab.view
-    if (navigatingView && !navigatingView.webContents.isDestroyed()) {
-      void this.loadWithFreshSignature(navigatingView.webContents, decision.url)
+    if (!tab.view) {
+      // 新视图由 instantiateTab 按目标 URL 加载（restoring:false：显式导航按用户/模型指定地址加载）
+      this.instantiateTab(tab, { restoring: false })
+    } else {
+      const navigatingView = tab.view
+      if (!navigatingView.webContents.isDestroyed()) {
+        void this.loadWithFreshSignature(navigatingView.webContents, decision.url)
+      }
     }
     if (this.activeTabId === tab.id) this.applyLayoutToActive()
     this.emitTabs()
@@ -1026,7 +1038,7 @@ export class YanhuExpressManager {
     } catch (err) {
       // -3 ERR_ABORTED 属于前序导航被新导航打断或重定向接管，并非致命故障，不报警告
       if (isNavigationAborted(err)) return
-      console.warn('[砚湖秒通] 页面加载失败:', target, err)
+      console.warn('[智联万站] 页面加载失败:', target, err)
     }
   }
 
@@ -1167,7 +1179,7 @@ export class YanhuExpressManager {
         await shell.openExternal(url)
       }
     } catch (err) {
-      console.warn('[砚湖秒通] 打开系统浏览器失败:', err)
+      console.warn('[智联万站] 打开系统浏览器失败:', err)
     }
   }
 
@@ -1316,7 +1328,7 @@ export class YanhuExpressManager {
       released += 1
     }
     if (released > 0) {
-      console.log(`[砚湖秒通] 已休眠 ${released} 个闲置后台标签，回收底层 WebContents`)
+      console.log(`[智联万站] 已休眠 ${released} 个闲置后台标签，回收底层 WebContents`)
     }
   }
 
@@ -1479,54 +1491,6 @@ export class YanhuExpressManager {
     if (!tab) throw new Error('目标标签不存在')
     await this.ensureCdpAttached(tab)
     return yanhuDevToolsHub.executeScript(tab.id, expression)
-  }
-
-  /**
-   * 求值并返回远端对象句柄（CDP objectId），供 `DOM.setFileInputFiles` 等需要节点引用的命令使用。
-   *
-   * 与 {@link evalInPage} 不同：此处 `returnByValue:false`，仅取远端节点引用而不序列化 DOM 本身。
-   */
-  public async evalForObjectId(tabId: string | undefined, expression: string): Promise<string | null> {
-    const tab = this.resolveTab(tabId)
-    if (!tab) return null
-    await this.ensureCdpAttached(tab)
-    try {
-      const result = await yanhuDevToolsHub.send(tab.id, 'Runtime.evaluate', {
-        expression,
-        returnByValue: false,
-        awaitPromise: true,
-        userGesture: true,
-      })
-      const remote = result.result as { objectId?: unknown } | undefined
-      return remote && typeof remote.objectId === 'string' ? remote.objectId : null
-    } catch {
-      return null
-    }
-  }
-
-  /**
-   * 经 CDP `DOM.setFileInputFiles` 为 `<input type="file">` 安全注入本地文件。
-   *
-   * 这是纯 JS **无法完成**的能力：浏览器出于安全策略禁止脚本设置 file input 的 files，
-   * 必须走 CDP 原生通道，才能支持请假证明材料等必填附件上传。
-   */
-  public async setFileInputFiles(
-    tabId: string | undefined,
-    objectId: string,
-    filePaths: readonly string[],
-  ): Promise<boolean> {
-    const tab = this.resolveTab(tabId)
-    if (!tab || filePaths.length === 0) return false
-    await this.ensureCdpAttached(tab)
-    try {
-      await yanhuDevToolsHub.send(tab.id, 'DOM.setFileInputFiles', {
-        files: [...filePaths],
-        objectId,
-      })
-      return true
-    } catch {
-      return false
-    }
   }
 
   /**

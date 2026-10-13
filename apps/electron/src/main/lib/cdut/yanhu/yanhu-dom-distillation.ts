@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 无视感知（Vision-Less）DOM 蒸馏引擎（YanhuDomDistillationEngine）
+ * 智联万站 · 无视感知（Vision-Less）DOM 蒸馏引擎（YanhuDomDistillationEngine）
  *
  * 依据《The Architecture of Vision-Less Web Perception》研究成果，落地四级工业级算法流水线：
  *   第一级：AXTree / DOM 语义降噪——跳过排版容器、脚本文档与装饰性资源，仅保留语义元素；
@@ -545,8 +545,20 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
           try { thCount = t.querySelectorAll('th').length; } catch (e) {}
           try { tdCount = t.querySelectorAll('td').length; } catch (e) {}
           const isSchedule = isKbClass || weekdayMatches >= 3;
-          // 业务数据表判定：含 th 表头，或具备多行多列的数据网格（排除纯布局小表）
-          const isBusinessTable = thCount >= 1 || (rows.length >= 3 && thCount + tdCount >= 6);
+          // 业务数据表判定（收紧）：排除纯展示表；表头型要求多行多列（避免 1 行布局表被误提），
+          // 无表头的纯 td 数据网格仍沿用「多行且格子数足够」的旧判据（兼容成绩 / 考务类网格）。
+          let maxCols = 0;
+          try {
+            for (let ri = 0; ri < rows.length; ri++) {
+              const cellCount = rows[ri].querySelectorAll('th,td').length;
+              if (cellCount > maxCols) maxCols = cellCount;
+            }
+          } catch (e) {}
+          const isPresentationTable = ((t.getAttribute && t.getAttribute('role')) || '') === 'presentation';
+          const isBusinessTable = !isPresentationTable && maxCols >= 2 && (
+            (thCount >= 1 && rows.length >= 2)
+            || (rows.length >= 3 && thCount + tdCount >= 6)
+          );
           if (!isSchedule && !isBusinessTable) continue;
 
           const grid = [];
@@ -694,9 +706,22 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
             } catch {}
           }
 
-          const value = tag === 'input' || tag === 'textarea' || tag === 'select'
-            ? clip(el.value != null ? String(el.value) : '')
-            : undefined;
+          // radio / checkbox 的 el.value 恒为 "on"，无法反映勾选状态：改写入状态标记，
+          // 使页面指纹与 PageDigest 能感知「勾选态变化」，根除 read_page 误判「页面无变化」。
+          let value;
+          if (tag === 'input') {
+            const __inputType = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+            value = __inputType === 'radio' || __inputType === 'checkbox'
+              ? (el.checked ? '已勾选' : '未勾选')
+              : clip(el.value != null ? String(el.value) : '');
+          } else if (tag === 'textarea' || tag === 'select') {
+            value = clip(el.value != null ? String(el.value) : '');
+          } else if (role === 'radio' || role === 'checkbox') {
+            const __ariaChecked = attr(el, 'aria-checked');
+            value = __ariaChecked === 'true' ? '已勾选' : (__ariaChecked === 'false' ? '未勾选' : undefined);
+          } else {
+            value = undefined;
+          }
 
           emit.push({
             tag,
@@ -1031,7 +1056,7 @@ function nodeIdentity(node: YanhuBidNode): string {
 /**
  * 计算页面全要素结构指纹（Multi-Factor Fingerprint Hash）。
  *
- * 基于页面 URL、全部 BID 节点的「角色 + 名称 + 值 + 区域 + 框架」结构序列，
+ * 基于页面 URL、全部 BID 节点的「角色 + 名称 + 值」结构序列（勾选 / 选中态已并入 value），
  * 以及全框架穿透直提的数据表格 Markdown 内容共同计算快速哈希。
  *
  * 之所以纳入表格内容：成绩查询 / 考务等场景下，表格渲染在页面上但单元格内无 BID 控件，

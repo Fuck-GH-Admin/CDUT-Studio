@@ -2,7 +2,7 @@
  * 砚小龙 · 桌宠浮动窗口几何算法（纯函数）
  *
  * 该模块只做数学计算，不依赖 Electron / React，便于物理边界单元测试。
- * 架构：**160px 大立绘 + 常驻灵动伴随卡片（340px 宽）**，卡片底部与立绘底部基线对齐，
+ * 架构：**160px 大立绘 + 常驻灵动伴随卡片（420px 宽）**，卡片底部与立绘底部基线对齐，
  * 气泡/历史面板向上生长，输入条恒定处于最顺手的底部位置。
  *
  *   - computePushBackCoordinates：视口边界碰撞检测与智能推回；
@@ -301,8 +301,8 @@ export function clampPetPosition(
 /**
  * 视口物理正中央定位（Center Alignment Math）。
  *
- * - 伴随卡片可见时，以「立绘 + 间距 + 卡片」联合外框（PET_UNION_WIDTH = 512px）在视口中
- *   水平居中：centerX = max(margin, round((vw - 512) / 2))；卡片底边与立绘底边对齐，故立绘纵向居中。
+ * - 伴随卡片可见时，以「立绘 + 间距 + 卡片」联合外框（PET_UNION_WIDTH = 592px）在视口中
+ *   水平居中：centerX = max(margin, round((vw - 592) / 2))；卡片底边与立绘底边对齐，故立绘纵向居中。
  * - 仅显示立绘时，以 160px 立绘单体水平居中：centerX = max(margin, round((vw - 160) / 2))。
  * - 纵向恒为 centerY = max(margin, round((vh - 160) / 2))。
  *

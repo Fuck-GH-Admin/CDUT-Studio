@@ -10,8 +10,9 @@ const TREE_ROW_HEIGHT = 32
 const TREE_ROW_HORIZONTAL_MARGIN = 8
 const TREE_INDENT_WIDTH = 16
 /**
- * sticky 栈最多堆叠的层数，超出此深度的目录行不再 sticky（随滚动消失），
- * 避免多层重叠在同一 top 槽位导致下层覆盖上层。参考 VS Code Explorer 默认 = 7。
+ * sticky 允许的最大深度阈值（不含）：depth < MAX_STICKY_DEPTH 的目录行才 sticky，
+ * 即 depth 0..7 共 8 层可参与堆叠，更深的目录行随滚动消失，
+ * 避免多层重叠在同一 top 槽位导致下层覆盖上层。
  */
 const MAX_STICKY_DEPTH = 8
 

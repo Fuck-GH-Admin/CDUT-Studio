@@ -353,19 +353,19 @@ export interface StudySearchKnowledgeResult {
   error?: string
 }
 
-// ===== CDUT 专区 · 砚湖秒通（Yanhu Express）轻量级定制浏览器 =====
+// ===== CDUT 专区 · 智联万站（Yanhu Express）轻量级定制浏览器 =====
 //
-// 说明：砚湖秒通内嵌于 CDUT 专区，基于 Electron 原生 WebContentsView 驱动（零额外体积，
-// 不打包任何额外 Chromium 二进制）。本模块只描述「砚湖秒通」的状态与 IPC 契约，
+// 说明：智联万站内嵌于 CDUT 专区，基于 Electron 原生 WebContentsView 驱动（零额外体积，
+// 不打包任何额外 Chromium 二进制）。本模块只描述「智联万站」的状态与 IPC 契约，
 // 底层 CDP 采集仅为二期 AI 自动化预留高可用信道，前端不暴露任何调试 UI。
 
 /**
- * 砚湖秒通默认入口：办事大厅（未指定工作区时冷启动直达）。
+ * 智联万站默认入口：办事大厅（未指定工作区时冷启动直达）。
  */
 export const YANHU_DEFAULT_HOME_URL = 'https://bsdt.cdut.edu.cn/EIP/caslogin.jsp'
 
 /**
- * 砚湖秒通高频校内书签（导航栏快捷胶囊，顺序即展示顺序）。
+ * 智联万站高频校内书签（导航栏快捷胶囊，顺序即展示顺序）。
  */
 export interface YanhuBookmark {
   id: string
@@ -407,7 +407,7 @@ export function parseYanhuBlockedTarget(rawUrl: string): string | null {
 }
 
 
-/** 砚湖秒通主框架加载失败信息（成功或加载中为 null） */
+/** 智联万站主框架加载失败信息（成功或加载中为 null） */
 export interface YanhuTabError {
   /** Chromium 网络错误码（如 -105 ERR_NAME_NOT_RESOLVED） */
   errorCode: number
@@ -418,7 +418,7 @@ export interface YanhuTabError {
 }
 
 /**
- * 砚湖秒通单标签元数据（拓扑持久化与 UI 渲染共用）。
+ * 智联万站单标签元数据（拓扑持久化与 UI 渲染共用）。
  *
  * `isDormant` 为真时表示该标签仅保留元数据、底层 WebContentsView 尚未实例化；
  * 用户点击激活时才惰性唤醒加载，避免重启时的 WAF 风暴与突发卡顿。
@@ -441,13 +441,13 @@ export interface YanhuTabItem {
   error?: YanhuTabError | null
 }
 
-/** 砚湖秒通标签拓扑状态（主进程为唯一数据源，向渲染端广播） */
+/** 智联万站标签拓扑状态（主进程为唯一数据源，向渲染端广播） */
 export interface YanhuTabsState {
   tabs: YanhuTabItem[]
   activeTabId: string
 }
 
-/** 砚湖秒通原生视图布局（renderer 测得，主进程应用） */
+/** 智联万站原生视图布局（renderer 测得，主进程应用） */
 export interface YanhuViewLayout {
   /** 当前 renderer 实例标识；刷新后旧实例晚到的布局必须全部丢弃 */
   rendererInstanceId: string
@@ -556,9 +556,9 @@ export interface YanhuDevToolsHubContract {
   executeScript(tabId: string, expression: string): Promise<unknown>
 }
 
-// ===== 砚湖秒通 · 桌宠「砚小龙」与无视感知（Vision-Less）契约 =====
+// ===== 智联万站 · 桌宠「砚小龙」与无视感知（Vision-Less）契约 =====
 //
-// 说明：桌宠「砚小龙」为砚湖秒通内嵌浏览器专属的 AI 伴侣与自动化操作精灵。
+// 说明：桌宠「砚小龙」为智联万站内嵌浏览器专属的 AI 伴侣与自动化操作精灵。
 // 其运行时为完全独立的“阉割版” Pi 运行时（Chat + Memory + ToolCalling），
 // 通过无视感知（Vision-Less）DOM 蒸馏与双射动态 ID（BIDs）实现确定性意图落地，
 // 不挂载任何文件系统、外部终端与子会话委派特权。
@@ -576,9 +576,9 @@ export interface YanhuPetConfig {
   memoryLimit: number
   /** 桌宠相对视口左上角的坐标（DIP） */
   petPosition: { x: number; y: number }
-  /** 砚湖秒通专属渠道 ID（未配置时回落到全局默认激活渠道） */
+  /** 智联万站专属渠道 ID（未配置时回落到全局默认激活渠道） */
   selectedChannelId?: string
-  /** 砚湖秒通专属模型 ID */
+  /** 智联万站专属模型 ID */
   selectedModelId?: string
   /** 是否向大模型暴露开发者级工具（默认关闭，经隐藏指令切换并持久化） */
   devToolsEnabled?: boolean
@@ -655,7 +655,7 @@ export interface YanhuPetViewport {
   height: number
 }
 
-/** 桌宠紧凑包裹窗口几何（DIP，相对于砚湖秒通视口左上角） */
+/** 桌宠紧凑包裹窗口几何（DIP，相对于智联万站视口左上角） */
 export interface YanhuPetWindowGeometry {
   /** 窗口左上角在视口坐标系中的位置 */
   x: number
@@ -669,14 +669,14 @@ export interface YanhuPetWindowGeometry {
 export interface YanhuPetBootstrap {
   config: YanhuPetConfig
   history: YanhuPetMessage[]
-  /** 砚湖秒通视口尺寸（DIP）；视口未知时为 null */
+  /** 智联万站视口尺寸（DIP）；视口未知时为 null */
   viewport: { width: number; height: number } | null
   presented: boolean
 }
 
 /** 桌宠状态广播（主进程 -> 桌宠子窗口）：视口尺寸 / 呈现态 / 最新配置 */
 export interface YanhuPetStateEvent {
-  /** 砚湖秒通视口尺寸（DIP）；视口未知时为 null */
+  /** 智联万站视口尺寸（DIP）；视口未知时为 null */
   viewport: { width: number; height: number } | null
   presented: boolean
   /**
@@ -732,7 +732,7 @@ export interface YanhuDistilledPage {
   timestamp: number
 }
 
-/** 砚湖秒通 IPC 通道契约 */
+/** 智联万站 IPC 通道契约 */
 export const YANHU_EXPRESS_IPC_CHANNELS = {
   // 视图与生命周期管理
   INIT_OR_RESTORE: 'yanhu:init-or-restore',
@@ -774,7 +774,7 @@ export const YANHU_EXPRESS_IPC_CHANNELS = {
   CDP_EXECUTE_SCRIPT: 'yanhu:cdp-execute-script',
 
   // 桌宠「砚小龙」：视口同步、窗口几何、对话与记忆、特权诊断控制台
-  /** 主渲染窗口 -> 主进程：同步砚湖秒通视口矩形（CSS 像素） */
+  /** 主渲染窗口 -> 主进程：同步智联万站视口矩形（CSS 像素） */
   PET_SYNC_VIEWPORT: 'yanhu-express:pet-sync-viewport',
   /** 桌宠子窗口 -> 主进程：上报紧凑包裹窗口几何（DIP） */
   PET_UPDATE_GEOMETRY: 'yanhu-express:pet-update-geometry',

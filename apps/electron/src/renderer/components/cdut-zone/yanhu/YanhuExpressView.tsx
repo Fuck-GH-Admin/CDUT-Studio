@@ -1,5 +1,5 @@
 /**
- * YanhuExpressView —— 砚湖秒通主容器
+ * YanhuExpressView —— 智联万站主容器
  *
  * 结构：YanhuTabStrip（多标签栏） + YanhuNavBar（导航栏） + 原生网页视口宿主。
  * 职责：
@@ -164,7 +164,11 @@ export function YanhuExpressView(): React.ReactElement {
           width: Math.max(0, Math.round(pageRect.width)),
           height: Math.max(0, Math.round(pageRect.height)),
         }
-        void api.petSyncViewport(petViewport).catch(() => {})
+        // 仅在本窗口实际可见时上报桌宠视口：不可见时上报会被主进程视作「几何有效」，
+        // 与隐藏指令冲突（桌宠显隐必须与客户端主窗口 / 浏览器视图状态保持一致）。
+        if (visible) {
+          void api.petSyncViewport(petViewport).catch(() => {})
+        }
         const key = [
           visible,
           viewportBounds.x, viewportBounds.y, viewportBounds.width, viewportBounds.height,
@@ -287,7 +291,7 @@ export function YanhuExpressView(): React.ReactElement {
 
       <div className="relative min-h-0 flex-1">
         {/* 原生 WebContentsView 的占位宿主：主进程按本矩形精确摆放原生视图 */}
-        <div ref={pageRef} className="absolute inset-0 bg-content-area" aria-label="砚湖秒通页面" />
+        <div ref={pageRef} className="absolute inset-0 bg-content-area" aria-label="智联万站页面" />
         {blockedTarget ? (
           <YanhuBlockedPage
             targetUrl={blockedTarget}

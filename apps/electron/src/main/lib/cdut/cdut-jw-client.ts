@@ -144,7 +144,7 @@ function isSessionExpired(finalUrl: string, html: string): boolean {
 /**
  * 清理专属分区中导致青果瑞数 WAF 误判并拒绝连接（HTTP 400）的陈旧动态签名 Cookie。
  *
- * 实现已抽取至 `yanhu/yanhu-cookie-utils.ts`，供砚湖秒通浏览器与教务客户端共用，
+ * 实现已抽取至 `yanhu/yanhu-cookie-utils.ts`，供智联万站浏览器与教务客户端共用，
  * 避免同一安全策略出现多份实现。此处保持同名再导出，默认目标域语义（jw.cdut.edu.cn）不变。
  */
 export { stripStaleRuiShuCookies }

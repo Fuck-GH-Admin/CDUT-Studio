@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 桌宠紧凑包裹子窗口调度（YanhuPetWindowManager）
+ * 智联万站 · 桌宠紧凑包裹子窗口调度（YanhuPetWindowManager）
  *
  * 为彻底解决 Electron 中 `WebContentsView` 原生图层遮挡渲染层 React DOM 的痼疾，
  * 桌宠「砚小龙」运行在独立、透明、无边框的原生子窗口内：
@@ -7,7 +7,7 @@
  *   - 窗口之外的整个内嵌网页保持 100% 原生点击、文本选中与滚轮响应；
  *   - 随同主窗口移动 / 最小化 / 恢复 / 关闭。
  *
- * 坐标契约：主渲染窗口上报砚湖秒通视口（CSS 像素）→ 本管理器按主窗口缩放换算为 DIP，
+ * 坐标契约：主渲染窗口上报智联万站视口（CSS 像素）→ 本管理器按主窗口缩放换算为 DIP，
  * 桌宠渲染进程再以视口左上角为原点上报紧凑包裹几何，最终折算为屏幕坐标应用。
  */
 
@@ -73,6 +73,18 @@ export class YanhuPetWindowManager {
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null
   /** 应用焦点切回监听器 */
   private appFocusListener: ((event: unknown, focusedWindow: BrowserWindow) => void) | null = null
+  /** 主窗口生命周期监听器（具名保存，dispose 时精确解绑，避免主窗口重建后残留回调把桌宠再次显示） */
+  private ownerHandlers: {
+    move: () => void
+    resize: () => void
+    minimize: () => void
+    restore: () => void
+    show: () => void
+    hide: () => void
+    focus: () => void
+    blur: () => void
+    closed: () => void
+  } | null = null
   /** 配置修订号：仅显式 saveConfig 递增，供渲染层判定是否应用配置 */
   private configRevision = 0
 
@@ -84,7 +96,7 @@ export class YanhuPetWindowManager {
     this.bindOwnerListeners(window)
   }
 
-  /** 监听主窗口生命周期，保证子窗口随动 */
+  /** 监听主窗口生命周期，保证子窗口随动（具名 handler，便于 dispose 精确解绑） */
   private bindOwnerListeners(window: BrowserWindow): void {
     if (this.ownerListenersBound) return
     this.ownerListenersBound = true
@@ -97,17 +109,28 @@ export class YanhuPetWindowManager {
       if (window.isMinimized() || !window.isVisible()) this.petWindow.hide()
       else if (this.presented) reapply()
     }
-    window.on('move', reapply)
-    window.on('resize', reapply)
-    window.on('minimize', hideWhenHidden)
-    window.on('restore', hideWhenHidden)
-    window.on('show', hideWhenHidden)
-    window.on('hide', hideWhenHidden)
-    // 主窗口重新获得焦点时瞬时复位到应用顶层
-    window.on('focus', reapply)
-    // 失焦后延迟判定：若整个应用失焦（切到外部第三方应用），隐藏子窗口避免流氓置顶
-    window.on('blur', () => this.scheduleFocusReconcile())
-    window.on('closed', () => this.dispose())
+    this.ownerHandlers = {
+      move: reapply,
+      resize: reapply,
+      minimize: hideWhenHidden,
+      restore: hideWhenHidden,
+      show: hideWhenHidden,
+      hide: hideWhenHidden,
+      // 主窗口重新获得焦点时瞬时复位到应用顶层
+      focus: reapply,
+      // 失焦后延迟判定：若整个应用失焦（切到外部第三方应用），隐藏子窗口避免流氓置顶
+      blur: () => this.scheduleFocusReconcile(),
+      closed: () => this.dispose(),
+    }
+    window.on('move', this.ownerHandlers.move)
+    window.on('resize', this.ownerHandlers.resize)
+    window.on('minimize', this.ownerHandlers.minimize)
+    window.on('restore', this.ownerHandlers.restore)
+    window.on('show', this.ownerHandlers.show)
+    window.on('hide', this.ownerHandlers.hide)
+    window.on('focus', this.ownerHandlers.focus)
+    window.on('blur', this.ownerHandlers.blur)
+    window.on('closed', this.ownerHandlers.closed)
 
     if (!this.appFocusListener) {
       this.appFocusListener = (_event: unknown, focusedWindow: BrowserWindow): void => {
@@ -140,6 +163,8 @@ export class YanhuPetWindowManager {
       this.applyBounds()
       this.raiseToTop()
     }, 2000)
+    // 定时器不得阻塞进程退出（AGENTS.md 红线）
+    if (typeof this.watchdogTimer.unref === 'function') this.watchdogTimer.unref()
   }
 
   /** 失焦后延迟核对焦点归属，避免切到外部应用时桌宠仍置顶漂浮 */
@@ -168,9 +193,11 @@ export class YanhuPetWindowManager {
       this.raiseToTop()
       this.applyBounds()
     }, 200)
+    // 定时器不得阻塞进程退出（AGENTS.md 红线）
+    if (typeof this.focusTimer.unref === 'function') this.focusTimer.unref()
   }
 
-  /** 设置砚湖秒通呈现态（进入 / 离开子页面） */
+  /** 设置智联万站呈现态（进入 / 离开子页面） */
   public setPresented(presented: boolean): void {
     this.presented = presented
     if (presented) {
@@ -185,16 +212,13 @@ export class YanhuPetWindowManager {
   }
 
   /**
-   * 同步砚湖秒通视口矩形（CSS 像素，来自主渲染窗口）。
+   * 同步智联万站视口矩形（CSS 像素，来自主渲染窗口）。
    * 主窗口缩放系数不为 1 时按缩放换算为 DIP，保证与子窗口坐标系一致。
    */
   public syncViewport(rect: YanhuPetViewport): void {
-    // 自愈保障：收到正向有效视口且尚未激活呈现时，自动补正 presented 状态并确保窗口实例化
-    if (rect.width > 4 && rect.height > 4 && !this.presented) {
-      this.presented = true
-      this.ensureWindow()
-      this.scheduleWatchdog()
-    }
+    // 仅更新几何，绝不隐式改变呈现态：
+    // 呈现态的唯一来源是 SHOW_VIEW / HIDE_VIEW / UPDATE_BOUNDS(visible)，
+    // 否则渲染层每帧上报视口都会把桌宠重新「置为呈现」，与隐藏指令互相打架造成 show/hide 抖动。
     const owner = this.owner
     const zoom = owner && !owner.isDestroyed() ? owner.webContents.getZoomFactor() : 1
     const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
@@ -257,7 +281,7 @@ export class YanhuPetWindowManager {
     this.send(YANHU_EXPRESS_IPC_CHANNELS.PET_HISTORY_CLEARED, null)
   }
 
-  /** 向砚湖秒通主渲染窗口与桌宠窗口派发流式事件 */
+  /** 向桌宠子窗口派发流式事件（仅桌宠窗口消费；主渲染窗口不经此通道） */
   public emitStream(event: YanhuPetStreamEvent): void {
     this.send(YANHU_EXPRESS_IPC_CHANNELS.PET_CHAT_STREAM_CHUNK, event)
   }
@@ -349,7 +373,7 @@ export class YanhuPetWindowManager {
   }
 
   /**
-   * 一键复位：依据当前砚湖秒通视口（DIP）重新计算正中央坐标并落盘。
+   * 一键复位：依据当前智联万站视口（DIP）重新计算正中央坐标并落盘。
    *
    * 伴随卡片可见时以「立绘 + 间距 + 卡片」联合外框整体居中；仅桌宠态则以立绘单体居中。
    * 复位后立即抬高到绝对顶层，避免被原生网页图层抢占 Z-Order。
@@ -376,6 +400,22 @@ export class YanhuPetWindowManager {
   public dispose(): void {
     this.presented = false
     this.geometry = null
+    // 解绑主窗口生命周期监听：主窗口重建 / 重新 setOwnerWindow 时不残留旧回调
+    const owner = this.owner
+    const handlers = this.ownerHandlers
+    if (handlers && owner && !owner.isDestroyed()) {
+      owner.off('move', handlers.move)
+      owner.off('resize', handlers.resize)
+      owner.off('minimize', handlers.minimize)
+      owner.off('restore', handlers.restore)
+      owner.off('show', handlers.show)
+      owner.off('hide', handlers.hide)
+      owner.off('focus', handlers.focus)
+      owner.off('blur', handlers.blur)
+      owner.off('closed', handlers.closed)
+    }
+    this.ownerHandlers = null
+    this.ownerListenersBound = false
     if (this.focusTimer) {
       clearTimeout(this.focusTimer)
       this.focusTimer = null
@@ -484,13 +524,12 @@ export class YanhuPetWindowManager {
    */
   private applyBounds(): void {
     const win = this.petWindow
+    if (!win || win.isDestroyed()) return
     const owner = this.owner
-    if (!win || win.isDestroyed() || !owner || owner.isDestroyed()) return
-    if (!this.presented || !this.dipViewport) {
-      win.hide()
-      return
-    }
-    if (!owner.isVisible() || owner.isMinimized()) {
+    // 桌宠显隐与客户端主窗口强绑定（单一裁决点）：
+    // 主窗口不存在 / 已销毁 / 不可见 / 最小化 / 未呈现 / 无有效视口 → 一律隐藏，绝不单独漂浮。
+    if (!owner || owner.isDestroyed() || !this.presented || !this.dipViewport
+      || !owner.isVisible() || owner.isMinimized()) {
       win.hide()
       return
     }

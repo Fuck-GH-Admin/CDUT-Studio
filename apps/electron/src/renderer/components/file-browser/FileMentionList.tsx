@@ -493,7 +493,6 @@ function TreeNodeList({
           <FileTypeIcon
             name={node.name}
             isDirectory={node.type === 'dir'}
-            isOpen={node.type === 'dir' && node.expanded}
             size={12}
           />
 

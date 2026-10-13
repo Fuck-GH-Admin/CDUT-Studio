@@ -33,6 +33,25 @@ export interface InteractivePreviewViewportProps {
   memoryKey?: string
 }
 
+/**
+ * 计算元素「用户可滚动手势」的两个轴各是否可滚动。
+ *
+ * `overflow: hidden/clip` 的元素同样是滚动容器（可编程设置 scrollTop/scrollLeft），
+ * 但用户无法用手势滚动，且这类元素常是覆盖在真实滚动宿主之上的装饰层
+ * （如 Excel 的 selectionOverlay / findOverlay）。若把它们当成平移目标，
+ * 拖拽只会滚动装饰层自身（表现为“拖不动表格，反而拖动了选中框”）。
+ * 因此仅当计算样式的 overflow 轴为 auto/scroll/overlay 且确实存在溢出时才计入。
+ */
+function scrollableAxes(el: HTMLElement): { x: boolean; y: boolean } {
+  const style = window.getComputedStyle(el)
+  const allowsUserScroll = (value: string): boolean =>
+    value === 'auto' || value === 'scroll' || value === 'overlay'
+  return {
+    x: allowsUserScroll(style.overflowX) && el.scrollWidth > el.clientWidth + 1,
+    y: allowsUserScroll(style.overflowY) && el.scrollHeight > el.clientHeight + 1,
+  }
+}
+
 /** 在容器内查找「包含指定视口坐标、且最深层」的可滚动元素。 */
 function findScrollableAt(container: HTMLElement, clientX: number, clientY: number): HTMLElement | null {
   let best: HTMLElement | null = null
@@ -40,8 +59,7 @@ function findScrollableAt(container: HTMLElement, clientX: number, clientY: numb
   let bestArea = Number.POSITIVE_INFINITY
   const nodes = container.querySelectorAll<HTMLElement>('*')
   for (const el of nodes) {
-    const canScrollY = el.scrollHeight > el.clientHeight + 1
-    const canScrollX = el.scrollWidth > el.clientWidth + 1
+    const { x: canScrollX, y: canScrollY } = scrollableAxes(el)
     if (!canScrollY && !canScrollX) continue
     const rect = el.getBoundingClientRect()
     if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) continue
@@ -66,8 +84,7 @@ function findPrimaryScrollable(container: HTMLElement): HTMLElement | null {
   let bestSpan = 0
   const nodes = container.querySelectorAll<HTMLElement>('*')
   for (const el of nodes) {
-    const canScrollY = el.scrollHeight > el.clientHeight + 1
-    const canScrollX = el.scrollWidth > el.clientWidth + 1
+    const { x: canScrollX, y: canScrollY } = scrollableAxes(el)
     if (!canScrollY && !canScrollX) continue
     const span = (canScrollY ? el.scrollHeight : 0) + (canScrollX ? el.scrollWidth : 0)
     if (span > bestSpan) {

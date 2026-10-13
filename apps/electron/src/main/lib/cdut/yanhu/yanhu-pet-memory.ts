@@ -195,7 +195,7 @@ export function nextYanhuMessageId(): string {
   return `yanhu-msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 }
 
-/** 砚湖秒通默认落盘路径：~/.cdutai/yanhu-pet-history.json */
+/** 智联万站默认落盘路径：~/.cdutai/yanhu-pet-history.json */
 export function getYanhuPetHistoryPath(): string {
   return join(getConfigDir(), 'yanhu-pet-history.json')
 }
