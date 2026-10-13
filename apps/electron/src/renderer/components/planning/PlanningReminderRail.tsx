@@ -8,6 +8,7 @@ import { activeViewAtom } from '@/atoms/active-view'
 import { agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { notificationsEnabledAtom, notificationSoundEnabledAtom, notificationSoundsAtom, playNotificationSoundForType } from '@/atoms/notifications'
 import { Button } from '@profer/ui/primitives/button'
+import { Z_LAYER } from '@profer/ui'
 
 function formatTriggerTime(timestamp: number): string {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -92,7 +93,7 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
   if (reminders.length === 0) return null
 
   return (
-    <aside className="fixed bottom-4 right-4 z-[100] flex w-[min(380px,calc(100vw-2rem))] flex-col-reverse gap-2" aria-live="polite">
+    <aside className={`fixed bottom-4 right-4 ${Z_LAYER.dialog} flex w-[min(380px,calc(100vw-2rem))] flex-col-reverse gap-2`} aria-live="polite">
       {reminders.slice(0, 3).map((reminder) => {
         return (
           <section key={reminder.id} className="bg-background shadow-lg">

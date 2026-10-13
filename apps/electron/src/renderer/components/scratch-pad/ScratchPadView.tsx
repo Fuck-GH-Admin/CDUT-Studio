@@ -266,7 +266,7 @@ export function ScratchPadView(): React.ReactElement {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuPortal>
-          <DropdownMenuContent align="end" side="top" className="min-w-[240px] z-[9999]">
+          <DropdownMenuContent align="end" side="top" className="min-w-[240px]">
             <DropdownMenuLabel className="text-[11px] text-muted-foreground font-normal">
               导出为 Markdown
             </DropdownMenuLabel>

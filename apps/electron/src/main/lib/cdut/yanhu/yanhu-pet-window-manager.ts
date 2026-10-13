@@ -11,7 +11,7 @@
  * 桌宠渲染进程再以视口左上角为原点上报紧凑包裹几何，最终折算为屏幕坐标应用。
  */
 
-import { BrowserWindow, Menu, app, webContents, type MenuItemConstructorOptions, type WebContents } from 'electron'
+import { BrowserWindow, Menu, app, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import { join } from 'node:path'
 import { VITE_DEV_SERVER_URL } from '../../config-paths'
 import type {
@@ -73,6 +73,8 @@ export class YanhuPetWindowManager {
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null
   /** 应用焦点切回监听器 */
   private appFocusListener: ((event: unknown, focusedWindow: BrowserWindow) => void) | null = null
+  /** 应用失焦监听器（切到外部第三方应用时触发失焦裁决） */
+  private appBlurListener: ((event: unknown, window: BrowserWindow) => void) | null = null
   /** 主窗口生命周期监听器（具名保存，dispose 时精确解绑，避免主窗口重建后残留回调把桌宠再次显示） */
   private ownerHandlers: {
     move: () => void
@@ -135,10 +137,21 @@ export class YanhuPetWindowManager {
     if (!this.appFocusListener) {
       this.appFocusListener = (_event: unknown, focusedWindow: BrowserWindow): void => {
         if (focusedWindow === this.owner || focusedWindow === this.petWindow) {
-          if (this.presented) reapply()
+          if (this.presented) {
+            this.restorePetWindow()
+            reapply()
+          }
         }
       }
       app.on('browser-window-focus', this.appFocusListener)
+    }
+    // 全应用失焦监听：用户切到 VS Code / Chrome / 记事本等外部应用或点击任务栏时，
+    // 立即启动 80ms 快速裁决，确认焦点未在本应用内交接即隐藏桌宠，杜绝流氓常驻悬浮。
+    if (!this.appBlurListener) {
+      this.appBlurListener = (): void => {
+        this.scheduleFocusReconcile()
+      }
+      app.on('browser-window-blur', this.appBlurListener)
     }
   }
 
@@ -167,34 +180,63 @@ export class YanhuPetWindowManager {
     if (typeof this.watchdogTimer.unref === 'function') this.watchdogTimer.unref()
   }
 
-  /** 失焦后延迟核对焦点归属，避免切到外部应用时桌宠仍置顶漂浮 */
+  /**
+   * 失焦后 80ms 快速核对焦点归属，避免切到外部应用时桌宠仍置顶漂浮。
+   *
+   * 裁决依据严格收敛为 OS 级窗口聚合判定（见 {@link isAppInForeground}），
+   * **绝不使用 `webContents.getFocusedWebContents()`**：Electron 在切到外部应用时会恒定保留
+   * 上一激活 WebContents 指针而永不置 null，历史实现据此判定会导致 `anyFocused` 恒为 true、
+   * `win.hide()` 永不触发的「失焦背景常驻流氓」漏洞。
+   */
   private scheduleFocusReconcile(): void {
     if (this.focusTimer) clearTimeout(this.focusTimer)
     this.focusTimer = setTimeout(() => {
       this.focusTimer = null
       const win = this.petWindow
-      const owner = this.owner
-      if (!win || win.isDestroyed() || !owner || owner.isDestroyed()) return
+      if (!win || win.isDestroyed()) return
       if (!this.presented) return
 
-      // 综合核对焦点：检查主窗口、桌宠窗口、其它窗口或内嵌 WebContents（含 WebContentsView）是否持有焦点
-      const anyWindowFocused =
-        owner.isFocused() ||
-        win.isFocused() ||
-        BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused())
-      const anyWebContentsFocused = Boolean(webContents.getFocusedWebContents())
-      const anyFocused = anyWindowFocused || anyWebContentsFocused
-
-      // 仅当应用完全切出至外部第三方软件（操作系统前台无本应用任何焦点）时才隐藏，避免流氓置顶
-      if (!anyFocused) {
-        win.hide()
+      // 操作系统前台焦点未落在本应用（主窗口 / 桌宠窗口）→ 瞬时隐藏，杜绝流氓置顶
+      if (!this.isAppInForeground()) {
+        this.hidePetWindow()
         return
       }
+      // 焦点仍在应用内交接（如主窗口 <-> 桌宠窗口切换）→ 保持显示并复位层级
+      this.restorePetWindow()
       this.raiseToTop()
       this.applyBounds()
-    }, 200)
+    }, 80)
     // 定时器不得阻塞进程退出（AGENTS.md 红线）
     if (typeof this.focusTimer.unref === 'function') this.focusTimer.unref()
+  }
+
+  /**
+   * OS 级前台聚合判定：仅当主窗口可见、未最小化，且操作系统前台焦点确实落在
+   * 主窗口或桌宠窗口上时，才认定本应用处于前台。
+   */
+  private isAppInForeground(): boolean {
+    const owner = this.owner
+    if (!owner || owner.isDestroyed() || !owner.isVisible() || owner.isMinimized()) {
+      return false
+    }
+    const focusedWin = BrowserWindow.getFocusedWindow()
+    return focusedWin === owner || focusedWin === this.petWindow
+  }
+
+  /** 瞬时隐藏桌宠窗口（不改动呈现态，供失焦裁决与全局模态联动调用） */
+  public hidePetWindow(): void {
+    const win = this.petWindow
+    if (win && !win.isDestroyed() && win.isVisible()) win.hide()
+  }
+
+  /** 复位恢复桌宠窗口（仅当仍处于呈现态且应用处于 OS 前台时生效） */
+  public restorePetWindow(): void {
+    const win = this.petWindow
+    if (!win || win.isDestroyed()) return
+    if (!this.presented || !this.dipViewport) return
+    if (!this.isAppInForeground()) return
+    this.applyBounds()
+    this.raiseToTop()
   }
 
   /** 设置智联万站呈现态（进入 / 离开子页面） */
@@ -428,6 +470,10 @@ export class YanhuPetWindowManager {
       app.removeListener('browser-window-focus', this.appFocusListener)
       this.appFocusListener = null
     }
+    if (this.appBlurListener) {
+      app.removeListener('browser-window-blur', this.appBlurListener)
+      this.appBlurListener = null
+    }
     this.hideWindow()
     if (this.petWindow && !this.petWindow.isDestroyed()) {
       this.petWindow.destroy()
@@ -496,6 +542,10 @@ export class YanhuPetWindowManager {
 
     win.on('closed', () => {
       this.petWindow = null
+    })
+    // 子窗口自身失焦：覆盖「点击桌宠后随即切到外部应用」的场景，同样纳入 80ms 前台裁决
+    win.on('blur', () => {
+      this.scheduleFocusReconcile()
     })
 
     this.petWindow = win

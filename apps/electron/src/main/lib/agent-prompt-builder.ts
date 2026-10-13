@@ -273,6 +273,13 @@ function buildBrowserGuideline(
   return `## CDUT Studio 受管浏览器\n\n- 当任务需要打开网站、站内搜索、点击页面控件、填写公开字段、分页筛选或检查动态网页时，使用 CDUT Studio 内置受管浏览器工具；不要改走 Chrome DevTools MCP。\n${lines.map((line) => `- ${line}`).join('\n')}`
 }
 
+/**
+ * 通用响应语种镜像契约：要求模型生成最终回复时采用用户所用语言，缺省回退英语。
+ */
+const LANGUAGE_CONVENTION = `## Language Convention
+
+Generate final responses in the same language used by the user in the ongoing conversation. Default to English when the user's language is ambiguous or unspecified.`
+
 export type AgentEpistemicMode = 'grounded' | 'open'
 
 /**
@@ -435,6 +442,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
       ? `## 学习资料大纲向导\n\n${ctx.studyOutline.trim()}`
       : '## 学习资料大纲向导\n\n当前课堂尚未上传任何学习资料。先请学生上传课件/教材/习题集；若学生只想口头提问，也可直接开始带教。')
     sections.push(`## 学生认知档案\n\n${ctx.studyCognition?.trim() || '（尚无学生认知档案，遇到新学科/新教材时请主动发起摸底诊断）'}`)
+    sections.push(LANGUAGE_CONVENTION)
     sections.push(MULTIMODAL_PRESENTATION_CONTRACT)
     sections.push(`${EXPRESSION_CONTRACT}\n\n${buildEpistemicStance(epistemicMode)}`)
   } else {

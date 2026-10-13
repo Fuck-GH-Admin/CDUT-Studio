@@ -582,6 +582,14 @@ export interface YanhuPetConfig {
   selectedModelId?: string
   /** 是否向大模型暴露开发者级工具（默认关闭，经隐藏指令切换并持久化） */
   devToolsEnabled?: boolean
+  /**
+   * 是否启用视觉截图辅助感知（Screenshot Recognition，默认关闭）。
+   *
+   * 开启后在页面信息不足（纯 Canvas / 图形验证码 / DOM 蒸馏稀疏 / 大量 [Occluded]）时，
+   * 允许「砚小龙」触发视口截图，交由支持多模态图像输入的模型渠道进行视觉认知，
+   * 并经双平面平行坐标锚定引擎将视觉坐标映射回真实 DOM DIP 坐标后精确落地。
+   */
+  enableVision?: boolean
 }
 
 /** 桌宠工具调用（微胶囊标签消费） */

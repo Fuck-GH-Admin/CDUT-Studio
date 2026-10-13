@@ -132,6 +132,19 @@ import type {
   UpdateAutomationInput,
 } from '@profer/shared'
 import type {
+  AiClassRightTabItem,
+  AiClassTabsState,
+  FlashcardDeck,
+  FlashcardItem,
+  MindMapData,
+  QuizSession,
+  StudyArtifactSummary,
+  StudyCardRatingInput,
+  StudyGenerateArtifactInput,
+  StudyGenerateArtifactResult,
+  StudyQuizAnswerInput,
+} from '@profer/shared'
+import type {
   UserProfile,
   AppSettings,
   DeveloperSettingsSnapshot,
@@ -1634,6 +1647,30 @@ export interface ElectronAPI {
     removeDocument: (input: StudyDocumentQueryInput) => Promise<{ success: boolean }>
     toggleDocumentActive: (input: StudyToggleDocumentActiveInput) => Promise<{ success: boolean; enabled: boolean }>
     setDocumentsActive: (input: StudySetDocumentsActiveInput) => Promise<{ success: boolean }>
+    // Chrome 风格动态多 Tab 拓扑
+    getTabs: (sessionId: string) => Promise<AiClassTabsState>
+    saveTabs: (input: { sessionId: string; tabs: AiClassRightTabItem[]; activeTabId: string }) => Promise<AiClassTabsState>
+    // 思维导图
+    getMindmap: (input: { sessionId: string; mindmapId?: string }) => Promise<MindMapData | null>
+    saveMindmapCoords: (input: {
+      sessionId: string
+      mindmapId: string
+      coords: Record<string, { x: number; y: number }>
+    }) => Promise<MindMapData | null>
+    exportOpml: (input: {
+      sessionId: string
+      mindmapId?: string
+    }) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>
+    // 抽认卡与 FSRS-7
+    getFlashcards: (input: { sessionId: string; deckId?: string }) => Promise<FlashcardDeck | null>
+    updateCardRating: (input: StudyCardRatingInput) => Promise<FlashcardItem | null>
+    // 测验与 FIM
+    getQuiz: (input: { sessionId: string; quizId?: string }) => Promise<QuizSession | null>
+    submitQuizAnswer: (input: StudyQuizAnswerInput) => Promise<QuizSession | null>
+    // 双轨联动生成
+    generateArtifact: (input: StudyGenerateArtifactInput) => Promise<StudyGenerateArtifactResult>
+    // 已生成成果总览（右侧工作台常驻列表）
+    listArtifacts: (sessionId: string) => Promise<StudyArtifactSummary[]>
   }
 
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====
@@ -3800,6 +3837,36 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.TOGGLE_DOCUMENT_ACTIVE, input),
     setDocumentsActive: (input: StudySetDocumentsActiveInput) =>
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.SET_DOCUMENTS_ACTIVE, input),
+    // Chrome 风格动态多 Tab 拓扑
+    getTabs: (sessionId: string) => ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_TABS, sessionId),
+    saveTabs: (input: { sessionId: string; tabs: AiClassRightTabItem[]; activeTabId: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.SAVE_TABS, input),
+    // 思维导图
+    getMindmap: (input: { sessionId: string; mindmapId?: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_MINDMAP, input),
+    saveMindmapCoords: (input: {
+      sessionId: string
+      mindmapId: string
+      coords: Record<string, { x: number; y: number }>
+    }) => ipcRenderer.invoke(STUDY_IPC_CHANNELS.SAVE_MINDMAP_COORDS, input),
+    exportOpml: (input: { sessionId: string; mindmapId?: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.EXPORT_OPML, input),
+    // 抽认卡与 FSRS-7
+    getFlashcards: (input: { sessionId: string; deckId?: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_FLASHCARDS, input),
+    updateCardRating: (input: StudyCardRatingInput) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.UPDATE_CARD_RATING, input),
+    // 测验与 FIM
+    getQuiz: (input: { sessionId: string; quizId?: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_QUIZ, input),
+    submitQuizAnswer: (input: StudyQuizAnswerInput) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.SUBMIT_QUIZ_ANSWER, input),
+    // 双轨联动生成
+    generateArtifact: (input: StudyGenerateArtifactInput) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.GENERATE_ARTIFACT, input),
+    // 已生成成果总览（右侧工作台常驻列表）
+    listArtifacts: (sessionId: string) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.LIST_ARTIFACTS, sessionId),
   },
 
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====

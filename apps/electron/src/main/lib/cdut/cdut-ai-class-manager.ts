@@ -193,7 +193,7 @@ export function deleteAiClassSession(sessionId: string): void {
  * 一次性的非流式模型调用（复用 generateTitle 的渠道 / 鉴权 / 适配器链路）。
  * 任意失败返回 null，由调用方静默降级。
  */
-async function oneShotJsonCompletion(systemPrompt: string, userPrompt: string): Promise<string | null> {
+export async function oneShotJsonCompletion(systemPrompt: string, userPrompt: string): Promise<string | null> {
   const settings = getSettings()
   const channelId = settings.agentChannelId
   const modelId = settings.agentModelId
@@ -545,23 +545,25 @@ async function runModelEdgeBatches(
 }
 
 const GRAPH_SYSTEM_PROMPT = [
-  '你是学习资料知识图谱分析专家。给定多份学习资料的章节目录，请推演跨文档之间的知识关联。',
-  '只输出 JSON，结构为：',
-  '{"edges":[{"sourceDocId":"..","sourceSectionId":"..","targetDocId":"..","targetSectionId":"..","relationType":"prerequisite|exercise|extension|reference","label":"简短中文微标签","description":"一句话说明关联理由"}]}',
-  '规则：',
-  '- 只连接不同文档之间的章节；不得自连；sectionId 必须来自给定列表。',
-  '- 前置于后（先学后练）用 prerequisite；习题集对应知识点用 exercise；延伸补充用 extension；其余为 reference。',
-  '- 关联要精炼可靠，宁少勿滥，最多 24 条。',
+  'You are a knowledge graph specialist. Given the chapter outlines of multiple study documents, analyze cross-document conceptual relationships.',
+  'Language Convention: Generate relation labels and descriptions matching the language of the source documents. Generate final responses in the same language used by the user, defaulting to English otherwise.',
+  'Output strictly valid JSON with the following schema:',
+  '{"edges":[{"sourceDocId":"..","sourceSectionId":"..","targetDocId":"..","targetSectionId":"..","relationType":"prerequisite|exercise|extension|reference","label":"concise label","description":"one-sentence rationale"}]}',
+  'Rules:',
+  '- Connect sections between distinct documents; self-loops are omitted; sectionId must be chosen from the provided outline.',
+  '- Use "prerequisite" for preparatory material; "exercise" for practice problems corresponding to concepts; "extension" for advanced topics; "reference" for related citations.',
+  '- Keep relationships concise and reliable, up to 24 edges.',
 ].join('\n')
 
 const INTRA_GRAPH_SYSTEM_PROMPT = [
-  '你是学习资料知识图谱分析专家。给定同一份长篇资料的章节顺序目录，请推演大章之间的先后演进逻辑。',
-  '只输出 JSON，结构为：',
-  '{"edges":[{"sourceDocId":"..","sourceSectionId":"..","targetDocId":"..","targetSectionId":"..","relationType":"prerequisite|extension|reference","label":"简短中文微标签","description":"一句话说明关联理由"}]}',
-  '规则：',
-  '- 只连接同一份资料内部的前后章节，反映「先学什么、后学什么」的递进关系；不得自连；sectionId 必须来自给定列表。',
-  '- 承接递进的后续章节用 prerequisite；概念延伸补充用 extension；其余为 reference。',
-  '- 关联要精炼可靠，宁少勿滥，最多 10 条。',
+  'You are a knowledge graph specialist. Given the sequential chapter outline of a single comprehensive study document, deduce pedagogical progression between chapters.',
+  'Language Convention: Generate relation labels and descriptions matching the language of the source documents. Generate final responses in the same language used by the user, defaulting to English otherwise.',
+  'Output strictly valid JSON with the following schema:',
+  '{"edges":[{"sourceDocId":"..","sourceSectionId":"..","targetDocId":"..","targetSectionId":"..","relationType":"prerequisite|extension|reference","label":"concise label","description":"one-sentence rationale"}]}',
+  'Rules:',
+  '- Connect sequential sections within the same document to reflect pedagogical progression; self-loops are omitted; sectionId must be chosen from the provided outline.',
+  '- Use "prerequisite" for sequential progressions; "extension" for conceptual expansions; "reference" for supporting sections.',
+  '- Keep relationships concise and reliable, up to 10 edges.',
 ].join('\n')
 
 /**

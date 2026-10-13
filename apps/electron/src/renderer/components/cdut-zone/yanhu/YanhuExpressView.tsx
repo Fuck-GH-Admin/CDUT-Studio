@@ -22,6 +22,7 @@ import {
   type YanhuUrlChangedEvent,
 } from '@profer/shared'
 import { resolvedThemeAtom } from '@/atoms/theme'
+import { isGlobalOverlayActiveAtom } from '@/atoms/overlay-atoms'
 import { yanhuActiveTabAtom, yanhuLoadingAtom, yanhuTabsAtom } from '@/atoms/yanhu-express-atoms'
 import { YanhuTabStrip } from './YanhuTabStrip'
 import { YanhuNavBar } from './YanhuNavBar'
@@ -52,6 +53,10 @@ export function YanhuExpressView(): React.ReactElement {
   const [loadingMap, setLoadingMap] = useAtom(yanhuLoadingAtom)
   const activeTab = useAtomValue(yanhuActiveTabAtom)
   const resolvedTheme = useAtomValue(resolvedThemeAtom)
+  // 全局模态叠加态：任一全局阻断性模态打开时，原生 WebContentsView 必须让位（见 overlay-atoms）
+  const overlayActive = useAtomValue(isGlobalOverlayActiveAtom)
+  const overlayActiveRef = React.useRef(overlayActive)
+  overlayActiveRef.current = overlayActive
 
   const rootRef = React.useRef<HTMLDivElement>(null)
   const pageRef = React.useRef<HTMLDivElement>(null)
@@ -153,6 +158,7 @@ export function YanhuExpressView(): React.ReactElement {
         }
         const visible =
           enabledRef.current &&
+          !overlayActiveRef.current &&
           viewportBounds.width > 4 &&
           viewportBounds.height > 4 &&
           pageBounds.width > 4 &&
@@ -234,10 +240,11 @@ export function YanhuExpressView(): React.ReactElement {
     }
   }, [api])
 
-  // 拦截态 / 故障态 / 激活标签变化 → 重新校准可见性
+  // 拦截态 / 故障态 / 激活标签 / 全局模态叠加态变化 → 重新校准可见性
+  // （模态打开时原生视图立即隐去、关闭时立即原位恢复，均无重载、不丢页面状态）
   React.useEffect(() => {
     publishRef.current()
-  }, [enabled, tabsState.activeTabId])
+  }, [enabled, tabsState.activeTabId, overlayActive])
 
   // ===== 操作封装 =====
   const run = React.useCallback(

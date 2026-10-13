@@ -27,6 +27,7 @@ import {
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { Bot } from 'lucide-react'
+import { Z_LAYER } from '@profer/ui'
 import { getVisibleAgentWorkspaces } from '@/lib/product-feature-flags'
 
 type SwitchSectionId = 'recent'
@@ -311,7 +312,7 @@ export function TabSwitcher(): ReactElement | null {
   return (
     // 注意：不要加 data-browser-blocking —— 原生 WebContentsView 的遮挡检测会因此
     // 在按住 Ctrl+Tab 的整段时间里隐藏浏览器面板，视觉上就是分栏浏览器闪黑。
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+    <div className={`fixed inset-0 ${Z_LAYER.overlay} flex items-center justify-center`}>
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
 
       <div className="relative bg-popover/95 backdrop-blur-md border border-border/50 rounded-xl shadow-2xl min-w-[420px] max-w-[540px] overflow-hidden">

@@ -1238,3 +1238,112 @@ describe('结构化空间命名（杜绝网格 / 多列 Flex 跨列串扰）', (
   })
 })
 
+describe('DOM Clobbering 原型隔离防御（BDD-PARSE-01）', () => {
+  function runWith(doc: Record<string, unknown>, location: unknown): {
+    url: string
+    title: string
+    elements: Array<{ name: string }>
+    error?: string
+  } {
+    const runner = new Function('document', 'window', 'location', `return ${buildYanhuCollectorScript()}`)
+    return runner(doc, doc.defaultView, location)
+  }
+
+  test('页面含 name="title" / id="location" 污染时脚本不抛 TypeError，仍安全解析 PageDigest 与真实 URL', () => {
+    const clobberedTitle = { tagName: 'FORM', name: 'title', id: 'title' }
+    const linkEl = {
+      nodeType: 1,
+      tagName: 'A',
+      className: '',
+      id: '',
+      getAttribute: (n: string) => (n === 'href' ? '/jsxsd/framework/xsMainV.htmlx' : ''),
+      getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 24 }),
+      innerText: '学生管理',
+    }
+    const doc: Record<string, unknown> = {
+      body: { querySelectorAll: (sel: string) => (sel === '*' ? [linkEl] : []) },
+      querySelectorAll: () => [],
+      defaultView: {
+        getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1', cursor: 'pointer' }),
+        innerWidth: 1200,
+        innerHeight: 800,
+      },
+    }
+    // 模拟被 <form name="title"> 污染的 document.title（返回元素对象而非字符串）
+    Object.defineProperty(doc, 'title', { get: () => clobberedTitle })
+
+    const result = runWith(doc, { href: 'https://jw.cdut.edu.cn/jsxsd/framework/xsMainV.htmlx' })
+    expect(result.error).toBeUndefined()
+    expect(result.url).toBe('https://jw.cdut.edu.cn/jsxsd/framework/xsMainV.htmlx')
+    expect(result.title).toBe('')
+    expect(result.elements.length).toBeGreaterThanOrEqual(1)
+    expect(result.elements[0]!.name).toBe('学生管理')
+  })
+
+  test('location 被污染（href 非字符串）时安全返回空 URL，绝不抛出 TypeError', () => {
+    const doc: Record<string, unknown> = {
+      body: { querySelectorAll: () => [] },
+      querySelectorAll: () => [],
+      title: '正常标题',
+      defaultView: {
+        getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
+        innerWidth: 800,
+        innerHeight: 600,
+      },
+    }
+    const result = runWith(doc, { href: { tagName: 'IMG' } })
+    expect(result.error).toBeUndefined()
+    expect(result.url).toBe('')
+    expect(result.title).toBe('正常标题')
+  })
+})
+
+describe('闭合 Shadow DOM 宿主探测（CDP 深度补漏标记）', () => {
+  function runWithHost(host: unknown): { closedShadowHosts?: string[] } {
+    const doc = {
+      body: { querySelectorAll: (sel: string) => (sel === '*' ? [host] : []) },
+      querySelectorAll: () => [],
+      title: 'closed-shadow',
+      defaultView: {
+        getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1', cursor: 'auto' }),
+        innerWidth: 1200,
+        innerHeight: 800,
+      },
+    }
+    const runner = new Function('document', 'window', 'location', `return ${buildYanhuCollectorScript()}`)
+    return runner(doc, doc.defaultView, { href: 'https://bsdt.cdut.edu.cn/' })
+  }
+
+  test('自定义元素拿不到 shadowRoot 时被探测打标并回传 closedShadowHosts', () => {
+    const host = {
+      nodeType: 1,
+      tagName: 'X-CLOSED-WIDGET',
+      className: '',
+      id: '',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 30 }),
+      innerText: '',
+      shadowRoot: null,
+      attachShadow: () => ({}),
+    }
+    const result = runWithHost(host)
+    expect(result.closedShadowHosts).toContain('x-closed-widget')
+  })
+
+  test('普通（非自定义）元素不会被误判为闭合 Shadow DOM 宿主', () => {
+    const host = {
+      nodeType: 1,
+      tagName: 'DIV',
+      className: '',
+      id: '',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 30 }),
+      innerText: '',
+      shadowRoot: null,
+      attachShadow: () => ({}),
+    }
+    const result = runWithHost(host)
+    expect(result.closedShadowHosts ?? []).toHaveLength(0)
+  })
+})
+

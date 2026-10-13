@@ -9,6 +9,7 @@ import * as React from "react"
 import * as TooltipPrimitive from "@radix-ui/react-tooltip"
 
 import { cn } from "../lib/cn"
+import { Z_LAYER } from "../lib/z-layers"
 
 const TooltipProvider = TooltipPrimitive.Provider
 
@@ -26,7 +27,8 @@ const TooltipContent = React.forwardRef<
       sideOffset={sideOffset}
       className={cn(
         // 深色毛玻璃效果：主题色调深色背景 + 模糊 + 高对比度文字
-        "z-[10050] overflow-hidden rounded-lg px-3 py-2 text-xs",
+        Z_LAYER.tooltip,
+        "overflow-hidden rounded-lg px-3 py-2 text-xs",
         "bg-tooltip/90 text-tooltip-foreground backdrop-blur-md",
         "shadow-lg",
         "animate-in fade-in-0 zoom-in-95",

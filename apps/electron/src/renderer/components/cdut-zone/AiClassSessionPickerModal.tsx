@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@profer/ui/primitives/dialog'
 import { cn } from '@/lib/utils'
+import { useGlobalOverlay } from '@/atoms/overlay-atoms'
 
 interface AiClassSessionPickerModalProps {
   open: boolean
@@ -54,6 +55,9 @@ export function AiClassSessionPickerModal({
   const [creating, setCreating] = React.useState(false)
   const [newCourseName, setNewCourseName] = React.useState('')
   const [error, setError] = React.useState('')
+
+  // 全局模态叠加登记：课堂选择器打开时，智联万站原生视口必须让位
+  useGlobalOverlay(open)
 
   const refresh = React.useCallback(async (): Promise<void> => {
     setLoading(true)

@@ -175,6 +175,25 @@ import {
   setStudyDocumentsActive,
 } from './lib/study/study-document-indexer'
 import {
+  getTabs as getStudyTabs,
+  saveTabs as saveStudyTabs,
+  getMindmap as getStudyMindmap,
+  saveMindmapCoords as saveStudyMindmapCoords,
+  getFlashcards as getStudyFlashcards,
+  updateCardRating as updateStudyCardRating,
+  getQuiz as getStudyQuiz,
+  submitQuizAnswer as submitStudyQuizAnswer,
+  listStudyArtifacts,
+} from './lib/study/study-session-store'
+import { generateStudyArtifact } from './lib/study/study-artifact-service'
+import { mindMapToOpml } from '@profer/shared'
+import type {
+  AiClassRightTabItem,
+  StudyCardRatingInput,
+  StudyGenerateArtifactInput,
+  StudyQuizAnswerInput,
+} from '@profer/shared'
+import {
   listChannels,
   createChannel,
   updateChannel,
@@ -6275,6 +6294,64 @@ export function registerIpcHandlers(): void {
     getGlobalStudyRetriever().invalidate(input.sessionId)
     return { success: true }
   })
+
+  // ===== AI 速课堂（Chrome 风格动态多 Tab / 思维导图 / 抽认卡 / 测验） =====
+  ipcMain.handle(STUDY_IPC_CHANNELS.GET_TABS, (_event, sessionId: string) => getStudyTabs(sessionId))
+
+  ipcMain.handle(
+    STUDY_IPC_CHANNELS.SAVE_TABS,
+    (_event, input: { sessionId: string; tabs: AiClassRightTabItem[]; activeTabId: string }) =>
+      saveStudyTabs(input.sessionId, input.tabs ?? [], input.activeTabId ?? ''),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.GET_MINDMAP, (_event, input: { sessionId: string; mindmapId?: string }) =>
+    getStudyMindmap(input.sessionId, input.mindmapId),
+  )
+
+  ipcMain.handle(
+    STUDY_IPC_CHANNELS.SAVE_MINDMAP_COORDS,
+    (
+      _event,
+      input: { sessionId: string; mindmapId: string; coords: Record<string, { x: number; y: number }> },
+    ) => saveStudyMindmapCoords(input.sessionId, input.mindmapId, input.coords ?? {}),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.EXPORT_OPML, async (_event, input: { sessionId: string; mindmapId?: string }) => {
+    const mindmap = getStudyMindmap(input.sessionId, input.mindmapId)
+    if (!mindmap) return { success: false, error: '未找到可导出的思维导图' }
+    const result = await dialog.showSaveDialog({
+      title: '导出思维导图（OPML 2.0）',
+      defaultPath: `${(mindmap.title || 'mindmap').replace(/[\\/:*?"<>|]/g, '_')}.opml`,
+      filters: [{ name: 'OPML 2.0', extensions: ['opml'] }],
+    })
+    if (result.canceled || !result.filePath) return { success: false, canceled: true }
+    await writeFile(result.filePath, mindMapToOpml(mindmap), 'utf-8')
+    return { success: true, filePath: result.filePath }
+  })
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.GET_FLASHCARDS, (_event, input: { sessionId: string; deckId?: string }) =>
+    getStudyFlashcards(input.sessionId, input.deckId),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.UPDATE_CARD_RATING, (_event, input: StudyCardRatingInput) =>
+    updateStudyCardRating(input),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.GET_QUIZ, (_event, input: { sessionId: string; quizId?: string }) =>
+    getStudyQuiz(input.sessionId, input.quizId),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.SUBMIT_QUIZ_ANSWER, (_event, input: StudyQuizAnswerInput) =>
+    submitStudyQuizAnswer(input),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.GENERATE_ARTIFACT, async (_event, input: StudyGenerateArtifactInput) =>
+    generateStudyArtifact(input),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.LIST_ARTIFACTS, (_event, sessionId: string) =>
+    listStudyArtifacts(sessionId),
+  )
 
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====
   ipcMain.handle(CDUT_AI_CLASS_IPC_CHANNELS.LIST_SESSIONS, () => {

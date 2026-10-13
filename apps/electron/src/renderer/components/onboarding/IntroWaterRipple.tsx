@@ -4,6 +4,7 @@
  */
 
 import * as React from 'react'
+import { Z_LAYER } from '@profer/ui'
 import { createPortal } from 'react-dom'
 import { IntroFluidBackground } from './IntroFluidBackground'
 
@@ -74,7 +75,7 @@ export function IntroWaterRipple({ onDone, durationMs = 5000 }: {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[10000] flex cursor-pointer select-none items-center justify-center overflow-hidden bg-black"
+      className={`fixed inset-0 ${Z_LAYER.overlay} flex cursor-pointer select-none items-center justify-center overflow-hidden bg-black`}
       onClick={skip}
       role="presentation"
     >

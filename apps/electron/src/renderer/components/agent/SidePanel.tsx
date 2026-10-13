@@ -860,7 +860,7 @@ function AttachedFilesSection({ attachedFiles, onDetach, onAddToChat, onFilePrev
                     <MoreHorizontal className="size-3.5" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+                <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
                   {onAddToChat && (
                     <DropdownMenuItem
                       className="text-xs py-1 [&>svg]:size-3.5"
@@ -1181,7 +1181,7 @@ function AttachedDirTree({ dirPath, onDetach, onRename, onMove, onDelete, onMove
               <MoreHorizontal className="size-3.5" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+          <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
             {onAddToChat && (
               <DropdownMenuItem
                 className="text-xs py-1 [&>svg]:size-3.5"
@@ -1519,7 +1519,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+              <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
                 {onAddToChat && !entry.isDirectory && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"

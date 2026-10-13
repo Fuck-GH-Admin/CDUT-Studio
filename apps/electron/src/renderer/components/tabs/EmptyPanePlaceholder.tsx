@@ -11,6 +11,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { Bot, Columns2, Globe2, MessageSquare } from 'lucide-react'
+import { Z_LAYER } from '@profer/ui'
 import { cn } from '@/lib/utils'
 import { tabsAtom, type TabItem } from '@/atoms/tab-atoms'
 import { isGroupEligibleTab } from '@/atoms/tab-group-atoms'
@@ -68,8 +69,8 @@ export function EmptyPanePlaceholder({
             选择会话
           </Button>
         </DropdownMenuTrigger>
-        {/* z-[100]：主区外壳自身是 z-[60]/z-[70]，Radix 默认 z-50 会被整个面板盖住 */}
-        <DropdownMenuContent align="center" className="z-[100] max-h-72 w-56 overflow-y-auto">
+        {/* 主区外壳自身是 shell 层，Radix 默认 z-50 会被整个面板盖住，故显式提升到下拉菜单层 */}
+        <DropdownMenuContent align="center" className={`${Z_LAYER.menu} max-h-72 w-56 overflow-y-auto`}>
           {candidates.length > 0 ? (
             candidates.map((tab) => (
               <DropdownMenuItem

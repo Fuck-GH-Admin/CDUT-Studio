@@ -33,13 +33,12 @@ import {
   studyRightPanelCollapsedAtom,
   studyRightPanelWidthAtom,
 } from '@/atoms/study-atoms'
-import { previewFileMapAtom } from '@/atoms/preview-atoms'
-import { SidebarFilePreview } from '@/components/diff/SidebarFilePreview'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { AiClassChatPanel } from './AiClassChatPanel'
 import { AiClassKnowledgeTree } from './AiClassKnowledgeTree'
 import { AiClassCognitionButton } from './AiClassCognitionButton'
 import { AiClassCognitionModal } from './AiClassCognitionModal'
+import { AiClassRightTabs } from './ai-class-tabs/AiClassRightTabs'
 
 /** 支持上传的资料扩展名（与白名单同源，用于 file input accept 提示） */
 const ACCEPT_EXTENSIONS = ALLOWED_STUDY_EXTENSIONS.join(',')
@@ -52,7 +51,6 @@ export function AiClassView(): React.ReactElement {
   const [rightWidth, setRightWidth] = useAtom(studyRightPanelWidthAtom)
   const setIngesting = useSetAtom(studyIngestingAtom)
   const ingesting = useAtomValue(studyIngestingAtom)
-  const previewFile = useAtomValue(previewFileMapAtom).get(sessionId ?? '') ?? null
   const openPreview = useOpenPreview()
 
   // 右栏左边缘拖拽调宽（320px ~ 60vw），松手后持久化
@@ -380,20 +378,18 @@ export function AiClassView(): React.ReactElement {
           {rightCollapsed ? <ChevronLeft size={13} /> : <ChevronRight size={13} />}
         </button>
         {!rightCollapsed ? (
-          previewFile ? (
-            <div className="flex min-h-0 flex-1 flex-col">
-              <SidebarFilePreview sessionId={sessionId ?? ''} />
-            </div>
+          sessionId ? (
+            <AiClassRightTabs sessionId={sessionId} />
           ) : (
             <div className="flex min-h-0 flex-1 flex-col p-3">
               <div className="flex shrink-0 justify-center">
                 <span className="inline-flex items-center rounded-full bg-muted/60 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  课程资料预览
+                  学习工作台
                 </span>
               </div>
               <div className="mt-2 flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 text-center">
                 <p className="px-4 text-[11px] leading-relaxed text-muted-foreground">
-                  点击左侧已上传课件，或对话中的引用胶囊，即可在此处对照原文并高亮定位。
+                  进入课堂后，右侧将呈现 Chrome 风格多标签工作台（导图 / 预览 / 抽认卡 / 测验）。
                 </p>
               </div>
             </div>

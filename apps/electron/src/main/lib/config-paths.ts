@@ -1264,6 +1264,46 @@ export function getStudyActiveDocumentsPath(sessionId: string): string {
 }
 
 /**
+ * AI 速课堂会话专属存储根目录（Chrome 风格多 Tab 拓扑 / 思维导图 / 抽认卡 / 测验）。
+ *
+ * 路径：~/.cdutai/study-sessions/
+ */
+export function getStudySessionsRootDir(): string {
+  const dir = join(getConfigDir(), 'study-sessions')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 单课堂的专属存储目录；仅在写入流程创建。 */
+export function getStudySessionDataDir(sessionId: string): string {
+  const root = resolve(getStudySessionsRootDir())
+  const dir = resolve(root, assertStudyId(sessionId, '会话标识'))
+  if (!dir.startsWith(`${root}${sep}`)) throw new Error('会话标识无效')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 速课堂多 Tab 拓扑路径（tabs.json）。 */
+export function getStudyTabsPath(sessionId: string): string {
+  return join(getStudySessionDataDir(sessionId), 'tabs.json')
+}
+
+/** 思维导图数据与用户自定义坐标路径（mindmaps.json）。 */
+export function getStudyMindmapsPath(sessionId: string): string {
+  return join(getStudySessionDataDir(sessionId), 'mindmaps.json')
+}
+
+/** 抽认卡卡包与 FSRS-7 学习状态路径（flashcards.json）。 */
+export function getStudyFlashcardsPath(sessionId: string): string {
+  return join(getStudySessionDataDir(sessionId), 'flashcards.json')
+}
+
+/** 测验题库、答题记录与 FIM 认知轨迹路径（quizzes.json）。 */
+export function getStudyQuizzesPath(sessionId: string): string {
+  return join(getStudySessionDataDir(sessionId), 'quizzes.json')
+}
+
+/**
  * 隐蔽评测服务运行时握手文件路径。
  *
  * 主进程启动时把回环监听端口与一次性认证 Token 写入该文件（仅供本机评测程序直连，

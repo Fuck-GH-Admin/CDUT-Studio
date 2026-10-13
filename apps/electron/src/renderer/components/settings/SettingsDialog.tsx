@@ -9,6 +9,8 @@ import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { settingsOpenAtom, channelFormDirtyAtom, settingsCloseRequestedAtom } from '@/atoms/settings-tab'
+import { useGlobalOverlay } from '@/atoms/overlay-atoms'
+import { Z_LAYER } from '@profer/ui'
 import { SettingsPanel, type SettingsTabItem } from './SettingsPanel'
 
 export interface SettingsDialogProps {
@@ -20,6 +22,9 @@ export function SettingsDialog({ tabsOverride }: SettingsDialogProps): React.Rea
   const [open, setOpen] = useAtom(settingsOpenAtom)
   const channelFormDirty = useAtomValue(channelFormDirtyAtom)
   const setCloseRequested = useSetAtom(settingsCloseRequestedAtom)
+
+  // 全局模态叠加登记：设置面板打开时，智联万站原生 WebContentsView 必须让位（避免硬遮挡）
+  useGlobalOverlay(open)
 
   // 遮罩点击和 Esc 与面板关闭按钮共用未保存确认流程。
   const handleOpenChange = (nextOpen: boolean): void => {
@@ -35,11 +40,11 @@ export function SettingsDialog({ tabsOverride }: SettingsDialogProps): React.Rea
       <DialogPrimitive.Portal>
         {/* 轻遮罩 — 与 Dialog primitive 统一使用 Surface Contract overlay。 */}
         <DialogPrimitive.Overlay
-          className="fixed inset-0 z-[100] bg-overlay/40 backdrop-blur-sm titlebar-no-drag transition-opacity duration-100 data-[state=open]:opacity-100 data-[state=closed]:opacity-0"
+          className={`fixed inset-0 ${Z_LAYER.dialog} bg-overlay/40 backdrop-blur-sm titlebar-no-drag transition-opacity duration-100 data-[state=open]:opacity-100 data-[state=closed]:opacity-0`}
         />
         <DialogPrimitive.Content
           data-browser-blocking
-          className="settings-dialog fixed left-[50%] top-[50%] z-[100] translate-x-[-50%] translate-y-[-50%] h-[88vh] w-[90vw] max-h-[820px] max-w-[1080px] overflow-hidden rounded-xl border border-surface-border/60 bg-dialog text-dialog-foreground shadow-2xl titlebar-no-drag transition-all duration-100 data-[state=open]:scale-100 data-[state=open]:opacity-100 data-[state=closed]:scale-[0.98] data-[state=closed]:opacity-0"
+          className={`settings-dialog fixed left-[50%] top-[50%] ${Z_LAYER.dialog} translate-x-[-50%] translate-y-[-50%] h-[88vh] w-[90vw] max-h-[820px] max-w-[1080px] overflow-hidden rounded-xl border border-surface-border/60 bg-dialog text-dialog-foreground shadow-2xl titlebar-no-drag transition-all duration-100 data-[state=open]:scale-100 data-[state=open]:opacity-100 data-[state=closed]:scale-[0.98] data-[state=closed]:opacity-0`}
         >
           <DialogPrimitive.Title className="sr-only">设置</DialogPrimitive.Title>
           <SettingsPanel onClose={() => setOpen(false)} tabsOverride={tabsOverride} />

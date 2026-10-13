@@ -348,7 +348,7 @@ function ResultItem({
           )}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="left" className="z-[10000] max-w-xs break-all">
+      <TooltipContent side="left" className="max-w-xs break-all">
         <p>{entry.path}</p>
       </TooltipContent>
     </Tooltip>

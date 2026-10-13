@@ -11,6 +11,7 @@ import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { Download, X } from 'lucide-react'
 import { cn } from '../lib/cn'
+import { Z_LAYER } from '../lib/z-layers'
 import { useSmoothZoom } from '../hooks/use-smooth-zoom'
 
 interface ImageLightboxProps {
@@ -50,7 +51,8 @@ export function ImageLightbox({
          */}
         <DialogPrimitive.Overlay
           className={cn(
-            'fixed inset-0 z-[200] bg-black/80 backdrop-blur-md titlebar-no-drag',
+            'fixed inset-0 bg-black/80 backdrop-blur-md titlebar-no-drag',
+            Z_LAYER.lightbox,
             'data-[state=open]:animate-in data-[state=closed]:animate-out',
             'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0'
           )}
@@ -59,7 +61,8 @@ export function ImageLightbox({
         <DialogPrimitive.Content
           data-browser-blocking
           className={cn(
-            'fixed inset-0 z-[200] flex items-center justify-center titlebar-no-drag',
+            'fixed inset-0 flex items-center justify-center titlebar-no-drag',
+            Z_LAYER.lightbox,
             'data-[state=open]:animate-in data-[state=closed]:animate-out',
             'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
             'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',

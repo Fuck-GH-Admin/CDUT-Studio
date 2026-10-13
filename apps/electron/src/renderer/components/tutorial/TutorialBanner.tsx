@@ -11,6 +11,7 @@ import * as React from 'react'
 import { useStore } from 'jotai'
 import { GraduationCap, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
+import { Z_LAYER } from '@profer/ui'
 import { openTutorialTab } from '@/lib/tab-activation'
 
 export function TutorialBanner(): React.ReactElement | null {
@@ -49,7 +50,7 @@ export function TutorialBanner(): React.ReactElement | null {
 
   return (
     <div
-      className={`fixed bottom-6 right-6 z-[100] w-[340px] transition-all duration-500 ease-out ${
+      className={`fixed bottom-6 right-6 ${Z_LAYER.dialog} w-[340px] transition-all duration-500 ease-out ${
         visible
           ? 'translate-x-0 opacity-100'
           : 'translate-x-8 opacity-0 pointer-events-none'

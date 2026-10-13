@@ -12,6 +12,7 @@ import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { getDefaultStore } from 'jotai'
 import { Button } from '@profer/ui/primitives/button'
+import { Z_LAYER } from '@profer/ui'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,7 +51,7 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
           {branches.length > 1 && <span className="tabular-nums">{branches.length}</span>}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="z-[100] w-64 titlebar-no-drag">
+      <DropdownMenuContent align="end" className={`${Z_LAYER.menu} w-64 titlebar-no-drag`}>
         {branches.map((branch) => (
           <DropdownMenuItem key={branch.id} onSelect={() => reopen(branch)} className="flex items-center gap-2 py-2">
             <Split className="size-3.5 shrink-0" />

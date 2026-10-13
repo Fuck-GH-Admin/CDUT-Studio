@@ -74,3 +74,27 @@ export function shouldRenderMermaidCodeBlock(className: string | undefined, code
   if (className && LANGUAGE_CLASS_PATTERN.test(className)) return false
   return looksLikeMermaidDefinition(code)
 }
+
+// ===== 对话流 ```mindmap 思维导图代码块识别 =====
+
+const MINDMAP_LANGUAGE_CLASS_PATTERN = /(?:^|\s)language-mindmap(?:\s|$)/i
+
+/** 语言标识是否为 mindmap */
+export function isMindMapLanguage(language: string): boolean {
+  return /^mindmap$/i.test(language.trim())
+}
+
+/**
+ * 判定代码块是否应交给专用思维导图渲染器（对话流只读预览 + 全屏可拖拽大图）。
+ *
+ * 仅两类命中，避免与 Mermaid 生态冲突：
+ *   1. 显式标注 `language-mindmap`；
+ *   2. 未标注任何语言且首行即为 `mindmap` 关键字。
+ * 显式标注 `language-mermaid`（mermaid 自带 mindmap 图）仍交由 MermaidBlock 渲染。
+ */
+export function shouldRenderMindMapCodeBlock(className: string | undefined, code: string): boolean {
+  if (className && MINDMAP_LANGUAGE_CLASS_PATTERN.test(className)) return true
+  if (className && LANGUAGE_CLASS_PATTERN.test(className)) return false
+  const firstLine = code.trimStart().split(/\r?\n/, 1)[0] ?? ''
+  return /^mindmap\b/i.test(firstLine.trim())
+}

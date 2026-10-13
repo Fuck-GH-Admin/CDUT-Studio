@@ -5,7 +5,7 @@
 
 import * as React from 'react'
 import { Copy, Minus, Square, X } from 'lucide-react'
-import { detectIsWindows } from '@profer/ui'
+import { detectIsWindows, Z_LAYER } from '@profer/ui'
 import { cn } from '@/lib/utils'
 
 interface WindowControlsProps {
@@ -51,7 +51,7 @@ export function WindowControls({
   return (
     <div className={cn(
       'window-controls flex select-none',
-      variant === 'fixed' ? 'fixed top-[2px] right-[8px] z-[100]' : 'relative z-30 shrink-0',
+      variant === 'fixed' ? `fixed top-[2px] right-[8px] ${Z_LAYER.dialog}` : `relative ${Z_LAYER.chrome} shrink-0`,
       className,
     )}>
       {/* Windows 原生语义顺序：最小化 → 最大化/还原 → 关闭。图标来自 Lucide 开源图标集。 */}
