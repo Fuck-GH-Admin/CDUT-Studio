@@ -800,13 +800,15 @@ function getFileSearchRoots(sessionId: string): string[] {
     }
   }
 
+  // 非项目会话（未绑定工作区）回退默认工作区沙箱，与 GET_SESSION_PATH / 编排层保持同构：
+  // 否则这类会话拿不到任何授权搜索根，chip 候选搜索会直接失败。
   const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
-  if (workspace?.slug) {
-    addRoot(getAgentSessionWorkspacePath(workspace.slug, sessionId))
-    // 不加入整个 workspace 根目录，避免把其他 session 的 cwd/文件纳入搜索范围。
-    addRoot(getWorkspaceFilesDir(workspace.slug))
-    for (const directory of getWorkspaceAttachedDirectories(workspace.slug)) addRoot(directory)
-  }
+  const workspaceSlug = workspace?.slug ?? 'default'
+  addRoot(getAgentSessionWorkspacePath(workspaceSlug, sessionId))
+  // 不加入整个 workspace 根目录，避免把其他 session 的 cwd/文件纳入搜索范围。
+  addRoot(getWorkspaceFilesDir(workspaceSlug))
+  for (const directory of getWorkspaceAttachedDirectories(workspaceSlug)) addRoot(directory)
+
   for (const directory of meta.attachedDirectories ?? []) addRoot(directory)
   return roots
 }
@@ -4799,8 +4801,12 @@ export function registerIpcHandlers(): void {
       if (!input || typeof input.sessionId !== 'string' || typeof input.requestId !== 'string' || typeof input.targetName !== 'string') {
         throw new Error('文件搜索请求无效')
       }
+      if (!getAgentSessionMeta(input.sessionId)) throw new Error('Agent 会话不存在')
       const roots = getFileSearchRoots(input.sessionId)
-      if (roots.length === 0) throw new Error('Agent 会话不存在或没有授权搜索目录')
+      if (roots.length === 0) {
+        console.warn('[IPC] file:search-candidate 没有可用授权搜索目录:', input.sessionId)
+        throw new Error('没有授权搜索目录')
+      }
       if (activeFileSearches.has(input.requestId)) {
         return { requestId: input.requestId, done: true, cancelled: true, error: '搜索请求已在进行中' }
       }
