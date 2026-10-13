@@ -55,7 +55,7 @@ import { ContentReviewView } from '@/components/content-review/ContentReviewView
 /** 三大板块子页面标题映射 */
 const SUB_VIEW_TITLES: Record<Exclude<CdutSubViewId, null>, string> = {
   'ai-class': 'AI 速课堂',
-  'yanhu-express': '砚湖秒通',
+  'yanhu-express': '智联万站',
   'material-review': '材料审核',
 }
 

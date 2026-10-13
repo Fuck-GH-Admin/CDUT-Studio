@@ -136,7 +136,7 @@ function hasEnabledModel(
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isAgentPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'agent-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
-// 砚湖秒通 · 桌宠「砚小龙」独立透明子窗口
+// 智联万站 · 桌宠「砚小龙」独立透明子窗口
 const isYanhuPetWindow = new URLSearchParams(window.location.search).get('window') === 'yanhu-pet'
 
 /**
@@ -1109,7 +1109,7 @@ if (isDetachedPreviewWindow) {
     )
   })
 } else if (isYanhuPetWindow) {
-  // ===== 砚湖秒通 · 桌宠「砚小龙」透明子窗口 =====
+  // ===== 智联万站 · 桌宠「砚小龙」透明子窗口 =====
   import('./components/cdut-zone/yanhu/pet/YanhuPetFloatingHost').then(({ YanhuPetFloatingHost }) => {
     ReactDOM.createRoot(document.getElementById('root')!).render(
       <React.StrictMode>

@@ -18,7 +18,7 @@ export const cdutAccountAtom = atom<CdutAccountProfile>({
 
 /**
  * CDUT 专区当前打开的子页面标识；null 表示停留在专区首页。
- * 进入任一板块（AI速课堂 / 砚湖秒通 / 材料审查）时非空，关闭后回到 null。
+ * 进入任一板块（AI速课堂 / 智联万站 / 材料审查）时非空，关闭后回到 null。
  */
 export const cdutSubViewAtom = atom<CdutSubViewId>(null)
 

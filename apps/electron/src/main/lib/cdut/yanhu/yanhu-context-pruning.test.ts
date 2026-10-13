@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 多步工具循环上下文剪枝（yanhu-context-pruning）单元测试
+ * 智联万站 · 多步工具循环上下文剪枝（yanhu-context-pruning）单元测试
  *
  * 覆盖：步骤不足时原样返回、超限时仅压缩旧步骤、read_page 巨型结果被替换为继承摘要、
  * 通用结果截断、toolCallId / isError 完整性保留、keepSteps 可配置。

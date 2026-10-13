@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通指纹伪装引擎（YanhuFingerprintEngine）
+ * 智联万站指纹伪装引擎（YanhuFingerprintEngine）
  *
  * 针对 CDUT 校内 CAS、办事大厅与青果教务（瑞数动态安全 WAF）实行「网络协议头」层伪装（见规格书 4.2）：
  *   - 会话层：User-Agent 对齐桌面 Chrome 133，注入 Client Hints 请求头；
@@ -82,7 +82,7 @@ export function applyYanhuSessionIdentity(ses: Session): void {
   try {
     ses.setUserAgent(YANHU_USER_AGENT, YANHU_ACCEPT_LANGUAGES)
   } catch (err) {
-    console.warn('[砚湖秒通] 设置 User-Agent 失败:', err)
+    console.warn('[智联万站] 设置 User-Agent 失败:', err)
   }
 
   try {
@@ -98,7 +98,7 @@ export function applyYanhuSessionIdentity(ses: Session): void {
       callback({ requestHeaders })
     })
   } catch (err) {
-    console.warn('[砚湖秒通] 注入 Client Hints 请求头失败:', err)
+    console.warn('[智联万站] 注入 Client Hints 请求头失败:', err)
   }
 }
 

@@ -321,7 +321,7 @@ export function ChannelSettings(): React.ReactElement {
         )}
       </SettingsSection>
 
-      {/* 砚湖秒通 · 桌宠「砚小龙」专属模型 */}
+      {/* 智联万站 · 桌宠「砚小龙」专属模型 */}
       <YanhuPetModelSettings channels={channels} />
 
       {/* 删除确认弹窗 */}

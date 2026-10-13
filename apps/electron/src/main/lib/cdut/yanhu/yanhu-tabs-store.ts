@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通标签拓扑持久化（YanhuTabsStore）
+ * 智联万站标签拓扑持久化（YanhuTabsStore）
  *
  * 职责：把标签顺序 / URL / 标题 / 激活项落盘到 `~/.cdutai/yanhu-express/tabs.json`，
  * 并在读取时对损坏或半损坏的数据做兜底修复（重建为默认办事大厅首页）。
@@ -112,7 +112,7 @@ export function normalizeStoredTabsState(raw: unknown): YanhuTabsState {
 }
 
 /**
- * 砚湖秒通标签拓扑持久化服务。
+ * 智联万站标签拓扑持久化服务。
  *
  * 默认写入 `~/.cdutai/yanhu-express/tabs.json`；测试可注入自定义路径。
  */
@@ -130,7 +130,7 @@ export class YanhuTabsStore {
       const raw = readJsonFileSafe<StoredYanhuTabs>(this.filePath)
       return normalizeStoredTabsState(raw)
     } catch (err) {
-      console.warn('[砚湖秒通] 读取标签拓扑失败，回退默认首页:', err)
+      console.warn('[智联万站] 读取标签拓扑失败，回退默认首页:', err)
       return createDefaultTabsState()
     }
   }
@@ -161,7 +161,7 @@ export class YanhuTabsStore {
       }
       writeJsonFileAtomic(this.filePath, payload)
     } catch (err) {
-      console.error('[砚湖秒通] 写入标签拓扑失败:', err)
+      console.error('[智联万站] 写入标签拓扑失败:', err)
     }
   }
 }

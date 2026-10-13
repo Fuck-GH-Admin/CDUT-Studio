@@ -1565,7 +1565,7 @@ export interface ElectronAPI {
     gatekeeperRespond: (decision: CdutGatekeeperDecision) => Promise<{ handled: boolean }>
   }
 
-  // ===== CDUT 专区 · 砚湖秒通（Yanhu Express）内置浏览器 =====
+  // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
   yanhuExpress: {
     /** 初始化或从落盘拓扑恢复（仅实例化激活标签，其余休眠） */
     initOrRestore: () => Promise<YanhuTabsState>
@@ -1591,7 +1591,7 @@ export interface ElectronAPI {
     /** 一键自愈：净化陈旧动态签名后重载当前标签 */
     retryWithClean: (input?: YanhuTabRefInput) => Promise<YanhuTabsState>
     /** 弹出标签栏原生上下文菜单（系统绘制，悬浮于网页视图之上） */
-    showTabMenu: (input: YanhuTabRefInput) => Promise<{ success: boolean }>
+    showTabMenu: (input?: YanhuTabRefInput) => Promise<{ success: boolean }>
     /** 在系统默认浏览器打开外链（仅 http/https） */
     openExternal: (url: string) => Promise<{ success: boolean }>
     onTabsChanged: (callback: (state: YanhuTabsState) => void) => () => void
@@ -1599,7 +1599,7 @@ export interface ElectronAPI {
     onUrlChanged: (callback: (event: YanhuUrlChangedEvent) => void) => () => void
 
     // ===== 桌宠「砚小龙」（独立阉割版 Pi 运行时） =====
-    /** 主渲染窗口：同步砚湖秒通视口矩形（CSS 像素） */
+    /** 主渲染窗口：同步智联万站视口矩形（CSS 像素） */
     petSyncViewport: (rect: YanhuPetViewport) => Promise<{ success: boolean }>
     /** 桌宠窗口：上报紧凑包裹窗口几何（DIP） */
     petUpdateGeometry: (geometry: YanhuPetWindowGeometry) => Promise<{ success: boolean }>
@@ -1622,7 +1622,7 @@ export interface ElectronAPI {
     petSetIgnoreMouse: (ignore: boolean) => Promise<{ success: boolean }>
     /** 唤起桌宠原生上下文菜单 */
     petShowContextMenu: () => Promise<{ success: boolean }>
-    /** 特权指令：唤起「砚湖秒通 · 实时底层诊断控制台」 */
+    /** 特权指令：唤起「智联万站 · 实时底层诊断控制台」 */
     openDiagnosticConsole: () => Promise<{ success: boolean }>
   }
 
@@ -3697,7 +3697,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.GATEKEEPER_RESPOND, decision),
   },
 
-  // ===== CDUT 专区 · 砚湖秒通（Yanhu Express）内置浏览器 =====
+  // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
   yanhuExpress: {
     initOrRestore: () => ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.INIT_OR_RESTORE),
     getTabsState: () => ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.GET_TABS_STATE),
@@ -3729,7 +3729,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.RELOAD, input),
     retryWithClean: (input?: YanhuTabRefInput) =>
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.RETRY_WITH_CLEAN, input),
-    showTabMenu: (input: YanhuTabRefInput) =>
+    showTabMenu: (input?: YanhuTabRefInput) =>
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.SHOW_TAB_MENU, input),
     openExternal: (url: string) =>
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.OPEN_EXTERNAL, url),

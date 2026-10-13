@@ -6090,13 +6090,13 @@ export function registerIpcHandlers(): void {
     return { handled: resolveCdutGatekeeper(decision) }
   })
 
-  // ===== CDUT 专区 · 砚湖秒通（Yanhu Express）轻量级定制浏览器 =====
+  // ===== CDUT 专区 · 智联万站（Yanhu Express）轻量级定制浏览器 =====
   // 前端 100% 纯净：仅暴露浏览器外壳所需通道；底层 CDP 能力静默预留、不提供任何调试 UI 入口。
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.INIT_OR_RESTORE, () => yanhuExpressManager.initOrRestore())
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.GET_TABS_STATE, () => yanhuExpressManager.getTabsState())
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.SHOW_VIEW, () => {
     const state = yanhuExpressManager.showView()
-    // 呈现砚湖秒通时同步唤起桌宠子窗口（紧凑包裹，随同主窗口生命周期）
+    // 呈现智联万站时同步唤起桌宠子窗口（紧凑包裹，随同主窗口生命周期）
     yanhuPetWindowManager.setPresented(true)
     return state
   })
@@ -6127,17 +6127,17 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CREATE_TAB, (_event, input: YanhuCreateTabInput) =>
     yanhuExpressManager.createTab(input ?? {}),
   )
-  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.ACTIVATE_TAB, (_event, input: YanhuTabRefInput) =>
-    yanhuExpressManager.activateTab(input.tabId),
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.ACTIVATE_TAB, (_event, input?: YanhuTabRefInput) =>
+    yanhuExpressManager.activateTab(input?.tabId ?? ''),
   )
-  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_TAB, (_event, input: YanhuTabRefInput) =>
-    yanhuExpressManager.closeTab(input.tabId),
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_TAB, (_event, input?: YanhuTabRefInput) =>
+    yanhuExpressManager.closeTab(input?.tabId ?? ''),
   )
-  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_OTHER_TABS, (_event, input: YanhuTabRefInput) =>
-    yanhuExpressManager.closeOtherTabs(input.tabId),
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_OTHER_TABS, (_event, input?: YanhuTabRefInput) =>
+    yanhuExpressManager.closeOtherTabs(input?.tabId ?? ''),
   )
-  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_RIGHT_TABS, (_event, input: YanhuCloseRightInput) =>
-    yanhuExpressManager.closeRightTabs(input.tabId),
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_RIGHT_TABS, (_event, input?: YanhuCloseRightInput) =>
+    yanhuExpressManager.closeRightTabs(input?.tabId ?? ''),
   )
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.REORDER_TABS, (_event, input: YanhuReorderTabsInput) =>
     yanhuExpressManager.reorderTabs(input.orderedTabIds ?? []),
@@ -6190,15 +6190,13 @@ export function registerIpcHandlers(): void {
     runYanhuCdp(() => yanhuExpressManager.cdpExecuteScript(input?.tabId, input?.expression ?? '')),
   )
 
-  // ===== 砚湖秒通 · 桌宠「砚小龙」（阉割版 Pi 运行时 + 紧凑包裹子窗口） =====
-  // 视口同步：主渲染窗口测得砚湖秒通视口（CSS 像素），驱动桌宠子窗口贴合定位
+  // ===== 智联万站 · 桌宠「砚小龙」（阉割版 Pi 运行时 + 紧凑包裹子窗口） =====
+  // 视口同步：主渲染窗口测得智联万站视口（CSS 像素），驱动桌宠子窗口贴合定位
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.PET_SYNC_VIEWPORT, (_event, rect: YanhuPetViewport) => {
-    if (rect) {
-      if (rect.width > 4 && rect.height > 4) {
-        yanhuPetWindowManager.setPresented(true)
-      }
-      yanhuPetWindowManager.syncViewport(rect)
-    }
+    // 仅同步几何：呈现态由 SHOW_VIEW / HIDE_VIEW / UPDATE_BOUNDS(visible) 单一来源驱动。
+    // 此前在此处 setPresented(true) 会让渲染层每帧上报视口都把桌宠重新置为呈现，
+    // 与隐藏指令互相打架，造成桌宠在拦截页/错误页 show/hide 抖动。
+    if (rect) yanhuPetWindowManager.syncViewport(rect)
     return { success: true }
   })
   // 桌宠渲染进程上报紧凑包裹几何（DIP）-> 主进程应用窗口 Bounds

@@ -1,5 +1,5 @@
 /**
- * YanhuPetModelSettings - 砚湖秒通「砚小龙」专属模型配置卡片
+ * YanhuPetModelSettings - 智联万站「砚小龙」专属模型配置卡片
  *
  * 允许为桌宠单独指定渠道 / 模型；未配置时「砚小龙」将无缝继承全局默认激活渠道。
  * 配置持久化于 `~/.cdutai/yanhu-pet-history.json`，经主进程 `yanhuExpress.petSaveConfig` 写入。
@@ -65,6 +65,22 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
     [api],
   )
 
+  // 渠道/模型被停用或删除后回落为「继承全局默认渠道」，
+  // 避免下拉因值不在候选中而显示空白、并连带把模型下拉禁用。
+  React.useEffect(() => {
+    if (!loaded) return
+    if (channelId && !enabledChannels.some((channel) => channel.id === channelId)) {
+      setChannelId('')
+      setModelId('')
+      persist('', '')
+      return
+    }
+    if (modelId && !models.some((model) => model.id === modelId)) {
+      setModelId('')
+      persist(channelId, '')
+    }
+  }, [loaded, enabledChannels, models, channelId, modelId, persist])
+
   const handleChannelChange = (value: string): void => {
     setChannelId(value)
     setModelId('')
@@ -78,7 +94,7 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
 
   return (
     <SettingsSection
-      title="砚湖秒通专属模型"
+      title="智联万站专属模型"
       description="为桌宠「砚小龙」单独指定模型渠道；未配置时无缝继承全局默认激活渠道。"
     >
       <SettingsCard>

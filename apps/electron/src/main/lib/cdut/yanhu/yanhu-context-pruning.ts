@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 多步工具循环上下文剪枝（Context Pruning）
+ * 智联万站 · 多步工具循环上下文剪枝（Context Pruning）
  *
  * 纯函数，不依赖 Electron / 供应商适配器，便于单测。
  *

@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 无视感知 DOM 蒸馏与 BID 双射单元测试
+ * 智联万站 · 无视感知 DOM 蒸馏与 BID 双射单元测试
  *
  * 覆盖：四级剪枝（0 面积 / 不可视 / aria-hidden 100% 裁剪）、交互候选集过滤、
  * BID 连续标定的单射与满射、Region 分块序列化、AXTree 语义增强。
@@ -929,6 +929,16 @@ describe('computePageFingerprint（页面结构指纹）', () => {
     const after = buildPage(nodes)
     after.dataTables = ['| 课程 | 成绩 |\n| --- | --- |\n| 高等数学 | 95 |']
     expect(computePageFingerprint(before)).not.toBe(computePageFingerprint(after))
+  })
+
+  test('勾选 / 选中态变化时指纹必须改变（勾选态由 value 承载，根除 read_page 误判「无变化」）', () => {
+    const unchecked = buildPage([
+      { bid: 1, role: 'checkbox', name: '同意条款', tag: 'input', value: '未勾选', bounds: { x: 0, y: 0, width: 1, height: 1 } },
+    ])
+    const checked = buildPage([
+      { bid: 1, role: 'checkbox', name: '同意条款', tag: 'input', value: '已勾选', bounds: { x: 0, y: 0, width: 1, height: 1 } },
+    ])
+    expect(computePageFingerprint(unchecked)).not.toBe(computePageFingerprint(checked))
   })
 })
 

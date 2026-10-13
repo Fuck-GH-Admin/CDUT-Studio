@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 桌宠「砚小龙」渲染层状态原子
+ * 智联万站 · 桌宠「砚小龙」渲染层状态原子
  *
  * 桌宠运行在独立的透明子窗口中，主进程为配置 / 记忆 / 流式的唯一数据源，
  * 渲染层只消费广播与本地交互态，遵循项目“状态全量 Jotai”约定。
@@ -29,10 +29,10 @@ export const DEFAULT_PET_CONFIG: YanhuPetConfig = {
 /** 桌宠配置 */
 export const petConfigAtom = atom<YanhuPetConfig>(DEFAULT_PET_CONFIG)
 
-/** 砚湖秒通视口尺寸（DIP）；未知时为 null */
+/** 智联万站视口尺寸（DIP）；未知时为 null */
 export const petViewportSizeAtom = atom<{ width: number; height: number } | null>(null)
 
-/** 砚湖秒通是否处于呈现态 */
+/** 智联万站是否处于呈现态 */
 export const petPresentedAtom = atom<boolean>(false)
 
 /** 历史消息列表（主进程为源） */

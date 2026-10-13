@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 确定性同步与高保真因果交互引擎（YanhuStabilization）
+ * 智联万站 · 确定性同步与高保真因果交互引擎（YanhuStabilization）
  *
  * 依据《Deterministic Synchronization and High-Fidelity Event Emulation in Autonomous Web Agents》
  * 技术报告，落地三大工业级算法基元，彻底根除「固定延时猜延迟」带来的假死与早熟断言：
@@ -112,7 +112,7 @@ export function buildCrossFrameDrainScript(options: CrossFrameDrainOptions = {})
     };
     const finish = () => {
       if (done) return; done = true;
-      const flush = () => { cleanup(); resolve({ settled: true, mutations: mutations, frames: docs.length, elapsed: Date.now() - started }); };
+      const flush = () => { cleanup(); resolve({ settled: true, mutations: mutations, frames: docs.length, elapsedMs: Date.now() - started }); };
       try {
         if (typeof requestIdleCallback === 'function') requestIdleCallback(flush, { timeout: 200 });
         else flush();
@@ -132,7 +132,9 @@ export function buildCrossFrameDrainScript(options: CrossFrameDrainOptions = {})
       schedule();
     };
     const schedule = () => {
-      if (channel) { try { channel.postMessage(0); return; } catch (e) {} }
+      // MessageChannel 实例本身没有 postMessage；必须由 port2 发送、port1 接收才能触发 tick。
+      // 此前误用 channel.postMessage 会抛 TypeError 被吞掉，导致「即时 yielding」永久退化为 16ms 轮询。
+      if (channel) { try { channel.port2.postMessage(0); return; } catch (e) {} }
       setTimeout(tick, 16);
     };
     try { channel = new MessageChannel(); channel.port1.onmessage = function () { tick(); }; } catch (e) { channel = null; }
