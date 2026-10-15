@@ -26,6 +26,8 @@ interface PdfJsTextItem {
 }
 
 interface PdfJsPage {
+  /** 页面可视区（cropBox ∩ mediaBox，用户空间 [x0, y0, x1, y1]） */
+  view?: number[]
   getViewport(params: { scale: number }): { width: number; height: number; transform: number[] }
   getTextContent(): Promise<{ items: unknown[] }>
   getOperatorList(): Promise<{ fnArray: number[]; argsArray: unknown[][] }>
@@ -70,7 +72,28 @@ async function loadPdfJs(): Promise<PdfJsModule> {
   return mod
 }
 
-/** 把一个 pdfjs 文本项切分为逐字符图元（宽度按字符数均分近似） */
+/**
+ * 估算单个字符的相对排版宽度权重：全角/宽字符（CJK、假名、谚文、全角形式）按 2 个半角位计，
+ * 其余（拉丁字母、数字、半角标点）按 1 计。用于混排行按比例分配总宽，替代均匀切分。
+ */
+function estimateCharWidthWeight(char: string): number {
+  const code = char.codePointAt(0) ?? 0
+  if (
+    (code >= 0x1100 && code <= 0x115f) || // 谚文 Jamo
+    (code >= 0x2e80 && code <= 0xa4cf) || // CJK 部首 · 标点 · 假名 · 注音
+    (code >= 0xac00 && code <= 0xd7a3) || // 谚文音节
+    (code >= 0xf900 && code <= 0xfaff) || // CJK 兼容表意
+    (code >= 0xfe30 && code <= 0xfe4f) || // CJK 兼容形式
+    (code >= 0xff00 && code <= 0xff60) || // 全角 ASCII 与符号
+    (code >= 0xffe0 && code <= 0xffe6) || // 全角符号
+    (code >= 0x20000 && code <= 0x3fffd) // CJK 扩展 B 及以后
+  ) {
+    return 2
+  }
+  return 1
+}
+
+/** 把一个 pdfjs 文本项切分为逐字符图元（宽度按字符类别比例分配，中英混排不再均匀近似） */
 function toGlyphs(
   item: PdfJsTextItem,
   pdfjs: PdfJsModule,
@@ -88,11 +111,18 @@ function toGlyphs(
   const chars = Array.from(item.str)
   if (chars.length === 0) return []
 
-  const charWidth = totalWidth / chars.length
+  // 字符类别比例分配：全角字占 2 份、半角字占 1 份（全半角同行时与均匀切分显著不同）
+  const weights = chars.map(estimateCharWidthWeight)
+  const totalWeight = weights.reduce((acc, w) => acc + w, 0) || chars.length
+  const charWidths = weights.map((w) => (totalWidth * w) / totalWeight)
+
   const glyphs: PdfGlyphItem[] = []
+  let cursor = left
   for (let index = 0; index < chars.length; index += 1) {
-    const charLeft = left + charWidth * index
+    const charWidth = charWidths[index] ?? totalWidth / chars.length
+    const charLeft = cursor
     const charRight = charLeft + charWidth
+    cursor = charRight
     const bbox: PdfGlyphItem['bbox'] = [charLeft, top, charRight, baseline]
     glyphs.push({
       char: chars[index] ?? '',
@@ -250,17 +280,33 @@ export async function extractPdfGeometry(
     for (let pageNumber = 1; pageNumber <= limit; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber)
       const viewport = page.getViewport({ scale: 1 })
+      // cropBox 语义对齐：pdfjs page.view 为 cropBox ∩ mediaBox 的用户空间可视区，
+      // 视口变换已隐含其原点偏移；此处显式校验视口尺寸（异常时回退 cropBox 尺寸），
+      // 保证字形/矢量线段的归一化坐标与渲染页原点一致
+      const view = Array.isArray(page.view) && page.view.length === 4 ? page.view : undefined
+      const cropWidth = view ? Math.abs((view[2] ?? 0) - (view[0] ?? 0)) : 0
+      const cropHeight = view ? Math.abs((view[3] ?? 0) - (view[1] ?? 0)) : 0
+      const pageWidth = Number.isFinite(viewport.width) && viewport.width > 0
+        ? viewport.width
+        : cropWidth > 0
+          ? cropWidth
+          : 612
+      const pageHeight = Number.isFinite(viewport.height) && viewport.height > 0
+        ? viewport.height
+        : cropHeight > 0
+          ? cropHeight
+          : 792
       const content = await page.getTextContent()
       const glyphs: PdfGlyphItem[] = []
       for (const item of content.items) {
         if (!isPdfJsTextItem(item)) continue
-        glyphs.push(...toGlyphs(item, pdfjs, viewport.transform, viewport.width, viewport.height))
+        glyphs.push(...toGlyphs(item, pdfjs, viewport.transform, pageWidth, pageHeight))
       }
       const vectorLines = await extractVectorLines(page, pdfjs)
       pages.push({
         pageNumber,
-        width: viewport.width,
-        height: viewport.height,
+        width: pageWidth,
+        height: pageHeight,
         glyphs,
         vectorLines,
       })

@@ -2,7 +2,7 @@
 name: pdf
 description: "Use this skill whenever the user mentions a PDF file or asks to inspect, summarize, query, modify or create one. CRITICAL KERNEL CONTRACT: Attached PDFs are pre-parsed by CDUT Studio's high-precision kernel engine into dual-state workspace artifacts (<attached_documents>): (1) clean_markdown_path in the working directory is an already-materialized, zero-HTML-anchor clean Markdown file ready for direct user delivery; (2) the workspace is indexed by silent RAG, which auto-retrieves the most relevant slices with real citation anchors ([第X页·位置](#blockId)) and injects them into <document_evidence> before your turn. Answer and cite directly from that evidence; never call discover_tools for PDF parsing and never run Python/CLI scripts to extract text from pre-ingested PDFs."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.2.1"
+version: "1.2.2"
 ---
 
 # PDF Processing Guide
@@ -23,13 +23,15 @@ Use this section for requests like "read this PDF", "summarize this PDF", "answe
 
 2. **Immediate Task Execution**:
    - **When asked to "parse/convert PDF to Markdown in workspace"**: The file at `clean_markdown_path` is ALREADY written in the working directory! Report its path and summary directly (or refine it with `Edit`/`Write` if the user requested custom formatting).
-   - **When asked to summarize, analyze, or answer questions**: Trust the auto-injected `<document_evidence>` slices (they already contain the most relevant 原文 with real anchors). For full text beyond the evidence, Read `clean_markdown_path` directly. Cite sources using `[第X页·位置/图表名](#blockId)`.
+   - **When asked to summarize, analyze, or answer questions**: Trust the auto-injected `<document_evidence>` slices (they already contain the most relevant source text with real anchors). For full text beyond the evidence, Read `clean_markdown_path` directly. Cite sources using `[第X页·位置/图表名](#blockId)`.
 
 3. **Visual Preview**:
    - Use `inspect_preview` / `open_file_preview` only when you need visual output (rendered page images or user-visible viewer), not for extracting plain text.
 
 4. **Scanned Documents (Fallback Only)**:
    - If the attached document explicitly states it has no text layer, treat it as a scanned document and follow the OCR section below.
+
+5. **Output Language**: All user-facing output — summaries, answers, and any delivered or refined Markdown files — must be written in the user's language (e.g., Simplified Chinese when the user writes in Chinese).
 
 ## Modification and Advanced Processing
 

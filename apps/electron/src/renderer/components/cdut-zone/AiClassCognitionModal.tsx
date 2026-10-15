@@ -1,8 +1,8 @@
 /**
  * AiClassCognitionModal — AI 速课堂「认知底座」双引擎配置弹窗
  *
- * 面向非技术背景的师生用户：隐藏晦涩学术名词，以学习场景化通俗标题呈现两组引擎，
- * 详尽说明适用场景、功能优势与潜在开销/风险，底部以灰色小字体如实标注底层技术。
+ * 面向非技术背景的师生用户：隐藏一切技术术语与学术风险描述，
+ * 每张卡片只呈现三项目大字要点：适用场景、功能优势、性能预估。
  *   - 一、课堂知识检索引擎：精准查点模式 / 全书脉络与宏观演化模式；
  *   - 二、跨课联想终身记忆引擎：当堂专注模式 / 海马体跨课联想与贯通模式。
  *
@@ -12,7 +12,7 @@
 
 import * as React from 'react'
 import { useAtom } from 'jotai'
-import { Brain, Check, Crosshair, Network, Target, Zap } from 'lucide-react'
+import { Brain, Check, Crosshair, Network, Target } from 'lucide-react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogTitle } from '@profer/ui/primitives/dialog'
 import { cn } from '@/lib/utils'
@@ -30,14 +30,13 @@ interface CognitionOption<T extends string> {
   tag: string
   scene: string
   advantage: string
-  risk: string
-  tech: string
+  performance: string
   accent: string
   ring: string
   icon: React.ReactNode
 }
 
-/** 单张场景化大卡片：选中态微光边框 + 动态勾选标记 + 灰色技术标注 */
+/** 单张场景化大卡片：选中态微光边框 + 动态勾选标记 + 三项目大字要点 */
 function CognitionOptionCard<T extends string>({
   option,
   selected,
@@ -52,7 +51,7 @@ function CognitionOptionCard<T extends string>({
       type="button"
       onClick={() => onSelect(option.value)}
       className={cn(
-        'flex flex-col gap-2.5 rounded-2xl border border-border/60 bg-card px-4 py-3.5 text-left transition-all hover:shadow-md',
+        'flex flex-col gap-3 rounded-2xl border border-border/60 bg-card px-4 py-4 text-left transition-all hover:shadow-md',
         selected ? `shadow-lg ring-2 ${option.ring}` : null,
       )}
     >
@@ -76,22 +75,20 @@ function CognitionOptionCard<T extends string>({
         {option.badge}
       </span>
 
-      <div className="flex flex-col gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
-        <p>
-          <span className="font-medium text-foreground/80">适用场景：</span>
+      <div className="flex flex-col gap-2 text-xs leading-relaxed">
+        <p className="text-foreground">
+          <span className="font-semibold">适用场景：</span>
           {option.scene}
         </p>
-        <p>
-          <span className="font-medium text-foreground/80">功能优势：</span>
+        <p className="text-foreground">
+          <span className="font-semibold">功能优势：</span>
           {option.advantage}
         </p>
-        <p className="text-rose-600/90 dark:text-rose-400/90">
-          <span className="font-medium">潜在风险与开销：</span>
-          {option.risk}
+        <p className="font-medium text-primary">
+          <span className="font-semibold">性能预估：</span>
+          {option.performance}
         </p>
       </div>
-
-      <p className="border-t border-border/50 pt-2 text-[10px] leading-normal text-muted-foreground/60">{option.tech}</p>
     </button>
   )
 }
@@ -109,9 +106,8 @@ export function AiClassCognitionModal(): React.ReactElement {
         badge: '默认 · 极速定位考点',
         tag: '⚡ 即时考点定位 · 毫秒级直接响应',
         scene: '考前刷题、查找单条定理公式、定位习题原题、概念直查。',
-        advantage: '聚焦当前段落原文，基于关键词与语义片段瞬间定位具体章节，精准确定，无发散干扰。',
-        risk: '宏观概括弱：面对“总结全书演进逻辑”这类全局性问题时，容易只摘取局部零散段落，见树不见林。',
-        tech: '底层技术：经典全文索引与向量混合切块检索 (Classic Hybrid RAG)',
+        advantage: '聚焦当前段落原文，直接定位具体章节，精准确定，无发散干扰。',
+        performance: '毫秒级响应，几乎零额外内存开销。',
         accent: 'text-sky-600 dark:text-sky-400',
         ring: 'ring-sky-500/40 border-sky-500/50',
         icon: <Target size={16} />,
@@ -120,12 +116,11 @@ export function AiClassCognitionModal(): React.ReactElement {
         value: 'graphrag',
         title: '全书脉络与宏观演化模式',
         badge: '期末串讲 · 全局框架',
-        tag: '🌐 分层社群大纲 · 期末系统串讲',
+        tag: '🌐 分层大纲 · 期末系统串讲',
         scene: '期末大复习、全书核心理论演进答疑、跨章节概念横向对比、综合性大题破题。',
         advantage:
-          '结合原子命题化与分层社群聚类，自动梳理顶层核心思想、中层大章脉络与底层细化考点，能站在全书全局高度回答系统性宏观大题。',
-        risk: '内存与算力开销：纯内存构建多层级社区图谱额外占用约 10MB~30MB 运行内存；宏观多层遍历会导致首字生成耗时微增约 0.5~1.5 秒。',
-        tech: '底层技术：Leiden 分层社群图谱检索 (Hierarchical GraphRAG)',
+          '自动梳理顶层核心思想、中层大章脉络与底层细化考点，能站在全书全局高度回答系统性宏观大题。',
+        performance: '额外占用约 10MB~30MB 内存，首字响应增加约 0.5~1.5 秒。',
         accent: 'text-violet-600 dark:text-violet-400',
         ring: 'ring-violet-500/40 border-violet-500/50',
         icon: <Network size={16} />,
@@ -143,8 +138,7 @@ export function AiClassCognitionModal(): React.ReactElement {
         tag: '🎯 当堂严格聚焦 · 零发散',
         scene: '只关注眼下这堂课的内容，不希望过去其他科目的陈旧记忆产生干扰。',
         advantage: '严格按时间线调取最近上下文，线性匹配，轻巧干净，完全不占用多余注意力。',
-        risk: '跨课遗忘：无法建立隐式知识桥梁，遗忘较久之前学过的先修课程基础或错题记录。',
-        tech: '底层技术：FTS5 BM25 词法时间线检索 (Classic Lexical Memory)',
+        performance: '零额外开销，轻巧流畅。',
         accent: 'text-emerald-600 dark:text-emerald-400',
         ring: 'ring-emerald-500/40 border-emerald-500/50',
         icon: <Crosshair size={16} />,
@@ -153,12 +147,11 @@ export function AiClassCognitionModal(): React.ReactElement {
         value: 'hipporag',
         title: '海马体跨课联想与贯通模式',
         badge: '融会贯通 · 唤醒错题',
-        tag: '🧠 突触多跳扩散 · 融会贯通',
+        tag: '🧠 跨课联想 · 融会贯通',
         scene: '跨学科交叉学习、长期备战考试、遇到瓶颈时希望 Agent 主动提示相似错题与基础知识。',
         advantage:
-          '模拟人脑海马体记忆联结机制，在概念共现网络中进行个性化 PageRank 扩散，能自发联想出“你之前在 XX 课程中推导过的类似原理”。',
-        risk: 'Token 与内存消耗：纯内存概念图随历史累积占用 15MB~40MB 内存；联想召回的上下文较多，会使模型单次输入 Token 增加约 10%~25%。',
-        tech: '底层技术：神经海马体多跳图谱扩散 (HippoRAG)',
+          '模拟人脑海马体记忆联结机制，能自发联想出“你之前在 XX 课程中推导过的类似原理”，唤醒旧知识与错题记录。',
+        performance: '随历史累积占用约 15MB~40MB 内存，单次输入 Token 增加约 10%~25%。',
         accent: 'text-amber-600 dark:text-amber-400',
         ring: 'ring-amber-500/40 border-amber-500/50',
         icon: <Brain size={16} />,

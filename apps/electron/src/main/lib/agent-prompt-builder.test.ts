@@ -48,17 +48,17 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'auto',
     })
 
-    expect(prompt).toContain('## 认识论姿态：求实')
-    expect(prompt).toContain('收敛到清晰的推荐结论')
-    expect(prompt).toContain('## 不可变执行底线')
-    expect(prompt).toContain('不伪造工具调用')
-    expect(prompt).not.toContain('## 认识论姿态：开放')
+    expect(prompt).toContain('## Epistemic Stance: Grounded')
+    expect(prompt).toContain('converge on a clear recommended conclusion')
+    expect(prompt).toContain('## Immutable Execution Bottom Lines')
+    expect(prompt).toContain('Never fabricate tool calls')
+    expect(prompt).not.toContain('## Epistemic Stance: Open')
     // 反和稀泥契约常驻，且不再保留「不假装存在唯一答案」这类回避表态许可
-    expect(prompt).toContain('## 表达与判断')
-    expect(prompt).toContain('先给判断')
-    expect(prompt).toContain('不做套路式对冲')
-    expect(prompt).toContain('发散也要表态')
-    expect(prompt).not.toContain('不假装存在唯一答案')
+    expect(prompt).toContain('## Expression & Judgment')
+    expect(prompt).toContain('Lead with the judgment')
+    expect(prompt).toContain('No formulaic hedging')
+    expect(prompt).toContain('Take a stance even when diverging')
+    expect(prompt).not.toContain('pretend a unique answer exists')
   })
 
   test('开放认识论允许暂定与创作自由，但必须表态且不放宽执行真实性', () => {
@@ -71,21 +71,21 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: true,
     })
 
-    expect(prompt).toContain('## 认识论姿态：开放（已关闭「绝对正确」）')
-    expect(prompt).toContain('允许暂定，但必须表态')
-    expect(prompt).toContain('主观、夸张、象征、虚构')
-    expect(prompt).toContain('不执着证明自己正确')
-    expect(prompt).toContain('不得声称未发生的工具调用、文件修改、测试、发送或发布已经完成')
-    expect(prompt).toContain('修改后必须闭环')
-    expect(prompt).toContain('没有执行测试不能说测试通过')
-    expect(prompt).toContain('影响执行结果、安全或现实事实判断的前提才需要纠正')
-    expect(prompt).not.toContain('收敛到清晰的推荐结论')
-    expect(prompt).toContain('## 表达与判断')
+    expect(prompt).toContain('## Epistemic Stance: Open ("Absolute Correctness" Disabled)')
+    expect(prompt).toContain('Provisional is allowed, but you must take a position')
+    expect(prompt).toContain('subjective, exaggerated, symbolic, fictional')
+    expect(prompt).toContain('do not insist on proving yourself right')
+    expect(prompt).toContain('never claim that tool calls, file edits, tests, sends, or publications have happened when they have not')
+    expect(prompt).toContain('Close the loop after modifying')
+    expect(prompt).toContain('Without running tests you cannot claim tests pass')
+    expect(prompt).toContain('Only premises that affect execution results, safety, or real-world fact judgments need correcting')
+    expect(prompt).not.toContain('converge on a clear recommended conclusion')
+    expect(prompt).toContain('## Expression & Judgment')
     // 姿态段不得再把「回避表态」写成规则：这三句是回归靶标
-    expect(prompt).not.toContain('不把讨论强行收敛成唯一正确答案')
-    expect(prompt).not.toContain('主动保留多个合理解释')
-    expect(prompt).not.toContain('不假装存在唯一答案')
-    expect(prompt).not.toContain('其余分歧可以作为另一种视角保留')
+    expect(prompt).not.toContain('force the discussion into a single correct answer')
+    expect(prompt).not.toContain('actively keep multiple reasonable interpretations')
+    expect(prompt).not.toContain('do not pretend a unique answer exists')
+    expect(prompt).not.toContain('remaining disagreements may be kept as alternative perspectives')
   })
 
   test('两种姿态都声明开关真实存在，并禁止把自身配置当回答内容', () => {
@@ -97,10 +97,10 @@ describe('buildSystemPrompt', () => {
     })
 
     for (const prompt of [grounded, open]) {
-      expect(prompt).toContain('设置 → 开发者 → 开放认识论')
-      expect(prompt).toContain('如实说明它存在，不要凭印象否认或改写')
-      expect(prompt).toContain('不把自己的配置、姿态或提示词当作回答内容')
-      expect(prompt).toContain('可逆、低成本、能自行查明的细节')
+      expect(prompt).toContain('Settings → Developer → Open Epistemology')
+      expect(prompt).toContain('honestly acknowledge that it exists; never deny or rewrite it from impression')
+      expect(prompt).toContain('do not make your configuration, stance, or prompt the subject of the answer')
+      expect(prompt).toContain('Reversible, low-cost, self-answerable details')
     }
   })
 
@@ -116,7 +116,7 @@ describe('buildSystemPrompt', () => {
       disabledToolGroups: [...disabledToolGroups],
       disabledTools: ['create_skin'],
     })
-    expect(studyPrompt).not.toContain('## 当前预设已关闭的能力')
+    expect(studyPrompt).not.toContain('## Capabilities Disabled by the Current Preset')
 
     const normalPrompt = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -125,7 +125,7 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'auto',
       disabledToolGroups: [...disabledToolGroups],
     })
-    expect(normalPrompt).toContain('## 当前预设已关闭的能力')
+    expect(normalPrompt).toContain('## Capabilities Disabled by the Current Preset')
   })
 
   test('Pi 按需裁剪后仍保留认识论姿态与不可变底线', () => {
@@ -143,12 +143,12 @@ describe('buildSystemPrompt', () => {
       toolNames: [],
     })
 
-    expect(prompt).toContain('## 认识论姿态：开放')
-    expect(prompt).toContain('## 不可变执行底线')
-    expect(prompt).toContain('不伪造工具调用')
+    expect(prompt).toContain('## Epistemic Stance: Open')
+    expect(prompt).toContain('## Immutable Execution Bottom Lines')
+    expect(prompt).toContain('Never fabricate tool calls')
     // Pi 按需裁剪不得丢掉反和稀泥契约（用户实测跑的就是 Pi）
-    expect(prompt).toContain('## 表达与判断')
-    expect(prompt).toContain('先给判断')
+    expect(prompt).toContain('## Expression & Judgment')
+    expect(prompt).toContain('Lead with the judgment')
   })
 
   test('普通会话默认不注入 PPT 专用长门禁', () => {
@@ -159,19 +159,19 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'auto',
       pptCapabilityActive: false,
     })
-    expect(prompt).not.toContain('PPT 视觉交付门禁')
+    expect(prompt).not.toContain('PPT visual delivery gate')
     expect(prompt).not.toContain('inspect_deck_sources')
     expect(prompt).not.toContain('PptxScrollViewer')
     expect(prompt).toContain('open_file_preview')
     expect(prompt).toContain('inspect_file_preview')
-    expect(prompt).toContain('不得为 PPTX 创建 `Preview.html`')
+    expect(prompt).toContain('Never create a `Preview.html`')
   })
 
   test('PPT 能力激活后不注入已移除的快速生成通道或治理工作流', () => {
     const prompt = buildSystemPrompt({
       workspaceName: 'Demo', workspaceSlug: 'demo-workspace', sessionId: 'session-123', permissionMode: 'auto', pptCapabilityActive: true,
     })
-    for (const forbidden of ['generate_pptx_fast', '快速 PPTX 生成', 'Deck Spec', 'Deck Project', 'Deck Brief', 'inspect_deck_sources', 'create_deck_project', 'compile_deck_project', '确认 Deck Brief', 'assetRefs']) {
+    for (const forbidden of ['generate_pptx_fast', 'fast PPTX generation', 'Deck Spec', 'Deck Project', 'Deck Brief', 'inspect_deck_sources', 'create_deck_project', 'compile_deck_project', 'confirm the Deck Brief', 'assetRefs']) {
       expect(prompt).not.toContain(forbidden)
     }
   })
@@ -188,12 +188,12 @@ describe('buildSystemPrompt', () => {
 
     const workspaceRoot = join(resolveConfigDir(), 'agent-workspaces', slug)
     const workspaceProfile = join(workspaceRoot, 'workspace-profile.md')
-    expect(prompt).toContain(`**CDUT Studio 工作区资料**: ${workspaceProfile}`)
-    expect(prompt).toContain(`③ CDUT Studio 工作区资料（\`${workspaceProfile}\``)
-    expect(prompt).toContain('旧版 CDUT Studio 工作区资料（仅兼容读取）')
-    expect(prompt).toContain('项目中的 `AGENTS.md` / `CLAUDE.md` 属于用户资产')
-    expect(prompt).toContain('不要读取当前 cwd 下不存在的相对路径 `CLAUDE.md`')
-    expect(prompt).not.toContain('维护工作区根目录下的 CLAUDE.md')
+    expect(prompt).toContain(`**CDUT Studio workspace profile**: ${workspaceProfile}`)
+    expect(prompt).toContain(`③ the CDUT Studio workspace profile (\`${workspaceProfile}\``)
+    expect(prompt).toContain('Legacy CDUT Studio workspace profile (compat reads only)')
+    expect(prompt).toContain('`AGENTS.md` / `CLAUDE.md` in projects are user assets')
+    expect(prompt).toContain('never read the relative path `CLAUDE.md` under the current cwd when it does not exist')
+    expect(prompt).not.toContain('maintain CLAUDE.md at the workspace root')
     expect(prompt).toContain(join(workspaceRoot, 'workspace-files', '.context'))
     expect(prompt).toContain(join(workspaceRoot, '.cdutai', 'memory', 'MEMORY.md'))
     expect(prompt).not.toContain('CDUT Studio 脱胎于开源项目')
@@ -213,7 +213,7 @@ describe('buildSystemPrompt', () => {
       })
 
       const workspaceRoot = join(isolatedRoot, 'agent-workspaces', slug)
-      expect(prompt).toContain(`**CDUT Studio 工作区资料**: ${join(workspaceRoot, 'workspace-profile.md')}`)
+      expect(prompt).toContain(`**CDUT Studio workspace profile**: ${join(workspaceRoot, 'workspace-profile.md')}`)
       expect(prompt).toContain(join(workspaceRoot, 'workspace-files', '.context'))
       expect(prompt).not.toContain(join(homedir(), '.cdutai-dev', 'agent-workspaces', slug))
     } finally {
@@ -232,11 +232,11 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: true,
     })
 
-    expect(prompt).toContain('先列出两个目录；只读取**实际存在且与当前任务相关**的文件')
-    expect(prompt).toContain('不得默认创建或读取 `note.md`、`todo.md`')
+    expect(prompt).toContain('list both directories first; read only files that **actually exist and relate to the current task**')
+    expect(prompt).toContain('Never create or read `note.md`/`todo.md` by default')
     expect(prompt).toContain('CDUT Studio Memory')
     expect(prompt).not.toContain('按主题命名的 Markdown — 研究与分析输出')
-    expect(prompt).toContain('按需检索和读取，不默认创建或读取通用 `note.md`')
+    expect(prompt).toContain('Retrieve and read on demand; never create or read a generic `note.md` by default')
     expect(prompt).not.toContain('会话级 `.context/`（note.md、todo.md）')
   })
 
@@ -256,32 +256,32 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: false,
     })
 
-    expect(piPrompt).toContain('最小相关验证')
+    expect(piPrompt).toContain('minimal relevant verification')
     // 验证闭环责任由 Agent 自身承担，系统不再自动追加续轮
-    expect(piPrompt).toContain('系统不会自动追加验证轮次')
-    expect(piPrompt).not.toContain('自动追加一次只做最小验证的续轮')
+    expect(piPrompt).toContain('the system will not append verification rounds')
+    expect(piPrompt).not.toContain('automatically append a continuation turn that only performs minimal verification')
     // 工具名按 runtime 适配：Pi 带 mcp__ 前缀，Claude 用 in-process MCP 裸名
     expect(piPrompt).toContain('mcp__task-graph__proma_task_create')
     expect(piPrompt).toContain('mcp__agent-presets__preset_list')
     expect(piPrompt).not.toContain('mcp__agent-presets__preset_create')
-    expect(piPrompt).not.toContain('用 `proma_task_create` 创建子任务')
-    expect(claudePrompt).toContain('用 `proma_task_create` 创建子任务')
-    expect(claudePrompt).toContain('写入口只在当前用户消息明确要求对应操作时按轮注册')
-    expect(claudePrompt).toContain('更新和设为默认先返回影响摘要，只有用户下一条消息明确确认后才提交')
+    expect(piPrompt).not.toContain('use `proma_task_create` to create subtasks')
+    expect(claudePrompt).toContain('use `proma_task_create` to create subtasks')
+    expect(claudePrompt).toContain('These write entry points are only registered for a turn when the current user message explicitly requests the corresponding operation')
+    expect(claudePrompt).toContain('Update and set-as-default first return an impact summary and are committed only after the user explicitly confirms')
     expect(claudePrompt).not.toContain('mcp__agent-presets__preset_create')
-    expect(piPrompt).toContain('不要等待 SDK 自动落盘')
-    expect(piPrompt).toContain('可以读取和写入')
+    expect(piPrompt).toContain('do not wait for the SDK to persist automatically')
+    expect(piPrompt).toContain('**Readable & writable**')
     expect(piPrompt).toContain('`.cdutai/memory/MEMORY.md`')
     expect(piPrompt).not.toContain('访问工作区根目录的 `CLAUDE.md`')
     expect(piPrompt).toContain('workspace-profile.md')
-    expect(piPrompt).toContain('收尾回写')
-    expect(piPrompt).toContain('单次弱信号、临时过程和未经验证的推断不要写入')
+    expect(piPrompt).toContain('Closing write-back')
+    expect(piPrompt).toContain('never write one-off weak signals, temporary processes, or unverified inferences')
     expect(piPrompt).not.toContain('不要写入长期记忆文件')
-    expect(claudePrompt).not.toContain('### Pi Runtime 自主执行准则')
+    expect(claudePrompt).not.toContain('### Pi Runtime Autonomous Execution Guidelines')
     // Claude runtime 也有专属段落，且明确要求 Agent 自行完成验证闭环
     expect(claudePrompt).toContain('## Claude Agent Runtime')
-    expect(claudePrompt).toContain('系统不会自动追加验证轮次')
-    expect(claudePrompt).not.toContain('自动追加一次只做验证的续轮')
+    expect(claudePrompt).toContain('the system will not append verification rounds')
+    expect(claudePrompt).not.toContain('automatically append a continuation turn that only performs verification')
     expect(piPrompt).not.toContain('## Claude Agent Runtime')
   })
 
@@ -304,13 +304,13 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).toContain('`mcp__planning__create_todo`')
     expect(piPrompt).toContain('`mcp__planning__update_todo`')
     expect(piPrompt).toContain('`mcp__planning__create_calendar_event`')
-    expect(piPrompt).toContain('不要主动询问 Google Calendar、Outlook')
+    expect(piPrompt).toContain('do not proactively ask about Google Calendar, Outlook')
     expect(claudePrompt).toContain('`create_todo`')
     expect(claudePrompt).toContain('`update_todo`')
     expect(claudePrompt).toContain('`create_calendar_event`')
     expect(claudePrompt).not.toContain('`mcp__planning__create_todo`')
     expect(piPrompt).toContain('`expectedUpdatedAt`')
-    expect(piPrompt).toContain('Todo 删除仍由用户在规划中心操作')
+    expect(piPrompt).toContain('Todo deletion is performed by the user in the Planning Center')
   })
 
   test('预设创建/复制提示词只描述主进程意图 gate 实际开放的入口', () => {
@@ -322,9 +322,9 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: true,
       allowedPresetOperations: ['create'],
     })
-    expect(createPrompt).toContain('`mcp__agent-presets__preset_create` 创建工作区预设')
-    expect(createPrompt).not.toContain('`mcp__agent-presets__preset_copy` 复制为工作区预设')
-    expect(createPrompt).toContain('创建或复制不改变当前会话或默认预设')
+    expect(createPrompt).toContain('`mcp__agent-presets__preset_create` create a workspace preset')
+    expect(createPrompt).not.toContain('`mcp__agent-presets__preset_copy` copy as a workspace preset')
+    expect(createPrompt).toContain('Create or copy does not change the current session or default preset')
 
     const copyPrompt = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -334,8 +334,8 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: false,
       allowedPresetOperations: ['copy'],
     })
-    expect(copyPrompt).toContain('`preset_copy` 复制为工作区预设')
-    expect(copyPrompt).not.toContain('`preset_create` 创建工作区预设')
+    expect(copyPrompt).toContain('`preset_copy` copy as a workspace preset')
+    expect(copyPrompt).not.toContain('`preset_create` create a workspace preset')
     expect(copyPrompt).not.toContain('mcp__agent-presets__preset_copy')
 
     const switchPrompt = buildSystemPrompt({
@@ -346,9 +346,9 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: true,
       allowedPresetOperations: ['switch'],
     })
-    expect(switchPrompt).toContain('`mcp__agent-presets__preset_switch_session` 切换当前会话预设')
-    expect(switchPrompt).toContain('当前轮能力快照保持不变、下一轮才生效')
-    expect(switchPrompt).not.toContain('`mcp__agent-presets__preset_create` 创建工作区预设')
+    expect(switchPrompt).toContain('`mcp__agent-presets__preset_switch_session` switch the current session preset')
+    expect(switchPrompt).toContain("the current turn's capability snapshot stays unchanged, taking effect the next turn")
+    expect(switchPrompt).not.toContain('`mcp__agent-presets__preset_create` create a workspace preset')
   })
 
   test('预设 Level 2 变更先提案后确认，确认轮只提交冻结提案', () => {
@@ -356,15 +356,15 @@ describe('buildSystemPrompt', () => {
       workspaceName: 'Demo', workspaceSlug: 'demo-workspace', sessionId: 'session-update', permissionMode: 'auto',
       isPiRuntime: false, allowedPresetOperations: ['propose_update'],
     })
-    expect(updatePrompt).toContain('`preset_propose_update` 提议更新工作区预设')
-    expect(updatePrompt).not.toContain('`preset_commit_change` 提交已确认的预设变更')
+    expect(updatePrompt).toContain('`preset_propose_update` propose a workspace preset update')
+    expect(updatePrompt).not.toContain('`preset_commit_change` commit a confirmed preset change')
 
     const commitPrompt = buildSystemPrompt({
       workspaceName: 'Demo', workspaceSlug: 'demo-workspace', sessionId: 'session-commit', permissionMode: 'auto',
       isPiRuntime: true, allowedPresetOperations: ['commit_change'],
     })
-    expect(commitPrompt).toContain('`mcp__agent-presets__preset_commit_change` 提交已确认的预设变更')
-    expect(commitPrompt).not.toContain('`mcp__agent-presets__preset_propose_update` 提议更新工作区预设')
+    expect(commitPrompt).toContain('`mcp__agent-presets__preset_commit_change` commit a confirmed preset change')
+    expect(commitPrompt).not.toContain('`mcp__agent-presets__preset_propose_update` propose a workspace preset update')
   })
 
   test('极简预设关闭全部产品能力时，Prompt 只保留基础工具规则与预设切换出口', () => {
@@ -381,18 +381,18 @@ describe('buildSystemPrompt', () => {
     })
     // 隐藏：任务图、委派、记忆、规划及所有增强型产品能力说明。
     expect(minimalPrompt).not.toContain('proma_task_create')
-    expect(minimalPrompt).not.toContain('## SubAgent 委派策略')
-    expect(minimalPrompt).not.toContain('## CDUT Studio 知识维护架构')
-    expect(minimalPrompt).not.toContain('### Pi Runtime 与文件记忆')
+    expect(minimalPrompt).not.toContain('## SubAgent Delegation Policy')
+    expect(minimalPrompt).not.toContain('## CDUT Studio Knowledge Maintenance Architecture')
+    expect(minimalPrompt).not.toContain('### Pi Runtime & File Memory')
     expect(minimalPrompt).not.toContain('create_todo')
-    expect(minimalPrompt).not.toContain('## CDUT Studio 受管浏览器')
+    expect(minimalPrompt).not.toContain('## CDUT Studio Managed Browser')
     expect(minimalPrompt).not.toContain('`inspect_preview`')
     expect(minimalPrompt).not.toContain('`generate_image`')
     expect(minimalPrompt).not.toContain('`WebSearch`')
     // 保留：基础工具规则、预设岗位段落与切回其它预设的唯一出口。
-    expect(minimalPrompt).toContain('回复中的代码块必须标语言')
-    expect(minimalPrompt).toContain('## Agent 预设（岗位）体系')
-    expect(minimalPrompt).toContain('当前会话预设：**极简**')
+    expect(minimalPrompt).toContain('explicitly declare an unambiguous language tag')
+    expect(minimalPrompt).toContain('## Agent Preset (Role) System')
+    expect(minimalPrompt).toContain('Current session preset: **极简**')
     expect(minimalPrompt).toContain('preset_list')
 
     const standardPrompt = buildSystemPrompt({
@@ -404,11 +404,11 @@ describe('buildSystemPrompt', () => {
     })
     // 标准预设无 suppress：全部段落在场
     expect(standardPrompt).toContain('proma_task_create')
-    expect(standardPrompt).toContain('## SubAgent 委派策略')
+    expect(standardPrompt).toContain('## SubAgent Delegation Policy')
     expect(standardPrompt).toContain('presetReference')
-    expect(standardPrompt).toContain('不传时子 Agent 继承当前父会话的稳定预设引用')
-    expect(standardPrompt).toContain('## CDUT Studio 知识维护架构')
-    expect(standardPrompt).toContain('### Pi Runtime 与文件记忆')
+    expect(standardPrompt).toContain("When omitted, the sub-agent inherits the current parent session's stable preset reference")
+    expect(standardPrompt).toContain('## CDUT Studio Knowledge Maintenance Architecture')
+    expect(standardPrompt).toContain('### Pi Runtime & File Memory')
   })
 
   test('automation suppress 隐藏交互规范定时任务条目（三层一致）', () => {
@@ -419,7 +419,7 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'auto',
       isPiRuntime: true,
     })
-    expect(withAutomation).toContain('7. **定时任务**')
+    expect(withAutomation).toContain('7. **Scheduled tasks (Automation)**')
     expect(withAutomation).toContain('Bash cron')
 
     const withoutAutomation = buildSystemPrompt({
@@ -430,23 +430,23 @@ describe('buildSystemPrompt', () => {
       suppressSections: ['automation'],
       isPiRuntime: true,
     })
-    expect(withoutAutomation).not.toContain('7. **定时任务**')
+    expect(withoutAutomation).not.toContain('7. **Scheduled tasks (Automation)**')
     expect(withoutAutomation).not.toContain('Bash cron')
     expect(withoutAutomation).not.toContain('create_todo')
     expect(withoutAutomation).not.toContain('create_calendar_event')
     // 其余交互规范条目不受影响
-    expect(withoutAutomation).toContain('8. **发送既有本地图片**')
-    expect(withoutAutomation).toContain('9. **AI 生图**')
+    expect(withoutAutomation).toContain('8. **Sending existing local images**')
+    expect(withoutAutomation).toContain('9. **AI image generation**')
     expect(withoutAutomation).toContain('`generate_image`')
-    expect(withoutAutomation).toContain('不要尝试用代码、ASCII art 等伪造图片')
-    expect(withoutAutomation).toContain('文件相对当前会话 cwd 的路径')
-    expect(withoutAutomation).toContain('皮肤壁纸')
-    expect(withoutAutomation).toContain('单张 assets 图片不得超过 4 MB')
-    expect(withoutAutomation).not.toContain('10. **PPT 视觉交付门禁**')
+    expect(withoutAutomation).toContain('Never fake images with code, ASCII art')
+    expect(withoutAutomation).toContain("path relative to the current session cwd")
+    expect(withoutAutomation).toContain('skin wallpaper')
+    expect(withoutAutomation).toContain('A single assets image must not exceed 4 MB')
+    expect(withoutAutomation).not.toContain('10. **PPT visual delivery gate**')
     expect(withoutAutomation).toContain('send_local_image')
-    expect(withoutAutomation).toContain('自动把校验后的图片附加到当前回复')
+    expect(withoutAutomation).toContain('automatically attaches validated images to the current reply')
     expect(withoutAutomation).not.toContain('PROMA_IMAGE_ATTACHMENT')
-    expect(withoutAutomation).toContain('6. **自检习惯**')
+    expect(withoutAutomation).toContain('6. **Self-check habit**')
   })
 
   test('Pi composer 静态裁剪：仅按工具挂载决定低频 SOP，且不随用户文本变化', () => {
@@ -465,14 +465,14 @@ describe('buildSystemPrompt', () => {
       userMessage: '检查这个 TypeScript 项目的类型错误。',
       toolNames: [],
     })
-    expect(tier0).toContain('## 做事方式')
-    expect(tier0).toContain('修改后必须闭环')
-    expect(tier0).toContain('计划模式文件路径')
-    expect(tier0).toContain('## CDUT Studio 知识维护架构')
-    expect(tier0).not.toContain('## CDUT Studio 受管浏览器')
-    expect(tier0).not.toContain('7. **定时任务**')
-    expect(tier0).not.toContain('## SubAgent 委派策略')
-    expect(tier0).not.toContain('### Pi Runtime 与文件记忆')
+    expect(tier0).toContain('## Way of Working')
+    expect(tier0).toContain('Close the loop after modifying')
+    expect(tier0).toContain('Plan Mode File Path')
+    expect(tier0).toContain('## CDUT Studio Knowledge Maintenance Architecture')
+    expect(tier0).not.toContain('## CDUT Studio Managed Browser')
+    expect(tier0).not.toContain('7. **Scheduled tasks (Automation)**')
+    expect(tier0).not.toContain('## SubAgent Delegation Policy')
+    expect(tier0).not.toContain('### Pi Runtime & File Memory')
     // 同一工具集合下，不同用户文本输出必须完全一致（前缀缓存友好）。
     const tier0OtherText = buildPiTaskPrompt({
       basePrompt,
@@ -498,12 +498,12 @@ describe('buildSystemPrompt', () => {
       toolNames,
       pptCapabilityActive: true,
     })
-    expect(full).toContain('## CDUT Studio 受管浏览器')
-    expect(full).toContain('7. **定时任务**')
-    expect(full).toContain('## SubAgent 委派策略')
-    expect(full).toContain('### Pi Runtime 与文件记忆')
+    expect(full).toContain('## CDUT Studio Managed Browser')
+    expect(full).toContain('7. **Scheduled tasks (Automation)**')
+    expect(full).toContain('## SubAgent Delegation Policy')
+    expect(full).toContain('### Pi Runtime & File Memory')
     // PPT 任务走 PptxGenJS Skill；已移除 generate_pptx_fast 的专属提示词。
-    expect(full).not.toContain('快速 PPTX 生成')
+    expect(full).not.toContain('fast PPTX generation')
     expect(full).not.toContain('generate_pptx_fast')
 
     const fullOtherText = buildPiTaskPrompt({
@@ -525,7 +525,7 @@ describe('buildSystemPrompt', () => {
       teamMemoryAvailable: false,
       isPiRuntime: true,
     })
-    expect(prompt).not.toContain('## 团队共享知识记忆')
+    expect(prompt).not.toContain('## Team Shared Knowledge Memory')
     expect(prompt).not.toContain('mcp__team-memory__list_team_memories')
   })
 
@@ -542,7 +542,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('`BrowserPreviewOpen`')
     expect(prompt).not.toContain('`WebSearch`')
     expect(prompt).not.toContain('`WebFetch`')
-    expect(prompt).toContain('## CDUT Studio 受管浏览器')
+    expect(prompt).toContain('## CDUT Studio Managed Browser')
     expect(prompt).toContain('BrowserObserve')
     expect(prompt).toContain('BrowserScreenshot')
   })
@@ -555,11 +555,11 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'auto',
       disabledTools: ['BrowserScreenshot'],
     })
-    expect(browserScreenshotDisabled).toContain('## CDUT Studio 受管浏览器')
+    expect(browserScreenshotDisabled).toContain('## CDUT Studio Managed Browser')
     expect(browserScreenshotDisabled).toContain('BrowserObserve')
     expect(browserScreenshotDisabled).toContain('BrowserPreviewOpen')
     expect(browserScreenshotDisabled).not.toContain('BrowserScreenshot')
-    expect(browserScreenshotDisabled).not.toContain('用浏览器截图检查视觉结果')
+    expect(browserScreenshotDisabled).not.toContain('inspect visual results with a browser screenshot')
 
     const browserObserveDisabled = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -568,10 +568,10 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'auto',
       disabledTools: ['BrowserObserve'],
     })
-    expect(browserObserveDisabled).toContain('## CDUT Studio 受管浏览器')
+    expect(browserObserveDisabled).toContain('## CDUT Studio Managed Browser')
     expect(browserObserveDisabled).toContain('BrowserScreenshot')
     expect(browserObserveDisabled).not.toContain('BrowserObserve')
-    expect(browserObserveDisabled).not.toContain('先调用 `BrowserObserve`')
+    expect(browserObserveDisabled).not.toContain('Call `BrowserObserve` first')
 
     const inspectPreviewDisabled = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -582,7 +582,7 @@ describe('buildSystemPrompt', () => {
     })
     expect(inspectPreviewDisabled).toContain('open_file_preview')
     expect(inspectPreviewDisabled).toContain('inspect_file_preview')
-    expect(inspectPreviewDisabled).not.toContain('通用文件可按需使用 `inspect_preview`')
+    expect(inspectPreviewDisabled).not.toContain('can be done on demand via `inspect_preview`')
 
     const openPreviewDisabled = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -593,8 +593,8 @@ describe('buildSystemPrompt', () => {
     })
     expect(openPreviewDisabled).toContain('inspect_preview')
     expect(openPreviewDisabled).toContain('inspect_file_preview')
-    expect(openPreviewDisabled).not.toContain('必须先用 `open_file_preview`')
-    expect(openPreviewDisabled).toContain('使用 `inspect_file_preview` 检查当前用户可见的 CDUT Studio PPTX 正式预览')
+    expect(openPreviewDisabled).not.toContain('first use `open_file_preview`')
+    expect(openPreviewDisabled).toContain('Use `inspect_file_preview` to inspect the current user-visible official CDUT Studio PPTX preview')
 
     const inspectFilePreviewDisabled = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -606,7 +606,7 @@ describe('buildSystemPrompt', () => {
     expect(inspectFilePreviewDisabled).toContain('inspect_preview')
     expect(inspectFilePreviewDisabled).toContain('open_file_preview')
     expect(inspectFilePreviewDisabled).not.toContain('inspect_file_preview')
-    expect(inspectFilePreviewDisabled).toContain('PPTX 必须先用 `open_file_preview` 打开 CDUT Studio 正式文件预览')
+    expect(inspectFilePreviewDisabled).toContain('For PPTX, first use `open_file_preview` to open the official CDUT Studio file preview')
 
     const allPreviewDisabled = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -615,7 +615,7 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'auto',
       disabledTools: ['inspect_preview', 'open_file_preview', 'inspect_file_preview'],
     })
-    expect(allPreviewDisabled).not.toContain('文件内容与视觉预览')
+    expect(allPreviewDisabled).not.toContain('File content & visual preview')
   })
 
   test('代码预设关闭非研发能力，但保留任务图、记忆、预览、网页检索与图片呈现', () => {
@@ -630,16 +630,16 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: true,
     })
     expect(prompt).toContain('proma_task_create')
-    expect(prompt).toContain('## SubAgent 委派策略')
-    expect(prompt).toContain('## CDUT Studio 知识维护架构')
+    expect(prompt).toContain('## SubAgent Delegation Policy')
+    expect(prompt).toContain('## CDUT Studio Knowledge Maintenance Architecture')
     expect(prompt).toContain('`inspect_preview`')
     expect(prompt).toContain('`WebSearch`')
     expect(prompt).toContain('`send_local_image`')
     expect(prompt).not.toContain('create_todo')
-    expect(prompt).not.toContain('## CDUT Studio 受管浏览器')
+    expect(prompt).not.toContain('## CDUT Studio Managed Browser')
     expect(prompt).not.toContain('`generate_image`')
     // create_skin 归属 image 组：代码预设声明生图关闭时，皮肤创建工具及其 SOP 也必须一并消失
-    expect(prompt).not.toContain('10. **创建 CDUT Studio 皮肤**')
+    expect(prompt).not.toContain('10. **Creating CDUT Studio skins**')
   })
 
   test('六类能力硬禁用时 Prompt 与动态浏览器上下文不暴露对应入口', () => {
@@ -651,13 +651,14 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'auto',
       disabledToolGroups: disabled,
     })
-    expect(prompt).not.toContain('## CDUT Studio 受管浏览器')
+    expect(prompt).not.toContain('## CDUT Studio Managed Browser')
     expect(prompt).not.toContain('`inspect_preview`')
     expect(prompt).not.toContain('`generate_image`')
     expect(prompt).not.toContain('`WebSearch`')
-    expect(prompt).toContain('当前预设已关闭的能力')
-    expect(prompt).toContain('受管浏览器（browser）')
-    expect(prompt).toContain('PPT 交付（ppt-materials）')
+    expect(prompt).toContain('Capabilities Disabled by the Current Preset')
+    // 能力组 label 为产品 UI 术语（保留简体中文），仅分隔符改为 ASCII 括号
+    expect(prompt).toContain('受管浏览器 (browser)')
+    expect(prompt).toContain('PPT 交付 (ppt-materials)')
 
     const dynamic = buildDynamicContext({
       workspaceName: 'Demo',
@@ -693,15 +694,15 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: false,
     })
 
-    expect(macPrompt).toContain('## 当前平台与项目路径（macOS）')
-    expect(macPrompt).toContain('当前执行环境是 POSIX shell')
-    expect(macPrompt).toContain('不要把其他操作系统的命令')
+    expect(macPrompt).toContain('## Current Platform & Project Paths (macOS)')
+    expect(macPrompt).toContain('The current execution environment is a POSIX shell')
+    expect(macPrompt).toContain('from other operating systems')
     expect(macPrompt).toContain('/Users/mac/profer/profer-main')
     expect(macPrompt).toContain('path + edits[].oldText/newText')
-    expect(winPrompt).toContain('## 当前平台与项目路径（Windows）')
-    expect(winPrompt).toContain('只使用运行时实际提供的 Windows shell 和路径格式')
+    expect(winPrompt).toContain('## Current Platform & Project Paths (Windows)')
+    expect(winPrompt).toContain('Use only the Windows shell and path format actually provided by the runtime')
     expect(winPrompt).toContain('file_path + old_string/new_string')
-    expect(winPrompt).not.toContain('## 当前平台与项目路径（macOS）')
+    expect(winPrompt).not.toContain('## Current Platform & Project Paths (macOS)')
 
     // 实际拼装后的普通 Pi 任务也必须保留平台事实与禁用边界，不能随低频 SOP 裁掉。
     const taskPrompt = buildPiTaskPrompt({
@@ -709,13 +710,13 @@ describe('buildSystemPrompt', () => {
       userMessage: '检查类型错误。',
       toolNames: [],
     })
-    expect(taskPrompt).toContain('## 当前平台与项目路径（macOS）')
+    expect(taskPrompt).toContain('## Current Platform & Project Paths (macOS)')
     expect(taskPrompt).toContain('/bin/zsh')
     expect(taskPrompt).toContain('/Users/mac/profer/profer-main')
-    expect(taskPrompt).toContain('## 当前预设已关闭的能力')
+    expect(taskPrompt).toContain('## Capabilities Disabled by the Current Preset')
     expect(taskPrompt).toContain('clipboard')
-    expect(taskPrompt).not.toContain('### Pi Runtime 与文件记忆')
-    expect(taskPrompt).not.toContain('## CDUT Studio 受管浏览器')
+    expect(taskPrompt).not.toContain('### Pi Runtime & File Memory')
+    expect(taskPrompt).not.toContain('## CDUT Studio Managed Browser')
   })
 
   test('动态上下文只展示当前预设实际允许的 MCP，且不泄露命令和 URL', () => {
@@ -724,14 +725,14 @@ describe('buildSystemPrompt', () => {
       workspaceSlug: 'demo-workspace',
       mcpServerNames: ['allowed'],
     })
-    expect(restricted).toContain('- allowed (http, 已启用)')
+    expect(restricted).toContain('- allowed (http, enabled)')
     expect(restricted).not.toContain('denied')
     expect(restricted).not.toContain('disabled')
     expect(restricted).not.toContain('https://allowed.example.test/mcp')
     expect(restricted).not.toContain('/private/denied-mcp')
 
     const none = buildDynamicContext({ workspaceSlug: 'demo-workspace', mcpServerNames: [] })
-    expect(none).not.toContain('MCP 服务器:')
+    expect(none).not.toContain('MCP servers:')
   })
 
   test('团队记忆工具名按 runtime 适配（Pi 前缀 / Claude 裸名）', () => {
@@ -772,19 +773,19 @@ describe('buildSystemPrompt 皮肤创建指引', () => {
   test('create_skin 可用时给出固定皮肤目录，并要求不要全盘扫描', () => {
     const prompt = buildSystemPrompt(base)
     const userSkinDir = `~/${getConfigDirName()}/skins/`
-    expect(prompt).toContain('10. **创建 CDUT Studio 皮肤**')
+    expect(prompt).toContain('10. **Creating CDUT Studio skins**')
     expect(prompt).toContain(userSkinDir)
     expect(prompt).toContain('installedPath')
     // 措辞必须涵盖 Windows 侧的递归搜索命令，而不只是 macOS/Linux 的 find/ls
-    expect(prompt).toContain('不要用递归或全盘文件搜索去定位皮肤目录')
+    expect(prompt).toContain('never locate the skin directory via recursive or full-disk file searches')
     expect(prompt).toContain('Get-ChildItem -Recurse')
     // create_skin 已内置安装校验，不应再要求模型手工做文件系统二次校验
-    expect(prompt).not.toContain('并执行一次皮肤导入/刷新或等价静态校验')
+    expect(prompt).not.toContain('perform one skin import/refresh or equivalent static validation')
   })
 
   test('create_skin 被禁用时不再注入皮肤创建 SOP', () => {
     const prompt = buildSystemPrompt({ ...base, disabledTools: ['create_skin'] })
-    expect(prompt).not.toContain('10. **创建 CDUT Studio 皮肤**')
+    expect(prompt).not.toContain('10. **Creating CDUT Studio skins**')
   })
 
   test('传入 activeToolGroups 空集合时，所有未挂载的 Tier 2 能力组 SOP 均零提示词（100% 同构）', () => {
@@ -793,13 +794,13 @@ describe('buildSystemPrompt 皮肤创建指引', () => {
       isPiRuntime: true,
       activeToolGroups: new Set(),
     })
-    expect(prompt).toContain('文档事实与证据互信原则')
+    expect(prompt).toContain('Document Evidence & Mutual Trust')
     expect(prompt).not.toContain('mcp__task-graph__proma_task_create')
     expect(prompt).not.toContain('mcp__planning__create_todo')
-    expect(prompt).not.toContain('## SubAgent 委派策略')
-    expect(prompt).not.toContain('7. **定时任务**')
-    expect(prompt).not.toContain('9. **AI 生图**')
-    expect(prompt).not.toContain('10. **创建 CDUT Studio 皮肤**')
-    expect(prompt).not.toContain('## CDUT Studio 受管浏览器')
+    expect(prompt).not.toContain('## SubAgent Delegation Policy')
+    expect(prompt).not.toContain('7. **Scheduled tasks (Automation)**')
+    expect(prompt).not.toContain('9. **AI image generation**')
+    expect(prompt).not.toContain('10. **Creating CDUT Studio skins**')
+    expect(prompt).not.toContain('## CDUT Studio Managed Browser')
   })
 })

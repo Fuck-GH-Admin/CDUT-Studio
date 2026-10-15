@@ -37,25 +37,25 @@ export interface HeadlessExecutorDeps {
 function buildTaskPrompt(execution: TaskExecution): string {
   const { request } = execution.task
   const lines: string[] = [
-    `你是一个被 CDUT Studio Agent Fabric 派工的本地执行节点。任务 ID：${request.taskId}。`,
+    `You are a local execution node dispatched by the CDUT Studio Agent Fabric. Task ID: ${request.taskId}.`,
     ``,
-    `目标：${request.objective}`,
+    `Objective: ${request.objective}`,
   ]
   if (request.constraints.length > 0) {
-    lines.push(``, `约束（必须遵守）：`)
+    lines.push(``, `Constraints (must be followed):`)
     for (const constraint of request.constraints) lines.push(`- ${constraint}`)
   }
   if (request.context?.files && request.context.files.length > 0) {
-    lines.push(``, `相关文件：`)
+    lines.push(``, `Related files:`)
     for (const file of request.context.files) lines.push(`- ${file}`)
   }
   if (request.context?.notes) {
-    lines.push(``, `补充说明：${request.context.notes}`)
+    lines.push(``, `Additional notes: ${request.context.notes}`)
   }
   lines.push(
     ``,
-    `完成后用一段简洁中文总结结果：做了什么、验证方式与结果、遗留问题。`,
-    `不要声称执行过你实际没有执行的命令或测试。`,
+    `When finished, summarize the result in one concise paragraph: what was done, how it was verified and with what outcome, and any remaining issues. User-facing output must be written in the user's language (e.g., Simplified Chinese when the user writes in Chinese).`,
+    `Do not claim to have executed commands or tests that you did not actually run.`,
   )
   return lines.join('\n')
 }

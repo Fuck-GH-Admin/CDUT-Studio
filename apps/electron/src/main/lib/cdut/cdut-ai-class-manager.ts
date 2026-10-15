@@ -232,22 +232,43 @@ export function deleteAiClassSession(sessionId: string): void {
 
 // ===== 静默模型编排：一次性 JSON 补全 =====
 
+/** 一次性补全默认硬超时（毫秒）：90 秒熔断，杜绝网络悬挂导致 Promise 无限 Pending */
+export const ONE_SHOT_COMPLETION_TIMEOUT_MS = 90_000
+
+/** 一次性补全调用选项（渠道继承 / 超时覆盖 / 外部取消） */
+export interface OneShotCompletionOptions {
+  /** 显式指定渠道 ID（优先于全局 settings.agentChannelId） */
+  channelId?: string
+  /** 显式指定模型 ID（优先于全局 settings.agentModelId） */
+  modelId?: string
+  /** 请求硬超时（毫秒），缺省 90 秒 */
+  timeoutMs?: number
+  /** 外部取消信号（触发后立即中断底层 fetch） */
+  signal?: AbortSignal
+}
+
 /**
  * 一次性的非流式模型调用（复用 generateTitle 的渠道 / 鉴权 / 适配器链路）。
- * 任意失败返回 null，由调用方静默降级。
+ *
+ * 渠道继承优先级：显式 options.channelId / modelId → 全局 settings；
+ * 两者皆无时抛出可读错误。请求强制硬超时熔断（默认 90 秒），超时后中断底层
+ * fetch 并抛出明确原因；所有失败路径均抛出携带可读文案的异常，由调用方决定
+ * 静默降级（图谱推演）还是直接呈现（学习工件生成）。
  */
-export async function oneShotJsonCompletion(systemPrompt: string, userPrompt: string): Promise<string | null> {
+export async function oneShotJsonCompletion(
+  systemPrompt: string,
+  userPrompt: string,
+  options: OneShotCompletionOptions = {},
+): Promise<string> {
   const settings = getSettings()
-  const channelId = settings.agentChannelId
-  const modelId = settings.agentModelId
+  const channelId = options.channelId || settings.agentChannelId
+  const modelId = options.modelId || settings.agentModelId
   if (!channelId || !modelId) {
-    console.warn('[AI速课堂] 未配置 agentChannelId / agentModelId，跳过静默推演')
-    return null
+    throw new Error('尚未配置模型渠道：请先在「设置 → 渠道」中选择默认渠道与模型。')
   }
   const channel = listChannels().find((candidate) => candidate.id === channelId)
   if (!channel) {
-    console.warn('[AI速课堂] 静默推演渠道不存在:', channelId)
-    return null
+    throw new Error(`渠道不存在或已被删除（${channelId}），请在设置中检查渠道配置。`)
   }
 
   let apiKey: string
@@ -255,8 +276,7 @@ export async function oneShotJsonCompletion(systemPrompt: string, userPrompt: st
   if ((isCommercialBuild() || isCommercialMode()) && isOfficialManagedChannel(channel)) {
     const auth = await getTeamAuthWithRefresh()
     if (!auth) {
-      console.warn('[AI速课堂] 团队账号登录已过期，跳过静默推演')
-      return null
+      throw new Error('团队账号登录已过期，请重新登录后再试。')
     }
     const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
     proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
@@ -325,19 +345,51 @@ export async function oneShotJsonCompletion(systemPrompt: string, userPrompt: st
   }
   req.body = JSON.stringify(bodyObj)
 
+  // 硬超时熔断 + 外部取消：定时器触发 abort 中断底层 fetch，finally 中复位
+  const timeoutMs = Math.max(1_000, options.timeoutMs ?? ONE_SHOT_COMPLETION_TIMEOUT_MS)
+  const externalSignal = options.signal
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  const onExternalAbort = (): void => controller.abort()
+  if (externalSignal?.aborted) controller.abort()
+  else externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+
+  const startedAt = Date.now()
+  console.info(`[AI速课堂] 静默推演开始: channel=${channel.name || channelId} model=${modelId} timeout=${timeoutMs}ms`)
   try {
     const fetchFn = getFetchFn(await getEffectiveProxyUrl())
-    const resp = await fetchFn(req.url, { method: 'POST', headers: req.headers, body: req.body })
+    const resp = await fetchFn(req.url, {
+      method: 'POST',
+      headers: req.headers,
+      body: req.body,
+      signal: controller.signal,
+    })
     if (!resp.ok) {
       const errText = await resp.text().catch(() => 'unknown')
-      console.warn('[AI速课堂] 静默推演请求失败:', resp.status, errText.slice(0, 300))
-      return null
+      throw new Error(`模型请求失败（HTTP ${resp.status}）：${errText.slice(0, 200)}`)
     }
     const data: unknown = await resp.json()
-    return adapter.parseTitleResponse(data)
+    const output = adapter.parseTitleResponse(data)
+    if (!output) {
+      throw new Error('模型返回结果为空，请确认所选模型支持 JSON 输出后重试。')
+    }
+    return output
   } catch (error) {
-    console.warn('[AI速课堂] 静默推演异常:', error)
-    return null
+    if (timedOut) {
+      throw new Error(`模型请求超时（${Math.round(timeoutMs / 1000)} 秒）已熔断，请检查网络或更换渠道后重试。`)
+    }
+    if (externalSignal?.aborted) {
+      throw new Error('生成已取消。')
+    }
+    throw error instanceof Error ? error : new Error(String(error))
+  } finally {
+    clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', onExternalAbort)
+    console.info(`[AI速课堂] 静默推演结束: 耗时 ${Date.now() - startedAt}ms`)
   }
 }
 
@@ -536,9 +588,9 @@ function buildPromptFromRefs(refs: SectionRef[]): string {
   for (const ref of refs) {
     if (ref.documentId !== currentDocId) {
       currentDocId = ref.documentId
-      lines.push(`### 文档 documentId=${ref.documentId}｜${ref.fileName}（${ref.fileType}）`)
+      lines.push(`### Document documentId=${ref.documentId} | ${ref.fileName} (${ref.fileType})`)
     }
-    lines.push(`- sectionId=${ref.section.sectionId}｜${ref.section.title}｜${ref.section.summary}`)
+    lines.push(`- sectionId=${ref.section.sectionId} | ${ref.section.title} | ${ref.section.summary}`)
   }
   return lines.join('\n')
 }
@@ -626,10 +678,16 @@ async function runModelEdgeBatches(
   const total = batches.length
   let done = 0
   const groups = await runWithConcurrency(batches, MODEL_CONCURRENCY, async (batch) => {
-    const output = await oneShotJsonCompletion(
-      systemPrompt,
-      `${userIntro}\n\n${buildPromptFromRefs(batch)}\n\n请输出关联 edges JSON。`,
-    )
+    // 图谱推演保持静默降级语义：单批失败（含超时熔断）不阻断整体，全部失败退回本地启发式
+    let output: string | null = null
+    try {
+      output = await oneShotJsonCompletion(
+        systemPrompt,
+        `${userIntro}\n\n${buildPromptFromRefs(batch)}\n\nOutput the relation edges as JSON.`,
+      )
+    } catch (error) {
+      console.warn('[AI速课堂] 图谱批次推演失败，跳过该批次:', error)
+    }
     done += 1
     emitGraphProgress(reporter, done, total, phase)
     if (!output) return []
@@ -712,7 +770,7 @@ async function buildIntraDocumentGraph(
     [document],
     true,
     INTRA_GRAPH_SYSTEM_PROMPT,
-    '以下是同一份学习资料的章节顺序目录：',
+    'Below is the sequential chapter outline of a single study document:',
     reporter,
     '正在推演大章演进脉络',
   )
@@ -745,7 +803,7 @@ async function buildHierarchicalMultiDocumentGraph(
         documents,
         false,
         GRAPH_SYSTEM_PROMPT,
-        '以下是多份学习资料的章节目录：',
+        'Below are the chapter outlines of multiple study documents:',
         reporter,
         '正在推演分层知识网络',
       )

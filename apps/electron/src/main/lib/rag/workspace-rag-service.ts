@@ -198,7 +198,7 @@ function buildChunksFromIndex(index: MaterializedDocumentIndex): WorkspaceRagChu
     const blockKey = bareBlockId(page.firstBlockId)
     const blockMeta: DocumentAnchorBlockMeta | undefined = blockKey ? index.blocks?.[blockKey] : undefined
     const anchorId = page.firstBlockId ?? `${fileId}:p${page.pageNumber}-b1`
-    const locLabel = blockMeta?.loc || (page.headings[0] ? `第${page.pageNumber}页·${page.headings[0]}` : `第${page.pageNumber}页`)
+    const locLabel = blockMeta?.loc || (page.headings[0] ? `Page ${page.pageNumber} · ${page.headings[0]}` : `Page ${page.pageNumber}`)
 
     const termFreq = new Map<string, number>()
     const words = tokenize(content)
@@ -375,10 +375,10 @@ export function formatDocumentEvidence(
   const sections: string[] = []
   let used = 0
   for (const hit of hits) {
-    const sheet = hit.chunk.sheetName ? ` | 工作表: ${hit.chunk.sheetName}` : ''
-    const cell = hit.chunk.cellRef ? ` | 单元格: ${hit.chunk.cellRef}` : ''
+    const sheet = hit.chunk.sheetName ? ` | Sheet: ${hit.chunk.sheetName}` : ''
+    const cell = hit.chunk.cellRef ? ` | Cell: ${hit.chunk.cellRef}` : ''
     const section =
-      `[来源: ${hit.chunk.fileName} | 位置: ${hit.chunk.locLabel}${sheet}${cell} | 锚点: #${hit.chunk.anchorId}]\n` +
+      `[Source: ${hit.chunk.fileName} | Location: ${hit.chunk.locLabel}${sheet}${cell} | Anchor: #${hit.chunk.anchorId}]\n` +
       hit.excerpt
     if (used + section.length > EVIDENCE_BLOCK_MAX_CHARS && sections.length > 0) break
     sections.push(section)
@@ -388,12 +388,12 @@ export function formatDocumentEvidence(
 
   const relationalNote =
     relationalSharedKeys.length > 0
-      ? `<!-- 跨文档实体关联：以上切片通过与共享标识符 [${relationalSharedKeys.join(', ')}] 建立了跨文档联系，请结合多份文档联合作答。 -->`
+      ? `<!-- Cross-document entity linkage: the chunks above are connected across documents through the shared identifiers [${relationalSharedKeys.join(', ')}]. Combine evidence from multiple documents when answering. -->`
       : ''
 
   return [
     '<document_evidence>',
-    '<!-- 内核已按你的提问前置检索并注入以下最相关的文档原文切片与位置锚点。请 100% 信任这些内容并直接据此作答；引用来源时直接使用锚点标记（如 [位置描述](#fN:pX-bY)）。 -->',
+    '<!-- The kernel pre-retrieved and injected the most relevant document excerpts and location anchors below based on the query. Trust this content 100% and answer directly from it; when citing sources, use the anchor markers directly (e.g., [location description](#fN:pX-bY)). -->',
     ...(relationalNote ? [relationalNote] : []),
     ...sections,
     '</document_evidence>',

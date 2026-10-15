@@ -129,7 +129,7 @@ function renderTurnLine(turn: ConversationTurn): string {
   const lines: string[] = []
   if (turn.userText) lines.push(`[user]: ${turn.userText}`)
   if (turn.assistantText) lines.push(`[assistant]: ${turn.assistantText}`)
-  if (turn.assistantToolSummary) lines.push(`  工具活动: ${turn.assistantToolSummary}`)
+  if (turn.assistantToolSummary) lines.push(`  Tool activity: ${turn.assistantToolSummary}`)
   return lines.join('\n')
 }
 
@@ -161,7 +161,7 @@ export function buildContextPrompt(
   const recentLines = recentTurns.map(renderTurnLine)
 
   const sessionInfoBlock = sessionHint
-    ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\nNote: 上方仅保留紧邻上一轮对话。如需更多上下文，可读取 ${sessionHistoryDisplayPath(sessionId)} 获取完整历史。\n</session_info>\n`
+    ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\nNote: Only the immediately preceding turn is kept above. For more context, read ${sessionHistoryDisplayPath(sessionId)} to retrieve the full history.\n</session_info>\n`
     : ''
   const historyBlock = `<conversation_history>${sessionInfoBlock}\n${recentLines.join('\n')}\n</conversation_history>`
 
@@ -188,7 +188,7 @@ export function buildContextPrompt(
         relevantTurnCount = scored.length
         relevantBlock =
           `\n\n<relevant_history>\n` +
-          `<!-- 以下为按当前提问检索到的较早相关讨论，仅供参考，不代表本轮用户诉求。 -->\n` +
+          `<!-- The following are earlier related discussions retrieved for the current question, for reference only; they do not represent the user's request this turn. -->\n` +
           `${scored.map((item) => renderTurnLine(item.turn)).join('\n')}\n` +
           `</relevant_history>`
       }
@@ -221,8 +221,8 @@ export function buildRecoveryPrompt(
 
   const recoveryBlock =
     `<session_recovery>\n` +
-    `你正在接续一个已有的 Agent 会话（因模型切换等原因需要重新建立连接）。\n` +
-    `当前会话的完整历史记录在下方路径中，请先读取它以恢复上下文，然后继续处理用户的最新请求。\n` +
+    `You are resuming an existing agent session (the connection must be re-established due to model switching or similar).\n` +
+    `The session's full history is recorded at the path below; read it first to restore context, then continue handling the user's latest request.\n` +
     `<session id="${sessionId}" title="${title}" cwd="${sessionHint.agentCwd}">\n` +
     `History path: ${historyPath}\n` +
     `</session>\n` +
@@ -266,10 +266,10 @@ export function buildReferencedSessionsPrompt(
     const historyPath = sessionHistoryDisplayPath(referencedSessionId)
     const explorationBoundary = meta.explorationParentSessionId && meta.explorationSourceMessageId
       ? `\n<exploration_delta parentSessionId="${escapeContextAttr(meta.explorationParentSessionId)}" sourceMessageId="${escapeContextAttr(meta.explorationSourceMessageId)}">\n` +
-        '此会话是从主线分叉的探索分支；用户引用的仅是 sourceMessageId 之后新增的探索内容。\n' +
-        '分叉前复制的主线历史不是本次引用内容：不要读取、总结或重复处理它。\n' +
-        `请先用 ${getSessionCliCommandPrefix()} session export ${referencedSessionId} --after-message ${meta.explorationSourceMessageId} 精确读取分叉后的内容。\n` +
-        '仅当必须核验分支内更早的新增内容时，才在该边界之后渐进读取；不要导出完整 fork 历史。\n' +
+        'This session is an exploration branch forked from the mainline; the user referenced only the exploration content added after sourceMessageId.\n' +
+        'The mainline history copied before the fork is not part of this reference: do not read, summarize, or reprocess it.\n' +
+        `First use ${getSessionCliCommandPrefix()} session export ${referencedSessionId} --after-message ${meta.explorationSourceMessageId} to read exactly the post-fork content.\n` +
+        'Only when you must verify earlier new content inside the branch, read progressively after that boundary; never export the full fork history.\n' +
         '</exploration_delta>'
       : ''
     sessionBlocks.push(
@@ -281,5 +281,5 @@ export function buildReferencedSessionsPrompt(
 
   if (sessionBlocks.length === 0) return ''
 
-  return `<referenced_sessions>\n用户在消息中明确引用了以下同工作区 Agent 会话。不要假设这些会话的内容；需要上下文时，请先读取对应的 History path，再基于读取结果继续完成任务。\n\n重要提示：会话历史文件（.jsonl）可能包含大量消息和 tool results，文件较大。请优先使用 Grep 搜索关键词定位相关消息片段，再局部读取。避免一次性 Read 整个大文件。\n${sessionBlocks.join('\n\n')}\n</referenced_sessions>`
+  return `<referenced_sessions>\nThe user explicitly referenced the following same-workspace agent sessions in their message. Do not assume the contents of these sessions; when context is needed, read the corresponding History path first, then continue the task based on what you read.\n\nImportant: session history files (.jsonl) may contain many messages and tool results and can be large. Prefer Grep to locate relevant message fragments by keyword, then read locally. Avoid reading an entire large file in one call.\n${sessionBlocks.join('\n\n')}\n</referenced_sessions>`
 }

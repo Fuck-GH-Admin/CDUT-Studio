@@ -37,9 +37,9 @@ publishComprehensiveFixture(store)
 const fakeClient = {
   protocol: 'openai-chat',
   complete: async (input: { prompt: string }) => {
-    if (input.prompt.includes('抽取事实')) {
-      const docId = (input.prompt.match(/--- (.+?)（doc-/) ?? [])[1] ?? ''
-      const versionMatch = input.prompt.match(/（(doc-[^\s)]+-v\d)）/)
+    if (input.prompt.includes('extract facts')) {
+      const docId = (input.prompt.match(/--- (.+?) \(doc-/) ?? [])[1] ?? ''
+      const versionMatch = input.prompt.match(/\((doc-[^\s)]+-v\d)\)/)
       const versionId = versionMatch?.[1] ?? 'doc-ghost-v1'
       const ghost = JSON.stringify([{ subjectId: 's1', fieldKey: 'level', value: 'national-1', sourceRefs: [{ documentVersionId: versionId, quote: '一等奖' }], confidence: 0.9 }])
       const withGhost = JSON.stringify([{ subjectId: 's1', fieldKey: 'level', value: 'national-1', sourceRefs: [{ documentVersionId: versionId, quote: '一等奖' }] }, { subjectId: 's1', fieldKey: 'ghost', value: 'x', sourceRefs: [{ documentVersionId: 'doc-fake-v9', quote: '伪造' }] }])

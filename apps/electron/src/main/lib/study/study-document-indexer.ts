@@ -393,7 +393,7 @@ function buildImageSection(filePath: string): RawSection[] {
     {
       title: basename(filePath),
       level: 1,
-      content: `本地图片资料：${filePath}\n（图片无文本层，请由多模态模型直接查看该图片内容。）`,
+      content: `Local image material: ${filePath}\n(The image has no text layer; inspect the image content directly with multimodal vision.)`,
     },
   ]
 }
@@ -470,11 +470,11 @@ function persistDocument(
 
 /** 生成轻量级大纲导航 Markdown（控制在约 800 字以内，供模型直接消费） */
 function buildNavigationMarkdown(document: PersistedStudyDocument): string {
-  const fileIdTag = document.fileId ? `｜锚点前缀：\`${document.fileId}\`` : ''
+  const fileIdTag = document.fileId ? ` | anchor prefix (锚点前缀): \`${document.fileId}\`` : ''
   const header =
-    `## 学习资料大纲：${document.fileName}\n` +
-    `文档标识：\`${document.documentId}\`${fileIdTag}｜共 ${document.sections.length} 个章节块、${document.totalChars} 字。\n` +
-    '（原文未全部注入上下文，讲解具体知识点时请调用 `study_inspect_section` 按 sectionId 查阅原文，并用 `[第X页·小节](#f1:pX-bY)` 格式标注溯源锚点。）\n'
+    `## Study Material Outline (学习资料大纲): ${document.fileName}\n` +
+    `Document ID: \`${document.documentId}\`${fileIdTag} | ${document.sections.length} section block(s), ${document.totalChars} characters in total.\n` +
+    '(The full source text is NOT fully injected into the context. When explaining a specific knowledge point, call `study_inspect_section` with its sectionId to read the original text, and mark source anchors using the `[第X页·小节](#f1:pX-bY)` format (「第X页·小节」 means "Page X · Section name").)\n'
   const lines: string[] = []
   for (const section of document.sections) {
     const locator = section.pageRange
@@ -1087,11 +1087,10 @@ export function buildStudyOutlineForPrompt(sessionId: string): string {
   const lines: string[] = []
   let used = 0
   for (const doc of outlines) {
-    const header = `### 资料：${doc.fileName}（documentId=${doc.documentId}，共 ${doc.totalSections} 个章节）`
+    const header = `### Material: ${doc.fileName} (documentId=${doc.documentId}, ${doc.totalSections} section(s) in total)`
     if (used + header.length > MAX_OUTLINE_PROMPT_CHARS) {
       lines.push(
-        '…（资料大纲篇幅较长，部分内容已折叠。如需检索未在大纲列出的细节、考点或跨文件关联，' +
-          '请直接调用 study_search_knowledge 工具发起全域混合检索；如需查阅具体已知章节，请使用 study_inspect_section 按 sectionId 查阅原文。）',
+        '…(The study material outline (学习资料大纲) is long and part of it has been folded. To retrieve details, exam points, or cross-file connections not listed in the outline, call the study_search_knowledge tool for full-domain hybrid retrieval; to read a specific known section, use study_inspect_section with its sectionId.)',
       )
       break
     }
@@ -1099,15 +1098,15 @@ export function buildStudyOutlineForPrompt(sessionId: string): string {
     used += header.length
     for (const section of doc.sections) {
       const locator = section.pageRange
-        ? `（P${section.pageRange[0]}-${section.pageRange[1]}）`
+        ? `(P${section.pageRange[0]}-${section.pageRange[1]})`
         : section.slideIndex
-          ? `（第 ${section.slideIndex} 页）`
+          ? `(slide ${section.slideIndex})`
           : ''
       const line = `- [${section.sectionId}] ${section.title}${locator} — ${section.summary}`
       if (used + line.length > MAX_OUTLINE_PROMPT_CHARS) {
         lines.push(
-          '…（资料大纲过长，已截断。如需检索未在大纲列出的细节、考点或跨文件关联，请直接调用 study_search_knowledge ' +
-            '工具发起全域混合检索；如需查阅具体已知章节，请使用 study_inspect_section 按 sectionId 查阅原文。）',
+          '…(The study material outline (学习资料大纲) is too long and has been truncated. To retrieve details, exam points, or cross-file connections not listed in the outline, call the study_search_knowledge ' +
+            'tool for full-domain hybrid retrieval; to read a specific known section, use study_inspect_section with its sectionId.)',
         )
         return lines.join('\n')
       }
@@ -1120,13 +1119,13 @@ export function buildStudyOutlineForPrompt(sessionId: string): string {
 
 /** 供提示词注入：把认知档案压缩为简短文本 */
 export function describeCognitionForPrompt(profile: StudentCognitionProfile | null): string {
-  if (!profile) return '（尚无学生认知档案，遇到新学科/新教材时请主动发起 /grill-me 摸底诊断）'
-  const join = (items: string[]): string => (items.length > 0 ? items.join('、') : '（无）')
+  if (!profile) return '(No student cognition profile (学生认知档案) yet; when encountering a new subject or new textbook, proactively start a /grill-me baseline diagnostic (摸底诊断).)'
+  const join = (items: string[]): string => (items.length > 0 ? items.join('、') : '(none)')
   return [
-    `学科：${profile.subject || '未指定'}`,
-    `目标：${profile.targetGoal || '未指定'}`,
-    `已掌握：${join(profile.masteredConcepts)}`,
-    `待学未知：${join(profile.unlearnedConcepts)}`,
-    `薄弱混淆：${join(profile.fragileConcepts)}`,
-  ].join('；')
+    `Subject (学科): ${profile.subject || 'unspecified'}`,
+    `Goal (目标): ${profile.targetGoal || 'unspecified'}`,
+    `Mastered (已掌握): ${join(profile.masteredConcepts)}`,
+    `Unlearned (待学未知): ${join(profile.unlearnedConcepts)}`,
+    `Fragile/confused (薄弱混淆): ${join(profile.fragileConcepts)}`,
+  ].join('; ')
 }

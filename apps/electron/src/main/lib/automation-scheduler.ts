@@ -74,26 +74,26 @@ function formatScheduleLabel(a: Automation): string {
       ? new Date(a.scheduledAt).toLocaleString('zh-CN', {
           month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
         })
-      : '指定时间'
-    return `仅运行一次（${when}）`
+      : 'the scheduled time'
+    return `Runs once (${when})`
   }
-  const times = (a.timeOfDay?.length ? a.timeOfDay : ['09:00']).join('、')
-  if (a.scheduleType === 'daily') return `每天 ${times}`
+  const times = (a.timeOfDay?.length ? a.timeOfDay : ['09:00']).join(', ')
+  if (a.scheduleType === 'daily') return `Daily at ${times}`
   if (a.scheduleType === 'weekly') {
-    const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+    const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     const days = (a.dayOfWeek?.length ? a.dayOfWeek : [1])
-      .map((day) => names[day] ?? `星期${day}`)
-      .join('、')
-    return `每${days} ${times}`
+      .map((day) => names[day] ?? `weekday ${day}`)
+      .join(', ')
+    return `Weekly on ${days} at ${times}`
   }
   if (a.scheduleType === 'monthly') {
-    const days = (a.dayOfMonth?.length ? a.dayOfMonth : [1]).join('、')
-    return `每月 ${days} 号 ${times}`
+    const days = (a.dayOfMonth?.length ? a.dayOfMonth : [1]).join(', ')
+    return `Monthly on day(s) ${days} at ${times}`
   }
   const min = a.intervalMinutes
-  if (min < 60) return `每 ${min} 分钟`
-  if (min < 1440) return `每 ${min / 60} 小时`
-  return `每 ${min / 1440} 天`
+  if (min < 60) return `Every ${min} minutes`
+  if (min < 1440) return `Every ${min / 60} hours`
+  return `Every ${min / 1440} days`
 }
 
 let tickTimer: NodeJS.Timeout | undefined
@@ -246,7 +246,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
         {
           sessionId: targetSessionId,
           userMessage: automation.prompt + '\n<!--PROMA_SCHEDULED_RUN-->',
-          automationContext: `这是 Profer 定时任务「${automation.name}」的自动执行（ID: ${automation.id}，${formatScheduleLabel(automation)}）。这本身就是定时任务，不要建议用户再创建定时任务。直接执行任务即可。如发现本任务连续失败、输出价值低、频率不合适或提示词不完整，可以使用 automation 工具读取并更新当前任务。`,
+          automationContext: `This is an automated run of the Profer 定时任务 (Automation) "${automation.name}" (ID: ${automation.id}, ${formatScheduleLabel(automation)}). This run is itself a scheduled Automation; do not suggest that the user create another one. Execute the task directly. If you find that this task keeps failing consecutively, produces low-value output, runs at an unsuitable frequency, or has an incomplete prompt, you may use the automation tools to read and update the current task. User-facing output must be written in the user's language (e.g., Simplified Chinese when the user writes in Chinese).`,
           channelId: automation.channelId,
           modelId: automation.modelId,
           agentRuntime,

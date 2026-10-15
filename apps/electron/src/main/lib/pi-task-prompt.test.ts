@@ -3,44 +3,44 @@ import { buildPiTaskPrompt } from './pi-task-prompt'
 
 const BASE_PROMPT = `# Core
 
-## SubAgent 委派策略
+## SubAgent Delegation Policy
 COLLABORATION_RULES
 
 ## Pi Agent Runtime
 CORE_PI_RULES
 
-### Pi Runtime 与文件记忆
+### Pi Runtime & File Memory
 PI_MEMORY_RULES
 
-## 用户信息
+## User Info
 USER
 
-## 团队共享知识记忆
+## Team Shared Knowledge Memory
 TEAM_MEMORY_RULES
 
-## 不确定性处理
+## Uncertainty Handling
 UNCERTAINTY
 
-## CDUT Studio 知识维护架构
+## CDUT Studio Knowledge Maintenance Architecture
 KNOWLEDGE_GOVERNANCE_RULES
 
-## 任务完成标准
+## Task Completion Criteria
 DELIVERY_CORE
 
-## 交互规范
+## Interaction Norms
 COMMON_INTERACTION
 
-7. **定时任务**
+7. **Scheduled tasks (Automation)**
 AUTOMATION_RULES
 
-8. **发送既有本地图片**
+8. **Sending existing local images**
 LOCAL_IMAGE_RULES
-9. **AI 生图**
+9. **AI image generation**
 IMAGE_GENERATION_RULES
-10. **PPT 视觉交付门禁**
+10. **PPT visual delivery gate**
 PPT_VISUAL_GATE
 
-## CDUT Studio 受管浏览器
+## CDUT Studio Managed Browser
 BROWSER_RULES`
 
 const ALL_TOOLS = [
@@ -124,11 +124,11 @@ ALWAYS_PRESENT_RULES`
     const withoutBrowser = buildPiTaskPrompt({ basePrompt, userMessage: '任意', toolNames: [] })
     expect(withoutBrowser).toContain('DISABLED_CAPABILITY_RULES')
     expect(withoutBrowser).toContain('ALWAYS_PRESENT_RULES')
-    expect(withoutBrowser).not.toContain('## CDUT Studio 受管浏览器')
+    expect(withoutBrowser).not.toContain('## CDUT Studio Managed Browser')
     expect(withoutBrowser).not.toContain('NESTED_BROWSER_RULES')
 
     const withBrowser = buildPiTaskPrompt({ basePrompt, userMessage: '任意', toolNames: ['BrowserObserve'] })
-    expect(withBrowser).toContain('## CDUT Studio 受管浏览器')
+    expect(withBrowser).toContain('## CDUT Studio Managed Browser')
     expect(withBrowser).toContain('NESTED_BROWSER_RULES')
     expect(withBrowser).toContain('DISABLED_CAPABILITY_RULES')
   })

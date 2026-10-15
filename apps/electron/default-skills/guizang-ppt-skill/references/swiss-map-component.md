@@ -1,26 +1,26 @@
 # Swiss Map Component
 
-用于地理、历史、城市、人文路线、门店/校区/事件点位等内容。它不是新的 Swiss 正文版式,而是 **S08 Duo Compare 的右侧插槽扩展**:左侧仍是解释卡片,右侧替换为地图组件。
+Used for geography, history, cities, humanities routes, store/campus/event locations and similar content. It is not a new Swiss body layout but an **extension of S08 Duo Compare's right slot**: the left side remains explanation cards, and the right side is replaced by the map component.
 
-## 何时使用
+## When to use
 
-- 文档里出现地点、街区、路线、人物住所、机构分布、城市漫游。
-- 用户明确希望有地图、点位、关系线或地理组件。
-- 内容需要解释“空间关系”,而不只是罗列人物或地点。
+- The document contains places, blocks, routes, residences, institution distributions, city wandering.
+- The user explicitly wants a map, pins, relation lines or a geographic component.
+- The content needs to explain "spatial relations", not just list people or places.
 
-## 硬规则
+## Hard rules
 
-- `<section>` 仍写 `data-layout="S08"`;不要新增 `P23/P24` 或自定义正文页。
-- 页面结构必须是:顶部标题 + 左侧说明卡片 + 右侧地图卡片。
-- 地图标记由 HTML 组件组成:点 `.pin-dot` + 连线 `.pin-line` + 卡片 `.pin-card`。
-- SVG 只画 fallback 关系线,不要在 SVG 里写文字。
-- MapLibre 地图默认关闭滚轮缩放和拖动,避免触发 PPT 翻页。
-- 右上角必须有 `+` / `-` / `DRAG` 控制。用户点击 `DRAG` 后才允许拖动地图。
-- 必须有静态 fallback:CDN 或地图瓦片失败时,仍能看到点位、关系线和卡片。
+- The `<section>` still writes `data-layout="S08"`; do not add `P23/P24` or custom body pages.
+- The page structure must be: top heading + left explanation cards + right map card.
+- Map markers are composed of HTML components: pin `.pin-dot` + line `.pin-line` + card `.pin-card`.
+- SVG only draws fallback relation lines; do not write text in SVG.
+- The MapLibre map disables wheel zoom and dragging by default, avoiding deck page-flip triggers.
+- `+` / `-` / `DRAG` controls are required at the top-right. Dragging is allowed only after the user clicks `DRAG`.
+- A static fallback is mandatory: when the CDN or map tiles fail, pins, relation lines and cards remain visible.
 
-## 数据契约
+## Data contract
 
-写页面前先定义点位和关系。`x/y` 用于静态 fallback 百分比坐标,`coord` 用于 MapLibre 经纬度。
+Define points and relations before writing the page. `x/y` are percentage coordinates for the static fallback; `coord` is the MapLibre longitude/latitude.
 
 ```js
 const MAP_POINTS = [
@@ -38,9 +38,9 @@ const MAP_RELATIONS = [
 ];
 ```
 
-## 必要 CSS
+## Required CSS
 
-放到生成页 `<head>` 的额外 `<style>` 中,不要改 `template-swiss.html` 的全局基座类。
+Put this into an extra `<style>` in the generated page's `<head>`; do not modify `template-swiss.html`'s global base classes.
 
 ```html
 <link href="https://unpkg.com/maplibre-gl@5.14.0/dist/maplibre-gl.css" rel="stylesheet">
@@ -84,7 +84,7 @@ const MAP_RELATIONS = [
 </style>
 ```
 
-## 页面骨架
+## Page skeleton
 
 ```html
 <section class="slide" data-layout="S08" data-animate="duo-mirror">
@@ -121,9 +121,9 @@ const MAP_RELATIONS = [
 </section>
 ```
 
-## 必要 JS
+## Required JS
 
-放到 `</body>` 前。生成多张地图页时,把 id 从 `swiss-map` 改成唯一 id,并让初始化函数接收 selector。
+Place before `</body>`. When generating multiple map pages, change the id from `swiss-map` to a unique id and make the init function accept a selector.
 
 ```html
 <script>
@@ -206,10 +206,10 @@ const MAP_RELATIONS = [
 </script>
 ```
 
-## 视觉检查
+## Visual checks
 
-- 左侧卡片总高度要和右侧地图卡片对齐,不要上浮一半。
-- 地图标题和控制按钮不能互相遮挡;点位卡片不能压到右上角控制区。
-- marker 卡片至少显示地点名,`meta` 只作为短标签。
-- 左侧关系卡不要惜字如金,每张卡应有完整一句解释。
-- 若地图无法加载,静态 fallback 仍必须可读。
+- The left cards' total height must align with the right map card; don't let it float halfway up.
+- The map title and control buttons must not overlap each other; pin cards must not cover the top-right control area.
+- Marker cards must show at least the place name; `meta` is only a short tag.
+- Don't be stingy with words on the left relation cards; each card should have one complete explanatory sentence.
+- If the map fails to load, the static fallback must remain readable.

@@ -1050,11 +1050,11 @@ export function shouldDeferPiOverflowTerminalError(
 const MAX_AUTOMATIC_COMPACTION_CONTINUATIONS = 20
 
 export const PI_COMPACTION_CONTINUATION_PROMPT = `<profer_compaction_continuation>
-当前会话上下文已经安全压缩。请依据压缩摘要、保留的最近上下文和已持久化的交接状态，继续完成原始用户任务。
+The current session context has been safely compacted. Based on the compaction summary, the retained recent context, and the persisted handoff state, continue completing the original user task.
 
-- 不要重复已经完成或已提交的操作；先核验当前状态。
-- 若仍有工作，立即执行下一项具体行动。
-- 只有原始需求全部完成时才给出最终答复；若确实受阻，明确说明阻塞原因。
+- Do not repeat operations that have already been completed or committed; verify the current state first.
+- If work remains, immediately execute the next concrete action.
+- Give the final reply only when the original request is fully completed; if genuinely blocked, state the blocker explicitly.
 </profer_compaction_continuation>`
 
 function buildPinnedArtifactsContinuationBlock(cwd?: string): string {
@@ -1077,7 +1077,7 @@ function buildPinnedArtifactsContinuationBlock(cwd?: string): string {
         }
         if (meta.sourceName) {
           lines.push(
-            `- 文档《${meta.sourceName}》(artifact_id="${meta.artifactId ?? ''}", 共 ${meta.pageCount ?? 1} 页, ${meta.totalChars ?? 0} 字符): 纯净版 Markdown 已完整落盘于 \`${meta.cleanMarkdownPath ?? ''}\`（无需再用 Write/Edit 重写）；可直接 Read 该 Markdown，提问时系统也会自动注入 \`<document_evidence>\` 相关切片。`,
+            `- Document "${meta.sourceName}" (artifact_id="${meta.artifactId ?? ''}", ${meta.pageCount ?? 1} page(s), ${meta.totalChars ?? 0} chars): the clean Markdown has been fully persisted at \`${meta.cleanMarkdownPath ?? ''}\` (no need to rewrite it with Write/Edit); you can Read that Markdown directly, and the system will also auto-inject relevant \`<document_evidence>\` slices when questions arise.`,
           )
         }
       } catch {
@@ -1085,7 +1085,7 @@ function buildPinnedArtifactsContinuationBlock(cwd?: string): string {
       }
     }
     if (lines.length === 0) return ''
-    return `\n\n<pinned_document_artifacts>\n【跨压缩钉住的内核文档产物句柄】\n${lines.join('\n')}\n</pinned_document_artifacts>`
+    return `\n\n<pinned_document_artifacts>\n[Kernel document artifact handles pinned across compactions]\n${lines.join('\n')}\n</pinned_document_artifacts>`
   } catch {
     return ''
   }

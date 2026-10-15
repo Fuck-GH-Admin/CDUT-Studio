@@ -27,7 +27,7 @@ function materialTextOf(doc: DocumentVersion): string {
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext)) return ''
   try {
     const raw = readFileSync(join(getConfigDir(), 'review-cases', doc.versionId.split('-v')[0] ?? doc.documentId, doc.assetPath), 'utf-8')
-    return raw.length > 6000 ? `${raw.slice(0, 6000)}\n…（截断）` : raw
+    return raw.length > 6000 ? `${raw.slice(0, 6000)}\n…(truncated)` : raw
   } catch {
     return ''
   }
@@ -36,23 +36,23 @@ function materialTextOf(doc: DocumentVersion): string {
 /** 构建注入给 Pi 的材料/规则/字段上下文（内容仅作为数据，指令边界由 REVIEW_SYSTEM_PROMPT 承担） */
 function buildMaterialContext(aggregate: CaseAggregateV2, template: TemplateVersion): string {
   const parts: string[] = []
-  parts.push('【案卷字段】')
+  parts.push('【案卷字段 (Case Fields)】')
   for (const [key, value] of Object.entries(aggregate.caseV2.caseFields)) {
     parts.push(`- ${key} = ${JSON.stringify((value as { value: unknown }).value ?? null)}`)
   }
   for (const subject of aggregate.caseV2.subjects) {
-    parts.push(`【事项 ${subject.id}】${subject.title}`)
+    parts.push(`【事项 (Subject) ${subject.id}】${subject.title}`)
     for (const [key, value] of Object.entries(subject.fields)) {
       parts.push(`- ${key} = ${JSON.stringify((value as { value: unknown }).value ?? null)}`)
     }
   }
-  parts.push('【负责人规则】')
+  parts.push('【负责人规则 (Owner Rules)】')
   for (const ref of template.policyRefs ?? []) void ref
-  parts.push('【材料内容】')
+  parts.push('【材料内容 (Material Content)】')
   for (const doc of aggregate.caseV2.documents) {
     if (doc.active === false) continue
     const text = materialTextOf(doc)
-    parts.push(text ? `--- ${doc.fileName}（${doc.versionId}） ---\n${text}` : `--- ${doc.fileName}（${doc.versionId}）--- [非文本或未可读：不作为已读依据]`)
+    parts.push(text ? `--- ${doc.fileName} (${doc.versionId}) ---\n${text}` : `--- ${doc.fileName} (${doc.versionId}) --- [non-text or unreadable: must not be treated as read]`)
   }
   return parts.join('\n')
 }
@@ -72,9 +72,9 @@ export function assembleV2Executors(aggregate: CaseAggregateV2, template: Templa
   const piExtract: NodeExecutor = async (node, inputHash) => {
     if (options.signal?.aborted) throw new Error('已取消（模型调用前）')
     const prompt = [
-      `任务：从下列案卷材料中抽取事实（observations）。`,
-      `输出 JSON 数组，每项 {"subjectId":"…","fieldKey":"…","value":…,"sourceRefs":[{"documentVersionId":"…","quote":"原文引用"}],"confidence":0~1}。`,
-      `要求：sourceRefs 的 documentVersionId 必须来自下方材料清单；无对应材料的事实不得输出。`,
+      `Task: extract facts (observations) from the 案卷 (case-file) materials below.`,
+      `Output a JSON array where each item is {"subjectId":"…","fieldKey":"…","value":…,"sourceRefs":[{"documentVersionId":"…","quote":"verbatim quote from the material"}],"confidence":0~1}.`,
+      `Requirements: the documentVersionId in sourceRefs must come from the material list below; do not output facts that have no corresponding material.`,
       materialContext,
     ].join('\n')
     const { content } = await options.client.complete({ prompt, system: REVIEW_SYSTEM_PROMPT, signal: options.signal })
@@ -96,9 +96,9 @@ export function assembleV2Executors(aggregate: CaseAggregateV2, template: Templa
     if (options.signal?.aborted) throw new Error('已取消（模型调用前）')
     const findingsText = rules.map((rule) => `- ${rule.id}: ${rule.requirement}`).join('\n')
     const prompt = [
-      '任务：基于案卷字段、材料与规则清单，给出审核结论。',
-      '输出 JSON：{"opinion":"…简短结论…","checks":[{"ruleId":"…","status":"compliant|non-compliant|needs-confirmation|not-applicable","reason":"…"}]}',
-      `规则清单：\n${findingsText}`,
+      'Task: based on the 案卷 (case) fields, materials, and rule list below, produce the 审核 (review) conclusion.',
+      'Output JSON: {"opinion":"…short conclusion…","checks":[{"ruleId":"…","status":"compliant|non-compliant|needs-confirmation|not-applicable","reason":"…"}]}',
+      `Rule list:\n${findingsText}`,
       materialContext,
     ].join('\n')
     const { content } = await options.client.complete({ prompt, system: REVIEW_SYSTEM_PROMPT, signal: options.signal })

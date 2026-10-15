@@ -77,6 +77,7 @@ import { CdutAiClassAccessDialog } from './components/cdut-zone/CdutAiClassAcces
 import { useCdutAccountHydration } from './hooks/useCdutAccountHydration'
 import { useBrowserLocalFileSelectionQuote } from './hooks/useBrowserLocalFileSelectionQuote'
 import { useBrowserPreviewThemeSync } from './hooks/useBrowserPreviewThemeSync'
+import { useArchivedUnreadSync } from './atoms/sidebar-atoms'
 import {
   todosAtom,
   calendarEventsAtom,
@@ -630,6 +631,8 @@ function AgentListenersInitializer(): null {
   useBrowserLocalFileSelectionQuote()
   // 换皮肤时让已打开的文件预览跟上（受管浏览器里的普通网页不跟）
   useBrowserPreviewThemeSync()
+  // 后台静默自动归档未读红点：根部常驻订阅，侧栏收起时事件也不丢
+  useArchivedUnreadSync()
   return null
 }
 

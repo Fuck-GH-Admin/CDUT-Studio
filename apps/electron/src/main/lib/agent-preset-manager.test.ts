@@ -129,12 +129,12 @@ describe('listAgentPresets', () => {
     expect(code.disabledTools).toEqual(['generate_image', 'create_skin'])
     expect(code.skillSlugs).toBeUndefined()
     expect(code.mcpServerNames).toBeUndefined()
-    expect(code.promptSections?.[0]).toContain('跨边界修改必须检查调用方和契约')
-    expect(code.promptSections?.[0]).toContain('网页搜索/抓取与本地图片呈现保留')
+    expect(code.promptSections?.[0]).toContain('cross-boundary edits must check callers and contracts')
+    expect(code.promptSections?.[0]).toContain('web search/fetch and local image presentation remain available')
     const minimal = presets.find((p) => p.id === BUILTIN_PRESET_MINIMAL)!
     expect(minimal.promptSections?.length).toBeGreaterThan(0)
     expect(minimal.description).toContain('关闭全部产品能力组')
-    expect(minimal.promptSections?.[0]).toContain('全部产品能力组已为本会话关闭')
+    expect(minimal.promptSections?.[0]).toContain('all product capability groups are disabled for this session')
   })
 
   test('无工作区时仅返回内置三预设', () => {
@@ -933,7 +933,7 @@ describe('派生预设（basePresetId）', () => {
     const resolved = getAgentPreset(WS_A, created.id)
     expect(resolved.id).toBe(created.id)
     expect(resolved.promptSections).toHaveLength(2)
-    expect(resolved.promptSections![0]).toContain('代码任务模式')
+    expect(resolved.promptSections![0]).toContain('Code Task Mode')
     expect(resolved.promptSections![1]).toContain('测试强化')
   })
 
@@ -986,11 +986,11 @@ describe('派生预设（basePresetId）', () => {
       description: '',
       basePresetId: BUILTIN_PRESET_CODE,
     })
-    expect(getAgentPreset(WS_A, created.id).promptSections?.[0]).toContain('代码任务模式')
+    expect(getAgentPreset(WS_A, created.id).promptSections?.[0]).toContain('Code Task Mode')
 
     updateAgentPreset(WS_A, created.id, { basePresetId: BUILTIN_PRESET_MINIMAL })
     const resolved = getAgentPreset(WS_A, created.id)
-    expect(resolved.promptSections?.[0]).toContain('极简模式')
+    expect(resolved.promptSections?.[0]).toContain('Minimal Mode')
     expect(resolved.suppressPromptSections).toEqual(['subagents', 'memory', 'task-graph', 'automation'])
   })
 
@@ -1023,7 +1023,7 @@ describe('派生预设（basePresetId）', () => {
     expect(copy.basePresetId).toBe(BUILTIN_PRESET_CODE)
     const resolved = getAgentPreset(WS_A, copy.id)
     expect(resolved.promptSections).toHaveLength(2)
-    expect(resolved.promptSections![0]).toContain('代码任务模式')
+    expect(resolved.promptSections![0]).toContain('Code Task Mode')
   })
 
   test('旧版本的元预设引用仍能解析，并跟随当前元预设定义', () => {

@@ -30,6 +30,7 @@ import {
   studyActiveDocumentIdAtom,
   studyDocumentsAtom,
   studyIngestingAtom,
+  studyLeftPanelCollapsedAtom,
   studyRightPanelCollapsedAtom,
   studyRightPanelWidthAtom,
 } from '@/atoms/study-atoms'
@@ -47,6 +48,7 @@ export function AiClassView(): React.ReactElement {
   const sessionId = useAtomValue(activeSessionIdAtom)
   const [documents, setDocuments] = useAtom(studyDocumentsAtom)
   const [activeDocumentId, setActiveDocumentId] = useAtom(studyActiveDocumentIdAtom)
+  const [leftCollapsed, setLeftCollapsed] = useAtom(studyLeftPanelCollapsedAtom)
   const [rightCollapsed, setRightCollapsed] = useAtom(studyRightPanelCollapsedAtom)
   const [rightWidth, setRightWidth] = useAtom(studyRightPanelWidthAtom)
   const setIngesting = useSetAtom(studyIngestingAtom)
@@ -195,8 +197,13 @@ export function AiClassView(): React.ReactElement {
 
   return (
     <div className="flex h-full min-h-0 w-full overflow-hidden">
-      {/* ===== 左栏：课程资料与资料树 ===== */}
-      <aside className="flex w-80 shrink-0 flex-col border-r border-border/60 bg-card/40">
+      {/* ===== 左栏：课程资料与资料树（可通过顶栏开关整体收起） ===== */}
+      <aside
+        className={cn(
+          'flex shrink-0 flex-col overflow-hidden transition-[width,opacity] duration-300',
+          leftCollapsed ? 'w-0 border-r-0 opacity-0' : 'w-80 border-r border-border/60 bg-card/40',
+        )}
+      >
         {/* 居中标题：课程资料与大纲向导 */}
         <div className="flex shrink-0 justify-center px-3 py-2.5">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold tracking-tight text-primary">
@@ -242,15 +249,15 @@ export function AiClassView(): React.ReactElement {
           </div>
         </div>
 
-        {/* 已上传资料（居中标题 + 最大高度自适应） */}
-        <div className="mt-3 shrink-0 px-3">
-          <div className="mb-1.5 flex items-center justify-center gap-2">
+        {/* 已上传资料（居中标题 + 弹性占满剩余高度，大幅提升课程文档可视空间） */}
+        <div className="mt-3 flex min-h-0 flex-1 flex-col px-3">
+          <div className="mb-1.5 flex shrink-0 items-center justify-center gap-2">
             <span className="inline-flex items-center rounded-full bg-muted/60 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               已上传资料
             </span>
             <span className="text-[10px] text-muted-foreground/70">{documents.length}</span>
           </div>
-          <div className="flex max-h-48 flex-col gap-1.5 overflow-y-auto pr-0.5">
+          <div className="flex max-h-[380px] min-h-[140px] flex-1 flex-col gap-1.5 overflow-y-auto pr-0.5">
             {documents.length === 0 ? (
               <p className="rounded-lg bg-muted/40 px-2 py-2 text-[11px] text-muted-foreground">暂无资料，先上传课件或教材。</p>
             ) : (
@@ -318,8 +325,8 @@ export function AiClassView(): React.ReactElement {
           </div>
         </div>
 
-        {/* 现代节点图资料树 */}
-        <div className="mt-3 flex min-h-0 flex-1 flex-col px-3 pb-3">
+        {/* 现代节点图资料树（紧凑专用高度，让位于上方课程文档列表） */}
+        <div className="mt-3 flex h-[260px] shrink-0 flex-col px-3 pb-3">
           {sessionId ? (
             <AiClassKnowledgeTree sessionId={sessionId} />
           ) : (
@@ -360,6 +367,7 @@ export function AiClassView(): React.ReactElement {
         )}
         style={rightCollapsed ? undefined : { width: rightWidth }}
       >
+        {/* 左边缘拖拽调宽把手（仅展开态；开关按钮已移入面板内部，避免碰撞） */}
         {!rightCollapsed && (
           <div
             onMouseDown={startRightPanelResize}
@@ -369,32 +377,51 @@ export function AiClassView(): React.ReactElement {
             className="absolute -left-1 top-0 bottom-0 z-20 w-2 cursor-col-resize"
           />
         )}
-        <button
-          type="button"
-          onClick={() => setRightCollapsed((value) => !value)}
-          title={rightCollapsed ? '展开边栏' : '收起边栏'}
-          className="absolute -left-3 top-3 z-10 flex size-6 items-center justify-center rounded-full border border-border/70 bg-background text-muted-foreground shadow-sm transition-colors hover:text-foreground"
-        >
-          {rightCollapsed ? <ChevronLeft size={13} /> : <ChevronRight size={13} />}
-        </button>
-        {!rightCollapsed ? (
-          sessionId ? (
-            <AiClassRightTabs sessionId={sessionId} />
-          ) : (
-            <div className="flex min-h-0 flex-1 flex-col p-3">
-              <div className="flex shrink-0 justify-center">
-                <span className="inline-flex items-center rounded-full bg-muted/60 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  学习工作台
-                </span>
-              </div>
-              <div className="mt-2 flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 text-center">
-                <p className="px-4 text-[11px] leading-relaxed text-muted-foreground">
-                  进入课堂后，右侧将呈现 Chrome 风格多标签工作台（导图 / 预览 / 抽认卡 / 测验）。
-                </p>
-              </div>
+        {rightCollapsed ? (
+          /* 折叠态：竖向窄轨垂直居中放置展开按钮，与拖拽把手彻底解耦 */
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <button
+              type="button"
+              onClick={() => setRightCollapsed((value) => !value)}
+              title="展开边栏"
+              aria-label="展开边栏"
+              className="flex size-7 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+            >
+              <ChevronLeft size={14} />
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* 展开态：面板头部右对齐放置收起按钮 */}
+            <div className="flex shrink-0 justify-end px-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setRightCollapsed((value) => !value)}
+                title="收起边栏"
+                aria-label="收起边栏"
+                className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+              >
+                <ChevronRight size={14} />
+              </button>
             </div>
-          )
-        ) : null}
+            {sessionId ? (
+              <AiClassRightTabs sessionId={sessionId} />
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col p-3">
+                <div className="flex shrink-0 justify-center">
+                  <span className="inline-flex items-center rounded-full bg-muted/60 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    学习工作台
+                  </span>
+                </div>
+                <div className="mt-2 flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 text-center">
+                  <p className="px-4 text-[11px] leading-relaxed text-muted-foreground">
+                    进入课堂后，右侧将呈现 Chrome 风格多标签工作台（导图 / 预览 / 抽认卡 / 测验）。
+                  </p>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </aside>
     </div>
   )

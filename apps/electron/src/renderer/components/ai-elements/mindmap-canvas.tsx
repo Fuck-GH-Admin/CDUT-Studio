@@ -9,10 +9,9 @@
  */
 
 import * as React from 'react'
-import { createPortal } from 'react-dom'
 import { Minus, Plus, RotateCcw, X } from 'lucide-react'
 import { buildBezierPath, flattenMindMap, layoutMindMap, type MindMapNode } from '@profer/shared'
-import { Z_LAYER } from '@profer/ui'
+import { Dialog, DialogContent, DialogTitle } from '@profer/ui/primitives/dialog'
 import { cn } from '@/lib/utils'
 import { useGlobalOverlay } from '@/atoms/overlay-atoms'
 
@@ -393,53 +392,59 @@ export function MindMapFullscreenModal({
     h: (viewH / viewport.zoom) * miniScale,
   }
 
-  return createPortal(
-    <div className={`fixed inset-0 ${Z_LAYER.fullscreen} flex flex-col bg-background/95 backdrop-blur-md`} role="dialog" aria-modal="true" aria-label="思维导图大图">
-      <div className="flex shrink-0 items-center justify-between border-b border-border/50 px-4 py-2 text-foreground">
-        <span className="truncate text-xs font-medium">{root.label}</span>
-        <div className="flex items-center gap-1">
-          <button type="button" onClick={() => viewport.setZoom((z) => Math.max(MINDMAP_ZOOM_MIN, z / 1.15))} className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="缩小">
-            <Minus size={15} />
-          </button>
-          <span className="w-12 text-center text-[11px] text-muted-foreground">{Math.round(viewport.zoom * 100)}%</span>
-          <button type="button" onClick={() => viewport.setZoom((z) => Math.min(MINDMAP_ZOOM_MAX, z * 1.15))} className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="放大">
-            <Plus size={15} />
-          </button>
-          <button type="button" onClick={viewport.fit} className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="自适应复位">
-            <RotateCcw size={15} />
-          </button>
-          <button type="button" onClick={onClose} className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="关闭">
-            <X size={15} />
-          </button>
-        </div>
-      </div>
-
-      <div
-        className="relative min-h-0 flex-1 cursor-grab overflow-hidden bg-content-area active:cursor-grabbing"
-        onWheel={viewport.onWheel}
-        onPointerDown={viewport.beginPan}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
+  return (
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent
+        hideClose
+        overlayClassName="bg-black/70 backdrop-blur-sm"
+        className="grid h-[88vh] w-[90vw] max-w-none grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden rounded-2xl border-border/60 bg-card/95 p-0 shadow-2xl backdrop-blur-xl"
       >
-        <div className="absolute left-0 top-0 origin-top-left text-foreground" style={{ transform: `translate(${viewport.pan.x}px, ${viewport.pan.y}px) scale(${viewport.zoom})` }}>
-          <MindMapCanvas root={root} scene={scene} interactive onNodePointerDown={onBubblePointerDown} />
+        <DialogTitle className="sr-only">思维导图大图：{root.label}</DialogTitle>
+        <div className="flex shrink-0 items-center justify-between border-b border-border/50 px-4 py-2 text-foreground">
+          <span className="truncate text-xs font-medium">{root.label}</span>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => viewport.setZoom((z) => Math.max(MINDMAP_ZOOM_MIN, z / 1.15))} className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="缩小">
+              <Minus size={15} />
+            </button>
+            <span className="w-12 text-center text-[11px] text-muted-foreground">{Math.round(viewport.zoom * 100)}%</span>
+            <button type="button" onClick={() => viewport.setZoom((z) => Math.min(MINDMAP_ZOOM_MAX, z * 1.15))} className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="放大">
+              <Plus size={15} />
+            </button>
+            <button type="button" onClick={viewport.fit} className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="自适应复位">
+              <RotateCcw size={15} />
+            </button>
+            <button type="button" onClick={onClose} className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" title="关闭（ESC）">
+              <X size={15} />
+            </button>
+          </div>
         </div>
 
-        <div className="pointer-events-none absolute bottom-4 right-4 rounded-lg border border-border/70 bg-card/85 p-1 shadow-sm" style={{ width: MINI_W + 8, height: MINI_H + 8 }}>
-          <svg width={MINI_W} height={MINI_H}>
-            <g transform={`translate(${miniOffsetX} ${miniOffsetY}) scale(${miniScale})`}>
-              {nodes.map((node) => {
-                const point = scene.positions.get(node.id)
-                if (!point) return null
-                return <circle key={node.id} cx={point.x} cy={point.y} r={7} className="fill-primary/60" />
-              })}
-            </g>
-            <rect x={viewRect.x} y={viewRect.y} width={Math.max(4, viewRect.w)} height={Math.max(4, viewRect.h)} className="fill-none stroke-foreground/70" strokeWidth={1} rx={2} />
-          </svg>
+        <div
+          className="relative min-h-0 flex-1 cursor-grab overflow-hidden bg-content-area active:cursor-grabbing"
+          onWheel={viewport.onWheel}
+          onPointerDown={viewport.beginPan}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}
+        >
+          <div className="absolute left-0 top-0 origin-top-left text-foreground" style={{ transform: `translate(${viewport.pan.x}px, ${viewport.pan.y}px) scale(${viewport.zoom})` }}>
+            <MindMapCanvas root={root} scene={scene} interactive onNodePointerDown={onBubblePointerDown} />
+          </div>
+
+          <div className="pointer-events-none absolute bottom-4 right-4 rounded-lg border border-border/70 bg-card/85 p-1 shadow-sm" style={{ width: MINI_W + 8, height: MINI_H + 8 }}>
+            <svg width={MINI_W} height={MINI_H}>
+              <g transform={`translate(${miniOffsetX} ${miniOffsetY}) scale(${miniScale})`}>
+                {nodes.map((node) => {
+                  const point = scene.positions.get(node.id)
+                  if (!point) return null
+                  return <circle key={node.id} cx={point.x} cy={point.y} r={7} className="fill-primary/60" />
+                })}
+              </g>
+              <rect x={viewRect.x} y={viewRect.y} width={Math.max(4, viewRect.w)} height={Math.max(4, viewRect.h)} className="fill-none stroke-foreground/70" strokeWidth={1} rx={2} />
+            </svg>
+          </div>
         </div>
-      </div>
-    </div>,
-    document.body,
+      </DialogContent>
+    </Dialog>
   )
 }

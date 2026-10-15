@@ -316,7 +316,7 @@ describe('runAiReview 领域化（P1）', () => {
     expect(outcome.findings).toHaveLength(1)
     expect(outcome.findings[0]!.kind).toBe('missing-clause')
     const prompt = systemText()
-    expect(prompt).toContain('合同条款审核助手')
+    expect(prompt).toContain('contract clause')
     expect(prompt).toContain('违约责任')
     expect(prompt).not.toContain('学生综合素质测评')
   })

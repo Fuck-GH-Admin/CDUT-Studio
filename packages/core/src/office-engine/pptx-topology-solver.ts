@@ -99,6 +99,7 @@ function buildRotationFlipMatrix(
 
 /**
  * 构建组合形状 (`p:grpSp -> p:grpSpPr -> a:xfrm`) 的子空间到父空间仿射矩阵。
+ * 对嵌套组合的缩放矩阵做防御性钳制，杜绝异常 chExt/ext 产生 NaN 或极端缩放。
  */
 function buildGroupTransformMatrix(xfrm: XmlElement | null, parentMatrix: Matrix2D): Matrix2D {
   if (!xfrm) return parentMatrix
@@ -107,17 +108,21 @@ function buildGroupTransformMatrix(xfrm: XmlElement | null, parentMatrix: Matrix
   const chOff = getFirstDirectChild(xfrm, 'chOff')
   const chExt = getFirstDirectChild(xfrm, 'chExt')
 
-  const offX = Number(getAttr(off, 'x') ?? 0)
-  const offY = Number(getAttr(off, 'y') ?? 0)
-  const extCx = Number(getAttr(ext, 'cx') ?? 0)
-  const extCy = Number(getAttr(ext, 'cy') ?? 0)
-  const chOffX = Number(getAttr(chOff, 'x') ?? offX)
-  const chOffY = Number(getAttr(chOff, 'y') ?? offY)
-  const chExtCx = Number(getAttr(chExt, 'cx') ?? extCx)
-  const chExtCy = Number(getAttr(chExt, 'cy') ?? extCy)
+  const sanitize = (val: number): number => (Number.isFinite(val) ? val : 0)
+  const offX = sanitize(Number(getAttr(off, 'x') ?? 0))
+  const offY = sanitize(Number(getAttr(off, 'y') ?? 0))
+  const extCx = sanitize(Number(getAttr(ext, 'cx') ?? 0))
+  const extCy = sanitize(Number(getAttr(ext, 'cy') ?? 0))
+  const chOffX = sanitize(Number(getAttr(chOff, 'x') ?? offX))
+  const chOffY = sanitize(Number(getAttr(chOff, 'y') ?? offY))
+  const chExtCx = sanitize(Number(getAttr(chExt, 'cx') ?? extCx))
+  const chExtCy = sanitize(Number(getAttr(chExt, 'cy') ?? extCy))
 
-  const scaleX = chExtCx > 0 && extCx > 0 ? extCx / chExtCx : 1
-  const scaleY = chExtCy > 0 && extCy > 0 ? extCy / chExtCy : 1
+  // 缩放防御：非有限值或超出 ±64x 的退化缩放一律回退单位矩阵，保证归一化 bbox 有界
+  const safeScale = (scale: number): number =>
+    Number.isFinite(scale) && scale !== 0 && Math.abs(scale) <= 64 ? scale : 1
+  const scaleX = safeScale(chExtCx > 0 && extCx > 0 ? extCx / chExtCx : 1)
+  const scaleY = safeScale(chExtCy > 0 && extCy > 0 ? extCy / chExtCy : 1)
   const tx = offX - chOffX * scaleX
   const ty = offY - chOffY * scaleY
 
@@ -169,12 +174,15 @@ function computeShapeNormalizedBBox(
     applyMatrix2D(totalMatrix, x, y + Math.max(1, cy)),
   ]
 
-  const xs = corners.map((c) => c[0])
-  const ys = corners.map((c) => c[1])
-  const minX = Math.min(...xs)
-  const maxX = Math.max(...xs)
-  const minY = Math.min(...ys)
-  const maxY = Math.max(...ys)
+  // 仅保留有限坐标：异常嵌套矩阵产生的 NaN/Inf 一律回退默认框，保证输出恒为 [0..1] 有序 bbox
+  const finiteXs = corners.map((c) => c[0]).filter((v) => Number.isFinite(v))
+  const finiteYs = corners.map((c) => c[1]).filter((v) => Number.isFinite(v))
+  if (finiteXs.length === 0 || finiteYs.length === 0) return fallbackBBox
+
+  const minX = Math.min(...finiteXs)
+  const maxX = Math.max(...finiteXs)
+  const minY = Math.min(...finiteYs)
+  const maxY = Math.max(...finiteYs)
 
   return [
     clamp01(minX / slideWidthEmu),
