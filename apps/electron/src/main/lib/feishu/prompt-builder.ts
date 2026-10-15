@@ -60,30 +60,24 @@ export interface BuildOptions {
 }
 
 /** 教 Agent 如何看待 bridge 注入的 XML 块。会被前置到每条 userMessage。 */
-export const BRIDGE_USER_MESSAGE_PRELUDE = `<!-- 你正在通过 Profer 飞书桥处理来自飞书的用户消息。bridge 会用 XML 块注入
-当前对话的元数据。下面这些 XML 块**对用户不可见**，不要照抄到回复里。
+export const BRIDGE_USER_MESSAGE_PRELUDE = `<!-- You are handling user messages from Feishu (Lark) through the Profer Feishu bridge. The bridge injects
+metadata about the current conversation via XML blocks. The XML blocks below are **invisible to the user**;
+never copy them verbatim into your reply.
 
-可能出现的 XML 块：
-- <bridge_context>：chat_id / chat_type / sender 等飞书侧元数据
-- <quoted_message>：用户长按"回复"指向的那条消息（你的回答应该围绕它展开）
-- <interactive_card>：被引用消息是卡片时，附上原 card JSON 供你理解结构
-- <attached_files>：用户上传的图片/文件已保存到本地，给你绝对路径
+Possible XML blocks:
+- <bridge_context>: Feishu-side metadata such as chat_id / chat_type / sender
+- <quoted_message>: the message the user long-pressed "Reply" on (your answer should revolve around it)
+- <interactive_card>: when the quoted message is a card, the original card JSON is attached for you to understand its structure
+- <attached_files>: images/files the user uploaded have been saved locally; absolute paths are given to you
 
-用户的实际问题在这些块之后。回答时围绕用户问题展开；XML 块只用来理解上下文。
+The user's actual question follows these blocks. Focus your answer on the user's question; the XML blocks are for context understanding only.
 
-【飞书桥重要约束】
-1. **禁用 AskUserQuestion 工具**：飞书桥目前没有交互问答的 UI 通道，调用这个工具
-   会让会话卡死。如果信息不足，请基于现有信息给出最佳推断（可在回复里说明你的
-   假设），或直接告知用户需要的额外信息让他们补充，让用户在下一条消息里补全。
-   绝对不要调用 AskUserQuestion。
-2. **附件优先用 Read 工具读取**：<attached_files> 给的是已保存到本地的绝对路径，
-   你可以直接 Read（图片走多模态读取）/ 用 Bash 的 file/cat 等命令查看。
-3. **回复格式**：飞书侧使用 markdown 富文本卡片渲染，可以放心用 markdown 格式。
-4. **长内容优先用飞书文档交付**：飞书消息卡片适合简短回复，超长内容会被截断或拆成
-   多条卡片、阅读体验差。当最终交付是结构化或篇幅较长的内容（如调研报告、方案对比、
-   分析文档、长篇总结等）时，应更积极地创建飞书云文档承载完整内容，在消息里回复一段
-   简要摘要 + 文档链接。是否走文档交付由你根据内容形态与长度自行判断；短问答、零碎
-   信息、代码片段等仍直接用消息回复即可。
+[Important Feishu bridge constraints]
+1. **Never call the AskUserQuestion tool**: the Feishu bridge currently has no interactive Q&A UI channel; calling it would hang the session. If information is insufficient, give the best inference from what you have (you may state your assumptions in the reply), or directly tell the user what extra information you need so they can supply it in the next message.
+   Absolutely never call AskUserQuestion.
+2. **Prefer the Read tool for attachments**: <attached_files> provides absolute paths already saved locally; you can Read them directly (images go through multimodal reading) or inspect them with Bash commands like file/cat.
+3. **Reply format**: the Feishu side renders markdown rich-text cards, so markdown formatting is safe to use.
+4. **Prefer Feishu Docs for long content**: Feishu message cards suit short replies; overly long content gets truncated or split across multiple cards with poor readability. When the final deliverable is structured or lengthy (research reports, solution comparisons, analysis documents, long summaries, etc.), prefer creating a Feishu cloud document carrying the full content, and reply in the message with a brief summary + document link. Whether to use document delivery is your call based on content shape and length; short Q&A, fragmentary info, and code snippets should still be answered directly in the message.
 -->`
 
 /**
@@ -185,12 +179,12 @@ export async function fetchQuotedMessage(
       // 简化：拼接所有 text 段
       content = extractPostText(bodyContent)
     } else if (contentType === 'interactive') {
-      content = '（被引用的是交互式卡片，详见 <interactive_card>）'
+      content = '(The quoted item is an interactive card; see <interactive_card> for details)'
       cardJson = bodyContent
     } else if (contentType === 'image') {
-      content = `（被引用的是图片消息，image_key=${safeJsonField(bodyContent, 'image_key') ?? '?'}）`
+      content = `(The quoted item is an image message, image_key=${safeJsonField(bodyContent, 'image_key') ?? '?'})`
     } else if (contentType === 'file') {
-      content = `（被引用的是文件消息，file_name=${safeJsonField(bodyContent, 'file_name') ?? '?'}）`
+      content = `(The quoted item is a file message, file_name=${safeJsonField(bodyContent, 'file_name') ?? '?'})`
     } else {
       // 兜底：原始 JSON 截断
       content = bodyContent.length > 500 ? bodyContent.slice(0, 500) + '…' : bodyContent

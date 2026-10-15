@@ -197,8 +197,8 @@ describe('思维导图引擎（BDD-MINDMAP-01）', () => {
 
   test('点击气泡生成的伴学 Prompt 含主题与自测要求', () => {
     const prompt = buildNodeStudyPrompt({ id: 'a', label: '硬性限制条件' }, '转专业政策')
-    expect(prompt).toContain('「硬性限制条件」')
-    expect(prompt).toContain('自测问题')
+    expect(prompt).toContain('"硬性限制条件"')
+    expect(prompt).toContain('self-test questions')
   })
 })
 

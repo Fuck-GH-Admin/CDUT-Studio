@@ -1,12 +1,12 @@
 /**
  * AboutSettings - 关于页面
  *
- * 显示应用版本号等基本信息，以及 Agent 运行环境检测状态。
+ * 显示应用版本号等基本信息、Agent 运行环境检测状态，以及核心研发团队。
  */
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { RefreshCw, Loader2, AlertCircle, Info, Terminal } from 'lucide-react'
+import { RefreshCw, Loader2, AlertCircle, Info, Terminal, Users } from 'lucide-react'
 import type { EnvironmentCheckResult, RuntimeStatus } from '@profer/shared'
 import {
   SettingsSection,
@@ -19,6 +19,21 @@ import {
 } from '@/atoms/environment'
 import { EnvironmentCheckCard } from '@/components/environment/EnvironmentCheckCard'
 import { Badge } from '@profer/ui/primitives/badge'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
+import team1 from '@assets/team/team-1.jpg'
+import team2 from '@assets/team/team-2.gif'
+import team3 from '@assets/team/team-3.png'
+import team4 from '@assets/team/team-4.png'
+import team5 from '@assets/team/team-5.jpg'
+
+/** 核心研发团队成员（GitHub Contributors 风格头像画廊） */
+const TEAM_AVATARS = [
+  { src: team1, name: '核心研发成员 1' },
+  { src: team2, name: '核心研发成员 2' },
+  { src: team3, name: '核心研发成员 3' },
+  { src: team4, name: '核心研发成员 4' },
+  { src: team5, name: '核心研发成员 5' },
+] as const
 
 /** 环境检测卡片 */
 function EnvironmentCard(): React.ReactElement {
@@ -263,6 +278,42 @@ function ShellEnvironmentCard(): React.ReactElement | null {
   )
 }
 
+/** 核心研发团队卡片：GitHub Contributors 风格单行头像画廊 */
+function TeamCreditsCard(): React.ReactElement {
+  return (
+    <SettingsCard>
+      <div className="border-b p-4">
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium">核心研发团队</h3>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          由 5 位核心成员倾力打造 · 感谢每一位贡献者
+        </p>
+      </div>
+      <div className="p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          {TEAM_AVATARS.map((member) => (
+            <Tooltip key={member.name}>
+              <TooltipTrigger asChild>
+                <img
+                  src={member.src}
+                  alt={member.name}
+                  draggable={false}
+                  className="size-12 cursor-pointer rounded-full border border-border/60 object-cover ring-2 ring-background transition-all duration-200 hover:z-10 hover:-translate-y-0.5 hover:scale-110 hover:shadow-lg"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>{member.name}</p>
+              </TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
+      </div>
+    </SettingsCard>
+  )
+}
+
 export function AboutSettings(): React.ReactElement {
   return (
     <div className="space-y-8">
@@ -275,6 +326,9 @@ export function AboutSettings(): React.ReactElement {
 
         {/* Shell 环境卡片（仅 Windows） */}
         <ShellEnvironmentCard />
+
+        {/* 核心研发团队（GitHub Contributors 风格头像画廊） */}
+        <TeamCreditsCard />
       </SettingsSection>
     </div>
   )

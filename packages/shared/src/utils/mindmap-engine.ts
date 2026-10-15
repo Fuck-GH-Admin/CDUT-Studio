@@ -144,16 +144,18 @@ export function flattenMindMap(root: MindMapNode): MindMapNode[] {
 /** 生成某主题的深度伴学 Prompt（点击气泡时写入剪贴板） */
 export function buildNodeStudyPrompt(node: MindMapNode, mapTitle?: string): string {
   const topic = node.label
-  const notes = node.notes ? `\n已知要点：${node.notes}` : ''
-  const context = mapTitle ? `\n所属知识体系：${mapTitle}` : ''
+  const notes = node.notes ? `\nKnown key points (已知要点): ${node.notes}` : ''
+  const context = mapTitle ? `\nKnowledge system (所属知识体系): ${mapTitle}` : ''
   return [
-    `请围绕「${topic}」为我做一次深度伴学讲解：${context}${notes}`,
+    `Please give me an in-depth companion tutoring explanation (深度伴学讲解) about "${topic}":${context}${notes}`,
     '',
-    '要求：',
-    `1. 先用 2~3 句话给出「${topic}」的准确定义与它在整体知识结构中的定位；`,
-    '2. 拆解其核心构成 / 分类 / 关键规则，并给出一个贴近期末考试的实例；',
-    '3. 指出 2~3 个最容易与其它概念混淆的易错点，并逐一辨析；',
-    '4. 最后给出 3 个自测问题（附答案），帮助我检验是否真正掌握。',
+    'Requirements:',
+    `1. First, use 2-3 sentences to give an accurate definition of "${topic}" and its position within the overall knowledge structure;`,
+    '2. Break down its core components / classifications / key rules, and give one example close to a final exam;',
+    '3. Point out 2-3 concepts most easily confused with it (易错点) and analyze each one;',
+    '4. Finally, give 3 self-test questions (with answers) to help me verify whether I have truly mastered them.',
+    '',
+    'Language: Write the entire explanation in the student\'s language — the language of the study material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
   ].join('\n')
 }
 

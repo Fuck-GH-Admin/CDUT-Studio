@@ -411,6 +411,8 @@ export const IPC_CHANNELS = {
   SCREENSHOT_CAPTURE: 'screenshot:capture',
   /** 使 git diff 缓存失效（Agent 写文件/git 突变后调用，传 changedPath 可定向失效） */
   INVALIDATE_GIT_DIFF_CACHE: 'git:invalidate-diff-cache',
+  /** 后台静默自动归档产生新增归档会话/对话（主进程 → 渲染进程，携带本次归档数量） */
+  ARCHIVED_UNREAD_CHANGED: 'sidebar:archived-unread-changed',
 } as const
 
 /**

@@ -34,7 +34,7 @@ describe('ProjectInstructionScopeController', () => {
 
     const prompt = controller.appendPendingInstructions('base prompt')
     expect(prompt).toContain('# 用户项目规则')
-    expect(prompt).toContain('CLAUDE.md / AGENTS.md 仅作为上下文读取')
+    expect(prompt).toContain('CLAUDE.md / AGENTS.md in user projects are read as context only')
 
     const writeDecision = controller.beforeToolCall({
       toolName: 'write',

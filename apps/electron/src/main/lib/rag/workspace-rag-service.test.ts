@@ -168,7 +168,7 @@ describe('工作区静默 RAG 供给服务', () => {
 
     const block = buildDocumentEvidenceForMessage(root, '工管2班宿舍寝室长在表格中的位置')
     expect(block).toContain('<document_evidence>')
-    expect(block).toContain('跨文档实体关联')
+    expect(block).toContain('Cross-document entity linkage')
     expect(block).toContain('花名册')
     expect(block).toContain('寝室长任职证明')
   })

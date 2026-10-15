@@ -785,7 +785,8 @@ function isPathAllowed(filePath: string, options?: FileAccessOptions): boolean {
  * 会话里的文件链接来自 Agent 输出，路径常落在工作区之外（皮肤目录、/tmp 日志、~/Library 等），
  * 这些路径用户已在对话里看见，点开预览不应再被授权根拦住。边界说明见 preview-path-policy.ts。
  *
- * 只用于只读预览类 handler；写操作与「用默认应用打开文件」必须继续使用 isPathAllowed。
+ * 只用于只读预览类 handler 与「用默认应用打开文件」（SYSTEM_OPEN_FILE）；
+ * 该动作对文件本身只读，与预览共享同一授权边界。写操作必须继续使用 isPathAllowed。
  */
 function isPreviewPathAllowed(filePath: string, options?: FileAccessOptions): boolean {
   if (options && isPathAllowed(filePath, options)) return true
@@ -1539,11 +1540,14 @@ export function registerIpcHandlers(): void {
     async (_, filePath: string, appName?: string, access?: FileAccessOptions | string[]): Promise<void> => {
       const options = normalizeFileAccessOptions(access)
       const candidateBasePaths = options?.candidateBasePaths
-      // 相对路径从候选基础目录解析（匹配工作区路径），而非 process.cwd()
+      // 相对路径从候选基础目录解析（匹配工作区路径），而非 process.cwd()；`~/...` 一并展开
       const { resolveTargetPath } = await import('./lib/file-preview-service')
       const absPath = resolveTargetPath(filePath, candidateBasePaths?.length ? candidateBasePaths : undefined)
-      if (!isPathAllowed(absPath, options)) {
-        console.warn('[IPC] shell:system-open-file 拒绝越界路径:', absPath)
+      // 授权边界与 GET_DEFAULT_APP_FOR_FILE 同构：预览可见的目标文件
+      // （上传课件 / candidateBasePaths / 只读预览白名单内的本地磁盘路径）一律放行，
+      // 杜绝「应用内可预览、系统默认应用却静默拒绝」的体验断层；系统/凭据敏感路径依旧拦截。
+      if (!isPreviewPathAllowed(absPath, options)) {
+        console.warn('[IPC] shell:system-open-file 拒绝越界/系统敏感路径:', absPath)
         return
       }
       if (process.platform === 'darwin') {
@@ -6440,8 +6444,15 @@ export function registerIpcHandlers(): void {
       if (days > 0) {
         const archivedChats = autoArchiveConversations(days)
         const archivedSessions = autoArchiveAgentSessions(days)
-        if (archivedChats + archivedSessions > 0) {
+        const archivedTotal = archivedChats + archivedSessions
+        if (archivedTotal > 0) {
           console.log(`[自动归档] 已归档 ${archivedChats} 个对话, ${archivedSessions} 个 Agent 会话`)
+          // 静默自动归档发生时向所有窗口广播未读通知，点亮侧栏「已归档列表」红点
+          for (const window of BrowserWindow.getAllWindows()) {
+            if (!window.isDestroyed()) {
+              window.webContents.send(IPC_CHANNELS.ARCHIVED_UNREAD_CHANGED, archivedTotal)
+            }
+          }
         }
       }
     } catch (error) {

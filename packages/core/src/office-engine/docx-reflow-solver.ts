@@ -45,6 +45,57 @@ function twipsToPt(twips: number): number {
   return twips / 20
 }
 
+/** EMU → pt 换算基数（1 pt = 12700 EMU） */
+const EMU_PER_PT = 12700
+
+/** 插图高度防御上限（pt）：超出视为解析异常值直接丢弃 */
+const MAX_PLAUSIBLE_FIGURE_HEIGHT_PT = 4000
+
+/**
+ * 从 `w:drawing`（wp:inline / wp:anchor → wp:extent cx/cy，EMU）或旧版 `w:pict`
+ * （v:shape style="...height:...pt..."，VML）提取插图真实物理高度（pt）。
+ */
+function extractDrawingHeightPt(node: XmlElement): number | undefined {
+  // 现代绘图对象：wp:inline / wp:anchor 直接子节点 wp:extent
+  const hostNode = findFirstElement(node, 'inline') ?? findFirstElement(node, 'anchor')
+  if (hostNode) {
+    const extent = getFirstDirectChild(hostNode, 'extent')
+    const cyEmu = Number(getAttr(extent, 'cy'))
+    if (Number.isFinite(cyEmu) && cyEmu > 0) {
+      const heightPt = cyEmu / EMU_PER_PT
+      if (heightPt > 0 && heightPt < MAX_PLAUSIBLE_FIGURE_HEIGHT_PT) return heightPt
+    }
+    return undefined
+  }
+  // 旧版 VML 形状：style 属性内联尺寸
+  const shape = findFirstElement(node, 'shape')
+  const style = getAttr(shape, 'style')
+  if (style) {
+    const m = /(?:^|;)\s*height\s*:\s*([\d.]+)\s*(pt|px)?/i.exec(style)
+    if (m) {
+      const raw = Number(m[1])
+      if (Number.isFinite(raw) && raw > 0 && raw < MAX_PLAUSIBLE_FIGURE_HEIGHT_PT) {
+        return m[2]?.toLowerCase() === 'px' ? (raw * 72) / 96 : raw
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * 判断锚点插图是否挤占文字流动空间：
+ * wp:inline 恒占位；wp:anchor 仅在四周/上下环绕时占位，
+ * 衬于文字下方（behindDoc）或无环绕（wrapNone）的浮动插图不改变流式高度。
+ */
+function isDrawingFlowDisplacing(node: XmlElement): boolean {
+  const anchorNode = findFirstElement(node, 'anchor')
+  if (!anchorNode) return true
+  const behindDoc = getAttr(anchorNode, 'behindDoc')
+  if (behindDoc === '1' || behindDoc?.toLowerCase() === 'true') return false
+  if (findFirstElement(anchorNode, 'wrapNone')) return false
+  return true
+}
+
 function clamp01(val: number): number {
   if (!Number.isFinite(val)) return 0
   return Math.max(0, Math.min(1, Number(val.toFixed(4))))
@@ -507,6 +558,8 @@ interface ParsedParagraphSegment {
   hasPageBreakBefore: boolean
   isFormulaOnly: boolean
   hasDrawing: boolean
+  /** 参与文字流动的插图真实物理高度（pt），取自 EMU extent / VML style；无插图或浮动不占位时缺省 */
+  drawingHeightPt?: number
   footnoteIds: string[]
   fontSizePt?: number
 }
@@ -523,6 +576,7 @@ function extractParagraphSegments(
   let hasFormula = false
   let hasPlainText = false
   let hasDrawing = false
+  let drawingHeightPt: number | undefined
   let maxFontSizePt = styleFontSizePt ?? defaultFontSizePt
   const footnoteIds: string[] = []
 
@@ -536,6 +590,7 @@ function extractParagraphSegments(
         hasPageBreakBefore: hasBreakBefore,
         isFormulaOnly: hasFormula && !hasPlainText,
         hasDrawing,
+        ...(drawingHeightPt !== undefined ? { drawingHeightPt } : {}),
         footnoteIds: [...footnoteIds],
         fontSizePt: maxFontSizePt,
       })
@@ -546,6 +601,7 @@ function extractParagraphSegments(
     hasFormula = false
     hasPlainText = false
     hasDrawing = false
+    drawingHeightPt = undefined
     footnoteIds.length = 0
   }
 
@@ -612,6 +668,12 @@ function extractParagraphSegments(
             const descr = getAttr(descrNode, 'descr') || getAttr(descrNode, 'name') || '文档插图'
             currentText += `[插图: ${descr}]`
             currentMd += `![${descr}](embedded-figure)`
+            // 提取插图真实物理高度（EMU extent / VML style），供主流程替代「13pt 假想文本行」
+            const figureHeightPt = extractDrawingHeightPt(rChild)
+            if (figureHeightPt !== undefined && isDrawingFlowDisplacing(rChild)) {
+              // 同段多图取最大高度
+              drawingHeightPt = Math.max(drawingHeightPt ?? 0, figureHeightPt)
+            }
             continue
           }
           if (rChild.localName === 'footnoteReference') {
@@ -879,7 +941,12 @@ export function solveDocxReflow(
         const textWidthPt = measureGdiTextWidthPt(seg.text, effectiveFontPt)
         const lineCount = Math.max(1, Math.ceil(textWidthPt / contentWidthPt))
         const singleLinePt = computeGdiLineHeightPt(effectiveFontPt, lineTwips, lineRule)
-        const blockHeightPt = Math.max(singleLinePt, lineCount * singleLinePt)
+        let blockHeightPt = Math.max(singleLinePt, lineCount * singleLinePt)
+        // 插图段落使用真实绘图物理高度（EMU extent / VML style），
+        // 修复将 [插图] 当作单行 13pt 假想文本导致的整页纵向累计坐标漂移
+        if (seg.hasDrawing && seg.drawingHeightPt !== undefined && seg.drawingHeightPt > blockHeightPt) {
+          blockHeightPt = seg.drawingHeightPt
+        }
         const totalRequiredPt = spaceBeforePt + blockHeightPt + spaceAfterPt
 
         // Widow/Orphan 与分页阈值判定

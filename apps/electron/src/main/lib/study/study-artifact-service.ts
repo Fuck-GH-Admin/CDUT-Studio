@@ -22,7 +22,8 @@ import type {
   StudyGenerateArtifactInput,
   StudyGenerateArtifactResult,
 } from '@profer/shared'
-import { oneShotJsonCompletion } from '../cdut/cdut-ai-class-manager'
+import { oneShotJsonCompletion, type OneShotCompletionOptions } from '../cdut/cdut-ai-class-manager'
+import { getAgentSessionMeta } from '../agent-session-manager'
 import { listStudyDocuments } from './study-document-indexer'
 import { createInitialFsrs } from './fsrs-scheduler'
 import { saveFlashcardDeck, saveMindmap, saveQuiz } from './study-session-store'
@@ -207,8 +208,8 @@ function normalizeQuiz(json: unknown, input: StudyGenerateArtifactInput): QuizSe
 
 function buildMindMapPrompts(source: string, input: StudyGenerateArtifactInput): { system: string; user: string } {
   const system = [
-    'You are the Lead Knowledge Architect for AI Quick Classroom at 成都理工大学, specialized in synthesizing course materials into hierarchical concept mind maps.',
-    'Language Convention: Generate all node labels and notes in the language matching the source material or user prompt. Generate final responses in the same language used by the user, defaulting to English otherwise.',
+    'You are the Lead Knowledge Architect (带教导师) for AI速课堂 (AI Quick Classroom) at 成都理工大学 (Chengdu University of Technology), specialized in synthesizing course materials into hierarchical concept mind maps (思维导图).',
+    'Language Convention: The mind map is shown directly to the student. All generated student-facing content (node labels, notes, study prompts) MUST be written in the student\'s language — the language of the course material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
     'Output format: Return strictly valid JSON without Markdown code fences or explanatory prose.',
   ].join('\n')
   const focus = input.focusedTopic ? `\nFocused Topic: ${input.focusedTopic}` : ''
@@ -237,7 +238,7 @@ function buildFlashcardPrompts(source: string, input: StudyGenerateArtifactInput
   const system = [
     'You are an expert cognitive scientist designing atomic flashcards based on the Minimum Information Principle (MIP).',
     'Structure each card as an atomic single-question, single-answer proposition adhering to Miller\'s 7±2 cognitive chunking limits, ensuring each card targets an independent concept.',
-    'Language Convention: Generate all flashcard contents in the language matching the source material or user prompt. Generate final responses in the same language used by the user, defaulting to English otherwise.',
+    'Language Convention: The flashcards are shown directly to the student. All generated card content (front, back, topic) MUST be written in the student\'s language — the language of the course material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
     'Output format: Return strictly valid JSON without Markdown code fences or conversational prose.',
   ].join('\n')
   const focus = input.focusedTopic ? `\nFocused Topic: ${input.focusedTopic}` : ''
@@ -264,7 +265,7 @@ function buildQuizPrompts(source: string, input: StudyGenerateArtifactInput): { 
   const system = [
     'You are an expert psychometrician designing diagnostic assessment quizzes.',
     'Enforce first-order logic mutual exclusion (Z3 SMT formalization) for multiple-choice distractors: for every distractor d, (d ∩ CorrectAnswer = ∅) ∧ IsA(d, DomainConcept). Ensure each distractor is factually incorrect and semantically disjoint from the correct key.',
-    'Language Convention: Generate quiz content in the language matching the source material or user prompt. Generate final responses in the same language used by the user, defaulting to English otherwise.',
+    'Language Convention: The quiz is shown directly to the student. All generated content (questions, options, answers, explanations) MUST be written in the student\'s language — the language of the course material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
     'Output format: Return strictly valid JSON without Markdown code fences or explanatory prose.',
   ].join('\n')
   const focus = input.focusedTopic ? `\nFocused Topic: ${input.focusedTopic}` : ''
@@ -276,9 +277,9 @@ function buildQuizPrompts(source: string, input: StudyGenerateArtifactInput): { 
     '{ "title": string, "questions": [ { "type": "single|multiple|boolean", "question": string, "options": [ { "key": "A", "text": string } ], "answer": ["A"], "explanation": string, "sourceTrace": string } ] }',
     'Specifications:',
     '- Each question must provide question text, options, answer key and distractor analysis (explanation).',
-    '- "sourceTrace" MUST be a Markdown citation anchor of the form `[第X页·小节名](#fN:pX)`, where `fN` is the document anchor prefix declared in the course outline (e.g. `#f1:p3`) and X is the page/slide number; output only this anchor without extra prose.',
+    '- "sourceTrace" MUST be a Markdown citation anchor of the form `[第X页·小节名](#fN:pX)` (「第X页·小节名」 means "Page X · Section name"), where `fN` is the document anchor prefix declared in the course outline (e.g. `#f1:p3`) and X is the page/slide number; output only this anchor without extra prose.',
     '- The explanation must elucidate why each distractor is incorrect.',
-    '- True/False questions must use options: [{key:"A",text:"正确"},{key:"B",text:"错误"}].',
+    '- True/False questions must use options: [{key:"A",text:"正确"},{key:"B",text:"错误"}] — keep these exact Chinese strings ("Correct" / "Wrong") as the student-facing option text.',
     '',
     'Course Material Outline:',
     source,
@@ -288,6 +289,9 @@ function buildQuizPrompts(source: string, input: StudyGenerateArtifactInput): { 
 
 /**
  * 生成学习工件（思维导图 / 抽认卡 / 测验）并落盘。
+ *
+ * 渠道继承优先级：请求显式携带 channelId / modelId → 会话元数据中已持久化的
+ * 绑定渠道与模型 → 全局默认设置（oneShotJsonCompletion 内部兜底并抛出可读错误）。
  */
 export async function generateStudyArtifact(
   input: StudyGenerateArtifactInput,
@@ -298,9 +302,16 @@ export async function generateStudyArtifact(
   }
   const docs = listStudyDocuments(input.sessionId).filter((doc) => doc.enabled !== false).map((doc) => doc.documentId)
 
+  // 渠道继承：显式入参优先，其次会话绑定的渠道 / 模型，最后由底层回退全局设置
+  const sessionMeta = getAgentSessionMeta(input.sessionId)
+  const completionOptions: OneShotCompletionOptions = {
+    channelId: input.channelId || sessionMeta?.channelId || undefined,
+    modelId: input.modelId || sessionMeta?.modelId || undefined,
+  }
+
   if (input.kind === 'mindmap') {
     const { system, user } = buildMindMapPrompts(source, input)
-    const raw = await oneShotJsonCompletion(system, user)
+    const raw = await oneShotJsonCompletion(system, user, completionOptions)
     if (!raw) throw new Error('思维导图生成失败：模型未返回结果，请检查渠道配置。')
     const mindmap = normalizeMindMap(extractJsonObject(raw), docs)
     saveMindmap(input.sessionId, mindmap)
@@ -309,7 +320,7 @@ export async function generateStudyArtifact(
 
   if (input.kind === 'flashcard') {
     const { system, user } = buildFlashcardPrompts(source, input)
-    const raw = await oneShotJsonCompletion(system, user)
+    const raw = await oneShotJsonCompletion(system, user, completionOptions)
     if (!raw) throw new Error('抽认卡生成失败：模型未返回结果，请检查渠道配置。')
     const deck = normalizeDeck(extractJsonObject(raw), input)
     saveFlashcardDeck(input.sessionId, deck)
@@ -317,7 +328,7 @@ export async function generateStudyArtifact(
   }
 
   const { system, user } = buildQuizPrompts(source, input)
-  const raw = await oneShotJsonCompletion(system, user)
+  const raw = await oneShotJsonCompletion(system, user, completionOptions)
   if (!raw) throw new Error('测验生成失败：模型未返回结果，请检查渠道配置。')
   const quiz = normalizeQuiz(extractJsonObject(raw), input)
   saveQuiz(input.sessionId, quiz)

@@ -20,16 +20,16 @@ function escapePromptText(value: string): string {
 
 function projectRootsBlock(candidates: AgentPlatformProjectCandidate[]): string {
   if (candidates.length === 0) {
-    return '- 当前没有由 CDUT Studio 探测到的项目候选；先检查实际目录树，再决定要操作的 root。'
+    return '- No project candidates are currently detected by CDUT Studio; inspect the actual directory tree first, then decide which root to operate on.'
   }
-  return `- CDUT Studio 已探测到以下项目候选。使用项目名、目录名、package name、Git remote 或类型消歧；只有唯一匹配时才直接使用对应的绝对 root：\n${candidates.map((candidate) => `  - ${candidate.name}（${candidate.type}）：${escapePromptText(candidate.rootPath)}${candidate.packageName ? `，package=${escapePromptText(candidate.packageName)}` : ''}${candidate.gitRemote ? `，remote=${escapePromptText(candidate.gitRemote)}` : ''}`).join('\n')}`
+  return `- CDUT Studio detected the following project candidates. Disambiguate by project name, directory name, package name, Git remote, or type; use the corresponding absolute root directly only on a unique match:\n${candidates.map((candidate) => `  - ${candidate.name} (${candidate.type}): ${escapePromptText(candidate.rootPath)}${candidate.packageName ? `, package=${escapePromptText(candidate.packageName)}` : ''}${candidate.gitRemote ? `, remote=${escapePromptText(candidate.gitRemote)}` : ''}`).join('\n')}`
 }
 
 function commonToolingRules(isPiRuntime: boolean | undefined): string {
   const editShape = isPiRuntime
     ? '`path + edits[].oldText/newText`'
     : '`file_path + old_string/new_string`'
-  return `- Edit 是精确文本替换：如果提示找不到 oldText/old_string，立即重新 Read 当前文件相关区域，检查空格、缩进和换行后再提交；不要复用失败调用中的旧快照。\n- 使用 ${editShape} 的实际工具参数，不要把另一运行时的参数名混入当前调用。\n- 独立执行目录检查、git diff --check、typecheck 和测试；不要把多个检查拼成含 \`;\` 的复合命令，以免掩盖真实失败步骤。`
+  return `- Edit is exact text replacement: if the tool reports oldText/old_string not found, immediately re-Read the relevant region of the current file, check spacing, indentation, and line endings, then retry; never reuse a stale snapshot from a failed call.\n- Use the actual tool parameter shape ${editShape}; never mix the other runtime's parameter names into the current call.\n- Run directory checks, git diff --check, typecheck, and tests as separate commands; never chain multiple checks into one compound command with \`;\`, which can mask the real failing step.`
 }
 
 /**
@@ -39,43 +39,43 @@ function commonToolingRules(isPiRuntime: boolean | undefined): string {
 export function buildAgentPlatformPrompt(options: AgentPlatformPromptOptions): string {
   const shellPath = options.shellPath
     ?? (options.isPiRuntime
-      ? 'Bash 不可用（shell_not_found）'
+      ? 'Bash unavailable (shell_not_found)'
       : options.platform === 'win32'
-        ? 'PowerShell（由运行时检测）'
+        ? 'PowerShell (detected by the runtime)'
         : options.platform === 'darwin'
           ? '/bin/zsh'
           : '/bin/sh')
   const shellExecutionDescription = options.isPiRuntime && !options.shellPath
-    ? 'Bash 工具当前不可执行；不要改用 zsh/sh 猜测执行，先向用户报告 shell_not_found。'
-    : 'POSIX 命令通过该 shell 的非交互 `-c` 执行。'
+    ? 'The Bash tool is currently not executable; do not guess-run via zsh/sh—report shell_not_found to the user first.'
+    : "POSIX commands run via that shell's non-interactive `-c`."
   const candidateBlock = projectRootsBlock(options.projectCandidates ?? [])
 
   if (options.platform === 'win32') {
-    return `## 当前平台与项目路径（Windows）
+    return `## Current Platform & Project Paths (Windows)
 
-- 当前平台：Windows（win32）。当前 Agent shell：${escapePromptText(shellPath)}。
-- 只使用运行时实际提供的 Windows shell 和路径格式；若运行时提供了路径转换，严格遵循其返回值，不自行混用路径语法。
-- 当前 Agent cwd：${escapePromptText(options.agentCwd ?? '未提供')}。cwd 不是项目 root；不要因为 cwd 存在就猜测 \`src\` 或测试文件位置。
+- Current platform: Windows (win32). Current agent shell: ${escapePromptText(shellPath)}.
+- Use only the Windows shell and path format actually provided by the runtime; if the runtime provides path conversion, strictly follow its returned values—never mix path syntaxes yourself.
+- Current agent cwd: ${escapePromptText(options.agentCwd ?? 'not provided')}. The cwd is not the project root; do not guess \`src\` or test file locations just because a cwd exists.
 ${candidateBlock}
-- 当前 shell 的命令语法和路径规则必须以运行时实际提供的 shell 为准，不要把另一种 shell 的命令复制过来。
+- The current shell's command syntax and path rules follow the shell actually provided by the runtime; never copy commands over from a different shell.
 ${commonToolingRules(options.isPiRuntime)}`
   }
 
   if (options.platform === 'darwin') {
-    return `## 当前平台与项目路径（macOS）
+    return `## Current Platform & Project Paths (macOS)
 
-- 当前平台：macOS（darwin）。当前 Agent shell：${escapePromptText(shellPath)}；${shellExecutionDescription}
-- 当前执行环境是 POSIX shell；只使用该 shell 实际支持的命令和路径格式，不要把其他操作系统的命令、路径或环境变量当作当前事实。
-- 当前 Agent cwd：${escapePromptText(options.agentCwd ?? '未提供')}。cwd 不是项目 root；不要默认仓库根目录存在 \`src\`，先检查实际目录树。
+- Current platform: macOS (darwin). Current agent shell: ${escapePromptText(shellPath)}; ${shellExecutionDescription}
+- The current execution environment is a POSIX shell; use only the commands and path formats it actually supports—never treat commands, paths, or environment variables from other operating systems as current facts.
+- Current agent cwd: ${escapePromptText(options.agentCwd ?? 'not provided')}. The cwd is not the project root; do not assume \`src\` exists at the repo root—inspect the actual directory tree first.
 ${candidateBlock}
-- macOS GUI 进程的 PATH 可能比终端短；优先使用 CDUT Studio 提供的绝对路径、\`git -C <root> ...\`，以及从当前 shell 实际探测到的 bun/node/git，不要凭环境猜测。
+- A macOS GUI process's PATH may be shorter than a terminal's; prefer absolute paths provided by CDUT Studio, \`git -C <root> ...\`, and bun/node/git actually probed from the current shell—never guess from the environment.
 ${commonToolingRules(options.isPiRuntime)}`
   }
 
-  return `## 当前平台与项目路径（POSIX）
+  return `## Current Platform & Project Paths (POSIX)
 
-- 当前平台：${escapePromptText(options.platform)}。当前 Agent shell：${escapePromptText(shellPath)}。
-- 当前 Agent cwd：${escapePromptText(options.agentCwd ?? '未提供')}；先确认实际项目 root，不要默认存在根级 \`src\`。
+- Current platform: ${escapePromptText(options.platform)}. Current agent shell: ${escapePromptText(shellPath)}.
+- Current agent cwd: ${escapePromptText(options.agentCwd ?? 'not provided')}; confirm the actual project root first—never assume a root-level \`src\` exists.
 ${candidateBlock}
 ${commonToolingRules(options.isPiRuntime)}`
 }

@@ -1371,10 +1371,10 @@ export class AgentOrchestrator {
       ) ?? []
       const toolLines: string[] = []
       for (const name of allowedMentionedMcpServers) {
-        toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
+        toolLines.push(`- MCP server: ${name} (please use this MCP server's tools to complete the task)`)
       }
       if (toolLines.length > 0) {
-        enrichedMessage = `<mentioned_tools>\n用户在消息中明确引用了以下当前预设可用的工具，请在本次回复中主动调用：\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedMessage}`
+        enrichedMessage = `<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedMessage}`
         console.log(`[Agent 编排] 注入 mentioned_tools: ${toolLines.length} 条（原始 ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP）`)
       }
 
@@ -3652,10 +3652,10 @@ ${dynamicCtx}`
     ) ?? []
     const toolLines: string[] = []
     for (const name of allowedMentionedMcpServers) {
-      toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
+      toolLines.push(`- MCP server: ${name} (please use this MCP server's tools to complete the task)`)
     }
     if (toolLines.length > 0) {
-      enrichedText = `<mentioned_tools>\n用户在消息中明确引用了以下当前预设可用的工具，请在本次回复中主动调用：\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
+      enrichedText = `<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
     }
 
     // 构造 SDKUserMessage 并注入（'next' 优先级 = 等当前 turn 完成再处理）

@@ -286,6 +286,8 @@ export interface ElectronAPI {
   onWindowMaximizeChanged: (callback: (isMaximized: boolean) => void) => () => void
   /** 订阅 macOS 原生全屏状态变化 */
   onWindowFullScreenChanged: (callback: (isFullScreen: boolean) => void) => () => void
+  /** 订阅后台静默自动归档未读通知（携带本次归档的会话/对话数量） */
+  onArchivedUnreadChanged: (callback: (archivedCount: number) => void) => () => void
 
   // ===== 渠道管理相关 =====
 
@@ -1858,6 +1860,12 @@ const electronAPI: ElectronAPI = {
     const handler = (_event: Electron.IpcRendererEvent, isMaximized: boolean): void => callback(isMaximized)
     ipcRenderer.on(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, handler)
     return () => ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, handler)
+  },
+
+  onArchivedUnreadChanged: (callback: (archivedCount: number) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, archivedCount: number): void => callback(archivedCount)
+    ipcRenderer.on(IPC_CHANNELS.ARCHIVED_UNREAD_CHANGED, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.ARCHIVED_UNREAD_CHANGED, handler)
   },
 
   onWindowResize: (callback: () => void) => {

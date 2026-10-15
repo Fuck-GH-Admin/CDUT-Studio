@@ -399,6 +399,10 @@ export interface StudyGenerateArtifactInput {
   questionCount?: number
   /** 测验：题型范围 */
   questionTypes?: QuizQuestionType[]
+  /** 显式指定使用的渠道（优先级最高；缺省时回退会话绑定渠道，再回退全局默认渠道） */
+  channelId?: string
+  /** 显式指定使用的模型（优先级最高；缺省时回退会话绑定模型，再回退全局默认模型） */
+  modelId?: string
 }
 
 /** 学习工件生成结果（联合体，按 kind 区分） */

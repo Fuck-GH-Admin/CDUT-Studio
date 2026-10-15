@@ -316,15 +316,73 @@ function measureSlotPageBox(
 ): { left: number; top: number; width: number; height: number } {
   const wrapperWidth = wrapper.clientWidth || wrapper.offsetWidth
   const wrapperHeight = wrapper.clientHeight || wrapper.offsetHeight
-  if (!canvas || wrapperWidth > 0) {
-    return { left: 0, top: 0, width: wrapperWidth, height: wrapperHeight }
+
+  // 页面盒原点偏移：边框（clientLeft/Top）+ 内边距（computed style），
+  // 修正槽位容器 margin/padding 导致的聚光灯整体平移误差
+  let originLeft = wrapper.clientLeft
+  let originTop = wrapper.clientTop
+  try {
+    const cs = window.getComputedStyle(wrapper)
+    originLeft += Number.parseFloat(cs.paddingLeft) || 0
+    originTop += Number.parseFloat(cs.paddingTop) || 0
+  } catch {
+    // computed style 读取失败时退化为仅边框偏移
+  }
+
+  if (canvas) {
+    const canvasWidth = canvas.clientWidth || 0
+    const canvasHeight = canvas.clientHeight || 0
+    const isDefaultUnrendered = canvasWidth === 300 && canvasHeight === 150
+    // 画布已渲染但与槽位尺寸不一致（居中/留白 letterbox）：
+    // 采用画布真实占位与相对偏移，而非整槽尺寸
+    if (
+      !isDefaultUnrendered
+      && canvasWidth > 0
+      && canvasHeight > 0
+      && (Math.abs(canvasWidth - wrapperWidth) > 1 || Math.abs(canvasHeight - wrapperHeight) > 1)
+    ) {
+      const innerOffset = measureOffsetWithin(wrapper, canvas)
+      return {
+        left: originLeft + innerOffset.left,
+        top: originTop + innerOffset.top,
+        width: Math.max(1, Math.min(canvasWidth, wrapperWidth || canvasWidth)),
+        height: Math.max(1, Math.min(canvasHeight, wrapperHeight || canvasHeight)),
+      }
+    }
+  }
+
+  if (wrapperWidth > 0) {
+    return { left: originLeft, top: originTop, width: wrapperWidth, height: wrapperHeight }
   }
   return {
-    left: 0,
-    top: 0,
-    width: canvas.clientWidth || wrapperWidth,
-    height: canvas.clientHeight || wrapperHeight,
+    left: originLeft,
+    top: originTop,
+    width: canvas?.clientWidth || wrapperWidth,
+    height: canvas?.clientHeight || wrapperHeight,
   }
+}
+
+/**
+ * 沿 offsetParent 链累积元素相对 wrapper 的布局偏移。
+ * 若链条越过 wrapper（中间存在 static 定位截断）则回退零偏移，避免叠加越界祖先偏移。
+ */
+function measureOffsetWithin(
+  wrapper: HTMLElement,
+  element: HTMLElement,
+): { left: number; top: number } {
+  let left = 0
+  let top = 0
+  let node: HTMLElement | null = element
+  while (node && node !== wrapper) {
+    left += node.offsetLeft
+    top += node.offsetTop
+    const parent = node.offsetParent as HTMLElement | null
+    if (!parent || (parent !== wrapper && !wrapper.contains(parent))) {
+      return { left: 0, top: 0 }
+    }
+    node = parent
+  }
+  return { left, top }
 }
 
 /**

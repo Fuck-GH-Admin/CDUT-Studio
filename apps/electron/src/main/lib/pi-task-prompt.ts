@@ -68,13 +68,13 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
   const lowFrequency: string[] = []
   let prompt = options.basePrompt
 
-  const collaboration = removeSection(prompt, '## SubAgent 委派策略', '## Pi Agent Runtime')
+  const collaboration = removeSection(prompt, '## SubAgent Delegation Policy', '## Pi Agent Runtime')
   if (collaboration) {
     prompt = collaboration.rest
     if (hasAnyTool(tools, (name) => name.startsWith('mcp__collaboration__'))) lowFrequency.push(collaboration.text)
   }
 
-  const piMemory = removeHeadingSection(prompt, '### Pi Runtime 与文件记忆')
+  const piMemory = removeHeadingSection(prompt, '### Pi Runtime & File Memory')
   if (piMemory) {
     prompt = piMemory.rest
     const hasMemoryTool = hasAnyTool(tools, (name) => name.startsWith('mcp__memory-archive__') || name.startsWith('mcp__team-memory__'))
@@ -83,20 +83,20 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     if (hasMemoryTool) lowFrequency.push(piMemory.text)
   }
 
-  const teamMemory = removeSection(prompt, '## 团队共享知识记忆', '## 不确定性处理')
+  const teamMemory = removeSection(prompt, '## Team Shared Knowledge Memory', '## Uncertainty Handling')
   if (teamMemory) {
     prompt = teamMemory.rest
     if (hasAnyTool(tools, (name) => name.startsWith('mcp__team-memory__'))) lowFrequency.push(teamMemory.text)
   }
 
-  const knowledgeGovernance = removeSection(prompt, '## CDUT Studio 知识维护架构', '## 任务完成标准')
+  const knowledgeGovernance = removeSection(prompt, '## CDUT Studio Knowledge Maintenance Architecture', '## Task Completion Criteria')
   if (knowledgeGovernance) {
     prompt = knowledgeGovernance.rest
     // 知识维护是跨任务的常驻行为约束，不能只在出现“记忆”关键词时注入。
     lowFrequency.push(knowledgeGovernance.text)
   }
 
-  const automation = removeSection(prompt, '7. **定时任务**', '8. **发送既有本地图片**')
+  const automation = removeSection(prompt, '7. **Scheduled tasks (Automation)**', '8. **Sending existing local images**')
   if (automation) {
     prompt = automation.rest
     // 定时任务工具按会话注册；forceAutomation 用于自动任务运行上下文强制保留。
@@ -104,7 +104,7 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     if (hasAutomationTool || options.forceAutomation === true) lowFrequency.push(automation.text)
   }
 
-  const delivery = removeSection(prompt, '8. **发送既有本地图片**', '## CDUT Studio 受管浏览器')
+  const delivery = removeSection(prompt, '8. **Sending existing local images**', '## CDUT Studio Managed Browser')
   if (delivery) {
     prompt = delivery.rest
     const hasImageOutput = tools.has('send_local_image')
@@ -121,7 +121,7 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     if (hasDeliveryTools) lowFrequency.push(delivery.text)
   }
 
-  const browser = removeHeadingSection(prompt, '## CDUT Studio 受管浏览器')
+  const browser = removeHeadingSection(prompt, '## CDUT Studio Managed Browser')
   if (browser) {
     prompt = browser.rest
     if (hasAnyTool(tools, (name) => name.startsWith('Browser'))) lowFrequency.push(browser.text)

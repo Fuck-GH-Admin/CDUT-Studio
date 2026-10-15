@@ -19,15 +19,15 @@ describe('agent platform prompt overlay', () => {
       isPiRuntime: true,
     })
 
-    expect(prompt).toContain('当前平台：macOS（darwin）')
-    expect(prompt).toContain('当前 Agent shell：/bin/zsh')
-    expect(prompt).toContain('当前执行环境是 POSIX shell')
-    expect(prompt).toContain('不要把其他操作系统的命令')
+    expect(prompt).toContain('Current platform: macOS (darwin)')
+    expect(prompt).toContain('Current agent shell: /bin/zsh')
+    expect(prompt).toContain('The current execution environment is a POSIX shell')
+    expect(prompt).toContain('from other operating systems')
     expect(prompt).toContain('/Users/mac/profer/profer-main')
-    expect(prompt).toContain('不要默认仓库根目录存在 `src`')
+    expect(prompt).toContain('do not assume `src` exists at the repo root')
     expect(prompt).toContain('path + edits[].oldText/newText')
-    expect(prompt).toContain('不要把多个检查拼成含 `;` 的复合命令')
-    expect(prompt).not.toContain('当前平台：Windows')
+    expect(prompt).toContain('never chain multiple checks into one compound command with `;`')
+    expect(prompt).not.toContain('Current platform: Windows')
   })
 
   test('Pi macOS overlay reports shell_not_found instead of claiming zsh when Bash is unavailable', () => {
@@ -37,9 +37,9 @@ describe('agent platform prompt overlay', () => {
       isPiRuntime: true,
     })
 
-    expect(prompt).toContain('当前 Agent shell：Bash 不可用（shell_not_found）')
-    expect(prompt).toContain('不要改用 zsh/sh 猜测执行')
-    expect(prompt).not.toContain('当前 Agent shell：/bin/zsh')
+    expect(prompt).toContain('Current agent shell: Bash unavailable (shell_not_found)')
+    expect(prompt).toContain('do not guess-run via zsh/sh')
+    expect(prompt).not.toContain('Current agent shell: /bin/zsh')
   })
 
   test('Windows overlay describes detected shell choices and rejects macOS assumptions', () => {
@@ -51,11 +51,11 @@ describe('agent platform prompt overlay', () => {
       isPiRuntime: false,
     })
 
-    expect(prompt).toContain('当前平台：Windows（win32）')
+    expect(prompt).toContain('Current platform: Windows (win32)')
     expect(prompt).toContain('C:\\Program Files\\Git\\bin\\bash.exe')
-    expect(prompt).toContain('只使用运行时实际提供的 Windows shell 和路径格式')
-    expect(prompt).toContain('严格遵循其返回值')
+    expect(prompt).toContain('Use only the Windows shell and path format actually provided by the runtime')
+    expect(prompt).toContain('strictly follow its returned values')
     expect(prompt).toContain('file_path + old_string/new_string')
-    expect(prompt).not.toContain('当前平台：macOS')
+    expect(prompt).not.toContain('Current platform: macOS')
   })
 })
