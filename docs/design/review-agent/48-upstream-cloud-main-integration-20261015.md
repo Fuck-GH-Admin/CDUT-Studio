@@ -34,7 +34,7 @@
 
 旧弹窗 ODT/ODS/ODP 的 HTML fallback 随上游 IPC 退役，显示不支持内嵌预览并提供系统默认应用打开；后台 Office 文本提取仍由新引擎处理。本次不新增绕过文件权限的解析 IPC。
 
-`mammoth` 与 `@xmldom/xmldom` 恢复审核分支原版本约束，供专用结构提取使用；不再引入 officeparser。冻结安装通过。受影响包版本：Electron `0.15.162`、shared `0.1.67`、core `0.2.15`、ui `0.2.1`；锁文件与 CHANGELOG 同步。
+`mammoth` 与 `@xmldom/xmldom` 恢复审核分支原版本约束，供专用结构提取使用；不再引入 officeparser。冻结安装通过。受影响包版本：Electron `0.15.162`、shared `0.1.68`（首轮 `0.1.67`）、core `0.2.15`、ui `0.2.1`；锁文件与 CHANGELOG 同步。
 
 ## 本地静态检查与构建
 
@@ -57,3 +57,9 @@ Linux x86_64；Bun `1.4.0`；Node `v22.23.2`。精确命令、时间、退出码
 29号仍是唯一正式 LIVE 台账。37/38/44/46号原始失败、修复和实机证据保持历史归属，未覆盖或重算。此次同步不产生新的 E03/E04/E05/E06、ENOSPC、重启恢复或外部服务验收结论。
 
 P06-S02 NOT ACCEPTED、P06 PARTIAL、LIVE-07 PARTIAL 保留。P05-RELAY-ROUTE-01 BLOCKED，P05-POCKET-FIFO-01 PATCH READY / TARGET NOT-RUN，P04-TECHDEBT-01 永久 tombstone/owner UUID journal 禁止无证明 TTL/GC。P06 正式签收仍未满足，PR #21 维持 Draft / MERGE NO-GO。后续按[47号计划](47-p06-evidence-driven-followup-plan-20261015.md)从 `P06-RECHECK-LIVE-02 / L02-00` 开始；不进入P07/P08。
+
+## 首轮 main CI 与兼容断言修正
+
+首次内容提交为 `6ff93be71399683fb21c9b5e36cedce05d1945b8`，tree 为 `b33c6511ab8d3dba2aa4c8b0fa6b2e8bd8452241`，本地与云端逐字节一致。[PR CI #38748810136](https://github.com/Fuck-GH-Admin/cdut-studio-review-agent/actions/runs/38748810136) 的安装、类型、边界、皮肤和三端构建均通过；全仓回归实际3988项 / 456文件、3982 PASS / 5 SKIP / 1 FAIL、16448次 expect，退出1。唯一失败为上游内置身份提示词已改英文、身份检查仍要求旧中文产品名称原句。
+
+`system-prompt.test.ts` 的桌面身份断言改为当前原句 `CDUT Studio desktop app`，继续要求 `CDUT Studio Agent`，保留 Profer/别名拒止与产品名断言。无生产提示词、受控风险脚本和 P06 证据修改。首败事实、日志 SHA-256 见 [ci-first-run.json](evidence/upstream-main-sync-20261015/ci-first-run.json)，原始日志另存本地独立日志目录。后续 main CI 结果不能覆盖首轮失败。
