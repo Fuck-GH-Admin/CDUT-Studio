@@ -203,7 +203,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return
   }
 
-  if ((path === '/v1/session/reset' || path === '/v1/session') && (method === 'POST' || method === 'DELETE')) {
+  if ((path === '/v1/session/reset' && (method === 'POST' || method === 'DELETE')) || (path === '/v1/session' && method === 'DELETE')) {
     const body: Record<string, unknown> =
       method === 'DELETE'
         ? await readJsonBody(req).catch((): Record<string, unknown> => ({}))

@@ -78,3 +78,5 @@ export {
   stripMermaidNodeLabel,
 } from './mindmap-engine'
 export type { MindMapPoint, MindMapLayoutOptions } from './mindmap-engine'
+// FIM 潜伏认知能力评级映射（测验与学情展示共用）
+export { describeTheta } from './fim-engine'

@@ -48,6 +48,7 @@ import { CdutQuickBar, type CdutQuickFeature } from './CdutQuickBar'
 import { CdutFeatureSheet } from './CdutFeatureSheet'
 import { CdutWatermarkBackground } from './CdutWatermarkBackground'
 import { CdutSubViewContainer } from './CdutSubViewContainer'
+import { CdutZoneErrorBoundary } from './CdutZoneErrorBoundary'
 import { AiClassView } from './AiClassView'
 import { YanhuExpressView } from './yanhu/YanhuExpressView'
 import { ContentReviewView } from '@/components/content-review/ContentReviewView'
@@ -321,13 +322,15 @@ export function CdutZoneView(): React.ReactElement {
               ) : null
             }
           >
-            {activeSubView === 'ai-class' ? (
-              <AiClassView />
-            ) : activeSubView === 'yanhu-express' ? (
-              <YanhuExpressView />
-            ) : (
-              <ContentReviewView />
-            )}
+            <CdutZoneErrorBoundary fallbackTitle="子业务模块渲染异常">
+              {activeSubView === 'ai-class' ? (
+                <AiClassView />
+              ) : activeSubView === 'yanhu-express' ? (
+                <YanhuExpressView />
+              ) : (
+                <ContentReviewView />
+              )}
+            </CdutZoneErrorBoundary>
           </CdutSubViewContainer>
         </div>
 
@@ -348,20 +351,31 @@ export function CdutZoneView(): React.ReactElement {
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-content-area">
 
       {/* 标题栏拖拽区 */}
-      <div className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region" aria-hidden="true" />
+      <div
+        className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region"
+        style={{ right: resolveWindowControlsRightInset(isWindows) }}
+        aria-hidden="true"
+      />
+      {/* 窗口按钮（priority 20，确保在 Windows 顶层呈现） */}
+      <WindowControlsHost id="cdut-zone-main" priority={20} className="absolute right-2 top-[3px] z-20" />
 
       {/* 左下角校宠立绘艺术环境水印 */}
       <CdutWatermarkBackground />
 
-      {/* 顶栏：左侧学士帽图标 + 放大后的特区账户标签 */}
-      <header className="relative z-10 flex shrink-0 items-center gap-3 border-b border-border/60 bg-card/80 px-5 py-3 titlebar-no-drag backdrop-blur-sm">
-        <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary shadow-sm">
-          <GraduationCap size={18} />
+      {/* 顶栏：左侧学士帽图标 + 放大后的特区账户标签，右侧为系统窗口按钮让位 */}
+      <header
+        className="relative z-10 flex shrink-0 items-center justify-between border-b border-border/60 bg-card/80 px-5 py-3 titlebar-no-drag backdrop-blur-sm"
+        style={{ paddingRight: resolveWindowControlsRightInset(isWindows) + 20 }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary shadow-sm">
+            <GraduationCap size={18} />
+          </div>
+          <span className="text-sm font-semibold tracking-tight">CDUT 专区</span>
+          <span className="rounded-lg bg-primary/10 px-2.5 py-1 text-sm font-semibold text-primary">
+            特区账户
+          </span>
         </div>
-        <span className="text-sm font-semibold tracking-tight">CDUT 专区</span>
-        <span className="rounded-lg bg-primary/10 px-2.5 py-1 text-sm font-semibold text-primary">
-          特区账户
-        </span>
       </header>
 
       {/* 主视图 */}

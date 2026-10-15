@@ -138,5 +138,22 @@ export const DEMO_NOTICES = [
   { title: '系统通知', summary: 'CDUT Studio产品将于2026年10月正式发布。' },
 ] as const
 
+/** 考试日程条目（exams 域 query_exam_schedule） */
+export interface DemoExamEntry {
+  courseName: string
+  examTime: string
+  classroom: string
+  seatNumber: string
+  ticketNumber: string
+  examType: string
+}
+
+/** 演示考试日程 */
+export const DEMO_EXAMS: DemoExamEntry[] = [
+  { courseName: '工程力学Ⅱ', examTime: '2026-11-20 09:00-11:00', classroom: '（宜）甲A308', seatNumber: '24', ticketNumber: '20252026010101', examType: '期末统考' },
+  { courseName: '线性代数', examTime: '2026-11-24 14:30-16:30', classroom: '（宜）乙308', seatNumber: '15', ticketNumber: '20252026010102', examType: '期末统考' },
+  { courseName: '大学物理学III（2）', examTime: '2026-12-02 09:00-11:00', classroom: '（宜）甲A204', seatNumber: '32', ticketNumber: '20252026010103', examType: '期末统考' },
+]
+
 /** 演示态无数据时的统一提示语 */
 export const DEMO_NO_DATA_TEXT = '演示账户暂无此项数据。'

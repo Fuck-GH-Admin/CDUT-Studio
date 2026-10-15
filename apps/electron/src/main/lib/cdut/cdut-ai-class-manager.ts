@@ -12,7 +12,8 @@
  * 设计原则：所有模型调用失败均静默降级为本地启发式关联，绝不抛出阻断界面。
  */
 
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { existsSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { ProviderType } from '@profer/shared'
 import {
@@ -45,7 +46,12 @@ import {
 } from '../agent-session-manager'
 import { createAgentPreset, listAgentPresets } from '../agent-preset-manager'
 import { listStudyDocuments } from '../study/study-document-indexer'
-import { getStudySessionDir } from '../config-paths'
+import {
+  assertStudyId,
+  getStudyMaterialsRootDir,
+  getStudySessionDir,
+  getStudySessionsRootDir,
+} from '../config-paths'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
 import { listChannels, decryptApiKey, isCommercialMode } from '../channel-manager'
 import { getTeamAuthWithRefresh } from '../auth-service'
@@ -96,6 +102,23 @@ const ANTHROPIC_PROXY_PROVIDERS = new Set<ProviderType>([
   'anthropic', 'anthropic-compatible', 'kimi-api', 'kimi-coding',
   'minimax', 'xiaomi', 'xiaomi-token-plan', 'zhipu-coding',
 ])
+
+/** 一次性 JSON 补全的请求协议族 */
+type CompletionProtocol = 'google' | 'openai-responses' | 'openai-chat' | 'anthropic'
+
+/**
+ * 依据渠道 Provider 解析请求协议族。
+ *
+ * 红线：绝不能按请求 URL 判定——商业代理模式下 URL 会被改写为 `/v1/proxy/chat`
+ * 或 `/v1/proxy/messages`，`includes('/chat/completions')` 会恒为 false，
+ * 导致 OpenAI 协议渠道被误注入 Anthropic 的顶层 `system` 字段而 400。
+ */
+function resolveCompletionProtocol(provider: ProviderType): CompletionProtocol {
+  if (provider === 'google') return 'google'
+  if (provider === 'openai-responses' || provider === 'xai') return 'openai-responses'
+  if (ANTHROPIC_PROXY_PROVIDERS.has(provider)) return 'anthropic'
+  return 'openai-chat'
+}
 
 /** 关联类型 → 微标签 */
 const RELATION_LABELS: Record<KnowledgeRelationType, string> = {
@@ -182,9 +205,29 @@ export function createAiClassSession(courseName: string): AiClassSessionSummary 
   }
 }
 
-/** 删除速课堂会话（索引瞬时摘除 + 物理磁盘后台异步清理） */
+/** 删除速课堂会话（索引瞬时摘除 + 物理磁盘后台异步清理专属资料与工件） */
 export function deleteAiClassSession(sessionId: string): void {
   deleteAgentSession(sessionId, { backgroundDiskCleanup: true })
+  setImmediate(() => {
+    try {
+      const rootMaterials = resolve(getStudyMaterialsRootDir())
+      const materialsDir = resolve(rootMaterials, assertStudyId(sessionId, '会话标识'))
+      if (materialsDir.startsWith(`${rootMaterials}/`) || materialsDir.startsWith(`${rootMaterials}\\`)) {
+        if (existsSync(materialsDir)) rmSync(materialsDir, { recursive: true, force: true })
+      }
+    } catch (err) {
+      console.warn('[AI速课堂] 清理学习资料目录失败:', sessionId, err)
+    }
+    try {
+      const rootSessions = resolve(getStudySessionsRootDir())
+      const sessionDataDir = resolve(rootSessions, assertStudyId(sessionId, '会话标识'))
+      if (sessionDataDir.startsWith(`${rootSessions}/`) || sessionDataDir.startsWith(`${rootSessions}\\`)) {
+        if (existsSync(sessionDataDir)) rmSync(sessionDataDir, { recursive: true, force: true })
+      }
+    } catch (err) {
+      console.warn('[AI速课堂] 清理会话工件目录失败:', sessionId, err)
+    }
+  })
 }
 
 // ===== 静默模型编排：一次性 JSON 补全 =====
@@ -231,24 +274,54 @@ export async function oneShotJsonCompletion(systemPrompt: string, userPrompt: st
   })
   if (proxyBaseUrl) req.url = proxyBaseUrl
 
-  const isOpenAiChat = req.url.includes('/chat/completions')
+  const protocol = resolveCompletionProtocol(channel.provider)
   let bodyObj: Record<string, unknown>
   try {
     bodyObj = JSON.parse(req.body) as Record<string, unknown>
   } catch {
     bodyObj = { model: modelId }
   }
-  bodyObj['max_tokens'] = GRAPH_MAX_TOKENS
-  bodyObj['temperature'] = 0
-  if (isOpenAiChat) {
+
+  // 严格按渠道 Provider 协议注入 system prompt 与响应约束，杜绝 400 报错或 Token 截断
+  if (protocol === 'google') {
+    bodyObj['contents'] = [{ role: 'user', parts: [{ text: userPrompt }] }]
+    bodyObj['systemInstruction'] = { parts: [{ text: systemPrompt }] }
+    bodyObj['generationConfig'] = {
+      maxOutputTokens: GRAPH_MAX_TOKENS,
+      temperature: 0,
+      responseMimeType: 'application/json',
+    }
+    delete bodyObj['max_tokens']
+    delete bodyObj['system']
+    delete bodyObj['messages']
+  } else if (protocol === 'openai-responses') {
+    bodyObj['model'] = modelId
+    bodyObj['instructions'] = systemPrompt
+    bodyObj['input'] = [{ role: 'user', content: userPrompt }]
+    bodyObj['max_output_tokens'] = GRAPH_MAX_TOKENS
+    bodyObj['temperature'] = 0
+    delete bodyObj['max_tokens']
+    delete bodyObj['system']
+    delete bodyObj['messages']
+  } else if (protocol === 'openai-chat') {
+    bodyObj['model'] = modelId
+    bodyObj['max_tokens'] = GRAPH_MAX_TOKENS
+    bodyObj['temperature'] = 0
     bodyObj['messages'] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ]
-    bodyObj['response_format'] = { type: 'json_object' }
+    // 本地 Ollama 运行时普遍不支持 OpenAI 的 response_format，仅云端渠道启用
+    if (channel.provider !== 'ollama') bodyObj['response_format'] = { type: 'json_object' }
+    delete bodyObj['system']
   } else {
+    // Anthropic 原生与兼容通道（/messages）
+    bodyObj['model'] = modelId
+    bodyObj['max_tokens'] = GRAPH_MAX_TOKENS
+    bodyObj['temperature'] = 0
     bodyObj['system'] = systemPrompt
     bodyObj['messages'] = [{ role: 'user', content: userPrompt }]
+    delete bodyObj['response_format']
   }
   req.body = JSON.stringify(bodyObj)
 
@@ -343,15 +416,36 @@ function coerceEdges(
   return edges
 }
 
-/** 中文/英文标题的分词集合（中文字符 bigram + 英文词） */
+/** 常见标题停用词与泛化前缀（避免不同章节仅因“第X章”、“概述”等虚词产生误连） */
+const TITLE_STOPWORDS = new Set([
+  '第', '章', '节', '篇', '部', '目', '课', '讲',
+  '的', '了', '在', '是', '与', '和', '及', '或', '等', '之',
+  '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+  '简', '介', '概', '述', '总', '结', '思', '考', '复', '习',
+  '第一', '第二', '第三', '第四', '第五', '第六', '第七', '第八', '第九', '第十',
+  '简介', '概述', '总结', '思考', '复习', '练习', '习题', '讨论', '附录',
+  'the', 'and', 'for', 'with', 'chapter', 'section', 'part', 'unit',
+])
+
+/** 中文/英文标题的分词集合（过滤虚词/章节停用词，保留高辨识度实体与词素） */
 function titleTokens(title: string): Set<string> {
   const tokens = new Set<string>()
   const lower = title.toLowerCase()
-  for (const word of lower.match(/[a-z0-9]{2,}/g) ?? []) tokens.add(word)
+  for (const word of lower.match(/[a-z0-9]{2,}/g) ?? []) {
+    if (!TITLE_STOPWORDS.has(word)) tokens.add(word)
+  }
   const han = lower.match(/[\u4e00-\u9fa5]/g) ?? []
   for (let i = 0; i < han.length; i++) {
-    tokens.add(han[i]!)
-    if (i + 1 < han.length) tokens.add(`${han[i]}${han[i + 1]}`)
+    const char = han[i]!
+    if (!TITLE_STOPWORDS.has(char)) {
+      tokens.add(char)
+    }
+    if (i + 1 < han.length) {
+      const bi = `${char}${han[i + 1]}`
+      if (!TITLE_STOPWORDS.has(bi)) {
+        tokens.add(bi)
+      }
+    }
   }
   return tokens
 }
@@ -743,7 +837,8 @@ export async function generateKnowledgeGraph(
     emitGraphProgress(reporter, 1, 1, '知识网络构建完成')
 
     try {
-      const cachePath = join(getStudySessionDir(sessionId), 'knowledge-graph.json')
+      // 写入前确保目录存在（getStudySessionDir 默认纯路径解析、无创建副作用）
+      const cachePath = join(getStudySessionDir(sessionId, { create: true }), 'knowledge-graph.json')
       writeJsonFileAtomic(cachePath, { documents: [], edges, updatedAt: Date.now() })
     } catch (error) {
       console.warn('[AI速课堂] 图谱缓存写入失败:', error)

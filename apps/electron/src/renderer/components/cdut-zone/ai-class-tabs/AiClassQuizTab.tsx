@@ -9,23 +9,13 @@
 import * as React from 'react'
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
-import type { QuizQuestion, QuizSession } from '@profer/shared'
+import { describeTheta, type QuizQuestion, type QuizSession } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { StudySourceTrace } from './StudySourceTrace'
 
 interface AiClassQuizTabProps {
   sessionId: string
   quizId: string
-}
-
-/** 把连续 θ 映射为可读能力评级 */
-function describeTheta(theta: number): string {
-  if (theta >= 2) return '卓越（已显著超越课程要求）'
-  if (theta >= 1) return '优秀（知识体系扎实）'
-  if (theta >= 0) return '良好（基本掌握，仍有提升空间）'
-  if (theta >= -1) return '及格（存在若干知识盲区）'
-  if (theta >= -2) return '待提升（薄弱环节较多）'
-  return '亟需巩固（建议系统重学）'
 }
 
 export function AiClassQuizTab({ sessionId, quizId }: AiClassQuizTabProps): React.ReactElement {
@@ -36,9 +26,14 @@ export function AiClassQuizTab({ sessionId, quizId }: AiClassQuizTabProps): Reac
 
   React.useEffect(() => {
     let alive = true
+    if (!quizId) {
+      setQuiz(null)
+      setLoading(false)
+      return
+    }
     setLoading(true)
     window.electronAPI.study
-      .getQuiz({ sessionId, quizId: quizId || undefined })
+      .getQuiz({ sessionId, quizId })
       .then((data) => {
         if (!alive) return
         setQuiz(data)

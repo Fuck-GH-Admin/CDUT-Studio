@@ -22,6 +22,7 @@ import {
   studyGraphCostEstimateAtom,
   studyGraphModalOpenAtom,
   studyGraphModeAtom,
+  studyGraphProgressAtom,
 } from '@/atoms/study-atoms'
 
 interface AiClassGraphGenerateModalProps {
@@ -67,6 +68,7 @@ export function AiClassGraphGenerateModal({
   const [open, setOpen] = useAtom(studyGraphModalOpenAtom)
   const [estimate, setEstimate] = useAtom(studyGraphCostEstimateAtom)
   const [mode, setMode] = useAtom(studyGraphModeAtom)
+  const progress = useAtomValue(studyGraphProgressAtom)
 
   // 打开弹窗时动态测算成本（每次打开都重新拉取，确保数据实时）
   React.useEffect(() => {
@@ -239,14 +241,37 @@ export function AiClassGraphGenerateModal({
           })}
         </div>
 
+        {/* 实时推演进度看板 */}
+        {updating && (
+          <div className="border-t border-border/50 bg-muted/20 px-6 py-3">
+            <div className="mb-1.5 flex items-center justify-between text-xs">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Loader2 size={13} className="animate-spin text-primary" />
+                {progress?.phase || '正在推演分层知识网络...'}
+              </span>
+              <span className="font-mono font-semibold text-primary">
+                {progress?.percent != null ? `${progress.percent}%` : '处理中...'}
+                {progress?.total ? ` (${progress.current}/${progress.total} 批次)` : ''}
+              </span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-300"
+                style={{ width: `${progress?.percent ?? 15}%` }}
+              />
+            </div>
+          </div>
+        )}
+
         {/* 底部操作栏 */}
         <div className="flex items-center justify-end gap-2 border-t border-border/50 px-6 py-4">
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="rounded-xl border border-border/60 px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            disabled={updating}
+            className="rounded-xl border border-border/60 px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
           >
-            取消
+            {updating ? '后台运行' : '取消'}
           </button>
           <button
             type="button"
@@ -255,7 +280,7 @@ export function AiClassGraphGenerateModal({
             className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-40"
           >
             {updating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-            <span>开始生成</span>
+            <span>{updating ? (progress?.percent != null ? `推演中 ${progress.percent}%` : '正在推演...') : '开始生成'}</span>
           </button>
         </div>
       </DialogContent>

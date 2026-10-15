@@ -22,6 +22,8 @@ import {
   getAgentWorkspacePath,
   getPiCheckpointsDir,
   getSdkConfigDir,
+  getStudyMaterialsRootDir,
+  getStudySessionsRootDir,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { assertEnabledModelForChannel } from './agent-model-selection'
@@ -1412,6 +1414,20 @@ export function deleteAgentSession(id: string, options?: { backgroundDiskCleanup
       removePiFileCheckpoints(getPiCheckpointsDir(), id)
     } catch (error) {
       console.warn(`[Agent 会话] 清理 Pi 文件检查点失败 (${id}):`, error)
+    }
+
+    // 清理速课堂专属学习资料与会话工件目录（若存在）
+    try {
+      const studyMaterialsDir = join(getStudyMaterialsRootDir(), id)
+      if (existsSync(studyMaterialsDir)) {
+        rmSync(studyMaterialsDir, { recursive: true, force: true })
+      }
+      const studySessionsDir = join(getStudySessionsRootDir(), id)
+      if (existsSync(studySessionsDir)) {
+        rmSync(studySessionsDir, { recursive: true, force: true })
+      }
+    } catch (error) {
+      console.warn(`[Agent 会话] 清理速课堂专属目录失败 (${id}):`, error)
     }
 
     console.log(`[Agent 会话] 已删除会话: ${removed.title} (${removed.id})`)

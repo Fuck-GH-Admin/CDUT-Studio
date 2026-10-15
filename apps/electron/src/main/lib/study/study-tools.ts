@@ -18,7 +18,8 @@ import {
   readStudySection,
   writeStudentCognition,
 } from './study-document-indexer'
-import { getGlobalStudyRetriever } from './hybrid-retriever'
+import { searchStudyRouted } from './study-retrieval-router'
+import { getSettings } from '../settings-service'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -93,9 +94,9 @@ export function buildPiStudyTools(
       }),
       async execute(_toolCallId, params) {
         const args = params as { query: string; targetDocumentId?: string; topK?: number }
-        const retriever = getGlobalStudyRetriever()
+        const engine = getSettings().studyRetrievalEngine ?? 'classic'
         return jsonToolResult(
-          retriever.searchHybrid(ctx.sessionId, args.query, {
+          searchStudyRouted(ctx.sessionId, args.query, engine, {
             ...(args.targetDocumentId ? { targetDocumentId: args.targetDocumentId } : {}),
             topK: args.topK ?? 5,
           }),

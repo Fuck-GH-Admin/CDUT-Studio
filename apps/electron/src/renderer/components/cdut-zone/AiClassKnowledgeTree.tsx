@@ -803,28 +803,40 @@ export function AiClassKnowledgeTree({ sessionId }: AiClassKnowledgeTreeProps): 
     return () => window.clearTimeout(timer)
   }, [updating, setProgress])
 
+  const sessionIdRef = React.useRef(sessionId)
+  sessionIdRef.current = sessionId
+
   // 用户确认方案后按选定模式生成关联（恒定用户主动触发，绝不自动偷跑 Token）
   const generate = React.useCallback(
     async (mode: KnowledgeGraphGenerationMode): Promise<void> => {
+      const targetSessionId = sessionId
       setUpdating(true)
       setProgress(null)
       try {
-        const data = await window.electronAPI.cdutAiClass.generateGraphRelations({ sessionId, mode })
-        setGraph(data)
+        const data = await window.electronAPI.cdutAiClass.generateGraphRelations({ sessionId: targetSessionId, mode })
+        if (sessionIdRef.current === targetSessionId) {
+          setGraph(data)
+        }
       } catch (error) {
         console.warn('[AI速课堂] 生成资料树关联失败:', error)
       } finally {
-        setUpdating(false)
+        if (sessionIdRef.current === targetSessionId) {
+          setUpdating(false)
+        }
       }
     },
     [sessionId, setGraph, setUpdating, setProgress],
   )
 
-  // 会话切换时清空图谱缓存与聚焦节点，避免残留上一课堂的关联边
+  // 会话切换时清空图谱缓存与聚焦节点，避免残留上一课堂的关联边；
+  // 同时复位全局生成态（updating/progress 为跨会话共享原子），否则切换课堂后
+  // 旧课堂遗留的「生成中」标记会让新课堂永久显示加载骨架并禁用生成按钮。
   React.useEffect(() => {
     setSelected(null)
     setGraph(null)
-  }, [sessionId, setGraph])
+    setUpdating(false)
+    setProgress(null)
+  }, [sessionId, setGraph, setUpdating, setProgress])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

@@ -35,8 +35,8 @@ interface PendingDecision {
 /** 进行中的门禁抉择（requestId -> 挂起 Promise 与超时定时器） */
 const pendingDecisions = new Map<string, PendingDecision>()
 
-/** 用户未在 2 分钟内抉择则视为拒绝登录 */
-const GATEKEEPER_TIMEOUT_MS = 120_000
+/** 用户未在 30 秒内抉择则自适应超时，视为拒绝登录 */
+const GATEKEEPER_TIMEOUT_MS = 30_000
 
 /** 构造面向大模型的阻断返回：双模（Markdown + 结构化 JSON），并区分拒绝原因 */
 function buildRejection(reason: 'navigated_to_login' | 'user_declined_login' | 'no_window'): CdutDomainToolResult {

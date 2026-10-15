@@ -23,6 +23,7 @@ import {
   parseMindMapText,
   stripMermaidNodeLabel,
 } from '@profer/shared'
+import { normalizeToMarkdown } from './markdown-normalizer'
 
 const DAY = 86_400_000
 
@@ -284,5 +285,34 @@ describe('思维导图整齐布局与径向连线（连线交错修复）', () =
     const path = buildBezierPath({ x: 0, y: 0, depth: 0, angle: 0 }, { x: 0, y: 100, depth: 1, angle: 0 })
     // 竖直连线亦不回绕：控制点落在同一直线上
     expect(path).toBe('M 0 0 C 0 33 0 67 0 100')
+  })
+})
+
+describe('标题识别正则精细化（防年份/数量词误升格）', () => {
+  test('真编号标题被规范化为 Markdown 标题', () => {
+    const input = '1.1 极限的定义\n\n1. 导数与微分\n\n第一章 绪论'
+    const output = normalizeToMarkdown(input)
+    expect(output).toContain('### 1.1 极限的定义')
+    expect(output).toContain('## 1. 导数与微分')
+    expect(output).toContain('## 第一章 绪论')
+  })
+
+  test('年份、数量词与普通陈述句绝不误升格为标题', () => {
+    const input = '2023年招生简章\n\n3.5 万人参加考试\n\n这是一个关于 3.14 的完整陈述句。'
+    const output = normalizeToMarkdown(input)
+    expect(output).not.toContain('# 2023年')
+    expect(output).not.toContain('# 3.5')
+    expect(output).not.toContain('# 这是一个')
+    expect(output).toContain('2023年招生简章')
+    expect(output).toContain('3.5 万人参加考试')
+    expect(output).toContain('这是一个关于 3.14 的完整陈述句。')
+  })
+
+  test('单空格单级编号标题被识别，但计量单位行不被误升格', () => {
+    const input = '1 引言\n\n5 分钟完成本章练习'
+    const output = normalizeToMarkdown(input)
+    expect(output).toContain('## 1 引言')
+    expect(output).not.toContain('# 5 分钟')
+    expect(output).toContain('5 分钟完成本章练习')
   })
 })

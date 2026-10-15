@@ -4,7 +4,7 @@
  * 负责注册主进程和渲染进程之间的通信处理器
  */
 
-import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app, Notification } from 'electron'
+import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app, Notification, session } from 'electron'
 import { isAbsolute, join, relative, resolve, sep, dirname, basename, extname } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync } from 'node:fs'
@@ -131,7 +131,7 @@ import type {
   BrowserAddBookmarkInput,
 } from '@profer/shared'
 import { KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type CdutToolInvokeParams, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { browserController } from './lib/browser-controller'
@@ -145,7 +145,9 @@ import { isReadOnlyPreviewPathAllowed } from './lib/preview-path-policy'
 import { CHANGELOG_IPC_CHANNELS, type ChangelogEntry } from '@profer/shared'
 import { getChangelog } from './lib/changelog-service'
 import { registerReviewIpc } from './lib/review/review-ipc'
-import { cdutAuthManager } from './lib/cdut/cdut-auth-manager'
+import { cdutAuthManager, CDUT_AUTH_PARTITION } from './lib/cdut/cdut-auth-manager'
+import { executeDomainTool } from './lib/cdut/cdut-jw-client'
+import { cdutDemoService } from './lib/cdut/cdut-demo/demo-service'
 import { yanhuExpressManager } from './lib/cdut/yanhu/yanhu-express-manager'
 import { yanhuPetWindowManager } from './lib/cdut/yanhu/yanhu-pet-window-manager'
 import { yanhuPiRuntime } from './lib/cdut/yanhu/yanhu-pi-runtime'
@@ -6108,6 +6110,33 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(CDUT_ZONE_IPC_CHANNELS.GATEKEEPER_RESPOND, (_event, decision: CdutGatekeeperDecision) => {
     return { handled: resolveCdutGatekeeper(decision) }
   })
+
+  // 8 大业务域按需调用：直接调用教务业务域工具（支持已登录态真实抓取与未登录态/网络异常 Demo 数据回退）
+  ipcMain.handle(
+    CDUT_ZONE_IPC_CHANNELS.CALL_DOMAIN_TOOL,
+    async (_event, input: CdutToolInvokeParams): Promise<CdutDomainToolResult> => {
+      const { domain, params } = input
+      const profile = cdutAuthManager.getProfile()
+      const isOnline = profile.status === 'active' && !cdutDemoService.isActive()
+
+      if (isOnline) {
+        try {
+          const ses = session.fromPartition(CDUT_AUTH_PARTITION)
+          const result = await executeDomainTool(domain, ses, params)
+          if (result.success) {
+            return { ...result, isDemo: false }
+          }
+          console.warn(`[CDUT专区] 业务域 ${domain} 真实抓取未成功，自动回退高仿真演示数据:`, result.error)
+        } catch (error) {
+          console.warn(`[CDUT专区] 业务域 ${domain} 请求异常，自动回退高仿真演示数据:`, error)
+        }
+      }
+
+      // 演示数据无缝回退
+      const demoResult = cdutDemoService.execute(domain, params)
+      return { ...demoResult, isDemo: true }
+    },
+  )
 
   // ===== CDUT 专区 · 智联万站（Yanhu Express）轻量级定制浏览器 =====
   // 前端 100% 纯净：仅暴露浏览器外壳所需通道；底层 CDP 能力静默预留、不提供任何调试 UI 入口。

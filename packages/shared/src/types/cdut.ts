@@ -228,6 +228,14 @@ export interface CdutDomainToolResult {
   error?: string
   /** 是否已由主进程实际执行写操作 */
   mutated?: boolean
+  /** 是否为离线演示数据（无缝降级或离线模式标记） */
+  isDemo?: boolean
+}
+
+/** 8 大业务域工具按需调用入参 */
+export interface CdutToolInvokeParams<D extends CdutToolDomain = CdutToolDomain> {
+  domain: D
+  params: CdutToolParamsMap[D]
 }
 
 /** 写操作二次确认：主进程 -> 渲染端 */

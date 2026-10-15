@@ -368,6 +368,14 @@ export class YanhuPetWindowManager {
           this.saveConfig({ isCollapsed: !config.isCollapsed })
         },
       },
+      {
+        label: '视觉多模态截图感知（截图标定辅助）',
+        type: 'checkbox',
+        checked: Boolean(config.enableVision),
+        click: () => {
+          this.saveConfig({ enableVision: !config.enableVision })
+        },
+      },
       { type: 'separator' },
       {
         label: '对话框位置',
