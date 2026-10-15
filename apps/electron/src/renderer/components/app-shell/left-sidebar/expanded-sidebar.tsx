@@ -5,10 +5,11 @@
  */
 
 import * as React from 'react'
-import { PanelLeftClose, Plus, Search, FolderOpen, Archive, ArchiveRestore, ArrowLeft, Settings, Bot, GraduationCap } from 'lucide-react'
-import { useSetAtom } from 'jotai'
+import { PanelLeftClose, Plus, Search, FolderOpen, Archive, ArchiveRestore, Settings, Bot, GraduationCap } from 'lucide-react'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { activeViewAtom } from '@/atoms/active-view'
+import { archivedUnreadAtom } from '@/atoms/sidebar-atoms'
 import cdutLogo from '@/assets/cdut-logo.svg'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { Popover, PopoverTrigger, PopoverContent } from '@profer/ui/primitives/popover'
@@ -22,6 +23,8 @@ import type { SidebarModel } from './use-left-sidebar'
 
 export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement {
   const setActiveView = useSetAtom(activeViewAtom)
+  const archivedUnread = useAtomValue(archivedUnreadAtom)
+  const setArchivedUnread = useSetAtom(archivedUnreadAtom)
   const {
     isMac,
     setSidebarCollapsed,
@@ -224,6 +227,39 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
           />
         </div>
       )}
+
+      {/* 已归档列表入口：紧随 Agent 技能（Agent 模式）/ 自动任务（Chat 模式）之下、会话列表之上。
+          后台静默自动归档时点亮即时通讯风格的红色未读圆点，点开归档视图后立即熄灭 */}
+      <div className="px-3 pb-0.5">
+        <button
+          type="button"
+          onClick={() => {
+            setArchivedUnread(false)
+            setViewMode(viewMode === 'archived' ? 'active' : 'archived')
+          }}
+          className={cn(
+            'w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] font-medium transition-colors duration-150 titlebar-no-drag border',
+            viewMode === 'archived'
+              ? 'bg-primary/10 border-primary/30 text-primary shadow-sm'
+              : 'bg-primary/5 border-border/60 text-foreground/70 hover:bg-primary/10 hover:text-foreground hover:border-primary/30',
+          )}
+          aria-label={viewMode === 'archived' ? '返回活跃列表' : '打开已归档列表'}
+        >
+          <Archive size={14} className="shrink-0 text-primary/70" />
+          <span className="flex-1 text-left truncate">
+            {viewMode === 'archived' ? '返回活跃列表' : '已归档列表'}
+            {viewMode === 'active' && archivedConversationCount + archivedAgentSessionCount > 0
+              ? ` (${archivedConversationCount + archivedAgentSessionCount})`
+              : ''}
+          </span>
+          {archivedUnread && viewMode !== 'archived' && (
+            <span
+              className="size-2.5 shrink-0 rounded-full bg-rose-500 ring-2 ring-background animate-pulse"
+              aria-label="有新的自动归档"
+            />
+          )}
+        </button>
+      </div>
 
       {/* Chat 模式 active 视图：置顶 + 对话历史，结构与 Agent active 视图保持一致 */}
       {mode === 'chat' && viewMode === 'active' ? (
@@ -596,41 +632,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
         </>
       )}
 
-      {/* 已归档入口 / 返回活跃对话 */}
-      <div className="px-3 pb-1">
-        {viewMode === 'active' ? (
-          <>
-            {mode === 'chat' && archivedConversationCount > 0 && (
-              <button
-                onClick={() => setViewMode('archived')}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
-              >
-                <Archive size={13} className="text-foreground/30" />
-                <span>已归档 ({archivedConversationCount})</span>
-              </button>
-            )}
-            {mode === 'agent' && archivedAgentSessionCount > 0 && (
-              <button
-                onClick={() => setViewMode('archived')}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
-              >
-                <Archive size={13} className="text-foreground/30" />
-                <span>已归档 ({archivedAgentSessionCount})</span>
-              </button>
-            )}
-          </>
-        ) : (
-          <button
-            onClick={() => setViewMode('active')}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/60 bg-foreground/[0.04] hover:bg-foreground/[0.07] hover:text-foreground/80 transition-colors titlebar-no-drag"
-          >
-            <ArrowLeft size={13} className="text-foreground/50" />
-            <span>返回活跃{mode === 'agent' ? '会话' : '对话'}</span>
-          </button>
-        )}
-      </div>
-
-      {/* 底部：用户资料 + 设置入口 */}
+      {/* 底部：用户资料 + 设置入口（已归档入口已上移至技能区下方） */}
       <div className="px-3 pb-3 space-y-1.5">
 
         <button

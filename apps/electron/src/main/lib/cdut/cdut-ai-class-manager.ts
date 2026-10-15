@@ -12,7 +12,8 @@
  * 设计原则：所有模型调用失败均静默降级为本地启发式关联，绝不抛出阻断界面。
  */
 
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { existsSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { ProviderType } from '@profer/shared'
 import {
@@ -45,7 +46,12 @@ import {
 } from '../agent-session-manager'
 import { createAgentPreset, listAgentPresets } from '../agent-preset-manager'
 import { listStudyDocuments } from '../study/study-document-indexer'
-import { getStudySessionDir } from '../config-paths'
+import {
+  assertStudyId,
+  getStudyMaterialsRootDir,
+  getStudySessionDir,
+  getStudySessionsRootDir,
+} from '../config-paths'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
 import { listChannels, decryptApiKey, isCommercialMode } from '../channel-manager'
 import { getTeamAuthWithRefresh } from '../auth-service'
@@ -96,6 +102,23 @@ const ANTHROPIC_PROXY_PROVIDERS = new Set<ProviderType>([
   'anthropic', 'anthropic-compatible', 'kimi-api', 'kimi-coding',
   'minimax', 'xiaomi', 'xiaomi-token-plan', 'zhipu-coding',
 ])
+
+/** 一次性 JSON 补全的请求协议族 */
+type CompletionProtocol = 'google' | 'openai-responses' | 'openai-chat' | 'anthropic'
+
+/**
+ * 依据渠道 Provider 解析请求协议族。
+ *
+ * 红线：绝不能按请求 URL 判定——商业代理模式下 URL 会被改写为 `/v1/proxy/chat`
+ * 或 `/v1/proxy/messages`，`includes('/chat/completions')` 会恒为 false，
+ * 导致 OpenAI 协议渠道被误注入 Anthropic 的顶层 `system` 字段而 400。
+ */
+function resolveCompletionProtocol(provider: ProviderType): CompletionProtocol {
+  if (provider === 'google') return 'google'
+  if (provider === 'openai-responses' || provider === 'xai') return 'openai-responses'
+  if (ANTHROPIC_PROXY_PROVIDERS.has(provider)) return 'anthropic'
+  return 'openai-chat'
+}
 
 /** 关联类型 → 微标签 */
 const RELATION_LABELS: Record<KnowledgeRelationType, string> = {
@@ -182,29 +205,70 @@ export function createAiClassSession(courseName: string): AiClassSessionSummary 
   }
 }
 
-/** 删除速课堂会话（索引瞬时摘除 + 物理磁盘后台异步清理） */
+/** 删除速课堂会话（索引瞬时摘除 + 物理磁盘后台异步清理专属资料与工件） */
 export function deleteAiClassSession(sessionId: string): void {
   deleteAgentSession(sessionId, { backgroundDiskCleanup: true })
+  setImmediate(() => {
+    try {
+      const rootMaterials = resolve(getStudyMaterialsRootDir())
+      const materialsDir = resolve(rootMaterials, assertStudyId(sessionId, '会话标识'))
+      if (materialsDir.startsWith(`${rootMaterials}/`) || materialsDir.startsWith(`${rootMaterials}\\`)) {
+        if (existsSync(materialsDir)) rmSync(materialsDir, { recursive: true, force: true })
+      }
+    } catch (err) {
+      console.warn('[AI速课堂] 清理学习资料目录失败:', sessionId, err)
+    }
+    try {
+      const rootSessions = resolve(getStudySessionsRootDir())
+      const sessionDataDir = resolve(rootSessions, assertStudyId(sessionId, '会话标识'))
+      if (sessionDataDir.startsWith(`${rootSessions}/`) || sessionDataDir.startsWith(`${rootSessions}\\`)) {
+        if (existsSync(sessionDataDir)) rmSync(sessionDataDir, { recursive: true, force: true })
+      }
+    } catch (err) {
+      console.warn('[AI速课堂] 清理会话工件目录失败:', sessionId, err)
+    }
+  })
 }
 
 // ===== 静默模型编排：一次性 JSON 补全 =====
 
+/** 一次性补全默认硬超时（毫秒）：90 秒熔断，杜绝网络悬挂导致 Promise 无限 Pending */
+export const ONE_SHOT_COMPLETION_TIMEOUT_MS = 90_000
+
+/** 一次性补全调用选项（渠道继承 / 超时覆盖 / 外部取消） */
+export interface OneShotCompletionOptions {
+  /** 显式指定渠道 ID（优先于全局 settings.agentChannelId） */
+  channelId?: string
+  /** 显式指定模型 ID（优先于全局 settings.agentModelId） */
+  modelId?: string
+  /** 请求硬超时（毫秒），缺省 90 秒 */
+  timeoutMs?: number
+  /** 外部取消信号（触发后立即中断底层 fetch） */
+  signal?: AbortSignal
+}
+
 /**
  * 一次性的非流式模型调用（复用 generateTitle 的渠道 / 鉴权 / 适配器链路）。
- * 任意失败返回 null，由调用方静默降级。
+ *
+ * 渠道继承优先级：显式 options.channelId / modelId → 全局 settings；
+ * 两者皆无时抛出可读错误。请求强制硬超时熔断（默认 90 秒），超时后中断底层
+ * fetch 并抛出明确原因；所有失败路径均抛出携带可读文案的异常，由调用方决定
+ * 静默降级（图谱推演）还是直接呈现（学习工件生成）。
  */
-async function oneShotJsonCompletion(systemPrompt: string, userPrompt: string): Promise<string | null> {
+export async function oneShotJsonCompletion(
+  systemPrompt: string,
+  userPrompt: string,
+  options: OneShotCompletionOptions = {},
+): Promise<string> {
   const settings = getSettings()
-  const channelId = settings.agentChannelId
-  const modelId = settings.agentModelId
+  const channelId = options.channelId || settings.agentChannelId
+  const modelId = options.modelId || settings.agentModelId
   if (!channelId || !modelId) {
-    console.warn('[AI速课堂] 未配置 agentChannelId / agentModelId，跳过静默推演')
-    return null
+    throw new Error('尚未配置模型渠道：请先在「设置 → 渠道」中选择默认渠道与模型。')
   }
   const channel = listChannels().find((candidate) => candidate.id === channelId)
   if (!channel) {
-    console.warn('[AI速课堂] 静默推演渠道不存在:', channelId)
-    return null
+    throw new Error(`渠道不存在或已被删除（${channelId}），请在设置中检查渠道配置。`)
   }
 
   let apiKey: string
@@ -212,8 +276,7 @@ async function oneShotJsonCompletion(systemPrompt: string, userPrompt: string): 
   if ((isCommercialBuild() || isCommercialMode()) && isOfficialManagedChannel(channel)) {
     const auth = await getTeamAuthWithRefresh()
     if (!auth) {
-      console.warn('[AI速课堂] 团队账号登录已过期，跳过静默推演')
-      return null
+      throw new Error('团队账号登录已过期，请重新登录后再试。')
     }
     const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
     proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
@@ -231,40 +294,102 @@ async function oneShotJsonCompletion(systemPrompt: string, userPrompt: string): 
   })
   if (proxyBaseUrl) req.url = proxyBaseUrl
 
-  const isOpenAiChat = req.url.includes('/chat/completions')
+  const protocol = resolveCompletionProtocol(channel.provider)
   let bodyObj: Record<string, unknown>
   try {
     bodyObj = JSON.parse(req.body) as Record<string, unknown>
   } catch {
     bodyObj = { model: modelId }
   }
-  bodyObj['max_tokens'] = GRAPH_MAX_TOKENS
-  bodyObj['temperature'] = 0
-  if (isOpenAiChat) {
+
+  // 严格按渠道 Provider 协议注入 system prompt 与响应约束，杜绝 400 报错或 Token 截断
+  if (protocol === 'google') {
+    bodyObj['contents'] = [{ role: 'user', parts: [{ text: userPrompt }] }]
+    bodyObj['systemInstruction'] = { parts: [{ text: systemPrompt }] }
+    bodyObj['generationConfig'] = {
+      maxOutputTokens: GRAPH_MAX_TOKENS,
+      temperature: 0,
+      responseMimeType: 'application/json',
+    }
+    delete bodyObj['max_tokens']
+    delete bodyObj['system']
+    delete bodyObj['messages']
+  } else if (protocol === 'openai-responses') {
+    bodyObj['model'] = modelId
+    bodyObj['instructions'] = systemPrompt
+    bodyObj['input'] = [{ role: 'user', content: userPrompt }]
+    bodyObj['max_output_tokens'] = GRAPH_MAX_TOKENS
+    bodyObj['temperature'] = 0
+    delete bodyObj['max_tokens']
+    delete bodyObj['system']
+    delete bodyObj['messages']
+  } else if (protocol === 'openai-chat') {
+    bodyObj['model'] = modelId
+    bodyObj['max_tokens'] = GRAPH_MAX_TOKENS
+    bodyObj['temperature'] = 0
     bodyObj['messages'] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ]
-    bodyObj['response_format'] = { type: 'json_object' }
+    // 本地 Ollama 运行时普遍不支持 OpenAI 的 response_format，仅云端渠道启用
+    if (channel.provider !== 'ollama') bodyObj['response_format'] = { type: 'json_object' }
+    delete bodyObj['system']
   } else {
+    // Anthropic 原生与兼容通道（/messages）
+    bodyObj['model'] = modelId
+    bodyObj['max_tokens'] = GRAPH_MAX_TOKENS
+    bodyObj['temperature'] = 0
     bodyObj['system'] = systemPrompt
     bodyObj['messages'] = [{ role: 'user', content: userPrompt }]
+    delete bodyObj['response_format']
   }
   req.body = JSON.stringify(bodyObj)
 
+  // 硬超时熔断 + 外部取消：定时器触发 abort 中断底层 fetch，finally 中复位
+  const timeoutMs = Math.max(1_000, options.timeoutMs ?? ONE_SHOT_COMPLETION_TIMEOUT_MS)
+  const externalSignal = options.signal
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  const onExternalAbort = (): void => controller.abort()
+  if (externalSignal?.aborted) controller.abort()
+  else externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+
+  const startedAt = Date.now()
+  console.info(`[AI速课堂] 静默推演开始: channel=${channel.name || channelId} model=${modelId} timeout=${timeoutMs}ms`)
   try {
     const fetchFn = getFetchFn(await getEffectiveProxyUrl())
-    const resp = await fetchFn(req.url, { method: 'POST', headers: req.headers, body: req.body })
+    const resp = await fetchFn(req.url, {
+      method: 'POST',
+      headers: req.headers,
+      body: req.body,
+      signal: controller.signal,
+    })
     if (!resp.ok) {
       const errText = await resp.text().catch(() => 'unknown')
-      console.warn('[AI速课堂] 静默推演请求失败:', resp.status, errText.slice(0, 300))
-      return null
+      throw new Error(`模型请求失败（HTTP ${resp.status}）：${errText.slice(0, 200)}`)
     }
     const data: unknown = await resp.json()
-    return adapter.parseTitleResponse(data)
+    const output = adapter.parseTitleResponse(data)
+    if (!output) {
+      throw new Error('模型返回结果为空，请确认所选模型支持 JSON 输出后重试。')
+    }
+    return output
   } catch (error) {
-    console.warn('[AI速课堂] 静默推演异常:', error)
-    return null
+    if (timedOut) {
+      throw new Error(`模型请求超时（${Math.round(timeoutMs / 1000)} 秒）已熔断，请检查网络或更换渠道后重试。`)
+    }
+    if (externalSignal?.aborted) {
+      throw new Error('生成已取消。')
+    }
+    throw error instanceof Error ? error : new Error(String(error))
+  } finally {
+    clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', onExternalAbort)
+    console.info(`[AI速课堂] 静默推演结束: 耗时 ${Date.now() - startedAt}ms`)
   }
 }
 
@@ -343,15 +468,36 @@ function coerceEdges(
   return edges
 }
 
-/** 中文/英文标题的分词集合（中文字符 bigram + 英文词） */
+/** 常见标题停用词与泛化前缀（避免不同章节仅因“第X章”、“概述”等虚词产生误连） */
+const TITLE_STOPWORDS = new Set([
+  '第', '章', '节', '篇', '部', '目', '课', '讲',
+  '的', '了', '在', '是', '与', '和', '及', '或', '等', '之',
+  '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+  '简', '介', '概', '述', '总', '结', '思', '考', '复', '习',
+  '第一', '第二', '第三', '第四', '第五', '第六', '第七', '第八', '第九', '第十',
+  '简介', '概述', '总结', '思考', '复习', '练习', '习题', '讨论', '附录',
+  'the', 'and', 'for', 'with', 'chapter', 'section', 'part', 'unit',
+])
+
+/** 中文/英文标题的分词集合（过滤虚词/章节停用词，保留高辨识度实体与词素） */
 function titleTokens(title: string): Set<string> {
   const tokens = new Set<string>()
   const lower = title.toLowerCase()
-  for (const word of lower.match(/[a-z0-9]{2,}/g) ?? []) tokens.add(word)
+  for (const word of lower.match(/[a-z0-9]{2,}/g) ?? []) {
+    if (!TITLE_STOPWORDS.has(word)) tokens.add(word)
+  }
   const han = lower.match(/[\u4e00-\u9fa5]/g) ?? []
   for (let i = 0; i < han.length; i++) {
-    tokens.add(han[i]!)
-    if (i + 1 < han.length) tokens.add(`${han[i]}${han[i + 1]}`)
+    const char = han[i]!
+    if (!TITLE_STOPWORDS.has(char)) {
+      tokens.add(char)
+    }
+    if (i + 1 < han.length) {
+      const bi = `${char}${han[i + 1]}`
+      if (!TITLE_STOPWORDS.has(bi)) {
+        tokens.add(bi)
+      }
+    }
   }
   return tokens
 }
@@ -442,9 +588,9 @@ function buildPromptFromRefs(refs: SectionRef[]): string {
   for (const ref of refs) {
     if (ref.documentId !== currentDocId) {
       currentDocId = ref.documentId
-      lines.push(`### 文档 documentId=${ref.documentId}｜${ref.fileName}（${ref.fileType}）`)
+      lines.push(`### Document documentId=${ref.documentId} | ${ref.fileName} (${ref.fileType})`)
     }
-    lines.push(`- sectionId=${ref.section.sectionId}｜${ref.section.title}｜${ref.section.summary}`)
+    lines.push(`- sectionId=${ref.section.sectionId} | ${ref.section.title} | ${ref.section.summary}`)
   }
   return lines.join('\n')
 }
@@ -532,10 +678,16 @@ async function runModelEdgeBatches(
   const total = batches.length
   let done = 0
   const groups = await runWithConcurrency(batches, MODEL_CONCURRENCY, async (batch) => {
-    const output = await oneShotJsonCompletion(
-      systemPrompt,
-      `${userIntro}\n\n${buildPromptFromRefs(batch)}\n\n请输出关联 edges JSON。`,
-    )
+    // 图谱推演保持静默降级语义：单批失败（含超时熔断）不阻断整体，全部失败退回本地启发式
+    let output: string | null = null
+    try {
+      output = await oneShotJsonCompletion(
+        systemPrompt,
+        `${userIntro}\n\n${buildPromptFromRefs(batch)}\n\nOutput the relation edges as JSON.`,
+      )
+    } catch (error) {
+      console.warn('[AI速课堂] 图谱批次推演失败，跳过该批次:', error)
+    }
     done += 1
     emitGraphProgress(reporter, done, total, phase)
     if (!output) return []
@@ -545,23 +697,25 @@ async function runModelEdgeBatches(
 }
 
 const GRAPH_SYSTEM_PROMPT = [
-  '你是学习资料知识图谱分析专家。给定多份学习资料的章节目录，请推演跨文档之间的知识关联。',
-  '只输出 JSON，结构为：',
-  '{"edges":[{"sourceDocId":"..","sourceSectionId":"..","targetDocId":"..","targetSectionId":"..","relationType":"prerequisite|exercise|extension|reference","label":"简短中文微标签","description":"一句话说明关联理由"}]}',
-  '规则：',
-  '- 只连接不同文档之间的章节；不得自连；sectionId 必须来自给定列表。',
-  '- 前置于后（先学后练）用 prerequisite；习题集对应知识点用 exercise；延伸补充用 extension；其余为 reference。',
-  '- 关联要精炼可靠，宁少勿滥，最多 24 条。',
+  'You are a knowledge graph specialist. Given the chapter outlines of multiple study documents, analyze cross-document conceptual relationships.',
+  'Language Convention: Generate relation labels and descriptions matching the language of the source documents. Generate final responses in the same language used by the user, defaulting to English otherwise.',
+  'Output strictly valid JSON with the following schema:',
+  '{"edges":[{"sourceDocId":"..","sourceSectionId":"..","targetDocId":"..","targetSectionId":"..","relationType":"prerequisite|exercise|extension|reference","label":"concise label","description":"one-sentence rationale"}]}',
+  'Rules:',
+  '- Connect sections between distinct documents; self-loops are omitted; sectionId must be chosen from the provided outline.',
+  '- Use "prerequisite" for preparatory material; "exercise" for practice problems corresponding to concepts; "extension" for advanced topics; "reference" for related citations.',
+  '- Keep relationships concise and reliable, up to 24 edges.',
 ].join('\n')
 
 const INTRA_GRAPH_SYSTEM_PROMPT = [
-  '你是学习资料知识图谱分析专家。给定同一份长篇资料的章节顺序目录，请推演大章之间的先后演进逻辑。',
-  '只输出 JSON，结构为：',
-  '{"edges":[{"sourceDocId":"..","sourceSectionId":"..","targetDocId":"..","targetSectionId":"..","relationType":"prerequisite|extension|reference","label":"简短中文微标签","description":"一句话说明关联理由"}]}',
-  '规则：',
-  '- 只连接同一份资料内部的前后章节，反映「先学什么、后学什么」的递进关系；不得自连；sectionId 必须来自给定列表。',
-  '- 承接递进的后续章节用 prerequisite；概念延伸补充用 extension；其余为 reference。',
-  '- 关联要精炼可靠，宁少勿滥，最多 10 条。',
+  'You are a knowledge graph specialist. Given the sequential chapter outline of a single comprehensive study document, deduce pedagogical progression between chapters.',
+  'Language Convention: Generate relation labels and descriptions matching the language of the source documents. Generate final responses in the same language used by the user, defaulting to English otherwise.',
+  'Output strictly valid JSON with the following schema:',
+  '{"edges":[{"sourceDocId":"..","sourceSectionId":"..","targetDocId":"..","targetSectionId":"..","relationType":"prerequisite|extension|reference","label":"concise label","description":"one-sentence rationale"}]}',
+  'Rules:',
+  '- Connect sequential sections within the same document to reflect pedagogical progression; self-loops are omitted; sectionId must be chosen from the provided outline.',
+  '- Use "prerequisite" for sequential progressions; "extension" for conceptual expansions; "reference" for supporting sections.',
+  '- Keep relationships concise and reliable, up to 10 edges.',
 ].join('\n')
 
 /**
@@ -616,7 +770,7 @@ async function buildIntraDocumentGraph(
     [document],
     true,
     INTRA_GRAPH_SYSTEM_PROMPT,
-    '以下是同一份学习资料的章节顺序目录：',
+    'Below is the sequential chapter outline of a single study document:',
     reporter,
     '正在推演大章演进脉络',
   )
@@ -649,7 +803,7 @@ async function buildHierarchicalMultiDocumentGraph(
         documents,
         false,
         GRAPH_SYSTEM_PROMPT,
-        '以下是多份学习资料的章节目录：',
+        'Below are the chapter outlines of multiple study documents:',
         reporter,
         '正在推演分层知识网络',
       )
@@ -741,7 +895,8 @@ export async function generateKnowledgeGraph(
     emitGraphProgress(reporter, 1, 1, '知识网络构建完成')
 
     try {
-      const cachePath = join(getStudySessionDir(sessionId), 'knowledge-graph.json')
+      // 写入前确保目录存在（getStudySessionDir 默认纯路径解析、无创建副作用）
+      const cachePath = join(getStudySessionDir(sessionId, { create: true }), 'knowledge-graph.json')
       writeJsonFileAtomic(cachePath, { documents: [], edges, updatedAt: Date.now() })
     } catch (error) {
       console.warn('[AI速课堂] 图谱缓存写入失败:', error)

@@ -12,8 +12,6 @@ interface FileTypeIconProps {
   name: string
   /** 是否为目录 */
   isDirectory: boolean
-  /** 目录是否展开（仅目录有效） */
-  isOpen?: boolean
   /** 图标尺寸（像素），默认 16 */
   size?: number
   /** 额外 className */

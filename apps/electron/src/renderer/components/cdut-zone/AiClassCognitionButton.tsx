@@ -13,6 +13,7 @@ import {
   memoryRetrievalEngineAtom,
   studyRetrievalEngineAtom,
 } from '@/atoms/study-retrieval-atoms'
+import { cn } from '@/lib/utils'
 
 export function AiClassCognitionButton(): React.ReactElement {
   const setModalOpen = useSetAtom(cognitionModalOpenAtom)
@@ -44,11 +45,32 @@ export function AiClassCognitionButton(): React.ReactElement {
     <button
       type="button"
       onClick={() => setModalOpen(true)}
-      className="absolute right-4 top-3 z-20 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-background/80 px-3 py-1.5 text-xs font-medium text-foreground shadow-sm backdrop-blur-md transition-all hover:border-primary/50 hover:bg-card hover:text-primary active:scale-95"
+      title="认知底座设置：调整课堂知识检索与跨课联想记忆引擎"
+      className="group absolute right-4 top-3 z-20 inline-flex items-center gap-2 rounded-full border border-primary/40 bg-gradient-to-r from-primary/15 via-card/90 to-card/90 px-3.5 py-1.5 text-xs font-semibold text-foreground shadow-md shadow-primary/10 backdrop-blur-md transition-all hover:border-primary/60 hover:shadow-lg hover:shadow-primary/20 active:scale-95"
     >
-      <Brain size={13} className="text-primary" />
+      {/* 高亮信标点：提示当前引擎配置入口 */}
+      <span className="relative flex size-2 shrink-0">
+        <span
+          className={cn(
+            'absolute inline-flex size-full animate-ping rounded-full opacity-60',
+            isEnhanced ? 'bg-violet-500' : 'bg-sky-500',
+          )}
+        />
+        <span
+          className={cn(
+            'relative inline-flex size-2 rounded-full',
+            isEnhanced ? 'bg-violet-500' : 'bg-sky-500',
+          )}
+        />
+      </span>
+      <Brain size={14} className="text-primary transition-transform group-hover:scale-110" />
       <span>认知底座</span>
-      <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+      <span
+        className={cn(
+          'rounded-full px-2 py-0.5 text-[10px] font-semibold',
+          isEnhanced ? 'bg-violet-500/15 text-violet-600 dark:text-violet-400' : 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
+        )}
+      >
         {isEnhanced ? '宏观演进+联想' : '经典精准'}
       </span>
     </button>

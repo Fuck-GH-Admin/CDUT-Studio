@@ -321,7 +321,7 @@ export function SessionItemActions({
               <MoreHorizontal size={14} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+          <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
             {menuItems(DropdownMenuItem, DropdownMenuSeparator)}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -548,7 +548,7 @@ export const ConversationItem = React.memo(function ConversationItem({
           )}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-40 z-[9999] min-w-0 p-0.5">
+      <ContextMenuContent className="w-40 min-w-0 p-0.5">
         {menuItems(ContextMenuItem, ContextMenuSeparator)}
       </ContextMenuContent>
       <SessionMiniMapPopover
@@ -929,7 +929,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-      <ContextMenuContent className="w-40 z-[9999] min-w-0 p-0.5">
+      <ContextMenuContent className="w-40 min-w-0 p-0.5">
         {menuItems(ContextMenuItem, ContextMenuSeparator)}
       </ContextMenuContent>
       {!disableMiniMap && (
@@ -1336,7 +1336,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                   <MoreHorizontal size={13} />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-44 z-[9999] min-w-0 p-0.5">
+              <DropdownMenuContent align="start" className="w-44 min-w-0 p-0.5">
                 <DropdownMenuItem
                   className="text-xs py-1 [&>svg]:size-3.5"
                   onSelect={() => onSelectProject(group.workspace.id)}

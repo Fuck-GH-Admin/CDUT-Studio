@@ -10,7 +10,7 @@ import { IPC_CHANNELS, REVIEW_IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANN
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
 import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
 import type {
   RuntimeStatus,
@@ -130,6 +130,19 @@ import type {
   Automation,
   CreateAutomationInput,
   UpdateAutomationInput,
+} from '@profer/shared'
+import type {
+  AiClassRightTabItem,
+  AiClassTabsState,
+  FlashcardDeck,
+  FlashcardItem,
+  MindMapData,
+  QuizSession,
+  StudyArtifactSummary,
+  StudyCardRatingInput,
+  StudyGenerateArtifactInput,
+  StudyGenerateArtifactResult,
+  StudyQuizAnswerInput,
 } from '@profer/shared'
 import type {
   UserProfile,
@@ -273,6 +286,8 @@ export interface ElectronAPI {
   onWindowMaximizeChanged: (callback: (isMaximized: boolean) => void) => () => void
   /** 订阅 macOS 原生全屏状态变化 */
   onWindowFullScreenChanged: (callback: (isFullScreen: boolean) => void) => () => void
+  /** 订阅后台静默自动归档未读通知（携带本次归档的会话/对话数量） */
+  onArchivedUnreadChanged: (callback: (archivedCount: number) => void) => () => void
 
   // ===== 渠道管理相关 =====
 
@@ -1103,7 +1118,7 @@ export interface ElectronAPI {
   /** 为内联 PDF 预览生成临时 HTML 文件，返回文件路径 */
   preparePdfPreview: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ tmpHtmlUrl: string } | null>
 
-  /** 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标 PDF 文件路径、页码与归一化 BBox 坐标 */
+  /** 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标文档文件路径、页码与坐标 */
   resolveDocumentAnchor: (
     anchor: string,
     access?: import('@profer/shared').FileAccessOptions & { label?: string },
@@ -1115,16 +1130,13 @@ export interface ElectronAPI {
     blockId: string
     bbox?: [number, number, number, number]
     label?: string
+    format?: 'pdf' | 'docx' | 'pptx' | 'xlsx'
+    sheetName?: string
+    cellRef?: string
   } | null>
 
   /** 读取文件为 base64（带路径校验，供内联图片预览等） */
   readBinaryBase64: (filePath: string, access?: import('@profer/shared').FileAccessOptions, maxSize?: number) => Promise<string | null>
-
-  /** DOCX 转 HTML（内联预览） */
-  docxToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<{ resolvedPath: string; html: string } | null>
-
-  /** XLSX/PPTX 转 HTML（内联预览） */
-  officeToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<import('@profer/shared').OfficePreviewResult | null>
 
   /** 截图导出：将 HTML 渲染为 PNG 并复制到剪贴板或保存文件 */
   screenshotCapture: (input: { html: string; isDark: boolean; width?: number; mode: 'clipboard' | 'file'; css?: string; themeClass?: string }) => Promise<{ success: boolean; message: string; filePath?: string }>
@@ -1567,9 +1579,11 @@ export interface ElectronAPI {
     onGatekeeperBlocked: (callback: (event: CdutGatekeeperNoticeEvent) => void) => () => void
     /** 回传统一门禁用户决策 */
     gatekeeperRespond: (decision: CdutGatekeeperDecision) => Promise<{ handled: boolean }>
+    /** 调用 8 大业务域工具（支持在线抓取与高仿真离线演示数据回退） */
+    callDomainTool: (params: CdutToolInvokeParams) => Promise<CdutDomainToolResult>
   }
 
-  // ===== CDUT 专区 · 砚湖秒通（Yanhu Express）内置浏览器 =====
+  // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
   yanhuExpress: {
     /** 初始化或从落盘拓扑恢复（仅实例化激活标签，其余休眠） */
     initOrRestore: () => Promise<YanhuTabsState>
@@ -1595,7 +1609,7 @@ export interface ElectronAPI {
     /** 一键自愈：净化陈旧动态签名后重载当前标签 */
     retryWithClean: (input?: YanhuTabRefInput) => Promise<YanhuTabsState>
     /** 弹出标签栏原生上下文菜单（系统绘制，悬浮于网页视图之上） */
-    showTabMenu: (input: YanhuTabRefInput) => Promise<{ success: boolean }>
+    showTabMenu: (input?: YanhuTabRefInput) => Promise<{ success: boolean }>
     /** 在系统默认浏览器打开外链（仅 http/https） */
     openExternal: (url: string) => Promise<{ success: boolean }>
     onTabsChanged: (callback: (state: YanhuTabsState) => void) => () => void
@@ -1603,7 +1617,7 @@ export interface ElectronAPI {
     onUrlChanged: (callback: (event: YanhuUrlChangedEvent) => void) => () => void
 
     // ===== 桌宠「砚小龙」（独立阉割版 Pi 运行时） =====
-    /** 主渲染窗口：同步砚湖秒通视口矩形（CSS 像素） */
+    /** 主渲染窗口：同步智联万站视口矩形（CSS 像素） */
     petSyncViewport: (rect: YanhuPetViewport) => Promise<{ success: boolean }>
     /** 桌宠窗口：上报紧凑包裹窗口几何（DIP） */
     petUpdateGeometry: (geometry: YanhuPetWindowGeometry) => Promise<{ success: boolean }>
@@ -1626,7 +1640,7 @@ export interface ElectronAPI {
     petSetIgnoreMouse: (ignore: boolean) => Promise<{ success: boolean }>
     /** 唤起桌宠原生上下文菜单 */
     petShowContextMenu: () => Promise<{ success: boolean }>
-    /** 特权指令：唤起「砚湖秒通 · 实时底层诊断控制台」 */
+    /** 特权指令：唤起「智联万站 · 实时底层诊断控制台」 */
     openDiagnosticConsole: () => Promise<{ success: boolean }>
   }
 
@@ -1638,6 +1652,30 @@ export interface ElectronAPI {
     removeDocument: (input: StudyDocumentQueryInput) => Promise<{ success: boolean }>
     toggleDocumentActive: (input: StudyToggleDocumentActiveInput) => Promise<{ success: boolean; enabled: boolean }>
     setDocumentsActive: (input: StudySetDocumentsActiveInput) => Promise<{ success: boolean }>
+    // Chrome 风格动态多 Tab 拓扑
+    getTabs: (sessionId: string) => Promise<AiClassTabsState>
+    saveTabs: (input: { sessionId: string; tabs: AiClassRightTabItem[]; activeTabId: string }) => Promise<AiClassTabsState>
+    // 思维导图
+    getMindmap: (input: { sessionId: string; mindmapId?: string }) => Promise<MindMapData | null>
+    saveMindmapCoords: (input: {
+      sessionId: string
+      mindmapId: string
+      coords: Record<string, { x: number; y: number }>
+    }) => Promise<MindMapData | null>
+    exportOpml: (input: {
+      sessionId: string
+      mindmapId?: string
+    }) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>
+    // 抽认卡与 FSRS-7
+    getFlashcards: (input: { sessionId: string; deckId?: string }) => Promise<FlashcardDeck | null>
+    updateCardRating: (input: StudyCardRatingInput) => Promise<FlashcardItem | null>
+    // 测验与 FIM
+    getQuiz: (input: { sessionId: string; quizId?: string }) => Promise<QuizSession | null>
+    submitQuizAnswer: (input: StudyQuizAnswerInput) => Promise<QuizSession | null>
+    // 双轨联动生成
+    generateArtifact: (input: StudyGenerateArtifactInput) => Promise<StudyGenerateArtifactResult>
+    // 已生成成果总览（右侧工作台常驻列表）
+    listArtifacts: (sessionId: string) => Promise<StudyArtifactSummary[]>
   }
 
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====
@@ -1823,6 +1861,12 @@ const electronAPI: ElectronAPI = {
     const handler = (_event: Electron.IpcRendererEvent, isMaximized: boolean): void => callback(isMaximized)
     ipcRenderer.on(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, handler)
     return () => ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, handler)
+  },
+
+  onArchivedUnreadChanged: (callback: (archivedCount: number) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, archivedCount: number): void => callback(archivedCount)
+    ipcRenderer.on(IPC_CHANNELS.ARCHIVED_UNREAD_CHANGED, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.ARCHIVED_UNREAD_CHANGED, handler)
   },
 
   onWindowResize: (callback: () => void) => {
@@ -2986,19 +3030,14 @@ const electronAPI: ElectronAPI = {
       blockId: string
       bbox?: [number, number, number, number]
       label?: string
+      format?: 'pdf' | 'docx' | 'pptx' | 'xlsx'
+      sheetName?: string
+      cellRef?: string
     } | null>
   },
 
   readBinaryBase64: (filePath: string, access?: import('@profer/shared').FileAccessOptions, maxSize?: number) => {
     return ipcRenderer.invoke('file:read-binary-base64', filePath, access, maxSize) as Promise<string | null>
-  },
-
-  docxToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke('file:docx-to-html', filePath, access) as Promise<{ resolvedPath: string; html: string } | null>
-  },
-
-  officeToHtml: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke('file:office-to-html', filePath, access) as Promise<import('@profer/shared').OfficePreviewResult | null>
   },
 
   screenshotCapture: (input: { html: string; isDark: boolean; width?: number; mode: 'clipboard' | 'file'; css?: string; themeClass?: string }) => {
@@ -3706,9 +3745,11 @@ const electronAPI: ElectronAPI = {
     },
     gatekeeperRespond: (decision: CdutGatekeeperDecision) =>
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.GATEKEEPER_RESPOND, decision),
+    callDomainTool: (params: CdutToolInvokeParams) =>
+      ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.CALL_DOMAIN_TOOL, params),
   },
 
-  // ===== CDUT 专区 · 砚湖秒通（Yanhu Express）内置浏览器 =====
+  // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
   yanhuExpress: {
     initOrRestore: () => ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.INIT_OR_RESTORE),
     getTabsState: () => ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.GET_TABS_STATE),
@@ -3740,7 +3781,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.RELOAD, input),
     retryWithClean: (input?: YanhuTabRefInput) =>
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.RETRY_WITH_CLEAN, input),
-    showTabMenu: (input: YanhuTabRefInput) =>
+    showTabMenu: (input?: YanhuTabRefInput) =>
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.SHOW_TAB_MENU, input),
     openExternal: (url: string) =>
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.OPEN_EXTERNAL, url),
@@ -3811,6 +3852,36 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.TOGGLE_DOCUMENT_ACTIVE, input),
     setDocumentsActive: (input: StudySetDocumentsActiveInput) =>
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.SET_DOCUMENTS_ACTIVE, input),
+    // Chrome 风格动态多 Tab 拓扑
+    getTabs: (sessionId: string) => ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_TABS, sessionId),
+    saveTabs: (input: { sessionId: string; tabs: AiClassRightTabItem[]; activeTabId: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.SAVE_TABS, input),
+    // 思维导图
+    getMindmap: (input: { sessionId: string; mindmapId?: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_MINDMAP, input),
+    saveMindmapCoords: (input: {
+      sessionId: string
+      mindmapId: string
+      coords: Record<string, { x: number; y: number }>
+    }) => ipcRenderer.invoke(STUDY_IPC_CHANNELS.SAVE_MINDMAP_COORDS, input),
+    exportOpml: (input: { sessionId: string; mindmapId?: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.EXPORT_OPML, input),
+    // 抽认卡与 FSRS-7
+    getFlashcards: (input: { sessionId: string; deckId?: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_FLASHCARDS, input),
+    updateCardRating: (input: StudyCardRatingInput) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.UPDATE_CARD_RATING, input),
+    // 测验与 FIM
+    getQuiz: (input: { sessionId: string; quizId?: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_QUIZ, input),
+    submitQuizAnswer: (input: StudyQuizAnswerInput) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.SUBMIT_QUIZ_ANSWER, input),
+    // 双轨联动生成
+    generateArtifact: (input: StudyGenerateArtifactInput) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.GENERATE_ARTIFACT, input),
+    // 已生成成果总览（右侧工作台常驻列表）
+    listArtifacts: (sessionId: string) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.LIST_ARTIFACTS, sessionId),
   },
 
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====
@@ -3984,6 +4055,9 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.BATCH_GROUP_APPLY_V2, input) as Promise<import('@profer/shared').BatchGroupApplyResult>,
   runReviewV2: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.RUN_REVIEW_V2, caseId) as Promise<import('@profer/shared').ReviewRunV2>,
   getPiReviewSessionV2: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.GET_PI_REVIEW_SESSION_V2, caseId) as Promise<string | null>,
+  getBackgroundPiReviewStateV2: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.GET_BACKGROUND_PI_REVIEW_STATE_V2, caseId) as Promise<import('@profer/shared').ReviewBackgroundPiRunState>,
+  startBackgroundPiReviewV2: (input: import('@profer/shared').ReviewBackgroundPiStartRequest) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.START_BACKGROUND_PI_REVIEW_V2, input) as Promise<import('@profer/shared').ReviewBackgroundPiRunState>,
+  stopBackgroundPiReviewV2: (input: { caseId: string; runId: string }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.STOP_BACKGROUND_PI_REVIEW_V2, input) as Promise<import('@profer/shared').ReviewBackgroundPiRunState>,
   preparePiReviewV2: (input: { caseId: string; sessionId: string; turnId: string; resumeRunId?: string; inheritReadReceipts?: boolean }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.PREPARE_PI_REVIEW_V2, input) as Promise<{ assignmentId: string; runId: string; caseDirectory: string; userMessage: string; continuedRun?: boolean; inheritedReadDocumentNames?: string[] }>,
   abortPiReviewV2: (input: { caseId: string; sessionId: string; assignmentId: string; runId: string }) =>

@@ -66,6 +66,14 @@ describe('normalizeYanhuPetConfig（配置边界收敛）', () => {
     expect(config.memoryLimit).toBe(50)
     expect(config.petPosition).toEqual({ x: 24, y: 24 })
   })
+
+  test('视觉截图辅助感知（enableVision）仅显式开启才生效，缺省一律关闭', () => {
+    expect(normalizeYanhuPetConfig(null).enableVision).toBeUndefined()
+    expect(normalizeYanhuPetConfig({ enableVision: false }).enableVision).toBeUndefined()
+    // 非布尔脏数据一律视为关闭
+    expect(normalizeYanhuPetConfig({ enableVision: 'yes' }).enableVision).toBeUndefined()
+    expect(normalizeYanhuPetConfig({ enableVision: true }).enableVision).toBe(true)
+  })
 })
 
 describe('toChatMessages（父链构建）', () => {

@@ -163,15 +163,16 @@ import {
   buildReferencedSessionsPrompt,
   DEFAULT_SESSION_TITLE,
   DEFAULT_MODEL_ID,
-  MAX_CONTEXT_MESSAGES,
 } from './agent-prompt-utils'
 import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
 import { buildAttachedDocumentsContext } from './document-parse-tools'
+import { buildDocumentEvidenceForMessage } from './rag/workspace-rag-service'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getOrCreateShellSnapshot } from './shell-snapshot'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import type { PiRetryUpdate } from './adapters/pi-retry-control'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
+import { isAuthorizedDirectReviewTool, selectDirectReviewStrictTools } from './review/review-strict-pi-tools'
 import { buildPiMcpTools, getMcpPolicyToolName } from './adapters/pi-mcp-tools'
 import { evaluatePptCapability } from './ppt-capability-gate'
 import { agentFilePreviewSessionManager } from './agent-file-preview-session'
@@ -677,7 +678,7 @@ export class AgentOrchestrator {
    *
    * 适用于 SDK session 过期、thinking signature 跨模型不兼容等场景。
    * 使用 <session_recovery> 标签指向当前会话的 JSONL 历史文件，Agent 会自动读取并恢复上下文，
-   * 比 buildContextPrompt（仅注入 20 条摘要）提供完整得多的上下文连续性。
+   * 比 buildContextPrompt（仅注入紧邻上一轮 + 相关历史检索）提供完整得多的上下文连续性。
    */
   private prepareResumeFallbackRecovery(
     sessionId: string,
@@ -1220,11 +1221,12 @@ export class AgentOrchestrator {
 
       console.log(`[Agent 编排] 启动 Pi runtime，模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`)
 
-      // 确定 Agent 工作目录
+      // 确定 Agent 工作目录（优先本轮入参，回退会话持久化元数据中的工作区，避免后续轮次退化为默认沙箱）
       workspaceSlug = undefined
       workspace = undefined
-      if (workspaceId) {
-        workspace = getAgentWorkspace(workspaceId)
+      const targetWorkspaceId = workspaceId ?? sessionMeta?.workspaceId
+      if (targetWorkspaceId) {
+        workspace = getAgentWorkspace(targetWorkspaceId)
       } else {
         // 无工作区模式下，统一使用默认工作区提供会话隔离沙箱，严禁在个人主目录运行
         try {
@@ -1250,7 +1252,7 @@ export class AgentOrchestrator {
         agentCwd = homedir()
       }
 
-      const effectiveWorkspaceId = workspaceId ?? workspace?.id
+      const effectiveWorkspaceId = targetWorkspaceId ?? workspace?.id
       const effectiveWorkspaceSlug = workspaceSlug ?? workspace?.slug
       // AI 速课堂专属会话判定：独立工作区（cdut-ai-class）的会话走专用带教身份与学习工具，
       // 常规 Agent 会话不再被注入速课堂铁律与学习工具，实现两套系统提示词彻底分家。
@@ -1387,10 +1389,10 @@ export class AgentOrchestrator {
       ) ?? []
       const toolLines: string[] = []
       for (const name of allowedMentionedMcpServers) {
-        toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
+        toolLines.push(`- MCP server: ${name} (please use this MCP server's tools to complete the task)`)
       }
       if (toolLines.length > 0) {
-        enrichedMessage = `<mentioned_tools>\n用户在消息中明确引用了以下当前预设可用的工具，请在本次回复中主动调用：\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedMessage}`
+        enrichedMessage = `<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedMessage}`
         console.log(`[Agent 编排] 注入 mentioned_tools: ${toolLines.length} 条（原始 ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP）`)
       }
 
@@ -1413,6 +1415,20 @@ export class AgentOrchestrator {
         console.log(`[内核摄入] 已前置注入附件文档上下文（${attachedDocumentsBlock.length} 字符）`)
       }
 
+      // 11.7 工作区静默 RAG：对工作区已解析文档执行 BM25 前置检索，注入带真实锚点的
+      // 最相关原文切片，使模型首轮即可直接作答并携带定位胶囊，无需再做工具试探。
+      if (agentCwd) {
+        try {
+          const evidenceBlock = buildDocumentEvidenceForMessage(agentCwd, runtimeUserMessage)
+          if (evidenceBlock) {
+            enrichedMessage = `${evidenceBlock}\n\n${enrichedMessage}`
+            console.log(`[工作区 RAG] 已前置注入文档证据切片（${evidenceBlock.length} 字符）`)
+          }
+        } catch (error) {
+          console.warn('[工作区 RAG] 前置检索失败，已跳过:', error)
+        }
+      }
+
       // Context Sandwich 动态后缀：动态环境块追加在当轮最新用户消息末尾，绝不污染历史前缀。
       let contextualMessage = `${enrichedMessage}
 
@@ -1426,14 +1442,14 @@ ${dynamicCtx}`
           ? contextualMessage
           : goalIsolated || isSingleTurnFocus
             ? contextualMessage
-            : buildContextPrompt(sessionId, contextualMessage, { agentCwd })
+            : buildContextPrompt(sessionId, contextualMessage, { agentCwd }, runtimeUserMessage)
 
       if (existingSdkSessionId) {
         console.log(`[Agent 编排] 使用 resume 模式，SDK session ID: ${existingSdkSessionId}`)
       } else if (isSingleTurnFocus) {
         console.log(`[Agent 编排] 单轮聚焦模式：跳过历史回填，本轮仅携带当前提问与系统指令`)
       } else if (finalPrompt !== contextualMessage) {
-        console.log(`[Agent 编排] 无 resume，已回填历史上下文（最近 ${MAX_CONTEXT_MESSAGES} 条消息）`)
+        console.log('[Agent 编排] 无 resume，已回填紧邻上一轮对话，并按需检索相关历史上下文')
       }
 
       // 12. 读取应用设置并确定权限模式
@@ -1529,6 +1545,9 @@ ${dynamicCtx}`
               disabledTools,
               pptCapabilityActive,
             })
+            // 活动案卷审核采用 Pi 已有 review 档案，且必须在进入 adapter 前缩小 customTools。
+            // 普通 Pi 会话完全保留原有 MCP/工具构造路径。
+            if (activePiReviewBinding) return selectDirectReviewStrictTools(builtin.tools, activePiReviewBinding)
             const mcpTools = await buildPiMcpTools(mcpServers, presetPolicy)
             return [...builtin.tools, ...mcpTools]
           })()
@@ -1616,7 +1635,6 @@ ${dynamicCtx}`
         'Read',
         'Glob',
         'Grep',
-        'read_document_artifact',
         'discover_tools',
         'WebSearch',
         'WebFetch',
@@ -1663,6 +1681,15 @@ ${dynamicCtx}`
         if (validationFailure) {
           console.warn(`[Agent 工具验证] 参数缺失: tool=${toolName}, mode=${currentMode}`)
           return validationFailure
+        }
+
+        // 已绑定的单案 Pi 审核只允许五个受控工具。普通 auto 权限弹窗不可见时
+        // 若沿用通用审批会导致后台永久等待；这里在 Main 校验指派后放行。
+        // 不对普通 Agent 或无效/过期指派改变任何权限语义。
+        if (activePiReviewBinding) {
+          return isAuthorizedDirectReviewTool(activePiReviewBinding, toolName)
+            ? { behavior: 'allow' as const, updatedInput: input }
+            : { behavior: 'deny' as const, message: '当前案卷审核仅允许受控工具，或本轮指派已失效' }
         }
 
         // ── Write 大文件 token 截断防护 ──
@@ -1940,6 +1967,7 @@ ${dynamicCtx}`
           ...(configuredChannelModel?.contextWindow !== undefined && { contextWindow: configuredChannelModel.contextWindow }),
           ...(configuredChannelModel?.maxTokens !== undefined && { maxTokens: configuredChannelModel.maxTokens }),
           ...(activePiReviewBinding && {
+            toolProfile: 'review' as const,
             contextPolicy: {
               kind: 'review' as const,
               caseId: activePiReviewBinding.caseId,
@@ -1977,6 +2005,7 @@ ${dynamicCtx}`
         }),
         ...(maxTurns != null && { maxTurns }),
         // Pi 使用 permissionMode/canUseTool；不再传 Claude SDK 专属权限字段。
+        canUseTool,
         systemPrompt: piSystemPrompt,
         resumeSessionId: existingSdkSessionId,
         onRuntimeMessage: input.onRuntimeMessage,
@@ -3679,10 +3708,10 @@ ${dynamicCtx}`
     ) ?? []
     const toolLines: string[] = []
     for (const name of allowedMentionedMcpServers) {
-      toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
+      toolLines.push(`- MCP server: ${name} (please use this MCP server's tools to complete the task)`)
     }
     if (toolLines.length > 0) {
-      enrichedText = `<mentioned_tools>\n用户在消息中明确引用了以下当前预设可用的工具，请在本次回复中主动调用：\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
+      enrichedText = `<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
     }
 
     // 构造 SDKUserMessage 并注入（'next' 优先级 = 等当前 turn 完成再处理）

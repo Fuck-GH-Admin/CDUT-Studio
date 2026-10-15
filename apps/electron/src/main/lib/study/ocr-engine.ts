@@ -137,13 +137,15 @@ function unionBBox(boxes: TesseractBBox[]): TesseractBBox | null {
   }
 }
 
-/** 序号标题识别（第一章 / 1.1 / 一、 / （一）等） */
+/** 序号标题识别（第一章 / 1.1 / 一、 / （一）等，排除普通陈述句与数量/年份行） */
 function looksLikeHeading(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed || trimmed.length > 60 || /[。！？；]$/.test(trimmed)) return false
   return (
-    /^第\s*[0-9一二三四五六七八九十百零两]+\s*[章节讲篇部]/.test(text) ||
-    /^\d+(?:\.\d+)+\s*\S?/.test(text) ||
-    /^[一二三四五六七八九十]+[、.．]/.test(text) ||
-    /^[（(][一二三四五六七八九十0-9]+[）)]/.test(text)
+    /^第\s*[0-9一二三四五六七八九十百零两]+\s*[章节讲篇部]/.test(trimmed) ||
+    /^\d+(?:\.\d+)+(?:\s*[\s、.．:：]|\s+)(?![年月日万亿个条项名人元点%度是为])\S/.test(trimmed) ||
+    /^[一二三四五六七八九十]+[、.．]/.test(trimmed) ||
+    /^[（(][一二三四五六七八九十0-9]+[）)]\s*(?![年月日万亿个条项名人元点%度是为])\S/.test(trimmed)
   )
 }
 

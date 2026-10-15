@@ -1,6 +1,6 @@
 {
   "name": "@profer/core",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "license": "AGPL-3.0-only",
   "description": "proma core types,storage and core logic with agents",
   "type": "module",
@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./providers": "./src/providers/index.ts",
     "./highlight": "./src/highlight/index.ts",
-    "./pdf-engine": "./src/pdf-engine/index.ts"
+    "./pdf-engine": "./src/pdf-engine/index.ts",
+    "./office-engine": "./src/office-engine/index.ts"
   },
   "dependencies": {
     "@profer/shared": "workspace:*",

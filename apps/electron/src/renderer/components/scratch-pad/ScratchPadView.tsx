@@ -93,7 +93,7 @@ export function ScratchPadView(): React.ReactElement {
 
   const activeSessionId = React.useMemo(() => {
     const activeTab = tabs.find((t) => t.id === activeTabId)
-    if (activeTab?.type === 'agent' || activeTab?.type === 'preview' || activeTab?.type === 'browser') return activeTab.sessionId
+    if (activeTab?.type === 'agent' || activeTab?.type === 'browser') return activeTab.sessionId
     const agentTab = [...tabs].reverse().find((t) => t.type === 'agent')
     return agentTab?.sessionId ?? null
   }, [tabs, activeTabId])
@@ -266,7 +266,7 @@ export function ScratchPadView(): React.ReactElement {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuPortal>
-          <DropdownMenuContent align="end" side="top" className="min-w-[240px] z-[9999]">
+          <DropdownMenuContent align="end" side="top" className="min-w-[240px]">
             <DropdownMenuLabel className="text-[11px] text-muted-foreground font-normal">
               导出为 Markdown
             </DropdownMenuLabel>

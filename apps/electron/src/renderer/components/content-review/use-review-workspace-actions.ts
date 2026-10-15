@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useAtomValue, useStore } from 'jotai'
+import { beginWorkspaceCaseWrite } from './review-workspace-write-fence'
 import type { Actor, CaseAggregateV2, FieldValue, ReviewCommandV2, SourceRef } from '@profer/shared'
 import {
   reviewWorkspaceAggregatesByCaseAtom,
@@ -55,16 +56,20 @@ export function useReviewWorkspaceActions(): {
 
   const refresh = useCallback(async (): Promise<CaseAggregateV2 | null> => {
     if (!caseId) return null
+    const isLatest = beginWorkspaceCaseWrite(store, caseId)
     const [aggregate, runs, observations] = await Promise.all([
       window.reviewAPI.getAggregateV2(caseId),
       window.reviewAPI.listRunsV2(caseId),
       window.reviewAPI.getRunObservationsV2(caseId),
     ])
     const run = runs[0] ?? null
+    if (!isLatest()) return null
+    const stale = run ? await window.reviewAPI.getWorkspaceRunValidityV2({ caseId, runId: run.id }) : false
+    if (!isLatest()) return null
+    // All four related slots commit together after the last asynchronous read.
     store.set(reviewWorkspaceAggregatesByCaseAtom, { ...store.get(reviewWorkspaceAggregatesByCaseAtom), [caseId]: aggregate ?? null })
     store.set(reviewWorkspaceRunsByCaseAtom, { ...store.get(reviewWorkspaceRunsByCaseAtom), [caseId]: run })
     store.set(reviewWorkspaceExtractedObservationsByCaseAtom, { ...store.get(reviewWorkspaceExtractedObservationsByCaseAtom), [caseId]: observations })
-    const stale = run ? await window.reviewAPI.getWorkspaceRunValidityV2({ caseId, runId: run.id }) : false
     store.set(reviewWorkspaceRunStaleByCaseAtom, { ...store.get(reviewWorkspaceRunStaleByCaseAtom), [caseId]: stale })
     return aggregate ?? null
   }, [caseId, store])
@@ -77,19 +82,27 @@ export function useReviewWorkspaceActions(): {
     ...input,
   }), [])
 
-  const apply = useCallback(async (result: { ok: boolean; aggregate?: CaseAggregateV2; message?: string } | undefined): Promise<void> => {
+  const apply = useCallback(async (request: Promise<{ ok: boolean; aggregate?: CaseAggregateV2; message?: string } | undefined>): Promise<void> => {
+    if (!caseId) return
+    // Capture BEFORE the IPC resolves; capturing at apply(result) would let
+    // a delayed old mutation steal the next round's display generation.
+    const isLatest = beginWorkspaceCaseWrite(store, caseId)
+    const result = await request
     if (!result) throw new Error('审核操作没有返回结果')
     if (!result.ok) throw new Error(result.message ?? '审核操作失败')
-    if (caseId && result.aggregate) {
-      store.set(reviewWorkspaceAggregatesByCaseAtom, { ...store.get(reviewWorkspaceAggregatesByCaseAtom), [caseId]: result.aggregate })
-      const runs = await window.reviewAPI.listRunsV2(caseId)
-      const run = runs[0] ?? null
-      store.set(reviewWorkspaceRunsByCaseAtom, { ...store.get(reviewWorkspaceRunsByCaseAtom), [caseId]: run })
-      const observations = await window.reviewAPI.getRunObservationsV2(caseId)
-      store.set(reviewWorkspaceExtractedObservationsByCaseAtom, { ...store.get(reviewWorkspaceExtractedObservationsByCaseAtom), [caseId]: observations })
-      const stale = run ? await window.reviewAPI.getWorkspaceRunValidityV2({ caseId, runId: run.id }) : false
-      store.set(reviewWorkspaceRunStaleByCaseAtom, { ...store.get(reviewWorkspaceRunStaleByCaseAtom), [caseId]: stale })
-    }
+    if (!result.aggregate || !isLatest()) return
+    const [runs, observations] = await Promise.all([
+      window.reviewAPI.listRunsV2(caseId),
+      window.reviewAPI.getRunObservationsV2(caseId),
+    ])
+    if (!isLatest()) return
+    const run = runs[0] ?? null
+    const stale = run ? await window.reviewAPI.getWorkspaceRunValidityV2({ caseId, runId: run.id }) : false
+    if (!isLatest()) return
+    store.set(reviewWorkspaceAggregatesByCaseAtom, { ...store.get(reviewWorkspaceAggregatesByCaseAtom), [caseId]: result.aggregate })
+    store.set(reviewWorkspaceRunsByCaseAtom, { ...store.get(reviewWorkspaceRunsByCaseAtom), [caseId]: run })
+    store.set(reviewWorkspaceExtractedObservationsByCaseAtom, { ...store.get(reviewWorkspaceExtractedObservationsByCaseAtom), [caseId]: observations })
+    store.set(reviewWorkspaceRunStaleByCaseAtom, { ...store.get(reviewWorkspaceRunStaleByCaseAtom), [caseId]: stale })
   }, [caseId, store])
 
   const currentAggregate = useCallback(async (): Promise<CaseAggregateV2> => {
@@ -101,7 +114,7 @@ export function useReviewWorkspaceActions(): {
   const confirmObservation = useCallback(async (observation: Record<string, unknown>, value: unknown = observation.value, reason = '审核员核对材料后确认该事实') => {
     const aggregate = await currentAggregate()
     if (typeof observation.subjectId !== 'string' || typeof observation.fieldKey !== 'string') throw new Error('事实缺少事项或字段标识')
-    await apply(await window.reviewAPI.correctObservationV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.correctObservationV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'CorrectObservation',
       payload: {
         subjectId: observation.subjectId,
@@ -115,7 +128,7 @@ export function useReviewWorkspaceActions(): {
 
   const transitionEvidenceLink = useCallback(async (input: { id?: string; documentVersionId: string; subjectId: string; supportsFact: string; status: 'confirmed' | 'rejected' }) => {
     const aggregate = await currentAggregate()
-    await apply(await window.reviewAPI.setEvidenceLinkV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.setEvidenceLinkV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'SetEvidenceLink',
       payload: input.id
         ? { evidenceLinkId: input.id, status: input.status, documentVersionId: input.documentVersionId, subjectIds: [input.subjectId], supportsFact: input.supportsFact, linkedBy: 'user' }
@@ -125,7 +138,7 @@ export function useReviewWorkspaceActions(): {
 
   const acknowledgeMaterial = useCallback(async (input: { documentVersionId: string; action: 'read' | 'ignore'; reason: string }) => {
     const aggregate = await currentAggregate()
-    await apply(await window.reviewAPI.acknowledgeWorkspaceMaterialV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.acknowledgeWorkspaceMaterialV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'AcknowledgeWorkspaceMaterial', payload: input,
     }) }))
   }, [apply, command, currentAggregate])
@@ -134,7 +147,7 @@ export function useReviewWorkspaceActions(): {
     const aggregate = await currentAggregate()
     const run = store.get(reviewWorkspaceRunsByCaseAtom)[aggregate.caseV2.id]
     if (!run) throw new Error('没有可处置的审核运行')
-    await apply(await window.reviewAPI.recordWorkspaceDispositionV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.recordWorkspaceDispositionV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'RecordWorkspaceFindingDisposition',
       payload: { ...input, runId: run.id, inputHash: run.inputManifest.hash },
     }) }))
@@ -144,7 +157,7 @@ export function useReviewWorkspaceActions(): {
     const aggregate = await currentAggregate()
     const run = store.get(reviewWorkspaceRunsByCaseAtom)[aggregate.caseV2.id]
     if (!run) throw new Error('没有可关联的审核运行')
-    await apply(await window.reviewAPI.openWorkspaceSupplementV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.openWorkspaceSupplementV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'OpenWorkspaceSupplement',
       payload: { ...input, runId: run.id, inputHash: run.inputManifest.hash },
     }) }))
@@ -157,7 +170,7 @@ export function useReviewWorkspaceActions(): {
     const previous = new Set(supplement.documentVersionIdsAtRequest ?? [])
     const versions = aggregate.caseV2.documents.filter((doc) => doc.role === 'evidence' && doc.active !== false && !previous.has(doc.versionId)).map((doc) => doc.versionId)
     if (versions.length === 0) throw new Error('请先从左侧导入本次补件的新增证明材料')
-    await apply(await window.reviewAPI.respondSupplementV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.respondSupplementV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'RespondSupplement',
       payload: { supplementId, note: '审核员在本地工作台导入了补充材料', documentVersionIds: versions },
     }) as unknown as Record<string, unknown> }))
@@ -165,7 +178,7 @@ export function useReviewWorkspaceActions(): {
 
   const resolveSupplement = useCallback(async (supplementId: string) => {
     const aggregate = await currentAggregate()
-    await apply(await window.reviewAPI.resolveSupplementV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.resolveSupplementV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'ResolveSupplement',
       payload: { supplementId, outcome: 'satisfied', reason: '审核员核验补充材料后确认满足要求' },
     }) as unknown as Record<string, unknown> }))
@@ -175,7 +188,7 @@ export function useReviewWorkspaceActions(): {
     const aggregate = await currentAggregate()
     const run = store.get(reviewWorkspaceRunsByCaseAtom)[aggregate.caseV2.id]
     if (!run) throw new Error('没有可关联的审核运行')
-    await apply(await window.reviewAPI.decideWorkspaceCaseV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.decideWorkspaceCaseV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'RecordWorkspaceBusinessDecision',
       payload: { ...input, basedOnRunId: run.id, inputHash: run.inputManifest.hash },
     }) }))
@@ -185,7 +198,7 @@ export function useReviewWorkspaceActions(): {
     const aggregate = await currentAggregate()
     const run = store.get(reviewWorkspaceRunsByCaseAtom)[aggregate.caseV2.id]
     if (!run) throw new Error('请先完成当前审核运行，再进行事项最终认定')
-    await apply(await window.reviewAPI.recordWorkspaceSubjectAdjudicationV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
+    await apply(window.reviewAPI.recordWorkspaceSubjectAdjudicationV2({ caseId: aggregate.caseV2.id, command: command(aggregate, {
       type: 'RecordWorkspaceSubjectAdjudication',
       payload: { ...input, runId: run.id, inputHash: run.inputManifest.hash },
     }) }))

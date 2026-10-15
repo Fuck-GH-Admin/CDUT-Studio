@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 桌宠紧凑包裹子窗口调度（YanhuPetWindowManager）
+ * 智联万站 · 桌宠紧凑包裹子窗口调度（YanhuPetWindowManager）
  *
  * 为彻底解决 Electron 中 `WebContentsView` 原生图层遮挡渲染层 React DOM 的痼疾，
  * 桌宠「砚小龙」运行在独立、透明、无边框的原生子窗口内：
@@ -7,11 +7,11 @@
  *   - 窗口之外的整个内嵌网页保持 100% 原生点击、文本选中与滚轮响应；
  *   - 随同主窗口移动 / 最小化 / 恢复 / 关闭。
  *
- * 坐标契约：主渲染窗口上报砚湖秒通视口（CSS 像素）→ 本管理器按主窗口缩放换算为 DIP，
+ * 坐标契约：主渲染窗口上报智联万站视口（CSS 像素）→ 本管理器按主窗口缩放换算为 DIP，
  * 桌宠渲染进程再以视口左上角为原点上报紧凑包裹几何，最终折算为屏幕坐标应用。
  */
 
-import { BrowserWindow, Menu, app, webContents, type MenuItemConstructorOptions, type WebContents } from 'electron'
+import { BrowserWindow, Menu, app, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import { join } from 'node:path'
 import { VITE_DEV_SERVER_URL } from '../../config-paths'
 import type {
@@ -73,6 +73,20 @@ export class YanhuPetWindowManager {
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null
   /** 应用焦点切回监听器 */
   private appFocusListener: ((event: unknown, focusedWindow: BrowserWindow) => void) | null = null
+  /** 应用失焦监听器（切到外部第三方应用时触发失焦裁决） */
+  private appBlurListener: ((event: unknown, window: BrowserWindow) => void) | null = null
+  /** 主窗口生命周期监听器（具名保存，dispose 时精确解绑，避免主窗口重建后残留回调把桌宠再次显示） */
+  private ownerHandlers: {
+    move: () => void
+    resize: () => void
+    minimize: () => void
+    restore: () => void
+    show: () => void
+    hide: () => void
+    focus: () => void
+    blur: () => void
+    closed: () => void
+  } | null = null
   /** 配置修订号：仅显式 saveConfig 递增，供渲染层判定是否应用配置 */
   private configRevision = 0
 
@@ -84,7 +98,7 @@ export class YanhuPetWindowManager {
     this.bindOwnerListeners(window)
   }
 
-  /** 监听主窗口生命周期，保证子窗口随动 */
+  /** 监听主窗口生命周期，保证子窗口随动（具名 handler，便于 dispose 精确解绑） */
   private bindOwnerListeners(window: BrowserWindow): void {
     if (this.ownerListenersBound) return
     this.ownerListenersBound = true
@@ -97,25 +111,47 @@ export class YanhuPetWindowManager {
       if (window.isMinimized() || !window.isVisible()) this.petWindow.hide()
       else if (this.presented) reapply()
     }
-    window.on('move', reapply)
-    window.on('resize', reapply)
-    window.on('minimize', hideWhenHidden)
-    window.on('restore', hideWhenHidden)
-    window.on('show', hideWhenHidden)
-    window.on('hide', hideWhenHidden)
-    // 主窗口重新获得焦点时瞬时复位到应用顶层
-    window.on('focus', reapply)
-    // 失焦后延迟判定：若整个应用失焦（切到外部第三方应用），隐藏子窗口避免流氓置顶
-    window.on('blur', () => this.scheduleFocusReconcile())
-    window.on('closed', () => this.dispose())
+    this.ownerHandlers = {
+      move: reapply,
+      resize: reapply,
+      minimize: hideWhenHidden,
+      restore: hideWhenHidden,
+      show: hideWhenHidden,
+      hide: hideWhenHidden,
+      // 主窗口重新获得焦点时瞬时复位到应用顶层
+      focus: reapply,
+      // 失焦后延迟判定：若整个应用失焦（切到外部第三方应用），隐藏子窗口避免流氓置顶
+      blur: () => this.scheduleFocusReconcile(),
+      closed: () => this.dispose(),
+    }
+    window.on('move', this.ownerHandlers.move)
+    window.on('resize', this.ownerHandlers.resize)
+    window.on('minimize', this.ownerHandlers.minimize)
+    window.on('restore', this.ownerHandlers.restore)
+    window.on('show', this.ownerHandlers.show)
+    window.on('hide', this.ownerHandlers.hide)
+    window.on('focus', this.ownerHandlers.focus)
+    window.on('blur', this.ownerHandlers.blur)
+    window.on('closed', this.ownerHandlers.closed)
 
     if (!this.appFocusListener) {
       this.appFocusListener = (_event: unknown, focusedWindow: BrowserWindow): void => {
         if (focusedWindow === this.owner || focusedWindow === this.petWindow) {
-          if (this.presented) reapply()
+          if (this.presented) {
+            this.restorePetWindow()
+            reapply()
+          }
         }
       }
       app.on('browser-window-focus', this.appFocusListener)
+    }
+    // 全应用失焦监听：用户切到 VS Code / Chrome / 记事本等外部应用或点击任务栏时，
+    // 立即启动 80ms 快速裁决，确认焦点未在本应用内交接即隐藏桌宠，杜绝流氓常驻悬浮。
+    if (!this.appBlurListener) {
+      this.appBlurListener = (): void => {
+        this.scheduleFocusReconcile()
+      }
+      app.on('browser-window-blur', this.appBlurListener)
     }
   }
 
@@ -140,37 +176,70 @@ export class YanhuPetWindowManager {
       this.applyBounds()
       this.raiseToTop()
     }, 2000)
+    // 定时器不得阻塞进程退出（AGENTS.md 红线）
+    if (typeof this.watchdogTimer.unref === 'function') this.watchdogTimer.unref()
   }
 
-  /** 失焦后延迟核对焦点归属，避免切到外部应用时桌宠仍置顶漂浮 */
+  /**
+   * 失焦后 80ms 快速核对焦点归属，避免切到外部应用时桌宠仍置顶漂浮。
+   *
+   * 裁决依据严格收敛为 OS 级窗口聚合判定（见 {@link isAppInForeground}），
+   * **绝不使用 `webContents.getFocusedWebContents()`**：Electron 在切到外部应用时会恒定保留
+   * 上一激活 WebContents 指针而永不置 null，历史实现据此判定会导致 `anyFocused` 恒为 true、
+   * `win.hide()` 永不触发的「失焦背景常驻流氓」漏洞。
+   */
   private scheduleFocusReconcile(): void {
     if (this.focusTimer) clearTimeout(this.focusTimer)
     this.focusTimer = setTimeout(() => {
       this.focusTimer = null
       const win = this.petWindow
-      const owner = this.owner
-      if (!win || win.isDestroyed() || !owner || owner.isDestroyed()) return
+      if (!win || win.isDestroyed()) return
       if (!this.presented) return
 
-      // 综合核对焦点：检查主窗口、桌宠窗口、其它窗口或内嵌 WebContents（含 WebContentsView）是否持有焦点
-      const anyWindowFocused =
-        owner.isFocused() ||
-        win.isFocused() ||
-        BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused())
-      const anyWebContentsFocused = Boolean(webContents.getFocusedWebContents())
-      const anyFocused = anyWindowFocused || anyWebContentsFocused
-
-      // 仅当应用完全切出至外部第三方软件（操作系统前台无本应用任何焦点）时才隐藏，避免流氓置顶
-      if (!anyFocused) {
-        win.hide()
+      // 操作系统前台焦点未落在本应用（主窗口 / 桌宠窗口）→ 瞬时隐藏，杜绝流氓置顶
+      if (!this.isAppInForeground()) {
+        this.hidePetWindow()
         return
       }
+      // 焦点仍在应用内交接（如主窗口 <-> 桌宠窗口切换）→ 保持显示并复位层级
+      this.restorePetWindow()
       this.raiseToTop()
       this.applyBounds()
-    }, 200)
+    }, 80)
+    // 定时器不得阻塞进程退出（AGENTS.md 红线）
+    if (typeof this.focusTimer.unref === 'function') this.focusTimer.unref()
   }
 
-  /** 设置砚湖秒通呈现态（进入 / 离开子页面） */
+  /**
+   * OS 级前台聚合判定：仅当主窗口可见、未最小化，且操作系统前台焦点确实落在
+   * 主窗口或桌宠窗口上时，才认定本应用处于前台。
+   */
+  private isAppInForeground(): boolean {
+    const owner = this.owner
+    if (!owner || owner.isDestroyed() || !owner.isVisible() || owner.isMinimized()) {
+      return false
+    }
+    const focusedWin = BrowserWindow.getFocusedWindow()
+    return focusedWin === owner || focusedWin === this.petWindow
+  }
+
+  /** 瞬时隐藏桌宠窗口（不改动呈现态，供失焦裁决与全局模态联动调用） */
+  public hidePetWindow(): void {
+    const win = this.petWindow
+    if (win && !win.isDestroyed() && win.isVisible()) win.hide()
+  }
+
+  /** 复位恢复桌宠窗口（仅当仍处于呈现态且应用处于 OS 前台时生效） */
+  public restorePetWindow(): void {
+    const win = this.petWindow
+    if (!win || win.isDestroyed()) return
+    if (!this.presented || !this.dipViewport) return
+    if (!this.isAppInForeground()) return
+    this.applyBounds()
+    this.raiseToTop()
+  }
+
+  /** 设置智联万站呈现态（进入 / 离开子页面） */
   public setPresented(presented: boolean): void {
     this.presented = presented
     if (presented) {
@@ -185,16 +254,13 @@ export class YanhuPetWindowManager {
   }
 
   /**
-   * 同步砚湖秒通视口矩形（CSS 像素，来自主渲染窗口）。
+   * 同步智联万站视口矩形（CSS 像素，来自主渲染窗口）。
    * 主窗口缩放系数不为 1 时按缩放换算为 DIP，保证与子窗口坐标系一致。
    */
   public syncViewport(rect: YanhuPetViewport): void {
-    // 自愈保障：收到正向有效视口且尚未激活呈现时，自动补正 presented 状态并确保窗口实例化
-    if (rect.width > 4 && rect.height > 4 && !this.presented) {
-      this.presented = true
-      this.ensureWindow()
-      this.scheduleWatchdog()
-    }
+    // 仅更新几何，绝不隐式改变呈现态：
+    // 呈现态的唯一来源是 SHOW_VIEW / HIDE_VIEW / UPDATE_BOUNDS(visible)，
+    // 否则渲染层每帧上报视口都会把桌宠重新「置为呈现」，与隐藏指令互相打架造成 show/hide 抖动。
     const owner = this.owner
     const zoom = owner && !owner.isDestroyed() ? owner.webContents.getZoomFactor() : 1
     const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
@@ -257,7 +323,7 @@ export class YanhuPetWindowManager {
     this.send(YANHU_EXPRESS_IPC_CHANNELS.PET_HISTORY_CLEARED, null)
   }
 
-  /** 向砚湖秒通主渲染窗口与桌宠窗口派发流式事件 */
+  /** 向桌宠子窗口派发流式事件（仅桌宠窗口消费；主渲染窗口不经此通道） */
   public emitStream(event: YanhuPetStreamEvent): void {
     this.send(YANHU_EXPRESS_IPC_CHANNELS.PET_CHAT_STREAM_CHUNK, event)
   }
@@ -300,6 +366,14 @@ export class YanhuPetWindowManager {
         label: config.isCollapsed ? '显示伴随卡片' : '仅显示桌宠',
         click: () => {
           this.saveConfig({ isCollapsed: !config.isCollapsed })
+        },
+      },
+      {
+        label: '视觉多模态截图感知（截图标定辅助）',
+        type: 'checkbox',
+        checked: Boolean(config.enableVision),
+        click: () => {
+          this.saveConfig({ enableVision: !config.enableVision })
         },
       },
       { type: 'separator' },
@@ -349,7 +423,7 @@ export class YanhuPetWindowManager {
   }
 
   /**
-   * 一键复位：依据当前砚湖秒通视口（DIP）重新计算正中央坐标并落盘。
+   * 一键复位：依据当前智联万站视口（DIP）重新计算正中央坐标并落盘。
    *
    * 伴随卡片可见时以「立绘 + 间距 + 卡片」联合外框整体居中；仅桌宠态则以立绘单体居中。
    * 复位后立即抬高到绝对顶层，避免被原生网页图层抢占 Z-Order。
@@ -376,6 +450,22 @@ export class YanhuPetWindowManager {
   public dispose(): void {
     this.presented = false
     this.geometry = null
+    // 解绑主窗口生命周期监听：主窗口重建 / 重新 setOwnerWindow 时不残留旧回调
+    const owner = this.owner
+    const handlers = this.ownerHandlers
+    if (handlers && owner && !owner.isDestroyed()) {
+      owner.off('move', handlers.move)
+      owner.off('resize', handlers.resize)
+      owner.off('minimize', handlers.minimize)
+      owner.off('restore', handlers.restore)
+      owner.off('show', handlers.show)
+      owner.off('hide', handlers.hide)
+      owner.off('focus', handlers.focus)
+      owner.off('blur', handlers.blur)
+      owner.off('closed', handlers.closed)
+    }
+    this.ownerHandlers = null
+    this.ownerListenersBound = false
     if (this.focusTimer) {
       clearTimeout(this.focusTimer)
       this.focusTimer = null
@@ -387,6 +477,10 @@ export class YanhuPetWindowManager {
     if (this.appFocusListener) {
       app.removeListener('browser-window-focus', this.appFocusListener)
       this.appFocusListener = null
+    }
+    if (this.appBlurListener) {
+      app.removeListener('browser-window-blur', this.appBlurListener)
+      this.appBlurListener = null
     }
     this.hideWindow()
     if (this.petWindow && !this.petWindow.isDestroyed()) {
@@ -457,6 +551,10 @@ export class YanhuPetWindowManager {
     win.on('closed', () => {
       this.petWindow = null
     })
+    // 子窗口自身失焦：覆盖「点击桌宠后随即切到外部应用」的场景，同样纳入 80ms 前台裁决
+    win.on('blur', () => {
+      this.scheduleFocusReconcile()
+    })
 
     this.petWindow = win
     return win
@@ -484,13 +582,12 @@ export class YanhuPetWindowManager {
    */
   private applyBounds(): void {
     const win = this.petWindow
+    if (!win || win.isDestroyed()) return
     const owner = this.owner
-    if (!win || win.isDestroyed() || !owner || owner.isDestroyed()) return
-    if (!this.presented || !this.dipViewport) {
-      win.hide()
-      return
-    }
-    if (!owner.isVisible() || owner.isMinimized()) {
+    // 桌宠显隐与客户端主窗口强绑定（单一裁决点）：
+    // 主窗口不存在 / 已销毁 / 不可见 / 最小化 / 未呈现 / 无有效视口 → 一律隐藏，绝不单独漂浮。
+    if (!owner || owner.isDestroyed() || !this.presented || !this.dipViewport
+      || !owner.isVisible() || owner.isMinimized()) {
       win.hide()
       return
     }

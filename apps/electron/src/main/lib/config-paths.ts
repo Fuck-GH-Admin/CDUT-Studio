@@ -1212,7 +1212,7 @@ export function getKnowledgeItemDir(itemId: string): string {
 const STUDY_ID_RE = /^[A-Za-z0-9_-]+$/
 
 /** 校验学习资料路径片段，非法直接抛错，避免 renderer 传入任意路径。 */
-function assertStudyId(value: string, label: string): string {
+export function assertStudyId(value: string, label: string): string {
   if (typeof value !== 'string' || !STUDY_ID_RE.test(value)) {
     throw new Error(`${label}无效`)
   }
@@ -1230,21 +1230,21 @@ export function getStudyMaterialsRootDir(): string {
   return dir
 }
 
-/** 单会话学习资料目录；仅在写入流程创建。 */
-export function getStudySessionDir(sessionId: string): string {
+/** 单会话学习资料目录；可选在写入流程创建（默认纯路径解析，无创建副作用）。 */
+export function getStudySessionDir(sessionId: string, options?: { create?: boolean }): string {
   const root = resolve(getStudyMaterialsRootDir())
   const dir = resolve(root, assertStudyId(sessionId, '会话标识'))
   if (!dir.startsWith(`${root}${sep}`)) throw new Error('会话标识无效')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  if (options?.create && !existsSync(dir)) mkdirSync(dir, { recursive: true })
   return dir
 }
 
-/** 单份学习资料索引目录；只在导入写入时创建。 */
-export function getStudyDocumentDir(sessionId: string, documentId: string): string {
-  const root = resolve(getStudySessionDir(sessionId))
+/** 单份学习资料索引目录；可选在导入写入时创建（默认纯路径解析，无创建副作用）。 */
+export function getStudyDocumentDir(sessionId: string, documentId: string, options?: { create?: boolean }): string {
+  const root = resolve(getStudySessionDir(sessionId, options))
   const dir = resolve(root, assertStudyId(documentId, '文档标识'))
   if (!dir.startsWith(`${root}${sep}`)) throw new Error('文档标识无效')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  if (options?.create && !existsSync(dir)) mkdirSync(dir, { recursive: true })
   return dir
 }
 
@@ -1261,6 +1261,46 @@ export function getStudentCognitionPath(sessionId: string): string {
 /** 资料激活状态配置路径（记录被停用、静默排除出检索的文档标识）。 */
 export function getStudyActiveDocumentsPath(sessionId: string): string {
   return join(getStudySessionDir(sessionId), 'active-documents.json')
+}
+
+/**
+ * AI 速课堂会话专属存储根目录（Chrome 风格多 Tab 拓扑 / 思维导图 / 抽认卡 / 测验）。
+ *
+ * 路径：~/.cdutai/study-sessions/
+ */
+export function getStudySessionsRootDir(): string {
+  const dir = join(getConfigDir(), 'study-sessions')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 单课堂的专属存储目录；可选在写入流程创建（默认纯路径解析，无创建副作用）。 */
+export function getStudySessionDataDir(sessionId: string, options?: { create?: boolean }): string {
+  const root = resolve(getStudySessionsRootDir())
+  const dir = resolve(root, assertStudyId(sessionId, '会话标识'))
+  if (!dir.startsWith(`${root}${sep}`)) throw new Error('会话标识无效')
+  if (options?.create && !existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 速课堂多 Tab 拓扑路径（tabs.json）。 */
+export function getStudyTabsPath(sessionId: string): string {
+  return join(getStudySessionDataDir(sessionId), 'tabs.json')
+}
+
+/** 思维导图数据与用户自定义坐标路径（mindmaps.json）。 */
+export function getStudyMindmapsPath(sessionId: string): string {
+  return join(getStudySessionDataDir(sessionId), 'mindmaps.json')
+}
+
+/** 抽认卡卡包与 FSRS-7 学习状态路径（flashcards.json）。 */
+export function getStudyFlashcardsPath(sessionId: string): string {
+  return join(getStudySessionDataDir(sessionId), 'flashcards.json')
+}
+
+/** 测验题库、答题记录与 FIM 认知轨迹路径（quizzes.json）。 */
+export function getStudyQuizzesPath(sessionId: string): string {
+  return join(getStudySessionDataDir(sessionId), 'quizzes.json')
 }
 
 /**

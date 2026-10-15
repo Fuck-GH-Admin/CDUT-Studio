@@ -4,14 +4,14 @@
  * 为什么需要它：把「当前会话」拖进分区时，**不自动补位**——另一栏先空着，由用户自己挑。
  * 空栏本身就是那个选择入口：可以从下拉里选一个已打开的会话，也可以把任意会话标签拖进来。
  *
- * 只提供组合白名单内的候选（agent / chat / preview），并排除已在栏里的标签；
- * 顶栏 Tab 属于同一会话，候选进一步收窄到组合已有成员的会话（不允许跨会话拼）；
- * 没有候选时给出"先从左侧栏打开一个会话"的指引，而不是给一个点不动的按钮。
+ * 只提供组合白名单内的候选（agent / chat / browser），并排除已在栏里的标签；
+ * 跨会话组合已放开，候选不再按会话收窄。
  */
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { Bot, Columns2, FileText, Globe2, MessageSquare } from 'lucide-react'
+import { Bot, Columns2, Globe2, MessageSquare } from 'lucide-react'
+import { Z_LAYER } from '@profer/ui'
 import { cn } from '@/lib/utils'
 import { tabsAtom, type TabItem } from '@/atoms/tab-atoms'
 import { isGroupEligibleTab } from '@/atoms/tab-group-atoms'
@@ -26,8 +26,6 @@ import {
 export interface EmptyPanePlaceholderProps {
   /** 已经在组合里的标签 id（不再作为候选） */
   excludeTabIds: string[]
-  /** 组合已有成员的会话 id；给出时候选收窄到该会话（顶栏 Tab 不跨会话拼） */
-  sessionId?: string | null
   onPick: (tabId: string) => void
   onDissolve: () => void
 }
@@ -35,25 +33,20 @@ export interface EmptyPanePlaceholderProps {
 function CandidateIcon({ tab }: { tab: TabItem }): React.ReactElement | null {
   if (tab.type === 'agent') return <Bot className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
   if (tab.type === 'chat') return <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-  // 预览标签是一个文件：给个文件图标，避免候选列表里出现没有类型标识的行
-  if (tab.type === 'preview') return <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
   if (tab.type === 'browser') return <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
   return null
 }
 
 export function EmptyPanePlaceholder({
   excludeTabIds,
-  sessionId = null,
   onPick,
   onDissolve,
 }: EmptyPanePlaceholderProps): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
   const excluded = React.useMemo(() => new Set(excludeTabIds), [excludeTabIds])
   const candidates = React.useMemo(
-    () => tabs.filter((tab) => !excluded.has(tab.id)
-      && isGroupEligibleTab(tab)
-      && (!sessionId || tab.sessionId === sessionId)),
-    [excluded, sessionId, tabs],
+    () => tabs.filter((tab) => !excluded.has(tab.id) && isGroupEligibleTab(tab)),
+    [excluded, tabs],
   )
 
   return (
@@ -76,8 +69,8 @@ export function EmptyPanePlaceholder({
             选择会话
           </Button>
         </DropdownMenuTrigger>
-        {/* z-[100]：主区外壳自身是 z-[60]/z-[70]，Radix 默认 z-50 会被整个面板盖住 */}
-        <DropdownMenuContent align="center" className="z-[100] max-h-72 w-56 overflow-y-auto">
+        {/* 主区外壳自身是 shell 层，Radix 默认 z-50 会被整个面板盖住，故显式提升到下拉菜单层 */}
+        <DropdownMenuContent align="center" className={`${Z_LAYER.menu} max-h-72 w-56 overflow-y-auto`}>
           {candidates.length > 0 ? (
             candidates.map((tab) => (
               <DropdownMenuItem

@@ -94,8 +94,8 @@ describe('文档内容解析服务（内核双态物化）', () => {
   })
 })
 
-describe('内核前置摄入：零 Token 膨胀引用句柄与 read_document_artifact 切片读取', () => {
-  test('Given 会话携带 PDF 附件 When 构建摄入上下文 Then 产出轻量句柄并支持 read_document_artifact 切片与检索', async () => {
+describe('内核前置摄入：零 Token 膨胀引用句柄与锚点切片读取', () => {
+  test('Given 会话携带 PDF 附件 When 构建摄入上下文 Then 产出轻量句柄并支持锚点切片与检索', async () => {
     const filePath = join(root, 'attached.pdf')
     writeFileSync(filePath, buildPdfWithText('PreIngest Check'))
 
@@ -109,7 +109,7 @@ describe('内核前置摄入：零 Token 膨胀引用句柄与 read_document_art
     expect(block).toContain('name="attached.pdf"')
     expect(block).toContain('pages="1"')
     expect(block).toContain('clean_markdown_path=')
-    expect(block).toContain('read_document_artifact')
+    expect(block).toContain('证据互信')
     expect(block).toContain('</attached_documents>')
 
     const slice = await executeReadDocumentArtifact(

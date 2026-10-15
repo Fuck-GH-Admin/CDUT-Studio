@@ -8,8 +8,9 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom, useAtom } from 'jotai'
-import { tabsAtom, activeTabIdAtom, activeTabAtom, tabIndicatorMapAtom } from '@/atoms/tab-atoms'
+import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
+import { activateTabWithSideEffects } from '@/lib/tab-activation'
+import { tabsAtom, activeTabIdAtom, activeTabAtom, SCRATCH_PAD_ID } from '@/atoms/tab-atoms'
 import { Panel } from '@/components/app-shell/Panel'
 import { WelcomeView } from '@/components/welcome/WelcomeView'
 import { browserPanelDismissedSessionIdsAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
@@ -27,17 +28,14 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
 import { cn } from '@/lib/utils'
-import { resolveContentTabId } from '@/lib/active-tab-content'
+import { resolveContentTabId, shouldShowWelcomeLauncher } from '@/lib/active-tab-content'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { EmptyPanePlaceholder } from './EmptyPanePlaceholder'
-import { useCloseTab } from '@/hooks/useCloseTab'
-import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 import {
   GROUP_SPLIT_GAP,
   fillGroupSide,
   findTabGroup,
   focusGroupMember,
-  groupSessionId,
   groupTabIds,
   isSessionConsistentGroup,
   reconcileTabGroups,
@@ -61,11 +59,14 @@ export function MainArea(): React.ReactElement {
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
   const appMode = useAtomValue(appModeAtom)
-  const syncActiveTabSideEffects = useSyncActiveTabSideEffects()
+  const store = useStore()
 
   // 内容必须跟随同步 activeTabId 渲染。useDeferredValue 会让 TabBar 已高亮新会话时，
   // 主区域仍长期保留旧会话；昂贵子树应自行优化，不能以旧会话内容作为过渡态。
   const contentTabId = resolveContentTabId(tabs, activeTabId)
+  // 主区空态判定：只有「没有任何真实内容标签」且「当前不同后台常驻 Tab（Scratch Pad / 教程）」
+  // 时才显示新建会话启动页。教程 Tab 是有效内容，必须交给 TabContent 渲染。
+  const showWelcomeLauncher = shouldShowWelcomeLauncher(tabs, activeTabId)
 
   // ===== 受管浏览器（Tab 化）=====
   const setBrowserStateMap = useSetAtom(browserStateMapAtom)
@@ -75,7 +76,7 @@ export function MainArea(): React.ReactElement {
   // 浏览器仅属于 Agent 会话；必须同时满足「激活 tab 绑定了 agent 会话」（agent / 预览 / 浏览器 Tab）
   // 和「当前处于 agent 模式」。否则 toggle-mode 快捷键（只切 appMode 不切 tab）会造成
   // appMode 与 activeTab 撕裂，让浏览器状态在已切到 Chat 的界面上错误残留。
-  const browserSessionId = appMode === 'agent' && activeTab && (activeTab.type === 'agent' || activeTab.type === 'preview' || activeTab.type === 'browser')
+  const browserSessionId = appMode === 'agent' && activeTab && (activeTab.type === 'agent' || activeTab.type === 'browser')
     ? activeTab.sessionId
     : null
   currentBrowserSessionIdRef.current = browserSessionId
@@ -158,7 +159,7 @@ export function MainArea(): React.ReactElement {
   // ===== 组合 tab（两个标签左右并排）=====
   // 组合是一个叠加态：两个成员标签仍在 tabsAtom 里，只是顶栏渲染时折叠成一个条目。
   // 焦点 = activeTabId 属于哪一侧，因此"当前会话"（左侧栏高亮/右侧文件面板）
-  // 通过既有的 useSyncActiveTabSideEffects 单点同步自动跟随焦点栏，不需要第二条真相。
+  // 通过既有的 activateTabWithSideEffects 单点同步自动跟随焦点栏，不需要第二条真相。
   const [tabGroupRatio, setTabGroupRatio] = useAtom(tabGroupRatioAtom)
   const tabGroupDrag = useAtomValue(tabGroupDragAtom)
   const leftGroupTab = React.useMemo(
@@ -169,12 +170,11 @@ export function MainArea(): React.ReactElement {
     () => (tabGroup ? tabs.find((tab) => tab.id === tabGroup.rightTabId) ?? null : null),
     [tabGroup, tabs],
   )
-  const indicatorMap = useAtomValue(tabIndicatorMapAtom)
-  const { executeClose } = useCloseTab()
   const groupContainerRef = React.useRef<HTMLDivElement>(null)
   // 分栏像素宽由实测容器宽算出，保证比例与最小宽度约束一致
   const [groupContainerWidth, setGroupContainerWidth] = React.useState(0)
   const groupDragging = React.useRef(false)
+  const groupResizeCleanupRef = React.useRef<(() => void) | null>(null)
 
   React.useLayoutEffect(() => {
     const element = groupContainerRef.current
@@ -202,8 +202,6 @@ export function MainArea(): React.ReactElement {
 
   // 成员被关闭/删除（或组合指向失效标签）时自动解散对应组合。
   React.useEffect(() => {
-    // 再叠加「同一会话」边界：跨会话组合（旧持久化或异常状态）直接解散，
-    // 顶栏 Tab 属于同一会话，组合只允许同会话成员并排。
     const reconciled = reconcileTabGroups(tabGroups, new Set(tabs.map((tab) => tab.id)))
       .filter((group) => isSessionConsistentGroup(group, tabs))
     const unchanged = reconciled.length === tabGroups.length
@@ -212,10 +210,8 @@ export function MainArea(): React.ReactElement {
   }, [setTabGroups, tabGroups, tabs])
 
   const activateGroupTab = React.useCallback((tabId: string): void => {
-    setActiveTabId(tabId)
-    const target = tabs.find((tab) => tab.id === tabId)
-    if (target) syncActiveTabSideEffects(target)
-  }, [setActiveTabId, syncActiveTabSideEffects, tabs])
+    activateTabWithSideEffects(store, tabId)
+  }, [store])
 
   /** 聚焦某一栏：只在组合视图激活时切换成员，组外标签不能被 pointerdown 劫持 */
   const focusGroupSide = React.useCallback((side: TabGroupSide): void => {
@@ -226,7 +222,7 @@ export function MainArea(): React.ReactElement {
     activateGroupTab(targetId)
   }, [activateGroupTab, activeTabId, setTabGroups, tabGroup])
 
-  /** 空栏里选中一个标签（会话或工作 Tab）：放进去并把焦点交给它；跨会话标签一律拒绝 */
+  /** 空栏里选中一个标签（会话或工作 Tab）：放进去并把焦点交给它（支持跨会话组合） */
   const fillGroupPane = React.useCallback((side: TabGroupSide, tabId: string): void => {
     if (!tabGroup) return
     const filledGroup = fillGroupSide(tabGroup, side, tabId)
@@ -243,6 +239,7 @@ export function MainArea(): React.ReactElement {
     const container = groupContainerRef.current
     if (!container) return
     e.preventDefault()
+    groupResizeCleanupRef.current?.()
     groupDragging.current = true
     const rect = container.getBoundingClientRect()
     document.body.style.userSelect = 'none'
@@ -255,17 +252,29 @@ export function MainArea(): React.ReactElement {
       const pointerFraction = (moveEvent.clientX - rect.left - GROUP_SPLIT_GAP / 2) / available
       setTabGroupRatio(resolveGroupSplitGeometry(rect.width, 1 - pointerFraction).ratio)
     }
-    const onMouseUp = (): void => {
+    const cleanup = (): void => {
       groupDragging.current = false
       document.body.style.userSelect = ''
       document.body.style.cursor = ''
       document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = '' })
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
+      groupResizeCleanupRef.current = null
     }
+    const onMouseUp = (): void => {
+      cleanup()
+    }
+    groupResizeCleanupRef.current = cleanup
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
   }, [setTabGroupRatio])
+
+  React.useEffect(() => {
+    return () => {
+      // 组件卸载时强制清理分栏拖拽监听与全局 cursor 样式
+      groupResizeCleanupRef.current?.()
+    }
+  }, [])
 
   React.useEffect(() => {
     if (tabs.length === 0) {
@@ -274,10 +283,12 @@ export function MainArea(): React.ReactElement {
   }, [tabs.length])
 
   React.useEffect(() => {
-    if (tabs.length > 0 && !activeTabId) {
-      setActiveTabId(tabs[0]!.id)
+    // 自动兜底选中首个 Tab 时跳过后台常驻的 Scratch Pad，避免冷启动直接进入草稿纸。
+    const firstSelectable = tabs.find((tab) => tab.id !== SCRATCH_PAD_ID)
+    if (tabs.length > 0 && !activeTabId && firstSelectable) {
+      activateTabWithSideEffects(store, firstSelectable.id)
     }
-  }, [tabs, activeTabId, setActiveTabId])
+  }, [tabs, activeTabId, store])
 
   return (
     <div className="relative flex h-full min-w-0">
@@ -340,7 +351,7 @@ export function MainArea(): React.ReactElement {
                   {automationFormOpen ? (
                     // 兼容从会话内入口打开任务设置的场景。
                     <AutomationFormView />
-                  ) : tabs.length === 0 ? (
+                  ) : showWelcomeLauncher ? (
                     <WelcomeView />
                   ) : leftPaneTabId ? (
                     <div className="flex-1 min-h-0 titlebar-no-drag">
@@ -349,7 +360,6 @@ export function MainArea(): React.ReactElement {
                   ) : groupViewActive && tabGroup ? (
                     <EmptyPanePlaceholder
                       excludeTabIds={groupTabIds(tabGroup)}
-                      sessionId={groupSessionId(tabGroup, tabs)}
                       onPick={(tabId) => fillGroupPane('left', tabId)}
                       onDissolve={dissolveGroup}
                     />
@@ -378,7 +388,6 @@ export function MainArea(): React.ReactElement {
                       ) : (
                         <EmptyPanePlaceholder
                           excludeTabIds={groupTabIds(tabGroup)}
-                          sessionId={groupSessionId(tabGroup, tabs)}
                           onPick={(tabId) => fillGroupPane('right', tabId)}
                           onDissolve={dissolveGroup}
                         />

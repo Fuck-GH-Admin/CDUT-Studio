@@ -67,6 +67,8 @@ export function normalizeYanhuPetConfig(raw: unknown): YanhuPetConfig {
         : undefined,
     // 仅显式开启才暴露开发者级工具；缺省一律关闭
     devToolsEnabled: candidate.devToolsEnabled === true ? true : undefined,
+    // 仅显式开启才启用视觉截图辅助感知；缺省一律关闭
+    enableVision: candidate.enableVision === true ? true : undefined,
   }
 }
 
@@ -195,7 +197,7 @@ export function nextYanhuMessageId(): string {
   return `yanhu-msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 }
 
-/** 砚湖秒通默认落盘路径：~/.cdutai/yanhu-pet-history.json */
+/** 智联万站默认落盘路径：~/.cdutai/yanhu-pet-history.json */
 export function getYanhuPetHistoryPath(): string {
   return join(getConfigDir(), 'yanhu-pet-history.json')
 }

@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通独立 Preload —— 最早时序防侦测加固
+ * 智联万站独立 Preload —— 最早时序防侦测加固
  *
  * 该脚本被 `WebContentsView` 以 `preload` 选项加载，在页面任何脚本执行前运行，
  * 将指纹伪装脚本注入**主世界**（`webFrame.executeJavaScript` 作用于页面主世界）。
@@ -22,7 +22,7 @@ function applyYanhuFingerprint(): void {
     })
   } catch (err) {
     // 绝不能因注入异常影响页面加载
-    console.warn('[砚湖秒通·Preload] 指纹注入失败:', err)
+    console.warn('[智联万站·Preload] 指纹注入失败:', err)
   }
 }
 

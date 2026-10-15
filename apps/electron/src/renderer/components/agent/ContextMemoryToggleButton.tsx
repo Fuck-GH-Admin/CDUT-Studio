@@ -43,15 +43,15 @@ export const ContextMemoryToggleButton: React.FC<ContextMemoryToggleButtonProps>
       <TooltipContent side="top" className="text-xs max-w-[220px]">
         {disabled ? (
           <div>
-            <div className="font-semibold text-foreground">单轮聚焦模式 (记忆已关闭)</div>
-            <div className="text-muted-foreground mt-0.5">
+            <div className="font-semibold text-tooltip-foreground">单轮聚焦模式 (记忆已关闭)</div>
+            <div className="text-tooltip-muted mt-0.5">
               发送时不携带前序问答，大幅降低 Token 消耗与费用。界面依然保留完整记录。
             </div>
           </div>
         ) : (
           <div>
-            <div className="font-semibold text-foreground">多轮对话模式 (记忆已开启)</div>
-            <div className="text-muted-foreground mt-0.5">
+            <div className="font-semibold text-tooltip-foreground">多轮对话模式 (记忆已开启)</div>
+            <div className="text-tooltip-muted mt-0.5">
               保持上下文连续性，模型可以理解前文问答与讨论内容。
             </div>
           </div>

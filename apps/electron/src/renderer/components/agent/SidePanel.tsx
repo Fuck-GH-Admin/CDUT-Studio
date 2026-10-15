@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { X, FolderOpen, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart, MessageSquarePlus, Trash2, GitMerge, GitFork, Split } from 'lucide-react'
+import { X, FolderOpen, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart, MessageSquarePlus, Trash2 } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { toast } from 'sonner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
@@ -30,12 +30,11 @@ import {
   DropdownMenuTrigger,
 } from '@profer/ui/primitives/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { markdownToHtml } from '@/lib/markdown-rich-text'
-import { interfaceVariantAtom } from '@/atoms/theme'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
+import { SidebarFilePreview } from '@/components/diff/SidebarFilePreview'
 import {
   agentSidePanelOpenAtom,
   workspaceFilesVersionAtom,
@@ -52,20 +51,13 @@ import {
   agentFileChangesCurrentRunAtom,
   fileBrowserAutoRevealAtom,
   agentSelectedWorktreeAtom,
-  agentSessionsAtom,
-  agentSDKMessagesCacheAtom,
-  liveMessagesMapAtom,
-  agentSessionDraftsAtom,
-  agentSessionDraftHtmlAtom,
-  agentSessionIndicatorMapAtom,
   type AgentSidePanelTab,
 } from '@/atoms/agent-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { detectIsWindows } from '@profer/ui'
 import { getFileBaseName, getFileParentPath, getLastPathSegments } from '@/lib/file-utils'
-import type { FileEntry, AgentPendingFile, AgentSessionMeta, SDKMessage } from '@profer/shared'
-import { AgentView } from './AgentView'
+import type { FileEntry, AgentPendingFile } from '@profer/shared'
 
 function getMediaTypeFromFilename(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() ?? ''
@@ -103,11 +95,6 @@ interface SidePanelProps {
 const filePanelActionButtonClass = 'h-6 w-6 flex-shrink-0 rounded-md text-muted-foreground/75 hover:bg-accent/70 hover:text-foreground [&_svg]:size-3.5'
 
 export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, width = 280 }: SidePanelProps): React.ReactElement {
-  const interfaceVariant = useAtomValue(interfaceVariantAtom)
-  const sessions = useAtomValue(agentSessionsAtom)
-  const sessionIndicators = useAtomValue(agentSessionIndicatorMapAtom)
-  const isClassic = interfaceVariant === 'classic'
-
   // 显示状态（B）= 展开意图 A（agentSidePanelOpenAtom）且窗口宽度足够。
   // 宽度过渡动画基于 isOpen（B）：手动开/关与窗口 resize 导致的可见性变化都会平滑过渡；
   // 关闭动作（onClose）只改 A（意图），窗口不足时 B 自动为 false、A 保持不变。
@@ -619,7 +606,11 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             onClose={() => setAgentPanelOpen(false)}
           />
 
-          {activeTab === 'changes' ? (
+          {activeTab === 'preview' ? (
+            <div className="flex-1 min-h-0 flex flex-col pt-0.5">
+              <SidebarFilePreview sessionId={sessionId} />
+            </div>
+          ) : activeTab === 'changes' ? (
             sessionPath ? (
               <DiffChangesList
                 key={sessionId}
@@ -869,7 +860,7 @@ function AttachedFilesSection({ attachedFiles, onDetach, onAddToChat, onFilePrev
                     <MoreHorizontal className="size-3.5" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+                <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
                   {onAddToChat && (
                     <DropdownMenuItem
                       className="text-xs py-1 [&>svg]:size-3.5"
@@ -1156,7 +1147,7 @@ function AttachedDirTree({ dirPath, onDetach, onRename, onMove, onDelete, onMove
             expanded && 'rotate-90',
           )}
         />
-        <FileTypeIcon name={dirName} isDirectory isOpen={expanded} />
+        <FileTypeIcon name={dirName} isDirectory />
         {isRenaming ? (
           <input
             ref={renameInputRef}
@@ -1190,7 +1181,7 @@ function AttachedDirTree({ dirPath, onDetach, onRename, onMove, onDelete, onMove
               <MoreHorizontal className="size-3.5" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+          <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
             {onAddToChat && (
               <DropdownMenuItem
                 className="text-xs py-1 [&>svg]:size-3.5"
@@ -1482,7 +1473,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
         ) : (
           <span className="w-3.5 flex-shrink-0" />
         )}
-        <FileTypeIcon name={currentName} isDirectory={entry.isDirectory} isOpen={expanded} />
+        <FileTypeIcon name={currentName} isDirectory={entry.isDirectory} />
 
         {/* 名称：正常显示 / 重命名输入框 */}
         {isRenaming ? (
@@ -1528,7 +1519,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+              <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
                 {onAddToChat && !entry.isDirectory && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"

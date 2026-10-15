@@ -10,7 +10,7 @@ describe('buildPiAdditionalDirectoriesPrompt', () => {
     ])
 
     expect(prompt).toContain('<attached_directories>')
-    expect(prompt).toContain('请直接使用绝对路径')
+    expect(prompt).toContain('use absolute paths directly')
     expect(prompt).toContain('<directory index="1">C:\\Users\\yuan\\.cdutai\\agent-workspaces\\cdutai</directory>')
     expect(prompt).toContain('<directory index="2">C:\\Users\\yuan\\.cdutai\\agent-workspaces\\cdutai\\workspace-files</directory>')
   })
@@ -32,7 +32,7 @@ describe('buildPiAdditionalDirectoriesPrompt', () => {
     expect(prompt).toContain('<name>AAAI学习大师</name>')
     expect(prompt).toContain('<relative_to_attached_directory>AAAI学习大师</relative_to_attached_directory>')
     expect(prompt).toContain('repository_root')
-    expect(prompt).toContain('唯一语义匹配候选')
+    expect(prompt).toContain('unique semantic match')
   })
 
   test('空目录不增加 Pi 提示词', () => {

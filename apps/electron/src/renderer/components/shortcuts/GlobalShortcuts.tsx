@@ -19,18 +19,12 @@ import {
   activeTabIdAtom,
   sidebarCollapsedAtom,
   openTab,
+  visibleTopBarTabsAtom,
 } from '@/atoms/tab-atoms'
 import { shortcutOverridesAtom, sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
+import { activateTabWithSideEffects } from '@/lib/tab-activation'
 import {
-  agentPendingPromptAtom,
-  agentSessionDraftHtmlAtom,
-  agentSessionDraftsAtom,
   agentSessionsAtom,
-  currentAgentSessionIdAtom,
-  agentChannelIdAtom,
-  currentAgentWorkspaceIdAtom,
-  agentWorkspacesAtom,
-  agentAttachedFilesMapAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { useCreateSession } from '@/hooks/useCreateSession'
@@ -40,8 +34,6 @@ import {
   initShortcutRegistry,
   updateShortcutOverrides,
 } from '@/lib/shortcut-registry'
-import { getFileParentPath } from '@/lib/file-utils'
-import { isImageAttachmentMediaType, resolveAgentAttachmentPrompt } from '@profer/shared'
 
 /**
  * 快捷键初始化 + 全局 Handler 注册
@@ -60,12 +52,14 @@ export function GlobalShortcuts(): null {
   const setSendWithCmdEnter = useSetAtom(sendWithCmdEnterAtom)
   const { createAgent } = useCreateSession()
 
-  // Tab 管理（用于关闭标签页）
+  // Tab 管理（用于关闭标签页与顶栏可见序列对齐）
   const activeTabId = useAtomValue(activeTabIdAtom)
+  useAtomValue(visibleTopBarTabsAtom)
 
   // 统一关闭逻辑：与 TabBar.handleClose 共用
   // 含 Agent 子进程 stop + 流式中的确认对话框（修复 Issue #357）
   const { requestClose } = useCloseTab()
+  const store = useStore()
 
   // 初始化：挂载注册表 + 加载用户配置
   useEffect(() => {
@@ -103,9 +97,10 @@ export function GlobalShortcuts(): null {
       return
     }
 
-    if (!activeTabId) return
-    requestClose(activeTabId)
-  }, [settingsOpen, setSettingsOpen, channelFormDirty, setSettingsCloseRequested, searchOpen, setSearchOpen, activeTabId, requestClose])
+    const currentActiveId = store.get(activeTabIdAtom) ?? activeTabId
+    if (!currentActiveId) return
+    requestClose(currentActiveId)
+  }, [settingsOpen, setSettingsOpen, channelFormDirty, setSettingsCloseRequested, searchOpen, setSearchOpen, activeTabId, requestClose, store])
 
   // 监听菜单 IPC 事件（Cmd+W 被 Electron 菜单拦截后通过 IPC 转发）
   useEffect(() => {
@@ -177,11 +172,6 @@ export function GlobalShortcuts(): null {
     }, []),
   )
 
-  // ===== 快速任务窗口 → 创建会话并自动发送 =====
-
-  const store = useStore()
-
-
   // ===== 菜单栏 → 打开 / 创建会话 =====
 
   useEffect(() => {
@@ -192,31 +182,24 @@ export function GlobalShortcuts(): null {
         if (!session) return
 
         store.set(agentSessionsAtom, sessions)
-        store.set(appModeAtom, 'agent')
         store.set(activeViewAtom, 'conversations')
-        store.set(currentAgentSessionIdAtom, session.id)
-
-        if (session.workspaceId) {
-          store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
-          window.electronAPI.updateSettings({
-            agentWorkspaceId: session.workspaceId,
-          }).catch(console.error)
-        }
 
         const currentTabs = store.get(tabsAtom)
+        const lineageParentId = session.parentSessionId ?? session.explorationParentSessionId
         const result = openTab(currentTabs, {
           type: 'agent',
           sessionId: session.id,
           title: session.title || data.title,
+          ...(lineageParentId ? { parentSessionId: lineageParentId } : {}),
         })
         store.set(tabsAtom, result.tabs)
-        store.set(activeTabIdAtom, result.activeTabId)
+        activateTabWithSideEffects(store, result.activeTabId)
       } catch (error) {
         console.error('[菜单栏] 打开 Agent 会话失败:', error)
       }
     })
 
-    const cleanupCreate = window.electronAPI.onTrayCreateSession(async (data) => {
+    const cleanupCreate = window.electronAPI.onTrayCreateSession(async () => {
       store.set(appModeAtom, 'agent')
       store.set(activeViewAtom, 'conversations')
       await createAgent()

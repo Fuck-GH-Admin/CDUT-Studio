@@ -19,6 +19,8 @@ import {
   CalendarDays,
   GraduationCap,
   LogIn,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShieldCheck,
   Sparkles,
   User,
@@ -37,6 +39,7 @@ import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { resolveWindowControlsRightInset } from '@/lib/window-controls-layout'
 import { cdutAccountAtom, cdutSidebarRestoreAtom, cdutSubViewAtom } from '@/atoms/cdut-account-atoms'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
+import { studyLeftPanelCollapsedAtom } from '@/atoms/study-atoms'
 import { useEnterCdutAiClass } from '@/hooks/useEnterCdutAiClass'
 import { AiClassSessionPickerModal } from './AiClassSessionPickerModal'
 import { MutationConfirmModal } from './MutationConfirmModal'
@@ -48,6 +51,7 @@ import { CdutQuickBar, type CdutQuickFeature } from './CdutQuickBar'
 import { CdutFeatureSheet } from './CdutFeatureSheet'
 import { CdutWatermarkBackground } from './CdutWatermarkBackground'
 import { CdutSubViewContainer } from './CdutSubViewContainer'
+import { CdutZoneErrorBoundary } from './CdutZoneErrorBoundary'
 import { AiClassView } from './AiClassView'
 import { YanhuExpressView } from './yanhu/YanhuExpressView'
 import { ContentReviewView } from '@/components/content-review/ContentReviewView'
@@ -55,8 +59,29 @@ import { ContentReviewView } from '@/components/content-review/ContentReviewView
 /** 三大板块子页面标题映射 */
 const SUB_VIEW_TITLES: Record<Exclude<CdutSubViewId, null>, string> = {
   'ai-class': 'AI 速课堂',
-  'yanhu-express': '砚湖秒通',
+  'yanhu-express': '智联万站',
   'material-review': '材料审核',
+}
+
+/**
+ * 速课堂左栏收起/展开开关：渲染于子页面顶栏校徽右侧，
+ * 与右栏拖拽把手、认知底座徽标完全解耦，避免碰撞。
+ */
+function LeftPanelToggleButton(): React.ReactElement {
+  const [leftCollapsed, setLeftCollapsed] = useAtom(studyLeftPanelCollapsedAtom)
+  const label = leftCollapsed ? '展开课程资料与大纲栏' : '收起课程资料与大纲栏'
+  return (
+    <button
+      type="button"
+      onClick={() => setLeftCollapsed((c) => !c)}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary transition-all hover:border-primary/40 hover:bg-primary/20 active:scale-95"
+      title={label}
+      aria-label={label}
+    >
+      {leftCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+      <span className="text-[11px]">{leftCollapsed ? '展开向导' : '收起向导'}</span>
+    </button>
+  )
 }
 
 /** 未登录态：专区三大核心能力矩阵展示 */
@@ -307,6 +332,11 @@ export function CdutZoneView(): React.ReactElement {
           <CdutSubViewContainer
             title={SUB_VIEW_TITLES[activeSubView]}
             onClose={handleCloseSubView}
+            leftAction={
+              activeSubView === 'ai-class' ? (
+                <LeftPanelToggleButton />
+              ) : null
+            }
             actions={
               activeSubView === 'ai-class' ? (
                 <button
@@ -321,13 +351,15 @@ export function CdutZoneView(): React.ReactElement {
               ) : null
             }
           >
-            {activeSubView === 'ai-class' ? (
-              <AiClassView />
-            ) : activeSubView === 'yanhu-express' ? (
-              <YanhuExpressView />
-            ) : (
-              <ContentReviewView />
-            )}
+            <CdutZoneErrorBoundary fallbackTitle="子业务模块渲染异常">
+              {activeSubView === 'ai-class' ? (
+                <AiClassView />
+              ) : activeSubView === 'yanhu-express' ? (
+                <YanhuExpressView />
+              ) : (
+                <ContentReviewView />
+              )}
+            </CdutZoneErrorBoundary>
           </CdutSubViewContainer>
         </div>
 
@@ -348,20 +380,31 @@ export function CdutZoneView(): React.ReactElement {
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-content-area">
 
       {/* 标题栏拖拽区 */}
-      <div className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region" aria-hidden="true" />
+      <div
+        className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region"
+        style={{ right: resolveWindowControlsRightInset(isWindows) }}
+        aria-hidden="true"
+      />
+      {/* 窗口按钮（priority 20，确保在 Windows 顶层呈现） */}
+      <WindowControlsHost id="cdut-zone-main" priority={20} className="absolute right-2 top-[3px] z-20" />
 
       {/* 左下角校宠立绘艺术环境水印 */}
       <CdutWatermarkBackground />
 
-      {/* 顶栏：左侧学士帽图标 + 放大后的特区账户标签 */}
-      <header className="relative z-10 flex shrink-0 items-center gap-3 border-b border-border/60 bg-card/80 px-5 py-3 titlebar-no-drag backdrop-blur-sm">
-        <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary shadow-sm">
-          <GraduationCap size={18} />
+      {/* 顶栏：左侧学士帽图标 + 放大后的特区账户标签，右侧为系统窗口按钮让位 */}
+      <header
+        className="relative z-10 flex shrink-0 items-center justify-between border-b border-border/60 bg-card/80 px-5 py-3 titlebar-no-drag backdrop-blur-sm"
+        style={{ paddingRight: resolveWindowControlsRightInset(isWindows) + 20 }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary shadow-sm">
+            <GraduationCap size={18} />
+          </div>
+          <span className="text-sm font-semibold tracking-tight">CDUT 专区</span>
+          <span className="rounded-lg bg-primary/10 px-2.5 py-1 text-sm font-semibold text-primary">
+            特区账户
+          </span>
         </div>
-        <span className="text-sm font-semibold tracking-tight">CDUT 专区</span>
-        <span className="rounded-lg bg-primary/10 px-2.5 py-1 text-sm font-semibold text-primary">
-          特区账户
-        </span>
       </header>
 
       {/* 主视图 */}

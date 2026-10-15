@@ -67,3 +67,16 @@ export type {
 } from './automation-schedule'
 export { pruneToolOutputByEntropy } from './context-entropy-pruner'
 export type { EntropyPruneOptions } from './context-entropy-pruner'
+// 思维导图引擎（双曲 Poincaré 布局 / 贝塞尔连线 / OPML 2.0 导出），主进程与渲染进程共用
+export {
+  layoutMindMap,
+  buildBezierPath,
+  flattenMindMap,
+  buildNodeStudyPrompt,
+  mindMapToOpml,
+  parseMindMapText,
+  stripMermaidNodeLabel,
+} from './mindmap-engine'
+export type { MindMapPoint, MindMapLayoutOptions } from './mindmap-engine'
+// FIM 潜伏认知能力评级映射（测验与学情展示共用）
+export { describeTheta } from './fim-engine'

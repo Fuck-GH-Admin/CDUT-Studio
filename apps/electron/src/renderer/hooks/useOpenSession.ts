@@ -6,12 +6,14 @@
  */
 
 import * as React from 'react'
-import { promoteMru } from '@profer/shared'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
+import { isReviewOwnedAgentSession, type AgentSessionMeta } from '@profer/shared'
+import { resolveOrdinaryTabSession } from '@/lib/agent-tab-access'
 import {
   tabsAtom,
   activeTabIdAtom,
   openTab,
+  promoteSessionMru,
   tabMruAtom,
   type TabType,
 } from '@/atoms/tab-atoms'
@@ -32,7 +34,8 @@ import { isAgentWorkspaceIdVisible } from '@/lib/product-feature-flags'
 type OpenSessionFn = (type: TabType, sessionId: string, title: string, parentSessionId?: string) => void
 
 export function useOpenSession(): OpenSessionFn {
-  const [tabs, setTabs] = useAtom(tabsAtom)
+  const store = useStore()
+  const setTabs = useSetAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const setTabMru = useSetAtom(tabMruAtom)
   const setAppMode = useSetAtom(appModeAtom)
@@ -53,34 +56,34 @@ export function useOpenSession(): OpenSessionFn {
         return
       }
 
-      const knownSession = type === 'agent' || type === 'preview'
+      const requiresAgentSession = type === 'agent' || type === 'browser'
+      const knownSession = requiresAgentSession
         ? agentSessions.find((session) => session.id === sessionId)
         : undefined
-      if ((type === 'agent' || type === 'preview')
-        && !isAgentWorkspaceIdVisible(knownSession?.workspaceId, agentWorkspaces)) {
-        return
-      }
 
-      // 子会话血缘（委派 parentSessionId / 探索 explorationParentSessionId）：
-      // 显式参数优先，再从会话 meta 派生，保证所有打开路径产出一致的子会话 Tab。
-      const lineageParentId = parentSessionId
-        ?? knownSession?.parentSessionId
-        ?? knownSession?.explorationParentSessionId
-      const result = openTab(tabs, {
-        type,
-        sessionId,
-        title,
-        ...(lineageParentId ? { parentSessionId: lineageParentId } : {}),
-      })
+      // Do not create an Agent/Browser Tab for an unknown ID while Main is still
+      // resolving its ownership. This also preserves archived ordinary-session reopen.
+      const openAuthorized = (sessionMeta?: AgentSessionMeta): void => {
+        if (requiresAgentSession && (!sessionMeta || isReviewOwnedAgentSession(sessionMeta)
+          || !isAgentWorkspaceIdVisible(sessionMeta.workspaceId, agentWorkspaces))) return
+        const lineageParentId = parentSessionId
+          ?? sessionMeta?.parentSessionId
+          ?? sessionMeta?.explorationParentSessionId
+        const result = openTab(store.get(tabsAtom), {
+          type,
+          sessionId,
+          title,
+          ...(lineageParentId ? { parentSessionId: lineageParentId } : {}),
+        })
       setTabs(result.tabs)
       setActiveTabId(result.activeTabId)
-      if (type === 'agent' || type === 'preview') {
-        setTabMru((previous) => promoteMru(previous, sessionId))
+      if (type === 'agent') {
+        setTabMru((previous) => promoteSessionMru(previous, sessionId))
       }
       setAutomationForm({ open: false, draft: null })
       setActiveView('conversations')
 
-      if (type === 'agent' || type === 'preview') {
+      if (type === 'agent') {
         setAppMode('agent')
         setCurrentAgentSessionId(sessionId)
 
@@ -101,7 +104,7 @@ export function useOpenSession(): OpenSessionFn {
           .catch(console.error)
 
         // 同步 workspaceId，确保与 TabBar 切换行为一致
-        const session = agentSessions.find((s) => s.id === sessionId)
+        const session = sessionMeta ?? agentSessions.find((s) => s.id === sessionId)
         if (session?.workspaceId) {
           setCurrentAgentWorkspaceId(session.workspaceId)
           window.electronAPI.updateSettings({
@@ -125,7 +128,18 @@ export function useOpenSession(): OpenSessionFn {
         setCurrentConversationId(null)
         setCurrentAgentSessionId(null)
       }
+      }
+      if (requiresAgentSession && !knownSession) {
+        void resolveOrdinaryTabSession(sessionId, window.electronAPI.getAgentSessionMeta)
+          .then((meta) => {
+            if (!meta) return
+            setAgentSessions((prev) => upsertAgentSession(prev, meta))
+            openAuthorized(meta)
+          })
+        return
+      }
+      openAuthorized(knownSession)
     },
-    [tabs, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions],
+    [store, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions],
   )
 }

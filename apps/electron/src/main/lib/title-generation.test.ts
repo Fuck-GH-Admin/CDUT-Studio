@@ -16,7 +16,7 @@ import {
 
 /** Chat 与 Agent 统一后的唯一标题生成 prompt（精简单轮版）。 */
 const UNIFIED_TITLE_PROMPT =
-  '请根据用户的第一条请求，提炼一个简短、明确的会话标题（10字以内）。直接输出标题文本本身，严禁输出任何标点符号、引号、书名号，严禁包含“标题：”等前缀套话。若请求属于日常打招呼或过短（如“你好”），提炼为“日常问候”；若无法明确意图，直接截取用户前10个有效字符。\n\n用户消息：'
+  'Based on the user\'s first request, distill a short, clear session title (no more than 10 characters) in the same language as the user\'s message. Output the title text itself only; never output any punctuation, quotation marks, book-title marks, or boilerplate prefixes like "Title:". If the request is a casual greeting or too short (e.g., "你好"), distill it as "日常问候". If the intent is unclear, directly take the first 10 meaningful characters of the user\'s message.\n\nUser message: '
 
 describe('buildTitlePrompt', () => {
   test('Given 用户消息 When 构建 Then 使用 Chat/Agent 统一 prompt', () => {
@@ -28,8 +28,8 @@ describe('buildTitlePrompt', () => {
   })
 
   test('Given 任意长度消息 When 构建 Then 始终包含过短消息的本地处理约束', () => {
-    expect(buildTitlePrompt('1')).toContain('若请求属于日常打招呼或过短（如“你好”），提炼为“日常问候”')
-    expect(buildTitlePrompt('1')).toContain('若无法明确意图，直接截取用户前10个有效字符。')
+    expect(buildTitlePrompt('1')).toContain('If the request is a casual greeting or too short (e.g., "你好"), distill it as "日常问候"')
+    expect(buildTitlePrompt('1')).toContain('directly take the first 10 meaningful characters')
   })
 })
 
@@ -229,7 +229,7 @@ describe('buildWindowTitlePrompt', () => {
     const prompt = buildWindowTitlePrompt(['修复流式缺陷', '顶栏控件遮罩'])
     expect(prompt).toContain('1. 修复流式缺陷')
     expect(prompt).toContain('2. 顶栏控件遮罩')
-    expect(prompt).toContain('不要照抄某一条消息的原文')
+    expect(prompt).toContain('never copy the verbatim text of one message')
   })
 })
 

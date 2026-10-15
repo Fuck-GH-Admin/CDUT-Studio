@@ -1,10 +1,10 @@
 /**
- * 砚湖秒通安全网关（YanhuDomainGatekeeper）
+ * 智联万站安全网关（YanhuDomainGatekeeper）
  *
  * 职责：校验导航目标是否为可访问的 http/https 网页地址，并规范化地址栏输入，
  * 供主进程在 `will-navigate` / `setWindowOpenHandler` / 地址栏导航三处统一裁决。
  *
- * 访问范围：砚湖秒通已解除「仅限成都理工大学校内域名」的限制，站外 http/https
+ * 访问范围：智联万站已解除「仅限成都理工大学校内域名」的限制，站外 http/https
  * 地址一律放行，仅拦截非网页协议（`mailto:` / `javascript:` / `file:` 等）与无法规范化的输入。
  *
  * 范围声明：本模块为纯逻辑，不加载页面、不持有会话；拦截页的渲染由渲染进程承担。
@@ -34,7 +34,7 @@ export function isCdutDomain(rawUrl: string): boolean {
 }
 
 /**
- * 判定 URL 是否为砚湖秒通内部哨兵协议（内置拦截页）。
+ * 判定 URL 是否为智联万站内部哨兵协议（内置拦截页）。
  * 内部哨兵永远视为「放行」，因为它从不真正发起网络导航，只作为渲染层状态。
  */
 export function isInternalYanhuUrl(rawUrl: string): boolean {
@@ -85,7 +85,7 @@ export interface YanhuGatekeeperDecision {
  * 无状态设计（不持有会话/标签），可安全地被多标签、多会话共享调用。
  */
 export class YanhuDomainGatekeeper {
-  /** 判定 URL 是否允许在砚湖秒通内直接加载（http/https 网页地址或内部哨兵页） */
+  /** 判定 URL 是否允许在智联万站内直接加载（http/https 网页地址或内部哨兵页） */
   public isAllowed(rawUrl: string): boolean {
     return isInternalYanhuUrl(rawUrl) || isWebUrl(rawUrl)
   }

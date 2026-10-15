@@ -1,4 +1,4 @@
-# 「砚湖秒通」多层框架瑞数防护白屏根治与纯文本 Agent 数据底座实施方案
+# 「智联万站」多层框架瑞数防护白屏根治与纯文本 Agent 数据底座实施方案
 
 > **文件归档**：`docs/plans/2026-10-08-yanhu-express-ruishu-frameset-remediation-plan.md`  
 > **性质**：生产级技术实施方案规格书（Execution Plan Specification）  
@@ -9,7 +9,7 @@
 
 ## 一、 核心根因复盘与理论映射
 
-在 CDUT Studio 砚湖秒通中，访问 B 站、百度、必应等现代单页站点正常，但访问成都理工大学青果教务系统（`xsMainV.htmlx`）时，出现**“页面纯白屏”**或**“仅加载顶层外框架、内层子框架全白”**的故障。此前五轮修复均未奏效。
+在 CDUT Studio 智联万站中，访问 B 站、百度、必应等现代单页站点正常，但访问成都理工大学青果教务系统（`xsMainV.htmlx`）时，出现**“页面纯白屏”**或**“仅加载顶层外框架、内层子框架全白”**的故障。此前五轮修复均未奏效。
 
 结合全球前沿文献 **《Client-Side Detection and Emulation Challenges in Embedded Chromium Runtimes》** 与真实 Chrome 开发者工具实测，确定了三大致病死穴：
 
@@ -59,7 +59,7 @@ app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-proces
 
 ---
 
-### 2. 砚湖秒通主调度服务
+### 2. 智联万站主调度服务
 **目标文件**：`apps/electron/src/main/lib/cdut/yanhu/yanhu-express-manager.ts`
 - **改动说明**：
   1. 彻底删除 `stripStaleRuiShuSignatures()` 方法定义；

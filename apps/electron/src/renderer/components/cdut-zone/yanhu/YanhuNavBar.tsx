@@ -1,5 +1,5 @@
 /**
- * YanhuNavBar —— 砚湖秒通导航控制栏
+ * YanhuNavBar —— 智联万站导航控制栏
  *
  * 组成：前进 / 后退 / 刷新 + 安全地址栏（可信绿锁标志 + 可输入） + 校内高频书签快捷胶囊。
  * 视觉：Tailwind 语义化双模配色，胶囊与阴影取代生硬边框。
@@ -7,6 +7,7 @@
 
 import * as React from 'react'
 import {
+  Activity,
   ArrowLeft,
   ArrowRight,
   BookMarked,
@@ -130,6 +131,21 @@ export function YanhuNavBar({
             {bookmark.label}
           </button>
         ))}
+      </div>
+
+      {/* 实时底层诊断控制台快捷入口 */}
+      <div className="flex shrink-0 items-center border-l border-border/40 pl-1.5">
+        <button
+          type="button"
+          onClick={() => {
+            void window.electronAPI?.yanhuExpress?.openDiagnosticConsole()
+          }}
+          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground cursor-pointer"
+          title="打开研学浏览器底层诊断控制台（实时监控 CDP / DOM 蒸馏 / 因果边）"
+        >
+          <Activity size={12} className="text-primary" />
+          <span className="hidden sm:inline">诊断控制台</span>
+        </button>
       </div>
 
       {/* 加载进度指示：位于导航栏底边（DOM 层，不被原生页面视图遮挡） */}

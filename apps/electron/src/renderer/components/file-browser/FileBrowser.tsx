@@ -48,7 +48,7 @@ import {
   DropdownMenuTrigger,
 } from '@profer/ui/primitives/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { getLastPathSegments } from '@/lib/file-utils'
+import { getFileBaseName, getFileParentPath, getLastPathSegments } from '@/lib/file-utils'
 import { toast } from 'sonner'
 import { workspaceFilesVersionAtom, fileBrowserAutoRevealAtom, recentlyModifiedPathsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import type { FileEntry } from '@profer/shared'
@@ -231,9 +231,12 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
   /** 加载根目录 */
   const isTeamMode = !!(workspaceId && workspaceSlug)
+  /** 单调递增的加载序号：并发/乱序返回时丢弃迟到响应，避免旧快照覆盖新列表 */
+  const loadSeqRef = React.useRef(0)
 
   const loadRoot = React.useCallback(async () => {
     if (!rootPath) return
+    const requestId = ++loadSeqRef.current
     setLoading(true)
     setError(null)
     try {
@@ -249,17 +252,18 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
         }))
         // 构建树状结构：目录可折叠展开
         const tree = buildFileTree(serverItems)
-        setEntries(tree)
+        if (requestId === loadSeqRef.current) setEntries(tree)
       } else {
         const items = await window.electronAPI.listDirectory(rootPath)
-        setEntries(items)
+        if (requestId === loadSeqRef.current) setEntries(items)
       }
     } catch (err) {
+      if (requestId !== loadSeqRef.current) return
       const msg = err instanceof Error ? err.message : '加载失败'
       setError(msg)
       setEntries([])
     } finally {
-      setLoading(false)
+      if (requestId === loadSeqRef.current) setLoading(false)
     }
   }, [rootPath, isTeamMode, workspaceId, workspaceSlug])
 
@@ -338,26 +342,13 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
       if (local) {
         onFilePreview?.(local)
       } else {
-        window.dispatchEvent(new CustomEvent('profer:file-preview', {
-          detail: { path: entry.path, name: entry.name, download: () => ensureTeamFileLocal(entry) },
-        }))
+        toast.error(`无法下载团队文件「${entry.name}」进行预览`)
       }
       return
     }
 
     onFilePreview?.(entry.path)
   }, [ensureTeamFileLocal, isTeamMode, onFilePreview])
-
-  const dispatchInlinePreview = React.useCallback((entry: FileEntry): void => {
-    if (entry.isDirectory) return
-    window.dispatchEvent(new CustomEvent('profer:file-preview', {
-      detail: {
-        path: isTeamMode ? entry.path : entry.path,
-        name: entry.name,
-        download: isTeamMode ? () => ensureTeamFileLocal(entry) : undefined,
-      },
-    }))
-  }, [ensureTeamFileLocal, isTeamMode])
 
   /** 拖拽事件 */
   const handleDragOver = React.useCallback((e: React.DragEvent) => {
@@ -398,6 +389,11 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
     }
   }, [handlePreviewFile])
 
+  /** 仅切换选中态（三点菜单触发按钮使用）：不触发文件预览，避免"开菜单顺带打开文件" */
+  const handleSelectOnly = React.useCallback((entry: FileEntry) => {
+    setSelectedPaths(new Set([entry.path]))
+  }, [])
+
   /** 点击空白区域清空选中 */
   const handleBackgroundClick = React.useCallback((e: React.MouseEvent) => {
     // 只处理直接点击容器的情况
@@ -436,20 +432,23 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
   /** 执行重命名（失败统一走 toast 通知，与删除/回收站一致） */
   const handleRename = React.useCallback(async (filePath: string, newName: string): Promise<void> => {
-    // 同名检查
-    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'))
+    // 同名检查：父目录必须跨平台解析（Windows 反斜杠路径用 '/' 切割会得到空串，
+    // 导致 listDirectory 抛错被静默吞掉、同名校验形同虚设）。
+    const parentDir = getFileParentPath(filePath)
     try {
       if (isTeamMode) {
         toast.error('团队文件暂不支持在侧栏重命名')
         setRenamingPath(null)
         return
       }
-      const siblings = await window.electronAPI.listDirectory(parentDir)
-      const conflict = siblings.some((s) => s.name === newName && s.path !== filePath)
-      if (conflict) {
-        toast.error('同名文件已存在')
-        setRenamingPath(null)
-        return
+      if (parentDir) {
+        const siblings = await window.electronAPI.listDirectory(parentDir)
+        const conflict = siblings.some((s) => s.name === newName && s.path !== filePath)
+        if (conflict) {
+          toast.error('同名文件已存在')
+          setRenamingPath(null)
+          return
+        }
       }
     } catch {
       // 无法列出目录，跳过检查
@@ -482,7 +481,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
         if (isTeamMode && workspaceId && workspaceSlug) {
           const ok = await window.electronAPI.teamFile.delete({ workspaceId, workspaceSlug, filePath }).catch(() => false)
           if (!ok) {
-            toast.error(`删除「${deleteTarget.name}」失败，请重试`)
+            toast.error(`删除「${getFileBaseName(filePath)}」失败，请重试`)
             return
           }
           // 主进程已按来源映射失效缓存；这里不能二次删除用户原始文件。
@@ -519,12 +518,13 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
   /** 移动文件 */
   const handleMove = React.useCallback(async (entry: FileEntry) => {
+    // 团队模式不支持本地移动：先判定，避免弹出无意义的原生目录选择框
+    if (isTeamMode) return
     setMoving(true)
     try {
       const result = await window.electronAPI.openFolderDialog()
       if (!result) return
 
-      if (isTeamMode) return
       if (selectedPaths.size > 1) {
         for (const path of selectedPaths) {
           await window.electronAPI.moveFile(path, result.path)
@@ -570,6 +570,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
           revealSelect={revealSelect}
           recentlyModifiedSet={recentlyModifiedSet}
           onSelect={handleSelect}
+          onSelectOnly={handleSelectOnly}
           onShowInFolder={handleShowInFolder}
           onStartRename={handleStartRename}
           onCancelRename={handleCancelRename}
@@ -829,6 +830,8 @@ interface FileTreeItemProps {
   /** 最近修改的路径集合（命中则在行左侧显示竖条标记） */
   recentlyModifiedSet: Set<string>
   onSelect: (entry: FileEntry, event: React.MouseEvent) => void
+  /** 仅切换选中态，不触发预览（三点菜单触发按钮用） */
+  onSelectOnly: (entry: FileEntry) => void
   onShowInFolder: (entry: FileEntry) => void
   onStartRename: (entry: FileEntry) => void
   onCancelRename: () => void
@@ -858,6 +861,7 @@ function FileTreeItem({
   revealSelect,
   recentlyModifiedSet,
   onSelect,
+  onSelectOnly,
   onShowInFolder,
   onStartRename,
   onCancelRename,
@@ -876,6 +880,12 @@ function FileTreeItem({
   const [childrenLoaded, setChildrenLoaded] = React.useState(false)
   const [flash, setFlash] = React.useState(false)
   const rowRef = React.useRef<HTMLDivElement>(null)
+  // 空目录首次展开后的延迟重试定时器：卸载/收起时必须清理，避免对已变化的状态 setState
+  const emptyRetryTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  React.useEffect(() => () => {
+    if (emptyRetryTimerRef.current) clearTimeout(emptyRetryTimerRef.current)
+  }, [])
 
   // 当 refreshVersion 变化时，已展开的文件夹自动重新加载子项
   React.useEffect(() => {
@@ -958,6 +968,12 @@ function FileTreeItem({
   const toggleDir = async (): Promise<void> => {
     if (!entry.isDirectory) return
 
+    // 收起时取消可能仍在等待的空目录重试，避免对已收起节点写入子项
+    if (expanded && emptyRetryTimerRef.current) {
+      clearTimeout(emptyRetryTimerRef.current)
+      emptyRetryTimerRef.current = null
+    }
+
     if (!expanded && !childrenLoaded) {
       if (entry.children) {
         setChildren(entry.children)
@@ -972,7 +988,9 @@ function FileTreeItem({
 
         // 首次展开空目录时，延迟重试一次（应对 Agent 正在写入文件的时序问题）
         if (items.length === 0) {
-          setTimeout(async () => {
+          if (emptyRetryTimerRef.current) clearTimeout(emptyRetryTimerRef.current)
+          emptyRetryTimerRef.current = setTimeout(async () => {
+            emptyRetryTimerRef.current = null
             try {
               const retryItems = await window.electronAPI.listDirectory(entry.path)
               if (retryItems.length > 0) setChildren(retryItems)
@@ -1120,7 +1138,7 @@ function FileTreeItem({
         )}
 
         {/* 文件/文件夹图标 */}
-        <FileTypeIcon name={entry.name} isDirectory={entry.isDirectory} isOpen={expanded} />
+        <FileTypeIcon name={entry.name} isDirectory={entry.isDirectory} />
 
         {/* 文件名 / 重命名输入框 */}
         {isRenaming ? (
@@ -1175,14 +1193,14 @@ function FileTreeItem({
                 )}
                 title="更多操作"
                 aria-label="更多操作"
-                onClick={(e) => {
-                  if (!isSelected) onSelect(entry, e)
+                onClick={() => {
+                  if (!isSelected) onSelectOnly(entry)
                 }}
               >
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
+              <DropdownMenuContent align="start" className="w-40 min-w-0 p-0.5">
                 {onDownload && entry.syncStatus === 'cloud-only' && menuSelectedCount === 1 && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
@@ -1282,6 +1300,7 @@ function FileTreeItem({
               revealSelect={revealSelect}
               recentlyModifiedSet={recentlyModifiedSet}
               onSelect={onSelect}
+              onSelectOnly={onSelectOnly}
               onShowInFolder={onShowInFolder}
               onStartRename={onStartRename}
               onCancelRename={onCancelRename}

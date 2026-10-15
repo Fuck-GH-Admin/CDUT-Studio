@@ -18,11 +18,16 @@ import type { CdutGatekeeperNoticeEvent } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import cdutCeLogo from '@assets/CDUT/CDUT-CE.png'
 import { activeViewAtom } from '@/atoms/active-view'
+import { useGlobalOverlay } from '@/atoms/overlay-atoms'
+import { Z_LAYER } from '@profer/ui'
 
 export function GatekeeperNoticeModal(): React.ReactElement | null {
   const [notice, setNotice] = React.useState<CdutGatekeeperNoticeEvent | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
   const setActiveView = useSetAtom(activeViewAtom)
+
+  // 全局模态叠加登记：门禁引导弹出时，智联万站原生视口必须让位
+  useGlobalOverlay(!!notice)
 
   React.useEffect(() => {
     const unsub = window.electronAPI.cdutZone.onGatekeeperBlocked((event) => {
@@ -50,7 +55,7 @@ export function GatekeeperNoticeModal(): React.ReactElement | null {
   if (!notice) return null
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+    <div className={`fixed inset-0 ${Z_LAYER.confirm} flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm`}>
       <div className="w-full max-w-md overflow-hidden rounded-2xl border border-border/80 bg-card shadow-2xl">
         {/* 顶部校徽区：居中排版成都理工大学校徽 */}
         <div className="relative flex flex-col items-center gap-2 bg-gradient-to-b from-primary/10 via-card to-card px-6 pt-8 pb-5">

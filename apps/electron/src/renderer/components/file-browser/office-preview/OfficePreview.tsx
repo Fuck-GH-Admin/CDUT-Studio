@@ -1,8 +1,14 @@
 import * as React from 'react'
+import { useAtom } from 'jotai'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
 import type { AgentFilePreviewReport, FileAccessOptions } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
+import { documentHighlightTargetAtom } from '@/atoms/preview-atoms'
+import { getFileBaseName } from '@/lib/file-utils'
+import { usePreviewViewport } from '@/components/diff/preview-viewport-context'
 import {
+  applyOfficeCitationSpotlight,
+  clampOfficeScale,
   createOfficeViewer,
   destroyOfficeViewer,
   normalizeOfficeFormat,
@@ -47,6 +53,12 @@ export function OfficePreview({
   const [error, setError] = React.useState('')
   const [sourceUrl, setSourceUrl] = React.useState('')
   const [retryVersion, setRetryVersion] = React.useState(0)
+  const [highlightTarget, setHighlightTarget] = useAtom(documentHighlightTargetAtom)
+  // 右侧栏预览视口上下文：把缩放/平移代理给 Silurus viewer 原生实现，
+  // 避免视口对整屏做 CSS 缩放（会把 Excel 行列号栏、底部缩放条一起缩放）。
+  const previewViewport = usePreviewViewport()
+  const previewViewportRef = React.useRef(previewViewport)
+  previewViewportRef.current = previewViewport
   const format = normalizeOfficeFormat(fileName)
   const previewSessionId = agentPreviewSession?.sessionId
   const previewRequestId = agentPreviewSession?.requestId
@@ -56,6 +68,8 @@ export function OfficePreview({
   const registrationCleanupRef = React.useRef<(() => void) | null>(null)
   const currentSlideRef = React.useRef(1)
   const scaleRef = React.useRef<number | undefined>(undefined)
+  /** 当前已挂载圈选框的销毁句柄（含 ResizeObserver/MutationObserver 清理） */
+  const spotlightDisposeRef = React.useRef<(() => void) | null>(null)
 
   const reportPreview = React.useCallback((partial: Pick<AgentFilePreviewReport, 'status'> & Partial<AgentFilePreviewReport>) => {
     if (!previewSessionId || !previewRequestId || !previewRevision || format !== 'pptx') return
@@ -98,7 +112,7 @@ export function OfficePreview({
       officeFormat,
       container,
       resolved.url,
-      (scale) => { scaleRef.current = scale },
+      (scale) => { scaleRef.current = scale; previewViewportRef.current?.reportScale(scale) },
       (viewerError) => {
         // load 阶段的错误会由 createOfficeViewer 抛给外层 catch；这里只处理 ready 后的异步渲染错误。
         if (!signal.aborted && viewerRef.current) {
@@ -173,6 +187,89 @@ export function OfficePreview({
     observer.observe(containerRef.current)
     return () => observer.disconnect()
   }, [format, status])
+
+  // 响应聊天中的引用胶囊点击（#f1:p1-b11），自动翻页/切换工作表并渲染琥珀色聚光灯高亮
+  React.useEffect(() => {
+    if (status !== 'ready' || !format || !highlightTarget) return
+    const viewer = viewerRef.current
+    const host = viewerHostRef.current
+    if (!viewer || !host) return
+
+    const target = highlightTarget
+    const norm = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
+    const isSameFile =
+      norm(target.filePath) === norm(filePath) ||
+      getFileBaseName(target.filePath).toLowerCase() === getFileBaseName(filePath).toLowerCase()
+    if (!isSameFile) return
+
+    let cancelled = false
+
+    const timer = setTimeout(() => {
+      if (cancelled || !viewerRef.current || !viewerHostRef.current) return
+      // 先销毁上一枚圈选框（含其观察器），再挂载新的，避免 observer 泄漏
+      spotlightDisposeRef.current?.()
+      spotlightDisposeRef.current = null
+      void applyOfficeCitationSpotlight(viewerRef.current, viewerHostRef.current, {
+        format,
+        pageNumber: target.pageNumber,
+        bbox: target.bbox,
+        cellRef: target.cellRef,
+        label: target.label,
+      }).then((dispose) => {
+        if (cancelled) {
+          dispose()
+          return
+        }
+        spotlightDisposeRef.current = dispose
+        // 仅在圈选框成功挂载后才消费本次请求：若提前消费会触发本 effect 清理，
+        // 使刚挂载的高亮框被立即销毁（表现为“闪一下但看不到圈选框”）。
+        setHighlightTarget((prev) => (prev?.requestId === target.requestId ? null : prev))
+      })
+    }, 80)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [filePath, format, highlightTarget, setHighlightTarget, status])
+
+  // 组件卸载（切换文件/关闭预览）时销毁当前圈选框
+  React.useEffect(() => () => {
+    spotlightDisposeRef.current?.()
+    spotlightDisposeRef.current = null
+  }, [])
+
+  // 向预览视口注册原生缩放控制器：调用 Silurus viewer 的 setScale/fitWidth，
+  // 与 viewer 底部缩放条走同一条缩放路径（只有内容区缩放，固定 UI 不动）。
+  const scaleViewer = React.useCallback((factor: number): void => {
+    const viewer = viewerRef.current
+    if (!viewer?.setScale) return
+    const current = viewer.getScale?.() ?? scaleRef.current ?? 1
+    viewer.setScale(clampOfficeScale(current * factor))
+  }, [])
+
+  React.useEffect(() => {
+    if (!previewViewport || status !== 'ready') return
+    return previewViewport.register({
+      zoomIn: () => scaleViewer(1.2),
+      zoomOut: () => scaleViewer(1 / 1.2),
+      fit: () => {
+        const viewer = viewerRef.current
+        if (!viewer) return
+        if (typeof viewer.fitWidth === 'function') viewer.fitWidth()
+        else viewer.fitPage?.()
+      },
+      reset: () => viewerRef.current?.setScale?.(1),
+      getScale: () => scaleRef.current ?? 1,
+      setScale: (scale) => {
+        const viewer = viewerRef.current
+        if (!viewer?.setScale) return
+        const clamped = clampOfficeScale(scale)
+        viewer.setScale(clamped)
+        scaleRef.current = viewer.getScale?.() ?? clamped
+      },
+    })
+  }, [previewViewport, status, scaleViewer])
 
   if (status === 'error' && fallback) return <>{fallback}</>
 

@@ -78,7 +78,7 @@ function registerProtocolsAndHandlers(): void {
     { scheme: 'cdut-resource', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
   ])
 
-  // 砚湖秒通多层框架白屏根除（引擎级隐身，须在 app ready 前注入）：
+  // 智联万站多层框架白屏根除（引擎级隐身，须在 app ready 前注入）：
   // C++ Blink 引擎原生将 navigator.webdriver 置为 false，其访问器为原生 native code，
   // 通过瑞数所有 Function.prototype.toString / Realm 对比检测（取代脆弱的 JS 原型链劫持）。
   app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
@@ -125,7 +125,7 @@ function registerProtocolsAndHandlers(): void {
     }
   })
 
-  // 砚湖秒通内网白屏根除：校内站点普遍使用内网中间证书/自签名证书，
+  // 智联万站内网白屏根除：校内站点普遍使用内网中间证书/自签名证书，
   // 一律信任 *.cdut.edu.cn，避免证书校验失败把整页拦成白屏；站外域名保持默认拒绝策略。
   app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
     if (isCdutDomain(url)) {

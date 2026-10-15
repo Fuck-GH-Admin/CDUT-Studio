@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通工业级 CDP 静默总线（YanhuDevToolsHub）
+ * 智联万站工业级 CDP 静默总线（YanhuDevToolsHub）
  *
  * 前端 100% 不暴露任何调试 UI；主进程在此建立标准 Chrome DevTools Protocol 数据总线，
  * 开启 DOM/CSS、Page、Network、Log/Runtime 四域，并以环形缓冲区留存采集结果，
@@ -132,7 +132,7 @@ export function resolveCdpExceptionMessage(exceptionDetails: unknown): string | 
 }
 
 /**
- * 砚湖秒通 CDP 采集总线。
+ * 智联万站 CDP 采集总线。
  */
 export class YanhuDevToolsHub {
   private readonly buffers = new Map<string, TabCdpBuffer>()
@@ -172,7 +172,7 @@ export class YanhuDevToolsHub {
         wc.debugger.attach('1.3')
       }
     } catch (err) {
-      console.warn('[砚湖秒通·CDP] 附加调试器失败，CDP 采集不可用:', err)
+      console.warn('[智联万站·CDP] 附加调试器失败，CDP 采集不可用:', err)
       return
     }
 
@@ -180,7 +180,7 @@ export class YanhuDevToolsHub {
       try {
         this.consumeCdpEvent(tabId, method, params)
       } catch (err) {
-        console.warn('[砚湖秒通·CDP] 采集事件异常:', err)
+        console.warn('[智联万站·CDP] 采集事件异常:', err)
       }
     }
     const onDetach = (): void => {
@@ -208,7 +208,7 @@ export class YanhuDevToolsHub {
       wc.debugger.on('message', onMessage)
       wc.debugger.on('detach', onDetach)
     } catch (err) {
-      console.warn('[砚湖秒通·CDP] 挂载监听失败:', err)
+      console.warn('[智联万站·CDP] 挂载监听失败:', err)
     }
 
     // 关键防御 1：最优先启用断点忽略，彻底解除瑞数反调试 debugger; 导致 V8 挂起与事件循环饥饿

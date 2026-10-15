@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · CDP 异常信息提取（yanhu-devtools-hub）单元测试
+ * 智联万站 · CDP 异常信息提取（yanhu-devtools-hub）单元测试
  *
  * 覆盖：优先取 `exception.description`（真实异常，如 TypeError: Illegal invocation），
  * 而非 Chrome 对未捕获异常仅给出的笼统 `text: "Uncaught"`。

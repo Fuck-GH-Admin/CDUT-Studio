@@ -15,7 +15,7 @@ import { TabBar } from '@/components/tabs/TabBar'
 import { WindowControlsTemplateProvider } from '@/components/WindowControlsTemplate'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { agentSidePanelOpenAtom, agentSidePanelWidthAtom, currentAgentSessionIdAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom, agentDiffPanelTabAtom } from '@/atoms/agent-atoms'
+import { agentSidePanelOpenAtom, agentSidePanelWidthAtom, agentPreviewPanelWidthAtom, currentAgentSessionIdAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom, agentDiffPanelTabAtom } from '@/atoms/agent-atoms'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -25,9 +25,11 @@ import { detectIsWindows } from '@profer/ui'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { usePanelAutoLayout } from '@/hooks/usePanelAutoLayout'
 import { cn } from '@/lib/utils'
+import { Z_LAYER } from '@profer/ui'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
+const MIN_PREVIEW_PANEL_WIDTH = 340
 
 const MIN_LEFT_SIDEBAR_WIDTH = 300
 const MAX_LEFT_SIDEBAR_WIDTH = 420
@@ -95,13 +97,23 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     } catch { /* ignore */ }
   }, [])
 
-  // 右侧面板可拖拽宽度
-  const [rightPanelWidth, setRightPanelWidth] = useAtom(agentSidePanelWidthAtom)
+  // 右侧面板可拖拽宽度：文件列表态与预览态分档记忆。
+  // 预览态使用舒适阅读宽度（340px ~ 62vw），列表态保持 300 ~ 560px。
+  const [listPanelWidth, setListPanelWidth] = useAtom(agentSidePanelWidthAtom)
+  const [previewPanelWidth, setPreviewPanelWidth] = useAtom(agentPreviewPanelWidthAtom)
+  const isPreviewTab = activeRightPanelTab === 'preview'
+  const rightPanelWidth = isPreviewTab ? previewPanelWidth : listPanelWidth
+  const setRightPanelWidth = isPreviewTab ? setPreviewPanelWidth : setListPanelWidth
   const dragging = React.useRef(false)
-  const rightPanelMinimumWidth = MIN_RIGHT_PANEL_WIDTH
+  const rightPanelMinimumWidth = isPreviewTab ? MIN_PREVIEW_PANEL_WIDTH : MIN_RIGHT_PANEL_WIDTH
   const clampCurrentRightPanelWidth = React.useCallback(
-    (width: number) => Math.max(rightPanelMinimumWidth, Math.min(MAX_RIGHT_PANEL_WIDTH, width)),
-    [rightPanelMinimumWidth],
+    (width: number) => {
+      const max = isPreviewTab
+        ? Math.max(MIN_PREVIEW_PANEL_WIDTH, Math.floor(window.innerWidth * 0.62))
+        : MAX_RIGHT_PANEL_WIDTH
+      return Math.max(rightPanelMinimumWidth, Math.min(max, width))
+    },
+    [isPreviewTab, rightPanelMinimumWidth],
   )
   const clampedRightPanelWidth = clampCurrentRightPanelWidth(rightPanelWidth)
 
@@ -204,7 +216,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           局部 drag region，因此全局层不能覆盖任何实际交互区域。 */}
       <div
         className={cn(
-          'titlebar-drag-region fixed top-0 left-0 h-2 z-50',
+          `titlebar-drag-region fixed top-0 left-0 h-2 ${Z_LAYER.shellTopDrag}`,
           isWindows ? 'right-[126px]' : 'right-0'
         )}
       />
@@ -216,14 +228,14 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             isClassic ? 'p-2 pr-0' : '',
             // 收起 rail 必须压过其右侧的分隔线；冷启动直接恢复收起状态时，
             // 分隔线处于更高层会裁掉 rail 最右侧，造成整列图标视觉上向左偏移。
-            sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[70] flex-none crt-sidebar',
+            sidebarCollapsed ? `relative ${Z_LAYER.shellRail} flex-none crt-sidebar` : `relative ${Z_LAYER.shell} flex-none crt-sidebar`,
           )}
         >
           <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
           {/* 左栏复用主区既有的 8px 外边距作为拖动命中区：不额外占宽度，也不覆盖侧栏滚动条。 */}
           {!sidebarCollapsed && (
             <div
-              className="titlebar-no-drag absolute left-full top-0 bottom-0 z-[80] w-1.5 translate-x-px cursor-col-resize pointer-events-auto"
+              className={`titlebar-no-drag absolute left-full top-0 bottom-0 ${Z_LAYER.shellResizer} w-1.5 translate-x-px cursor-col-resize pointer-events-auto`}
               onMouseDown={handleLeftSidebarMouseDown}
               role="separator"
               aria-orientation="vertical"
@@ -233,7 +245,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         </div>
 
         {/* 中间容器 */}
-        <div className="main-area-glass-host flex-1 min-w-0 p-2 relative z-[60]">
+        <div className={`main-area-glass-host flex-1 min-w-0 p-2 relative ${Z_LAYER.shellContent}`}>
           <MainArea />
         </div>
 
@@ -246,15 +258,15 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
               // 上下边距始终保留，避免收起瞬间面板从上下各扩展 8px；仅切换右侧
               // 横向 padding，并让 SidePanel 自身负责宽度过渡，保持收起方向纯水平。
               filePanelVisible
-                ? 'relative z-[70] flex items-stretch crt-sidebar py-2 pr-2 pl-0'
-                : 'relative z-[60] flex items-stretch crt-sidebar py-2 pr-0 pl-0'
+                ? `relative ${Z_LAYER.shell} flex items-stretch crt-sidebar py-2 pr-2 pl-0`
+                : `relative ${Z_LAYER.shellContent} flex items-stretch crt-sidebar py-2 pr-0 pl-0`
             )}
           >
             <RightSidePanel width={clampedRightPanelWidth} />
             {/* 透明命中区收窄为 6px，仅落在现有中缝中心，不参与布局也不产生额外留白。 */}
             {filePanelVisible && (
               <div
-                className="titlebar-no-drag absolute -left-[7px] top-0 bottom-0 z-[80] w-1.5 cursor-col-resize pointer-events-auto"
+                className={`titlebar-no-drag absolute -left-[7px] top-0 bottom-0 ${Z_LAYER.shellResizer} w-1.5 cursor-col-resize pointer-events-auto`}
                 onMouseDown={handleMouseDown}
                 role="separator"
                 aria-orientation="vertical"

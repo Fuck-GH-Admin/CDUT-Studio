@@ -1,5 +1,5 @@
 /**
- * YanhuPetModelSettings - 砚湖秒通「砚小龙」专属模型配置卡片
+ * YanhuPetModelSettings - 智联万站「砚小龙」专属模型配置卡片
  *
  * 允许为桌宠单独指定渠道 / 模型；未配置时「砚小龙」将无缝继承全局默认激活渠道。
  * 配置持久化于 `~/.cdutai/yanhu-pet-history.json`，经主进程 `yanhuExpress.petSaveConfig` 写入。
@@ -8,7 +8,7 @@
 import * as React from 'react'
 import type { Channel } from '@profer/shared'
 import { PROVIDER_LABELS } from '@profer/shared'
-import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
+import { SettingsSection, SettingsCard, SettingsRow, SettingsToggle } from './primitives'
 
 export interface YanhuPetModelSettingsProps {
   channels: Channel[]
@@ -21,6 +21,7 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
   const api = window.electronAPI?.yanhuExpress
   const [channelId, setChannelId] = React.useState('')
   const [modelId, setModelId] = React.useState('')
+  const [enableVision, setEnableVision] = React.useState(false)
   const [loaded, setLoaded] = React.useState(false)
 
   React.useEffect(() => {
@@ -35,6 +36,7 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
         if (!alive) return
         setChannelId(config.selectedChannelId ?? '')
         setModelId(config.selectedModelId ?? '')
+        setEnableVision(config.enableVision === true)
       })
       .catch(() => {})
       .finally(() => {
@@ -65,6 +67,22 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
     [api],
   )
 
+  // 渠道/模型被停用或删除后回落为「继承全局默认渠道」，
+  // 避免下拉因值不在候选中而显示空白、并连带把模型下拉禁用。
+  React.useEffect(() => {
+    if (!loaded) return
+    if (channelId && !enabledChannels.some((channel) => channel.id === channelId)) {
+      setChannelId('')
+      setModelId('')
+      persist('', '')
+      return
+    }
+    if (modelId && !models.some((model) => model.id === modelId)) {
+      setModelId('')
+      persist(channelId, '')
+    }
+  }, [loaded, enabledChannels, models, channelId, modelId, persist])
+
   const handleChannelChange = (value: string): void => {
     setChannelId(value)
     setModelId('')
@@ -76,9 +94,15 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
     persist(channelId, value)
   }
 
+  const handleVisionToggle = (checked: boolean): void => {
+    setEnableVision(checked)
+    if (!api) return
+    void api.petSaveConfig({ enableVision: checked ? true : undefined }).catch(() => {})
+  }
+
   return (
     <SettingsSection
-      title="砚湖秒通专属模型"
+      title="智联万站专属模型"
       description="为桌宠「砚小龙」单独指定模型渠道；未配置时无缝继承全局默认激活渠道。"
     >
       <SettingsCard>
@@ -112,6 +136,14 @@ export function YanhuPetModelSettings({ channels }: YanhuPetModelSettingsProps):
             ))}
           </select>
         </SettingsRow>
+        {/* 视觉截图辅助感知：页面信息不足时触发视口截图，交由多模态模型视觉认知 */}
+        <SettingsToggle
+          label="启用视觉截图辅助感知（Screenshot Recognition）"
+          description="开启后在页面信息不足时将触发视口截图分析；请确保所选模型渠道支持多模态图像输入 (Vision/Multimodal)。"
+          checked={enableVision}
+          disabled={!loaded}
+          onCheckedChange={handleVisionToggle}
+        />
       </SettingsCard>
     </SettingsSection>
   )

@@ -34,6 +34,7 @@ import type {
   ReviewModelGatewayStatus,
   ReviewRun,
   ReviewRunV2,
+  ReviewBackgroundPiRunState,
   CaseAggregateV2,
   TemplateVersion,
   RuleOutlineItem,
@@ -64,6 +65,7 @@ import {
 import type { ReviewCaseTasks } from '@/atoms/review-atoms'
 import type { ReviewExecutionViewState, ReviewFocus } from '@/atoms/review-atoms'
 import { buildReviewWorkspaceViewModel } from './review-workspace-view-model'
+import { beginWorkspaceCaseWrite, invalidateWorkspaceCaseWrites } from './review-workspace-write-fence'
 
 /** focus/locate 联动 nonce（每次点击 +1 驱动 useEffect 重放） */
 let focusNonce = 0
@@ -122,6 +124,8 @@ export interface ReviewActionsApi {
   getWorkspaceRunValidityV2?(input: { caseId: string; runId: string }): Promise<boolean>
   getTemplateV2?(templateId: string, version?: number): Promise<TemplateVersion | undefined>
   runReviewV2?(caseId: string): Promise<ReviewRunV2>
+  getBackgroundPiReviewStateV2?(caseId: string): Promise<ReviewBackgroundPiRunState>
+  stopBackgroundPiReviewV2?(input: { caseId: string; runId: string }): Promise<ReviewBackgroundPiRunState>
   getWorkspaceDocumentPreviewPath?(input: { caseId: string; documentVersionId: string }): Promise<string | null>
   registerMaterialPathV2?(input: { caseId: string; sourcePath: string; role: 'application' | 'evidence' | 'rule' | 'attachment'; materialSlotId?: string; fileName?: string; replacesVersionIds?: string[] }): Promise<string | undefined>
   submitCaseV2?(caseId: string): Promise<{ ok: boolean; aggregate?: CaseAggregateV2; message?: string } | undefined>
@@ -172,6 +176,8 @@ function executionStateFromRun(run: ReviewRun | null, inputStale: boolean): Revi
 
 function executionStateFromWorkspace(aggregate: CaseAggregateV2 | null, run: ReviewRunV2 | null, inputStale: boolean, observations: Array<Record<string, unknown>>, template?: TemplateVersion | null): ReviewExecutionViewState | null {
   if (!run || !aggregate) return null
+  if (run.status === 'running' || run.status === 'queued') return { status: 'running', stage: 'checks', message: '审核中，可切换页面' }
+  if (run.status === 'cancelled') return { status: 'cancelled', stage: 'summary', message: '本次审核已停止，可重新审核' }
   if (run.status === 'failed') return { status: 'failed', stage: 'summary', message: '最近一次审核未完成', error: run.error ?? '审核运行失败' }
   if (run.status === 'awaiting-input') return { status: 'awaiting-input', stage: 'summary', message: '审核等待补充输入' }
   const view = buildReviewWorkspaceViewModel(aggregate, run, inputStale, observations, template)
@@ -188,6 +194,11 @@ export const REVIEW_DOCUMENT_ROLE_LABELS: Record<SourceDocument['role'], string>
 
 export type ReviewRunMode = 'update' | 'restart'
 
+/** Electron IPC 包装属于诊断信息，业务错误卡和底部提示使用同一可读原因。 */
+function reviewErrorMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+}
+
 export function createReviewActionsController(
   store: JotaiStore,
   api: ReviewActionsApi,
@@ -195,12 +206,26 @@ export function createReviewActionsController(
 ) {
   /** 选择代次：每次 selectCase/loadDemo/create 递增；慢返回若代次已变则丢弃 */
   let selectionGeneration = 0
+
+  /** 所有进入/回读路径都以 Main 的真实 ACK 判定受理，账本 running 不能替代。 */
+  const executionStateWithAdmission = async (
+    aggregate: CaseAggregateV2 | null, run: ReviewRunV2 | null, inputStale: boolean,
+    observations: Array<Record<string, unknown>>, template?: TemplateVersion | null,
+  ): Promise<ReviewExecutionViewState | null> => {
+    const state = executionStateFromWorkspace(aggregate, run, inputStale, observations, template)
+    if (!run || !run.id.startsWith('run-pi-') || (run.status !== 'running' && run.status !== 'queued')) return state
+    const background = api.getBackgroundPiReviewStateV2 ? await api.getBackgroundPiReviewStateV2(run.caseId) : null
+    return background?.runId === run.id && background.phase === 'accepted'
+      ? { status: 'running', stage: 'checks', message: '审核中，可切换页面' }
+      : { status: 'preparing', message: '正在准备审核，请等待受理后再切换页面' }
+  }
   /** 同案操作代次：key = `${caseId}:${kind}`，新发起递增；旧返回代次不符即丢弃 */
   const operationGenerations = new Map<string, number>()
+  // Main owns the Pi run; shared store/case tokens fence only stale UI commits.
 
   const reportError = (scope: string, error: unknown, options: { caseId?: string } = {}): void => {
     console.error('[审核专区]', scope, error)
-    const message = error instanceof Error ? error.message : String(error)
+    const message = reviewErrorMessage(error)
     // 按案隔离：案卷已切走时错误只留日志，不污染当前案卷的错误条（K05）
     if (options.caseId === undefined || store.get(selectedCaseIdAtom) === options.caseId) {
       store.set(reviewErrorAtom, `${scope}：${message}`)
@@ -231,21 +256,29 @@ export function createReviewActionsController(
 
   /** 当前 workspace caseId 与 V2 aggregateId 一致；选择/写入后从持久层重读。 */
   const refreshWorkspaceV2 = async (caseId: string): Promise<void> => {
-    if (api.migrateCaseV2) await api.migrateCaseV2(caseId)
+    const isLatest = beginWorkspaceCaseWrite(store, caseId)
+    if (api.migrateCaseV2) {
+      await api.migrateCaseV2(caseId)
+      if (!isLatest()) return
+    }
     if (api.getAggregateV2) {
       const aggregate = await api.getAggregateV2(caseId)
+      if (!isLatest()) return
       store.set(reviewWorkspaceAggregatesByCaseAtom, { ...store.get(reviewWorkspaceAggregatesByCaseAtom), [caseId]: aggregate ?? null })
       if (aggregate && api.getTemplateV2) {
         const template = await api.getTemplateV2(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+        if (!isLatest()) return
         store.set(reviewWorkspaceTemplatesByCaseAtom, { ...store.get(reviewWorkspaceTemplatesByCaseAtom), [caseId]: template ?? null })
       }
     }
     if (api.listRunsV2) {
       const runs = await api.listRunsV2(caseId)
+      if (!isLatest()) return
       const latest = runs[0] ?? null
       store.set(reviewWorkspaceRunsByCaseAtom, { ...store.get(reviewWorkspaceRunsByCaseAtom), [caseId]: latest })
       if (latest && api.getWorkspaceRunValidityV2) {
         const stale = await api.getWorkspaceRunValidityV2({ caseId, runId: latest.id })
+        if (!isLatest()) return
         store.set(reviewWorkspaceRunStaleByCaseAtom, { ...store.get(reviewWorkspaceRunStaleByCaseAtom), [caseId]: stale })
       } else if (!latest) {
         store.set(reviewWorkspaceRunStaleByCaseAtom, { ...store.get(reviewWorkspaceRunStaleByCaseAtom), [caseId]: false })
@@ -253,18 +286,19 @@ export function createReviewActionsController(
     }
     if (api.getRunObservationsV2) {
       const observations = await api.getRunObservationsV2(caseId)
+      if (!isLatest()) return
       store.set(reviewWorkspaceExtractedObservationsByCaseAtom, { ...store.get(reviewWorkspaceExtractedObservationsByCaseAtom), [caseId]: observations })
     }
     const tasks = store.get(reviewTasksByCaseAtom)[caseId]
     if (!tasks?.running && !tasks?.outline && !tasks?.items) {
-      const state = executionStateFromWorkspace(
+      const state = await executionStateWithAdmission(
         store.get(reviewWorkspaceAggregatesByCaseAtom)[caseId] ?? null,
         store.get(reviewWorkspaceRunsByCaseAtom)[caseId] ?? null,
         store.get(reviewWorkspaceRunStaleByCaseAtom)[caseId] ?? false,
         store.get(reviewWorkspaceExtractedObservationsByCaseAtom)[caseId] ?? [],
         store.get(reviewWorkspaceTemplatesByCaseAtom)[caseId],
       )
-      if (state) store.set(reviewExecutionByCaseAtom, { ...store.get(reviewExecutionByCaseAtom), [caseId]: state })
+      if (isLatest() && state) store.set(reviewExecutionByCaseAtom, { ...store.get(reviewExecutionByCaseAtom), [caseId]: state })
     }
   }
 
@@ -301,14 +335,14 @@ export function createReviewActionsController(
           store.set(reviewRunsByCaseAtom, { ...store.get(reviewRunsByCaseAtom), [caseId]: latest.run })
           store.set(reviewRunStaleByCaseAtom, { ...store.get(reviewRunStaleByCaseAtom), [caseId]: latest.inputStale })
           store.set(reviewExecutionByCaseAtom, { ...store.get(reviewExecutionByCaseAtom), [caseId]: executionStateFromRun(latest.run, latest.inputStale) })
-          const workspaceState = executionStateFromWorkspace(
+          const workspaceState = await executionStateWithAdmission(
             store.get(reviewWorkspaceAggregatesByCaseAtom)[caseId] ?? null,
             store.get(reviewWorkspaceRunsByCaseAtom)[caseId] ?? null,
             store.get(reviewWorkspaceRunStaleByCaseAtom)[caseId] ?? false,
             store.get(reviewWorkspaceExtractedObservationsByCaseAtom)[caseId] ?? [],
             store.get(reviewWorkspaceTemplatesByCaseAtom)[caseId],
           )
-          if (workspaceState) store.set(reviewExecutionByCaseAtom, { ...store.get(reviewExecutionByCaseAtom), [caseId]: workspaceState })
+          if (generation === selectionGeneration && workspaceState) store.set(reviewExecutionByCaseAtom, { ...store.get(reviewExecutionByCaseAtom), [caseId]: workspaceState })
         }
       } catch (restoreError) {
         console.error('[审核专区] 恢复最近运行失败', restoreError)
@@ -396,6 +430,22 @@ export function createReviewActionsController(
   }
 
   return {
+    /** On unmount / case switch, revoke pending display reads, not background Pi. */
+    invalidateRefresh(caseId: string): void {
+      invalidateWorkspaceCaseWrites(store, caseId)
+    },
+    /** 仅刷新本案 V2 投影，执行仍由 Main 持有。 */
+    async refreshBackgroundReview(caseId: string): Promise<void> {
+      await refreshWorkspaceV2(caseId)
+    },
+
+    async stopReview(): Promise<void> {
+      const caseId = currentCaseId()
+      const run = caseId ? store.get(reviewWorkspaceRunsByCaseAtom)[caseId] : null
+      if (!caseId || !run || !api.stopBackgroundPiReviewV2) throw new Error('没有可停止的审核运行')
+      await api.stopBackgroundPiReviewV2({ caseId, runId: run.id })
+      await refreshWorkspaceV2(caseId)
+    },
     async initialize(): Promise<void> {
       const cases = await refreshCaseList()
       // 页面重开后 selectedCaseIdAtom 是空的；恢复上次案卷（或首个案卷），
@@ -447,7 +497,7 @@ export function createReviewActionsController(
             store.set(reviewRunsByCaseAtom, { ...store.get(reviewRunsByCaseAtom), [reviewCase.id]: latest.run })
             store.set(reviewRunStaleByCaseAtom, { ...store.get(reviewRunStaleByCaseAtom), [reviewCase.id]: latest.inputStale })
             store.set(reviewExecutionByCaseAtom, { ...store.get(reviewExecutionByCaseAtom), [reviewCase.id]: executionStateFromRun(latest.run, latest.inputStale) })
-            const workspaceState = executionStateFromWorkspace(
+            const workspaceState = await executionStateWithAdmission(
               store.get(reviewWorkspaceAggregatesByCaseAtom)[reviewCase.id] ?? null,
               store.get(reviewWorkspaceRunsByCaseAtom)[reviewCase.id] ?? null,
               store.get(reviewWorkspaceRunStaleByCaseAtom)[reviewCase.id] ?? false,
@@ -853,7 +903,7 @@ export function createReviewActionsController(
       const update = (state: ReviewExecutionViewState): void => setExecution(caseId, state)
       if (startPiReview) {
         try {
-          update({ status: 'preparing', stage: 'materials', message: '正在准备项目 Pi 审核会话' })
+          update({ status: 'preparing', stage: 'materials', message: '正在准备审核材料，请等待受理后再切换页面' })
           await refreshWorkspaceV2(caseId)
           let aggregate = store.get(reviewWorkspaceAggregatesByCaseAtom)[caseId]
           const template = store.get(reviewWorkspaceTemplatesByCaseAtom)[caseId]
@@ -928,7 +978,7 @@ export function createReviewActionsController(
               return
             }
           }
-          update({ status: 'running', stage: 'checks', message: '项目 Pi Agent 正在审核材料' })
+          update({ status: 'preparing', stage: 'checks', message: '正在等待审核受理，请稍候' })
           const run = await startPiReview(caseId, mode)
           await refreshWorkspaceV2(caseId)
           // Pi 会话也要像普通 V2 运行一样结束在明确状态。refreshWorkspaceV2 在
@@ -937,7 +987,7 @@ export function createReviewActionsController(
           const workspaceAggregate = store.get(reviewWorkspaceAggregatesByCaseAtom)[caseId] ?? null
           const observations = store.get(reviewWorkspaceExtractedObservationsByCaseAtom)[caseId] ?? []
           const stale = store.get(reviewWorkspaceRunStaleByCaseAtom)[caseId] ?? false
-          const workspaceState = executionStateFromWorkspace(
+          const workspaceState = await executionStateWithAdmission(
             workspaceAggregate,
             run,
             stale,
@@ -951,8 +1001,8 @@ export function createReviewActionsController(
           })
           setError(run.status === 'failed' ? `审核未完成：${run.error ?? '审核运行失败'}` : null, { caseId })
         } catch (error) {
-          reportError('项目 Pi 审核未完成', error, { caseId })
-          update({ status: 'failed', stage: 'summary', message: '项目 Pi 审核未完成', error: error instanceof Error ? error.message : String(error) })
+          reportError('审核未完成', error, { caseId })
+          update({ status: 'failed', stage: 'summary', message: '本次审核未完成', error: reviewErrorMessage(error) })
         } finally {
           endTask(caseId, 'running')
         }
@@ -1009,7 +1059,7 @@ export function createReviewActionsController(
           const workspaceAggregate = store.get(reviewWorkspaceAggregatesByCaseAtom)[caseId] ?? aggregate
           const workspaceObservations = store.get(reviewWorkspaceExtractedObservationsByCaseAtom)[caseId] ?? []
           const v2Stale = store.get(reviewWorkspaceRunStaleByCaseAtom)[caseId] ?? false
-          const workspaceState = executionStateFromWorkspace(workspaceAggregate, v2Run, v2Stale, workspaceObservations, store.get(reviewWorkspaceTemplatesByCaseAtom)[caseId])
+          const workspaceState = await executionStateWithAdmission(workspaceAggregate, v2Run, v2Stale, workspaceObservations, store.get(reviewWorkspaceTemplatesByCaseAtom)[caseId])
           update({
             ...(workspaceState ?? { status: 'partial' as const, stage: 'summary' as const, message: '审核结果状态不可用' }),
             documents: { completed: v2Run.coverage.documents.filter((document) => document.status === 'read').length, total: v2Run.coverage.documents.length },

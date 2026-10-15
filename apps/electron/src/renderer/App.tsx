@@ -4,9 +4,10 @@ import { AppShell } from './components/app-shell/AppShell'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
 import { TooltipProvider } from '@profer/ui/primitives/tooltip'
+import { Z_LAYER } from '@profer/ui'
 import { useCreateSession } from './hooks/useCreateSession'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
-import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from './atoms/tab-atoms'
+import { openTutorialTab } from './lib/tab-activation'
 import { replayIntroEnvironmentTestAtom, replayIntroOpenAtom } from './atoms/intro-atoms'
 import { IntroWaterRipple } from './components/onboarding/IntroWaterRipple'
 import { CoachTourOverlay } from './components/onboarding/coach-tour/CoachTourOverlay'
@@ -55,12 +56,9 @@ export default function App(): React.ReactElement {
     if (!isLoading) window.electronAPI.notifyRendererReady()
   }, [isLoading])
 
-  // 打开教程 Tab（纯 store 派发，不涉及会话创建，无需订阅会话/模型 atom）
+  // 打开教程 Tab：统一入口负责切回对话视图并同步副作用
   const handleOpenTutorial = React.useCallback((): void => {
-    const tabs = store.get(tabsAtom)
-    const result = openTab(tabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'CDUT Studio 使用教程' })
-    store.set(tabsAtom, result.tabs)
-    store.set(activeTabIdAtom, result.activeTabId)
+    openTutorialTab(store)
   }, [store])
 
   // 加载中状态
@@ -180,7 +178,7 @@ function IntroReplayOverlay(): React.ReactElement | null {
   if (!open) return null
   return (
     <div
-      className="fixed inset-0 z-[9999]"
+      className={`fixed inset-0 ${Z_LAYER.overlay}`}
       role="dialog"
       aria-modal="true"
       aria-label="CDUT Studio 开屏动画"

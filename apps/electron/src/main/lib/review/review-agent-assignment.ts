@@ -9,9 +9,11 @@
  * - 落盘：review-agent-assignments.json（轻量 JSON，无数据库）
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { writeJsonFileAtomic } from '../safe-file'
 import { join } from 'node:path'
 import { getConfigDir } from '../config-paths'
+import { getRunV2, isInterruptedRunV2 } from './run-store-v2'
 
 /** 指派允许的动作范围（C1：操作类全量；C2 增加决定类动作受代批开关二次约束） */
 export type ReviewAssignmentAction =
@@ -44,6 +46,26 @@ export interface ReviewAgentAssignment {
 
 const ASSIGNMENTS_FILE = 'review-agent-assignments.json'
 
+/**
+ * Process-local revocation intent. In case the disk write fails, the grant
+ * remains denied for every Main tool/lookup in this process. This is NOT
+ * evidence that the revocation reached persistent storage.
+ */
+const pendingRevocations = new Set<string>()
+
+function isLiveDirectPiRun(assignment: ReviewAgentAssignment): boolean {
+  if (!assignment.activeRunId) return true // ordinary delegated assignments
+  if (!assignment.caseId) return false
+  try {
+    // Even after process restart, a terminal or missing V2 run must never
+    // resurrect a grant whose revokedAt write failed.
+    return !isInterruptedRunV2(assignment.caseId, assignment.activeRunId)
+      && getRunV2(assignment.caseId, assignment.activeRunId)?.status === 'running'
+  } catch {
+    return false
+  }
+}
+
 function assignmentsPath(): string {
   return join(getConfigDir(), ASSIGNMENTS_FILE)
 }
@@ -51,16 +73,28 @@ function assignmentsPath(): string {
 function readAll(): ReviewAgentAssignment[] {
   const path = assignmentsPath()
   if (!existsSync(path)) return []
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as { assignments?: ReviewAgentAssignment[] }
-    return Array.isArray(parsed.assignments) ? parsed.assignments : []
-  } catch {
-    return []
+  // Missing file is a fresh profile. A present but corrupt/unreadable file
+  // is NOT an empty authorization ledger: fail closed and never overwrite it.
+  const parsed = JSON.parse(readFileSync(path, 'utf-8')) as { assignments?: ReviewAgentAssignment[] }
+  if (!parsed || !Array.isArray(parsed.assignments)) {
+    throw new Error('审核指派文件结构损坏，禁止继续授权')
   }
+  return parsed.assignments
 }
 
 function writeAll(assignments: ReviewAgentAssignment[]): void {
-  writeFileSync(assignmentsPath(), `${JSON.stringify({ assignments }, null, 2)}\n`, 'utf-8')
+  // A previous revoke may have failed with EACCES/ENOSPC. Any subsequent
+  // successful write MUST make that pending deny durable as well, otherwise
+  // an unrelated grant could preserve a stale authorized row across restart.
+  const persisted = assignments.map((assignment) => pendingRevocations.has(assignment.id) && !assignment.revokedAt
+    ? { ...assignment, revokedAt: new Date().toISOString() }
+    : assignment)
+  // Atomic replacement: ENOSPC must never truncate the last valid ledger.
+  writeJsonFileAtomic(assignmentsPath(), { assignments: persisted })
+  // Only clear process-local quarantine after the complete file was committed.
+  for (const assignment of persisted) {
+    if (assignment.revokedAt) pendingRevocations.delete(assignment.id)
+  }
 }
 
 export interface CreateAssignmentInput {
@@ -101,11 +135,21 @@ export function createAssignment(input: CreateAssignmentInput): ReviewAgentAssig
 
 /** 撤销指派：撤销后新写入被拒（已完成动作保留时间线） */
 export function revokeAssignment(assignmentId: string): boolean {
+  // Intend to deny BEFORE any read/write that can fail (EACCES, ENOSPC, JSON).
+  pendingRevocations.add(assignmentId)
   const all = readAll()
   const target = all.find((item) => item.id === assignmentId)
-  if (!target || target.revokedAt) return false
+  if (!target || target.revokedAt) {
+    // An unknown ID has no grant to re-enable, and a persisted revocation is
+    // already durable. Neither needs a process-local pending marker.
+    pendingRevocations.delete(assignmentId)
+    return false
+  }
   target.revokedAt = new Date().toISOString()
+  // On write failure the pending marker MUST survive: do not pretend that
+  // revokedAt was persisted. The exception is observed by the Main caller.
   writeAll(all)
+  pendingRevocations.delete(assignmentId)
   return true
 }
 
@@ -153,10 +197,21 @@ export function checkAssignment(input: {
   action: ReviewAssignmentAction
   turnTriggeredBy?: 'user' | 'automation' | 'delegation' | 'goal'
 }): AssignmentCheck {
-  const assignment = readAll().find((item) => item.id === input.assignmentId)
+  if (pendingRevocations.has(input.assignmentId)) {
+    return { ok: false, code: 'ASSIGNMENT_REVOKED', message: '该指派撤销未成功持久化，已在当前进程隔离；请修复存储后重试' }
+  }
+  let assignment: ReviewAgentAssignment | undefined
+  try {
+    assignment = readAll().find((item) => item.id === input.assignmentId)
+  } catch {
+    return { ok: false, code: 'ASSIGNMENT_REVOKED', message: '审核指派账本不可可信读取，已拒绝操作' }
+  }
   if (!assignment) return { ok: false, code: 'ASSIGNMENT_NOT_FOUND', message: `指派不存在: ${input.assignmentId}` }
   if (assignment.sessionId !== input.sessionId) return { ok: false, code: 'ASSIGNMENT_NOT_FOUND', message: '指派不属于当前会话' }
   if (assignment.revokedAt) return { ok: false, code: 'ASSIGNMENT_REVOKED', message: `指派已被撤销（${assignment.revokedAt}）；已完成动作保留在时间线` }
+  if (!isLiveDirectPiRun(assignment)) {
+    return { ok: false, code: 'ASSIGNMENT_REVOKED', message: '直接 Pi 审核运行已结束或无可信运行记录，旧指派不能再操作' }
+  }
   if (input.turnTriggeredBy && input.turnTriggeredBy !== 'user') {
     return { ok: false, code: 'TURN_NOT_USER', message: `仅用户发起的轮次可执行审核写操作（当前轮次来源: ${input.turnTriggeredBy}）` }
   }
@@ -175,13 +230,13 @@ export function listAssignments(sessionId?: string): ReviewAgentAssignment[] {
 
 /** 读取会话最近一条有效的直接审核指派。 */
 export function findActivePiReviewAssignment(sessionId: string): ReviewAgentAssignment | undefined {
-  return readAll()
-    .filter((item) => item.sessionId === sessionId
-      && !item.revokedAt
-      && item.caseId
-      && item.activeRunId
-      && item.actions.includes('submit-result'))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+  // createAssignment appends to disk. Millisecond timestamps can tie
+  // during consecutive runs; use persisted insertion order, newest first.
+  return readAll().reverse().find((item) => item.sessionId === sessionId
+    && !item.revokedAt && !pendingRevocations.has(item.id)
+    && item.caseId
+    && item.activeRunId
+    && item.actions.includes('submit-result'))
 }
 
 /** 由指派构造工具 actor（role 来自指派工作角色，不由模型声明；actorId 保留完整会话身份） */

@@ -10,25 +10,24 @@ import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import type { AgentSessionMeta } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import {
-  activeTabIdAtom,
   activeSessionIdAtom,
   openTab,
   tabMruAtom,
   tabsAtom,
+  visibleTopBarTabsAtom,
 } from '@/atoms/tab-atoms'
 import { getInitialTabSwitchIndex, promoteTabMru } from '@/lib/tab-switching'
-import { appModeAtom } from '@/atoms/app-mode'
+import { activateTabWithSideEffects } from '@/lib/tab-activation'
 import {
   agentSessionIndicatorMapAtom,
   agentSessionsAtom,
   agentWorkspacesAtom,
-  currentAgentSessionIdAtom,
-  currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { Bot } from 'lucide-react'
+import { Z_LAYER } from '@profer/ui'
 import { getVisibleAgentWorkspaces } from '@/lib/product-feature-flags'
 
 type SwitchSectionId = 'recent'
@@ -58,12 +57,10 @@ interface SwitcherModel {
 
 export function TabSwitcher(): ReactElement | null {
   const store = useStore()
-  const tabs = useAtomValue(tabsAtom)
+  const visibleTabs = useAtomValue(visibleTopBarTabsAtom)
   const setTabs = useSetAtom(tabsAtom)
-  const activeTabId = useAtomValue(activeTabIdAtom)
-  const setActiveTabId = useSetAtom(activeTabIdAtom)
-  // MRU 与 Ctrl+Tab 起始定位均按会话 ID 归一化：预览 Tab 复用其 owner 会话 ID，
-  // 与候选列表（会话 ID）对齐，避免处于预览 Tab 时需按两下才能切换。
+  // MRU 与 Ctrl+Tab 起始定位均按会话 ID 归一化：预览/浏览器工作 Tab 复用其 owner 会话 ID，
+  // 与候选列表（会话 ID）对齐，避免处于工作 Tab 时需按两下才能切换。
   const activeSessionId = useAtomValue(activeSessionIdAtom)
   const tabMru = useAtomValue(tabMruAtom)
   const setTabMru = useSetAtom(tabMruAtom)
@@ -77,11 +74,6 @@ export function TabSwitcher(): ReactElement | null {
     () => new Set(getVisibleAgentWorkspaces(agentWorkspaces).map((workspace) => workspace.id)),
     [agentWorkspaces],
   )
-
-  const setAppMode = useSetAtom(appModeAtom)
-  const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
-  const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
-  const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
 
   const [isOpen, setIsOpen] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -118,14 +110,20 @@ export function TabSwitcher(): ReactElement | null {
 
     const allCandidates = agentCandidates
 
-    // 按 MRU 排序：在 MRU 列表中的按 MRU 顺序，不在的按 updatedAt 追加到末尾
+    // 按 MRU 排序：在 MRU 列表中的按 MRU 顺序，不在的按顶栏可见顺序或 updatedAt 追加到末尾
     const mruIndex = new Map(tabMru.map((id, i) => [id, i]))
+    const visibleIndex = new Map(visibleTabs.map((tab, i) => [tab.sessionId, i]))
     allCandidates.sort((a, b) => {
       const ai = mruIndex.get(a.id)
       const bi = mruIndex.get(b.id)
       if (ai !== undefined && bi !== undefined) return ai - bi
       if (ai !== undefined) return -1
       if (bi !== undefined) return 1
+      const vai = visibleIndex.get(a.id)
+      const vbi = visibleIndex.get(b.id)
+      if (vai !== undefined && vbi !== undefined) return vai - vbi
+      if (vai !== undefined) return -1
+      if (vbi !== undefined) return 1
       return b.updatedAt - a.updatedAt
     })
 
@@ -150,6 +148,7 @@ export function TabSwitcher(): ReactElement | null {
     draftSessionIds,
     tabMru,
     unviewedCompletedIds,
+    visibleTabs,
     visibleWorkspaceIds,
   ])
 
@@ -159,7 +158,6 @@ export function TabSwitcher(): ReactElement | null {
   const activeSessionIdRef = useRef<string | null>(activeSessionId)
   const candidatesRef = useRef<SwitchCandidate[]>(switcherModel.candidates)
   const tabMruRef = useRef<string[]>(tabMru)
-  const tabsRef = useRef(tabs)
   const lastMousePosRef = useRef({ x: 0, y: 0 })
 
   isOpenRef.current = isOpen
@@ -167,7 +165,6 @@ export function TabSwitcher(): ReactElement | null {
   activeSessionIdRef.current = activeSessionId
   candidatesRef.current = switcherModel.candidates
   tabMruRef.current = tabMru
-  tabsRef.current = tabs
 
   useEffect(() => {
     setTabMru((prev) => {
@@ -186,48 +183,22 @@ export function TabSwitcher(): ReactElement | null {
 
   const activateCandidate = useCallback(
     (candidate: SwitchCandidate): void => {
-      const nextTab = openTab(tabsRef.current, {
+      const session = store.get(agentSessionsAtom).find((s) => s.id === candidate.id)
+      const lineageParentId = session?.parentSessionId ?? session?.explorationParentSessionId
+      const nextTab = openTab(store.get(tabsAtom), {
         type: candidate.type,
         sessionId: candidate.id,
         title: candidate.title,
+        ...(lineageParentId ? { parentSessionId: lineageParentId } : {}),
       })
+      store.set(tabsAtom, nextTab.tabs)
       setTabs(nextTab.tabs)
-      setActiveTabId(nextTab.activeTabId)
-      // MRU/起始定位按会话 ID 归一化：激活会话后以 candidate.id（会话 ID）记账，
-      // 保证与候选列表对齐。
+      // MRU/起始定位按会话 ID 归一化：统一走 activateTabWithSideEffects 同步全部副作用
       activeSessionIdRef.current = candidate.id
-      setTabMru((prev) => {
-        const next = promoteTabMru(prev, candidate.id)
-        tabMruRef.current = next
-        return next
-      })
-
-      setAppMode('agent')
-      setCurrentAgentSessionId(candidate.id)
-
-      setUnviewedCompleted((prev) => {
-        if (!prev.has(candidate.id)) return prev
-        const next = new Set(prev)
-        next.delete(candidate.id)
-        return next
-      })
-
-      if (candidate.workspaceId) {
-        setCurrentAgentWorkspaceId(candidate.workspaceId)
-        window.electronAPI
-          .updateSettings({ agentWorkspaceId: candidate.workspaceId })
-          .catch(console.error)
-      }
+      activateTabWithSideEffects(store, nextTab.activeTabId)
+      tabMruRef.current = store.get(tabMruAtom)
     },
-    [
-      setActiveTabId,
-      setAppMode,
-      setCurrentAgentSessionId,
-      setCurrentAgentWorkspaceId,
-      setTabMru,
-      setTabs,
-      setUnviewedCompleted,
-    ],
+    [setTabs, store],
   )
 
   const activateAndClose = useCallback((candidate: SwitchCandidate): void => {
@@ -341,7 +312,7 @@ export function TabSwitcher(): ReactElement | null {
   return (
     // 注意：不要加 data-browser-blocking —— 原生 WebContentsView 的遮挡检测会因此
     // 在按住 Ctrl+Tab 的整段时间里隐藏浏览器面板，视觉上就是分栏浏览器闪黑。
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+    <div className={`fixed inset-0 ${Z_LAYER.overlay} flex items-center justify-center`}>
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
 
       <div className="relative bg-popover/95 backdrop-blur-md border border-border/50 rounded-xl shadow-2xl min-w-[420px] max-w-[540px] overflow-hidden">

@@ -1016,7 +1016,7 @@ export async function assembleV2Executors(aggregate: CaseAggregateV2, template: 
           const subjects = subjectsForRule(aggregate.caseV2.subjects, rule)
           const missingTargets = rule.targetScope === 'subject'
             ? subjects.filter((subject) => !existingTargets.has(subject.id)).map((subject) => [subject.id])
-            : existingTargets.size > 0 ? [] : [subjects.map((subject) => subject.id)]
+            : pluginRuleIds.has(rule.id) ? [] : [subjects.map((subject) => subject.id)]
           return missingTargets.map((subjectIds) => {
             const target = { scope: rule.targetScope === 'subject' ? 'subject' as const : rule.targetScope === 'group' ? 'group' as const : 'case' as const, subjectIds }
             return { checkId: checkIdFor(rule, target), ruleId: rule.id, status: 'execution-failed' as const, reason: 'Pi 审核 Agent 未通过内置审核工具提交可核验结论；系统未完成该检查，请修正引用后重试或由审核员接手。', target, sourceRefs: sourceRefsForRule(aggregate, rule), executedBy: 'semantic' as const, executedAt: new Date().toISOString() }

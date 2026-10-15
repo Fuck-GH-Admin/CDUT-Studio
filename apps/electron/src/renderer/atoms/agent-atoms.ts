@@ -376,11 +376,17 @@ export const teamWorkspaceLayoutModeAtom = atomWithStorage<TeamWorkspaceLayoutMo
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
 export type AgentSidePanelBaseTab = 'session' | 'workspace' | 'changes'
-/** 右侧工作区 Tab：探索分支 Tab 化后只剩文件视图。 */
-export type AgentSidePanelTab = AgentSidePanelBaseTab
+/** 右侧工作区 Tab：文件预览已迁入侧栏，新增预览视图。 */
+export type AgentSidePanelTab = AgentSidePanelBaseTab | 'preview'
 
 /** 侧面板当前 Tab（per-session Map）。 */
 export const agentDiffPanelTabAtom = atom<Map<string, AgentSidePanelTab>>(new Map())
+
+/**
+ * 预览视图下的右侧栏宽度（全局共享，拖拽后持久化）。
+ * 与文件列表态宽度分档记忆：切入预览自动过渡到舒适阅读宽度，切回列表恢复列表宽度。
+ */
+export const agentPreviewPanelWidthAtom = atomWithStorage<number>('profer-agent-preview-panel-width', 560)
 
 /** Diff 视图模式：'split' | 'unified' */
 export const agentDiffViewModeAtom = atom<'split' | 'unified'>('split')

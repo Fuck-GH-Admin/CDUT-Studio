@@ -18,7 +18,8 @@ import {
   readStudySection,
   writeStudentCognition,
 } from './study-document-indexer'
-import { getGlobalStudyRetriever } from './hybrid-retriever'
+import { searchStudyRouted } from './study-retrieval-router'
+import { getSettings } from '../settings-service'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -53,14 +54,14 @@ export function buildPiStudyTools(
       name: 'study_inspect_section',
       label: '查阅学习资料章节原文',
       description:
-        '按大纲给出的 sectionId 反向查阅学习资料对应章节的完整原文。讲解具体知识点、引用例题或核对细节时使用，避免一次性复述整篇资料造成上下文爆炸。',
+        'Read back the full original text of a study-material section by the sectionId given in the outline. Use it when explaining a specific knowledge point, quoting an example, or verifying details — avoids restating the whole material and blowing up the context window.',
       promptSnippet:
         'study_inspect_section: read the full original text of one study-material section by its sectionId from the outline.',
       parameters: Type.Object({
-        documentId: Type.String({ minLength: 1, description: '大纲顶部给出的文档标识' }),
-        sectionId: Type.String({ minLength: 1, description: '大纲中形如 <documentId>-sN 的章节标识' }),
+        documentId: Type.String({ minLength: 1, description: 'The document ID given at the top of the outline' }),
+        sectionId: Type.String({ minLength: 1, description: 'The section ID of the form <documentId>-sN shown in the outline' }),
         queryFocus: Type.Optional(
-          Type.String({ maxLength: 200, description: '可选的查阅焦点关键词，命中时只返回焦点周围上下文，进一步节省 Token' }),
+          Type.String({ maxLength: 200, description: 'Optional focus keywords; when matched, only the context around the hit is returned to further save tokens' }),
         ),
       }),
       async execute(_toolCallId, params) {
@@ -79,23 +80,23 @@ export function buildPiStudyTools(
       name: 'study_search_knowledge',
       label: '全域跨文档检索学习资料',
       description:
-        '跨当前课堂的所有资料（教材、课件、试卷、大纲）进行全域高精度混合检索。当回答学生的概念定义、定理证明、例题考点或查找跨资料关联时优先调用此工具。支持直接返回各文档相关的黄金事实与章节定位。',
+        'Full-domain high-precision hybrid retrieval across all materials of the current class (textbooks, slides, exam papers, outlines). Prefer this tool when answering the student\'s concept definitions, theorem proofs, or example exam points, or when looking for cross-material connections. It can directly return each document\'s relevant golden facts and section locators.',
       promptSnippet:
         'study_search_knowledge: search across all uploaded study documents using high-precision hybrid retrieval to find relevant sections and facts.',
       parameters: Type.Object({
-        query: Type.String({ minLength: 1, maxLength: 300, description: '检索查询词或学生的具体提问' }),
+        query: Type.String({ minLength: 1, maxLength: 300, description: 'The retrieval query or the student\'s specific question' }),
         targetDocumentId: Type.Optional(
-          Type.String({ description: '可选：限定在某份特定文档中检索；不传则跨所有文档全局检索' }),
+          Type.String({ description: 'Optional: restrict the search to one specific document; omit to search across all documents globally' }),
         ),
         topK: Type.Optional(
-          Type.Integer({ minimum: 1, maximum: 10, default: 5, description: '返回最相关的切块数量' }),
+          Type.Integer({ minimum: 1, maximum: 10, default: 5, description: 'Number of most relevant chunks to return' }),
         ),
       }),
       async execute(_toolCallId, params) {
         const args = params as { query: string; targetDocumentId?: string; topK?: number }
-        const retriever = getGlobalStudyRetriever()
+        const engine = getSettings().studyRetrievalEngine ?? 'classic'
         return jsonToolResult(
-          retriever.searchHybrid(ctx.sessionId, args.query, {
+          searchStudyRouted(ctx.sessionId, args.query, engine, {
             ...(args.targetDocumentId ? { targetDocumentId: args.targetDocumentId } : {}),
             topK: args.topK ?? 5,
           }),
@@ -106,12 +107,12 @@ export function buildPiStudyTools(
       name: 'study_cognition',
       label: '学生认知记忆档案',
       description:
-        '读取或更新学生在 AI 速课堂的认知记忆档案（已掌握 / 待学未知 / 薄弱混淆三维清单）。开始讲解前应先读取；摸底诊断或自测通过后应及时回写。',
+        'Read or update the student\'s cognition memory profile (学生认知档案) in AI速课堂 (AI Quick Classroom) — a three-dimensional inventory of mastered / unlearned / fragile-confused concepts. Read it before starting to tutor; write it back promptly after a baseline diagnostic (摸底诊断) or a completed self-test.',
       promptSnippet:
         'study_cognition: read or update the student cognition profile (mastered / unlearned / fragile concepts) used by the prior-knowledge guard.',
       parameters: Type.Object({
         action: Type.Union([Type.Literal('read'), Type.Literal('update')], {
-          description: 'read 读取当前档案；update 增量更新档案',
+          description: '`read` reads the current profile; `update` applies an incremental update',
         }),
         subject: Type.Optional(Type.String({ maxLength: 120 })),
         targetGoal: Type.Optional(Type.String({ maxLength: 200 })),

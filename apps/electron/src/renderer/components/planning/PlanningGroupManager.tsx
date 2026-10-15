@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Check, MoreHorizontal, Pencil, Plus, Trash2, X } from 'lucide-react'
 import type { PlanningGroup, PlanningGroupScope } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
+import { Z_LAYER } from '@profer/ui'
 import { Input } from '@profer/ui/primitives/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@profer/ui/primitives/popover'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@profer/ui/primitives/dropdown-menu'
@@ -139,7 +140,7 @@ export function PlanningGroupManager({ scope, groups, trigger, itemLabel, getUsa
                 <span className="tabular-nums text-xs text-muted-foreground">{usageCount}</span>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" className="size-10 text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground data-[state=open]:text-foreground" aria-label={`管理分组 ${group.name}`}><MoreHorizontal size={16} /></Button></DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="z-[110] min-w-32">
+                  <DropdownMenuContent align="end" className={`${Z_LAYER.menu} min-w-32`}>
                     <DropdownMenuItem onSelect={() => startRenaming(group)}><Pencil />重命名</DropdownMenuItem>
                     <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => { setPendingDeletion(group); setOpen(false) }}><Trash2 />删除</DropdownMenuItem>
                   </DropdownMenuContent>

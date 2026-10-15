@@ -41,11 +41,12 @@ export function isAbsoluteFilePath(filePath: string): boolean {
 
 /**
  * 面包屑显示：取路径末尾 n 段（默认 2 段）。
- * 段数不足 n 时按原样返回；空串返回空串。分隔符处理与既有实现保持一致（按正斜杠切分）。
+ * 段数不足 n 时按原样返回；空串返回空串。
+ * 分隔符同时兼容 `/` 与 `\`（Windows 路径也需正确缩短，否则会原样返回完整绝对路径）。
  */
 export function getLastPathSegments(path: string | null | undefined, n = 2): string {
   if (!path) return ''
-  const parts = path.split('/').filter(Boolean)
+  const parts = path.split(/[\\/]/).filter(Boolean)
   return parts.length > n ? `.../${parts.slice(-n).join('/')}` : path
 }
 

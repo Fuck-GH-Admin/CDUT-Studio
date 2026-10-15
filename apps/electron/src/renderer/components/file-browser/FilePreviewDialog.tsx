@@ -6,7 +6,7 @@
  *   曾试过交给 OFV viewer，但它的 imagePlugin 要求按住 Ctrl/Cmd 滚轮才缩放、
  *   且是档位式 zoom-in/out 命令，体验不如自渲染版本，故改回。
  * - PDF: prepare-pdf-preview → HTML iframe
- * - Office: docx-to-html / office-to-html → HTML iframe
+ * - Office: 复用只读 OfficePreview（与上游侧栏一致）
  * - 代码/文本: resolve-and-read → 代码查看器
  * - 其他: 文件信息 + 下载提示
  */
@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@profer/ui/primitives/button'
 import { cn } from '@/lib/utils'
 import { OfficePreview } from './office-preview/OfficePreview'
+import { normalizeOfficeFormat } from './office-preview/silurus-bridge'
 import { useSmoothZoom } from '@profer/ui'
 import type { FileAccessOptions } from '@profer/shared'
 
@@ -36,7 +37,7 @@ type PreviewState =
   | { status: 'loading' }
   | { status: 'image'; src: string }
   | { status: 'html'; html: string }
-  | { status: 'office'; path: string; access?: FileAccessOptions; fallbackHtml?: string }
+  | { status: 'office'; path: string; access?: FileAccessOptions }
   | { status: 'iframe'; src: string }
   | { status: 'text'; content: string; language: string }
   | { status: 'unsupported' }
@@ -106,12 +107,8 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
         const result = await window.electronAPI.preparePdfPreview(localPath, access)
         if (result?.tmpHtmlUrl) setState({ status: 'iframe', src: result.tmpHtmlUrl })
         else setState({ status: 'error', message: '无法预览 PDF' })
-      } else if (['docx', 'xlsx', 'pptx'].includes(e)) {
+      } else if (normalizeOfficeFormat(fileName)) {
         setState({ status: 'office', path: localPath, access })
-      } else if (['odt', 'ods', 'odp'].includes(e)) {
-        const result = await window.electronAPI.officeToHtml(localPath, access)
-        if (result?.html) setState({ status: 'html', html: result.html })
-        else setState({ status: 'error', message: '无法预览文档' })
       } else if (e === 'html' || e === 'htm') {
         const result = await window.electronAPI.resolveAndReadFile(localPath, access)
         if (!result?.content) { setState({ status: 'error', message: '无法读取网页文件' }); return }
@@ -152,17 +149,6 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
       teamDownload ? { candidateBasePaths: [parentDir] } : undefined,
     ).catch(() => {})
   }
-
-  const handleOfficeError = React.useCallback(async (officePath: string, officeAccess?: FileAccessOptions): Promise<void> => {
-    try {
-      const result = ext(fileName) === 'docx'
-        ? await window.electronAPI.docxToHtml(officePath, officeAccess)
-        : await window.electronAPI.officeToHtml(officePath, officeAccess)
-      if (result?.html) setState((current) => current.status === 'office' ? { ...current, fallbackHtml: result.html } : current)
-    } catch {
-      // Office fallback is best effort; the viewer keeps its actionable error state.
-    }
-  }, [fileName])
 
   const handleShowInFolder = async (): Promise<void> => {
     let targetPath = resolvedPath ?? filePath
@@ -240,8 +226,6 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
               fileName={fileName}
               access={state.access}
               className="h-full"
-              fallback={state.fallbackHtml ? <iframe srcDoc={state.fallbackHtml} className="h-full w-full border-0" sandbox="" /> : undefined}
-              onError={() => { void handleOfficeError(state.path, state.access) }}
             />
           )}
           {state.status === 'iframe' && (

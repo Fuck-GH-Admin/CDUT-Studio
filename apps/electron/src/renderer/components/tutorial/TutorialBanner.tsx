@@ -8,16 +8,16 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useStore } from 'jotai'
 import { GraduationCap, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
-import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from '@/atoms/tab-atoms'
+import { Z_LAYER } from '@profer/ui'
+import { openTutorialTab } from '@/lib/tab-activation'
 
 export function TutorialBanner(): React.ReactElement | null {
   const [visible, setVisible] = React.useState(false)
   const [dismissed, setDismissed] = React.useState(true)
-  const [tabs, setTabs] = useAtom(tabsAtom)
-  const setActiveTabId = useSetAtom(activeTabIdAtom)
+  const store = useStore()
 
   React.useEffect(() => {
     window.electronAPI
@@ -37,9 +37,7 @@ export function TutorialBanner(): React.ReactElement | null {
   }
 
   const handleLearnNow = async () => {
-    const result = openTab(tabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'CDUT Studio 使用教程' })
-    setTabs(result.tabs)
-    setActiveTabId(result.activeTabId)
+    openTutorialTab(store)
     await handleDismiss()
   }
 
@@ -52,7 +50,7 @@ export function TutorialBanner(): React.ReactElement | null {
 
   return (
     <div
-      className={`fixed bottom-6 right-6 z-[100] w-[340px] transition-all duration-500 ease-out ${
+      className={`fixed bottom-6 right-6 ${Z_LAYER.dialog} w-[340px] transition-all duration-500 ease-out ${
         visible
           ? 'translate-x-0 opacity-100'
           : 'translate-x-8 opacity-0 pointer-events-none'

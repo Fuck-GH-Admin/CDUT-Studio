@@ -144,7 +144,7 @@ function isSessionExpired(finalUrl: string, html: string): boolean {
 /**
  * 清理专属分区中导致青果瑞数 WAF 误判并拒绝连接（HTTP 400）的陈旧动态签名 Cookie。
  *
- * 实现已抽取至 `yanhu/yanhu-cookie-utils.ts`，供砚湖秒通浏览器与教务客户端共用，
+ * 实现已抽取至 `yanhu/yanhu-cookie-utils.ts`，供智联万站浏览器与教务客户端共用，
  * 避免同一安全策略出现多份实现。此处保持同名再导出，默认目标域语义（jw.cdut.edu.cn）不变。
  */
 export { stripStaleRuiShuCookies }
@@ -277,21 +277,49 @@ export async function fetchImageAsBase64(
 
 // ===== HTML 表格与字段解析工具 =====
 
-/** 将整份 HTML 的某张表解析为二维文本矩阵（单元格内 <br> 折叠为空格） */
+/**
+ * 虚拟网格（Virtual Grid）表格解析引擎。
+ * 针对青果教务系统广泛出现的 rowspan 和 colspan：
+ * 采用 2D 坐标投影槽位填充，杜绝后续行单元格因跨行跨列发生索引错位或内容左移。
+ */
+function parseTableToGrid($table: ReturnType<CheerioAPI>, $: CheerioAPI): string[][] {
+  const grid: string[][] = []
+
+  $table.find('tr').each((rIdx, tr) => {
+    const currentRow = grid[rIdx] ?? (grid[rIdx] = [])
+    let cIdx = 0
+
+    $(tr)
+      .find('th, td')
+      .each((_, cell) => {
+        // 寻找当前行第一个未被上一行 rowspan 占用的列槽位
+        while (currentRow[cIdx] !== undefined) {
+          cIdx++
+        }
+
+        const text = cleanText($(cell).text())
+        const rowspan = parseInt($(cell).attr('rowspan') || '1', 10) || 1
+        const colspan = parseInt($(cell).attr('colspan') || '1', 10) || 1
+
+        for (let r = 0; r < rowspan; r++) {
+          const targetR = rIdx + r
+          const row = grid[targetR] ?? (grid[targetR] = [])
+          for (let c = 0; c < colspan; c++) {
+            row[cIdx + c] = text
+          }
+        }
+        cIdx += colspan
+      })
+  })
+
+  return grid.filter((row) => row && row.some((c) => c && c.trim() !== ''))
+}
+
+/** 将整份 HTML 的某张表解析为二维文本矩阵（单元格内 <br> 折叠为空格，支持跨行跨列对齐） */
 function parseTable(html: string, selector?: string): string[][] {
   const $ = load(html)
   const target = selector ? $(selector).first() : $('table').first()
-  const rows: string[][] = []
-  target.find('tr').each((_, tr) => {
-    const cells: string[] = []
-    $(tr)
-      .find('th, td')
-      .each((__, cell) => {
-        cells.push(cleanText($(cell).text()))
-      })
-    if (cells.some((c) => c !== '')) rows.push(cells)
-  })
-  return rows
+  return parseTableToGrid(target, $)
 }
 
 /** 页面上所有表格（按出现顺序）的二维矩阵数组 */
@@ -299,19 +327,8 @@ function parseAllTables(html: string): string[][][] {
   const $ = load(html)
   const tables: string[][][] = []
   $('table').each((_, table) => {
-    const rows: string[][] = []
-    $(table)
-      .find('tr')
-      .each((__, tr) => {
-        const cells: string[] = []
-        $(tr)
-          .find('th, td')
-          .each((___, cell) => {
-            cells.push(cleanText($(cell).text()))
-          })
-        if (cells.some((c) => c !== '')) rows.push(cells)
-      })
-    if (rows.length > 0) tables.push(rows)
+    const grid = parseTableToGrid($(table), $)
+    if (grid.length > 0) tables.push(grid)
   })
   return tables
 }

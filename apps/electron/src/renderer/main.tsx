@@ -77,6 +77,7 @@ import { CdutAiClassAccessDialog } from './components/cdut-zone/CdutAiClassAcces
 import { useCdutAccountHydration } from './hooks/useCdutAccountHydration'
 import { useBrowserLocalFileSelectionQuote } from './hooks/useBrowserLocalFileSelectionQuote'
 import { useBrowserPreviewThemeSync } from './hooks/useBrowserPreviewThemeSync'
+import { useArchivedUnreadSync } from './atoms/sidebar-atoms'
 import {
   todosAtom,
   calendarEventsAtom,
@@ -87,6 +88,7 @@ import {
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
 import { tabsAtom, activeTabIdAtom, ensureScratchPadTab, getPersistableTabState, scratchPadContentAtom, scratchPadLoadedAtom, SCRATCH_PAD_ID } from './atoms/tab-atoms'
+import { syncActiveTabSideEffectsForStore } from './lib/active-tab-side-effects'
 import {
   fromPersistedTabGroup,
   fromPersistedTabGroups,
@@ -94,7 +96,6 @@ import {
   tabGroupsAtom,
   toPersistedTabGroups,
 } from './atoms/tab-group-atoms'
-import type { TabItem } from './atoms/tab-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { currentConversationIdAtom, channelsAtom, channelsLoadedAtom, selectedModelAtom } from '@/atoms/conversation-atoms'
@@ -109,11 +110,12 @@ function ProferToaster(props: Omit<React.ComponentProps<typeof Toaster>, 'theme'
   return <Toaster theme={theme} {...props} />
 }
 import { toast } from 'sonner'
-import { diffCapabilities, isVisibleAgentSession } from '@profer/shared'
+import { diffCapabilities } from '@profer/shared'
 import type { WorkspaceCapabilities } from '@profer/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { invalidateFileSnapshotCache, invalidateWorkspaceCapabilitiesCache } from './components/agent/mention-query-utils'
 import { getVisibleAgentWorkspaces, isAgentWorkspaceVisible } from './lib/product-feature-flags'
+import { selectRestorableAgentTabs } from './lib/agent-tab-access'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { NavigationInputProvider } from './components/navigation/NavigationInputProvider'
@@ -135,7 +137,7 @@ function hasEnabledModel(
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isAgentPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'agent-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
-// 砚湖秒通 · 桌宠「砚小龙」独立透明子窗口
+// 智联万站 · 桌宠「砚小龙」独立透明子窗口
 const isYanhuPetWindow = new URLSearchParams(window.location.search).get('window') === 'yanhu-pet'
 
 /**
@@ -629,6 +631,8 @@ function AgentListenersInitializer(): null {
   useBrowserLocalFileSelectionQuote()
   // 换皮肤时让已打开的文件预览跟上（受管浏览器里的普通网页不跟）
   useBrowserPreviewThemeSync()
+  // 后台静默自动归档未读红点：根部常驻订阅，侧栏收起时事件也不丢
+  useArchivedUnreadSync()
   return null
 }
 
@@ -799,54 +803,29 @@ function TabStatePersistenceInitializer(): null {
         return
       }
 
-      // 构建有效 sessionId 集合。普通 draft 仍不恢复，但如果刷新前正打开的是
-      // 项目入口创建的持久化 draft，则必须恢复该 tab；否则 Ctrl+R 会把用户正在
-      // 使用的项目临时会话过滤掉。该会话仍保留 draft 标记，不会出现在侧栏列表。
-      const persistedDraftAgentTabIds = new Set(
-        tabState.tabs
-          .filter((tab): tab is TabItem => (
-            typeof tab === 'object'
-            && tab !== null
-            && 'type' in tab
-            && 'sessionId' in tab
-            && tab.type === 'agent'
-            && typeof tab.sessionId === 'string'
-          ))
-          .map((tab) => tab.sessionId),
-      )
+      // 旧快照可能含被隐藏的 owner、已删除 ID、伪造的工作 Tab 或过期工作区。
+      // 使用 Main 返回的会话元数据决定可恢复身份，不信任 settings.tabState 内的 title/ID。
+      // 持久化的普通项目 draft 允许恢复；内部审核 owner 一律不可恢复。
       const visibleWorkspaceIds = new Set(
         getVisibleAgentWorkspaces(agentWorkspaces).map((workspace) => workspace.id),
       )
-      const visibleAgentSessionIds = new Set(
-        agentSessions
-          .filter((session) => !session.workspaceId || visibleWorkspaceIds.has(session.workspaceId))
-          .map((session) => session.id),
-      )
-      const validSessionIds = new Set(
-        agentSessions
-          .filter((session) => isVisibleAgentSession(session) || persistedDraftAgentTabIds.has(session.id))
-          .map((session) => session.id),
-      )
-
-      // 过滤 diff 类型 Tab（不持久化），同时过滤掉已被删除的会话
-      const validTabs = tabState.tabs.filter(
-        (t): t is TabItem =>
-          typeof t === 'object' &&
-          t !== null &&
-          'id' in t &&
-          'sessionId' in t &&
-          'type' in t &&
-          'title' in t &&
-          (t.type === 'agent') &&
-          validSessionIds.has(t.sessionId) &&
-          visibleAgentSessionIds.has(t.sessionId),
-      )
+      const validTabs = selectRestorableAgentTabs(tabState.tabs, agentSessions, visibleWorkspaceIds)
       if (validTabs.length === 0) {
         restoredRef.current = true
         return
       }
 
-      const validTabIds = new Set(validTabs.map((t) => t.id))
+      // 从 agentSessions 回填 parentSessionId 血缘：持久化的 Tab 只存了自身，子会话血缘
+      // 依赖会话元数据，缺失会导致顶栏分组/组合上下文认不出父子关系。
+      const sessionMetaById = new Map(agentSessions.map((session) => [session.id, session]))
+      const restoredTabs = validTabs.map((tab) => {
+        if (tab.parentSessionId) return tab
+        const meta = sessionMetaById.get(tab.sessionId)
+        const parentSessionId = meta?.parentSessionId ?? meta?.explorationParentSessionId
+        return parentSessionId ? { ...tab, parentSessionId } : tab
+      })
+
+      const validTabIds = new Set(restoredTabs.map((t) => t.id))
 
       // 恢复 activeTabId（校验有效性）
       let restoredActiveTabId: string | null = null
@@ -858,13 +837,18 @@ function TabStatePersistenceInitializer(): null {
         if (legacyId && validTabIds.has(legacyId)) {
           restoredActiveTabId = legacyId
         } else {
-          restoredActiveTabId = validTabs[0]?.id ?? null
+          restoredActiveTabId = restoredTabs[0]?.id ?? null
         }
       }
 
-      const activeTab = validTabs.find((t) => t.id === restoredActiveTabId) ?? validTabs[0] ?? null
-      store.set(tabsAtom, ensureScratchPadTab(validTabs))
-      store.set(activeTabIdAtom, activeTab?.id ?? SCRATCH_PAD_ID)
+      const activeTab = restoredTabs.find((t) => t.id === restoredActiveTabId) ?? restoredTabs[0] ?? null
+      store.set(tabsAtom, ensureScratchPadTab(restoredTabs))
+      // scratchPadActive 由本恢复流水线统一裁决，避免 ScratchPadPersistence 并发覆盖：
+      // 上次退出停在草稿纸 → 保持草稿纸；否则回到恢复出的会话。
+      store.set(
+        activeTabIdAtom,
+        settings.scratchPadActive ? SCRATCH_PAD_ID : (activeTab?.id ?? SCRATCH_PAD_ID),
+      )
       // 新版支持多个组合；旧版单个 group 自动包装迁移。
       const persistedGroups = tabState.groups?.length
         ? fromPersistedTabGroups(tabState.groups)
@@ -882,6 +866,12 @@ function TabStatePersistenceInitializer(): null {
         }
       }
 
+      if (settings.scratchPadActive) {
+        syncActiveTabSideEffectsForStore(
+          store,
+          store.get(tabsAtom).find((t) => t.id === SCRATCH_PAD_ID) ?? null,
+        )
+      }
       console.log(`[TabRestore] 已恢复 ${validTabs.length} 个标签页`)
     }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
       .finally(() => { restoredRef.current = true })
@@ -988,6 +978,10 @@ function ScratchPadPersistence(): null {
         // 不改变 appMode，保留原有的 chat/agent 侧边栏状态
         if (settings.scratchPadActive) {
           store.set(activeTabIdAtom, SCRATCH_PAD_ID)
+          syncActiveTabSideEffectsForStore(
+            store,
+            store.get(tabsAtom).find((t) => t.id === SCRATCH_PAD_ID) ?? null,
+          )
         }
 
         console.log('[ScratchPad] 初始化完成，已加载内容:', !!loadedMd)
@@ -1042,6 +1036,7 @@ function ScratchPadPersistence(): null {
   // 监听 activeTabIdAtom 变化，持久化 scratchPadActive 到 settings
   useEffect(() => {
     const unsub = store.sub(activeTabIdAtom, () => {
+      if (!loadedRef.current) return
       const activeTabId = store.get(activeTabIdAtom)
       const isScratchActive = activeTabId === SCRATCH_PAD_ID
       window.electronAPI.updateSettings({
@@ -1082,7 +1077,7 @@ if (isDetachedPreviewWindow) {
     )
   })
 } else if (isYanhuPetWindow) {
-  // ===== 砚湖秒通 · 桌宠「砚小龙」透明子窗口 =====
+  // ===== 智联万站 · 桌宠「砚小龙」透明子窗口 =====
   import('./components/cdut-zone/yanhu/pet/YanhuPetFloatingHost').then(({ YanhuPetFloatingHost }) => {
     ReactDOM.createRoot(document.getElementById('root')!).render(
       <React.StrictMode>

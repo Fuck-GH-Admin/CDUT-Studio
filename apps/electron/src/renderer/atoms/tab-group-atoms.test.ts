@@ -17,7 +17,7 @@ import {
   focusGroupMember,
   fromPersistedTabGroup,
   fromPersistedTabGroups,
-  groupSessionId,
+  groupContextSessionId,
   groupSideOf,
   groupTabIds,
   isGroupComplete,
@@ -26,11 +26,11 @@ import {
   isGroupMember,
   isSessionConsistentGroup,
   planAutoGroupWorkTab,
-  planFollowWorkTab,
   planGroupDrop,
   reconcileGroup,
   reconcileTabGroups,
   removeTabGroup,
+  reorderRenderedTabItem,
   replaceTabGroup,
   resolveGroupMembership,
   resolveGroupPaneFocusTarget,
@@ -39,15 +39,13 @@ import {
   toPersistedTabGroups,
   type TabGroupState,
 } from './tab-group-atoms'
+import type { TabItem } from './tab-atoms'
 
 // ===== 白名单 =====
 
-test('agent/chat/preview 可以参与组合，单例 Tab 不行', () => {
+test('agent/chat/browser 可以参与组合，单例 Tab 不行', () => {
   expect(isGroupEligibleTab({ type: 'agent' })).toBe(true)
   expect(isGroupEligibleTab({ type: 'chat' })).toBe(true)
-  // preview 有独立内容身份（一个文件），可以当作一栏展示；
-  // 它的"转预览分屏"路径由落点判定保留（见 TabBar 的合并手势回落）
-  expect(isGroupEligibleTab({ type: 'preview' })).toBe(true)
   expect(isGroupEligibleTab({ type: 'browser' })).toBe(true)
   expect(isGroupEligibleTab({ type: 'scratch' })).toBe(false)
   expect(isGroupEligibleTab({ type: 'tutorial' })).toBe(false)
@@ -484,72 +482,58 @@ test('planAutoGroupWorkTab：用户不在看该对话、或任一成员已入组
   expect(planAutoGroupWorkTab({ groups: existing, agentTabId: 's1', workTabId: '__browser__:s1', activeTabId: 's1' })).toBeNull()
 })
 
-test('planFollowWorkTab：对话+同会话预览组合跟随最新文件，焦点留在对话', () => {
-  const tabs = [
-    { id: 's1', type: 'agent', sessionId: 's1', title: 's1' },
-    { id: '__preview__:s1:a', type: 'preview', sessionId: 's1', title: 'a', filePath: '/w/a' },
-    { id: '__preview__:s1:b', type: 'preview', sessionId: 's1', title: 'b', filePath: '/w/b' },
-  ] as const
-  const groups = [{ leftTabId: 's1', rightTabId: '__preview__:s1:a', focusedTabId: 's1' }]
-  const next = planFollowWorkTab({
-    groups,
-    tabs,
-    agentTabId: 's1',
-    workTabId: '__preview__:s1:b',
-    activeTabId: 's1',
-  })
-  expect(next).toHaveLength(1)
-  expect(next![0]).toEqual({ leftTabId: 's1', rightTabId: '__preview__:s1:b', focusedTabId: 's1' })
-})
+// ===== 会话上下文边界 =====
 
-test('planFollowWorkTab：右栏是浏览器/其他会话内容时不改写用户布局', () => {
-  const tabs = [
-    { id: 's1', type: 'agent', sessionId: 's1', title: 's1' },
-    { id: '__browser__:s1', type: 'browser', sessionId: 's1', title: '浏览器' },
-  ] as const
-  const groups = [{ leftTabId: 's1', rightTabId: '__browser__:s1', focusedTabId: 's1' }]
-  expect(planFollowWorkTab({
-    groups,
-    tabs,
-    agentTabId: 's1',
-    workTabId: '__preview__:s1:a',
-    activeTabId: 's1',
-  })).toBeNull()
-})
-
-test('planFollowWorkTab：无组合时退化为新建组合', () => {
-  const next = planFollowWorkTab({
-    groups: [],
-    tabs: [],
-    agentTabId: 's1',
-    workTabId: '__preview__:s1:a',
-    activeTabId: 's1',
-  })
-  expect(next![0]).toEqual({ leftTabId: 's1', rightTabId: '__preview__:s1:a', focusedTabId: 's1' })
-})
-
-// ===== 同一会话边界 =====
-
-const sessionTabs = [
-  { id: 'a1', sessionId: 's1' },
-  { id: 'p1', sessionId: 's1' },
-  { id: 'b2', sessionId: 's2' },
+const sessionTabs: TabItem[] = [
+  { id: 'a1', type: 'agent', sessionId: 's1', title: 'a1' },
+  { id: 'p1', type: 'agent', sessionId: 's1', title: 'p1' },
+  { id: 'b2', type: 'agent', sessionId: 's2', title: 'b2' },
 ]
 
-test('groupSessionId：同会话成员返回会话 id，空栏只看非空侧', () => {
-  expect(groupSessionId(createGroup('a1', 'p1', 'a1'), sessionTabs)).toBe('s1')
-  expect(groupSessionId(createGroup('a1', null, 'a1'), sessionTabs)).toBe('s1')
-  expect(groupSessionId(createGroup(null, 'p1', 'p1'), sessionTabs)).toBe('s1')
+test('groupContextSessionId：同会话成员返回根会话 id，空栏只看非空侧', () => {
+  expect(groupContextSessionId(createGroup('a1', 'p1', 'a1'), sessionTabs)).toBe('s1')
+  expect(groupContextSessionId(createGroup('a1', null, 'a1'), sessionTabs)).toBe('s1')
+  expect(groupContextSessionId(createGroup(null, 'p1', 'p1'), sessionTabs)).toBe('s1')
 })
 
-test('groupSessionId：跨会话成员或成员缺失返回 null', () => {
-  expect(groupSessionId(createGroup('a1', 'b2', 'a1'), sessionTabs)).toBeNull()
-  expect(groupSessionId(createGroup('a1', 'ghost', 'a1'), sessionTabs)).toBeNull()
-  expect(groupSessionId(null, sessionTabs)).toBeNull()
+test('groupContextSessionId：跨上下文成员或成员缺失返回 null', () => {
+  expect(groupContextSessionId(createGroup('a1', 'b2', 'a1'), sessionTabs)).toBeNull()
+  expect(groupContextSessionId(createGroup('a1', 'ghost', 'a1'), sessionTabs)).toBeNull()
+  expect(groupContextSessionId(null, sessionTabs)).toBeNull()
 })
 
-test('isSessionConsistentGroup：跨会话组合不合法，应被解散', () => {
-  expect(isSessionConsistentGroup(createGroup('a1', 'p1', 'a1'), sessionTabs)).toBe(true)
+test('isSessionConsistentGroup：父子血缘可并排，跨上下文组合不合法', () => {
+  const lineageTabs: TabItem[] = [
+    { id: 'root', type: 'agent', sessionId: 'root', title: 'root' },
+    { id: 'child', type: 'agent', sessionId: 'child', title: 'child', parentSessionId: 'root' },
+    { id: 'other', type: 'agent', sessionId: 'other', title: 'other' },
+  ]
+  // 父会话与探索分支（同血缘根）可以并排
+  expect(isSessionConsistentGroup(createGroup('root', 'child', 'root'), lineageTabs)).toBe(true)
   expect(isSessionConsistentGroup(createGroup('a1', null, 'a1'), sessionTabs)).toBe(true)
-  expect(isSessionConsistentGroup(createGroup('a1', 'b2', 'a1'), sessionTabs)).toBe(false)
+  // 不同上下文的两个会话不允许并排
+  // 任意两个已打开的可组合会话标签（含跨会话与父子血缘）均允许并排；缺失或不可组合标签拒绝
+  expect(isSessionConsistentGroup(createGroup('root', 'other', 'root'), lineageTabs)).toBe(true)
+  expect(isSessionConsistentGroup(createGroup('root', 'missing', 'root'), lineageTabs)).toBe(false)
+  const withScratch: TabItem[] = [
+    ...lineageTabs,
+    { id: '__scratch-pad__', type: 'scratch', sessionId: '__scratch-pad__', title: 'Scratch' },
+  ]
+  expect(isSessionConsistentGroup(createGroup('root', '__scratch-pad__', 'root'), withScratch)).toBe(false)
 })
+
+test('reorderRenderedTabItem：拖动分屏组合条目时两成员整体移动且锚点顺序不反转', () => {
+  const tabs: TabItem[] = [
+    { id: 'g-left', type: 'agent', sessionId: 's1', title: '左' },
+    { id: 'g-right', type: 'agent', sessionId: 's2', title: '右' },
+    { id: 'solo', type: 'agent', sessionId: 's3', title: '独立' },
+  ]
+  const groups = [createGroup('g-left', 'g-right', 'g-left')!]
+  // 向右拖过 solo：g-left 与 g-right 一起移到 solo 右侧，且 g-left 仍在 g-right 前面
+  const movedRight = reorderRenderedTabItem(tabs, groups, 'g-left', 'solo', 1)
+  expect(movedRight.map((t) => t.id)).toEqual(['solo', 'g-left', 'g-right'])
+  // 再向左拖回 solo 左侧：g-left 与 g-right 一起回到最前，顺序仍保持 ['g-left', 'g-right']
+  const movedLeft = reorderRenderedTabItem(movedRight, groups, 'g-left', 'solo', -1)
+  expect(movedLeft.map((t) => t.id)).toEqual(['g-left', 'g-right', 'solo'])
+})
+

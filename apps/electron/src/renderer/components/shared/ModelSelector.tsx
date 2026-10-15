@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { ChevronDown, Cpu, Search, Layers2 } from 'lucide-react'
+import { ChevronDown, Cpu, Search, Layers2, Settings, ArrowUpRight } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,7 @@ import {
   modelSelectorRequestAtom,
 } from '@/atoms/conversation-atoms'
 import { authStatusAtom } from '@/atoms/identity-atoms'
+import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
 import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
@@ -150,6 +151,8 @@ export function ModelSelector({
   const channelsLoaded = useAtomValue(channelsLoadedAtom)
   const setChannels = useSetAtom(channelsAtom)
   const modelSelectorRequest = useAtomValue(modelSelectorRequestAtom)
+  const setSettingsTab = useSetAtom(settingsTabAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
 
@@ -278,6 +281,13 @@ export function ModelSelector({
         })
         .catch(console.error)
     }
+  }
+
+  /** 跳转到设置中的「模型配置」页：先关闭选择弹窗，再打开设置并定位标签页。 */
+  const openModelSettings = (): void => {
+    setOpen(false)
+    setSettingsTab('channels')
+    setSettingsOpen(true)
   }
 
   /** 搜索框键盘导航 */
@@ -507,6 +517,19 @@ export function ModelSelector({
               })
               })()
             )}
+          </div>
+
+          {/* 底部入口：直接跳转到设置中的「模型配置」页 */}
+          <div className="border-t border-border/60">
+            <button
+              type="button"
+              onClick={openModelSettings}
+              className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Settings className="size-4 shrink-0" />
+              <span>前往模型配置</span>
+              <ArrowUpRight className="ml-auto size-3.5 shrink-0 opacity-60" />
+            </button>
           </div>
         </DialogContent>
       </Dialog>

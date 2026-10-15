@@ -4,7 +4,7 @@
  * 负责注册主进程和渲染进程之间的通信处理器
  */
 
-import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app, Notification } from 'electron'
+import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app, Notification, session } from 'electron'
 import { isAbsolute, join, relative, resolve, sep, dirname, basename, extname } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync } from 'node:fs'
@@ -130,8 +130,8 @@ import type {
   BrowserStartPageState,
   BrowserAddBookmarkInput,
 } from '@profer/shared'
-import { KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
+import { KNOWLEDGE_IPC_CHANNELS, isReviewOwnedAgentSession } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type CdutToolInvokeParams, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { browserController } from './lib/browser-controller'
@@ -142,10 +142,13 @@ import { listBookmarks, addBookmark, removeBookmark, listHistory, clearHistory }
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot, invalidateGitDiffCache } from './lib/git-diff-service'
 import { registerProferDirectoryPath, registerProferFilePath } from './lib/local-file-protocol'
 import { isReadOnlyPreviewPathAllowed } from './lib/preview-path-policy'
+import { isReviewPrivateDesktopPath, isUnsafeAgentWorkspaceMutationPath, filterOrdinaryDesktopFileEntries, renameOrdinaryAgentFileEntry } from './lib/review-private-file-access'
 import { CHANGELOG_IPC_CHANNELS, type ChangelogEntry } from '@profer/shared'
 import { getChangelog } from './lib/changelog-service'
 import { registerReviewIpc } from './lib/review/review-ipc'
-import { cdutAuthManager } from './lib/cdut/cdut-auth-manager'
+import { cdutAuthManager, CDUT_AUTH_PARTITION } from './lib/cdut/cdut-auth-manager'
+import { executeDomainTool } from './lib/cdut/cdut-jw-client'
+import { cdutDemoService } from './lib/cdut/cdut-demo/demo-service'
 import { yanhuExpressManager } from './lib/cdut/yanhu/yanhu-express-manager'
 import { yanhuPetWindowManager } from './lib/cdut/yanhu/yanhu-pet-window-manager'
 import { yanhuPiRuntime } from './lib/cdut/yanhu/yanhu-pi-runtime'
@@ -174,6 +177,25 @@ import {
   setStudyDocumentActive,
   setStudyDocumentsActive,
 } from './lib/study/study-document-indexer'
+import {
+  getTabs as getStudyTabs,
+  saveTabs as saveStudyTabs,
+  getMindmap as getStudyMindmap,
+  saveMindmapCoords as saveStudyMindmapCoords,
+  getFlashcards as getStudyFlashcards,
+  updateCardRating as updateStudyCardRating,
+  getQuiz as getStudyQuiz,
+  submitQuizAnswer as submitStudyQuizAnswer,
+  listStudyArtifacts,
+} from './lib/study/study-session-store'
+import { generateStudyArtifact } from './lib/study/study-artifact-service'
+import { mindMapToOpml } from '@profer/shared'
+import type {
+  AiClassRightTabItem,
+  StudyCardRatingInput,
+  StudyGenerateArtifactInput,
+  StudyQuizAnswerInput,
+} from '@profer/shared'
 import {
   listChannels,
   createChannel,
@@ -272,6 +294,7 @@ import {
 import { broadcastPlanningChanged } from './lib/planning-events'
 import {
   listAgentSessions,
+  assertOrdinaryAgentSession,
   createAgentSession,
   ensureProjectDraftAgentSession,
   getAgentSessionMeta,
@@ -306,12 +329,13 @@ import type { AgentGoalContract, AgentGoalLimits, AgentGoalState } from '@profer
 import { getAgentPresetByReference, presetReferenceForId } from './lib/agent-preset-manager'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
+import { filterOrdinaryPendingRequests, assertOrdinaryPendingRequestId } from './lib/agent-ordinary-pending-access'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
 import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath, getStudySessionDir } from './lib/config-paths'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import { compactAgentSessionStorage, previewAgentSessionCompaction } from './lib/agent-session-compaction'
 import { resolveMessageBlobs } from './lib/agent-session-manager'
@@ -565,7 +589,9 @@ function isResolvedPathInsideRoot(targetPath: string, root: string): boolean {
 }
 
 function assertInsideAgentWorkspaces(targetPath: string): void {
-  if (!isResolvedPathInsideRoot(targetPath, getAgentWorkspacesDir())) {
+  if (isUnsafeAgentWorkspaceMutationPath(targetPath)) throw new Error('审核内部路径不可操作')
+  if (!isResolvedPathInsideRoot(targetPath, getAgentWorkspacesDir())
+    || !isResolvedPathInsideRoot(realpathOrResolve(targetPath), getAgentWorkspacesDir())) {
     throw new Error('访问路径超出 Agent 工作区范围')
   }
 }
@@ -734,6 +760,7 @@ function parseHttpUrl(rawUrl: string): string | null {
 }
 
 function isPathAllowed(filePath: string, options?: FileAccessOptions): boolean {
+  if (isReviewPrivateDesktopPath(filePath)) return false
   // deny-by-default：渲染进程不可信，未提供访问选项时拒绝越权访问。
   // 调用方必须显式传递 sessionId 或 workspaceSlug 来声明授权上下文；即使有 sessionId，
   // 也只能访问该上下文的显式授权根，不能把“普通文件”当成授权凭证。
@@ -764,9 +791,11 @@ function isPathAllowed(filePath: string, options?: FileAccessOptions): boolean {
  * 会话里的文件链接来自 Agent 输出，路径常落在工作区之外（皮肤目录、/tmp 日志、~/Library 等），
  * 这些路径用户已在对话里看见，点开预览不应再被授权根拦住。边界说明见 preview-path-policy.ts。
  *
- * 只用于只读预览类 handler；写操作与「用默认应用打开文件」必须继续使用 isPathAllowed。
+ * 只用于只读预览类 handler 与「用默认应用打开文件」（SYSTEM_OPEN_FILE）；
+ * 该动作对文件本身只读，与预览共享同一授权边界。写操作必须继续使用 isPathAllowed。
  */
 function isPreviewPathAllowed(filePath: string, options?: FileAccessOptions): boolean {
+  if (isReviewPrivateDesktopPath(filePath)) return false
   if (options && isPathAllowed(filePath, options)) return true
   return isReadOnlyPreviewPathAllowed(filePath)
 }
@@ -800,13 +829,15 @@ function getFileSearchRoots(sessionId: string): string[] {
     }
   }
 
+  // 非项目会话（未绑定工作区）回退默认工作区沙箱，与 GET_SESSION_PATH / 编排层保持同构：
+  // 否则这类会话拿不到任何授权搜索根，chip 候选搜索会直接失败。
   const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
-  if (workspace?.slug) {
-    addRoot(getAgentSessionWorkspacePath(workspace.slug, sessionId))
-    // 不加入整个 workspace 根目录，避免把其他 session 的 cwd/文件纳入搜索范围。
-    addRoot(getWorkspaceFilesDir(workspace.slug))
-    for (const directory of getWorkspaceAttachedDirectories(workspace.slug)) addRoot(directory)
-  }
+  const workspaceSlug = workspace?.slug ?? 'default'
+  addRoot(getAgentSessionWorkspacePath(workspaceSlug, sessionId))
+  // 不加入整个 workspace 根目录，避免把其他 session 的 cwd/文件纳入搜索范围。
+  addRoot(getWorkspaceFilesDir(workspaceSlug))
+  for (const directory of getWorkspaceAttachedDirectories(workspaceSlug)) addRoot(directory)
+
   for (const directory of meta.attachedDirectories ?? []) addRoot(directory)
   return roots
 }
@@ -1273,6 +1304,8 @@ function assertSensitiveAgentIpcSender(event: { sender: { isDestroyed(): boolean
   assertMainWindowSender(event, mainWindowGetter)
 }
 
+
+
 let rendererReadyHandler: (() => void) | null = null
 
 /** 向仍存活的 renderer 广播工作区列表变化；与 preload 监听保持同一契约。 */
@@ -1516,11 +1549,14 @@ export function registerIpcHandlers(): void {
     async (_, filePath: string, appName?: string, access?: FileAccessOptions | string[]): Promise<void> => {
       const options = normalizeFileAccessOptions(access)
       const candidateBasePaths = options?.candidateBasePaths
-      // 相对路径从候选基础目录解析（匹配工作区路径），而非 process.cwd()
+      // 相对路径从候选基础目录解析（匹配工作区路径），而非 process.cwd()；`~/...` 一并展开
       const { resolveTargetPath } = await import('./lib/file-preview-service')
       const absPath = resolveTargetPath(filePath, candidateBasePaths?.length ? candidateBasePaths : undefined)
-      if (!isPathAllowed(absPath, options)) {
-        console.warn('[IPC] shell:system-open-file 拒绝越界路径:', absPath)
+      // 授权边界与 GET_DEFAULT_APP_FOR_FILE 同构：预览可见的目标文件
+      // （上传课件 / candidateBasePaths / 只读预览白名单内的本地磁盘路径）一律放行，
+      // 杜绝「应用内可预览、系统默认应用却静默拒绝」的体验断层；系统/凭据敏感路径依旧拦截。
+      if (!isPreviewPathAllowed(absPath, options)) {
+        console.warn('[IPC] shell:system-open-file 拒绝越界/系统敏感路径:', absPath)
         return
       }
       if (process.platform === 'darwin') {
@@ -2633,7 +2669,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_SESSIONS,
     async (_, includeArchived?: boolean): Promise<AgentSessionMeta[]> => {
-      const sessions = listAgentSessions(includeArchived ?? false)
+      const sessions = listAgentSessions(includeArchived ?? false).filter((session) => !isReviewOwnedAgentSession(session))
       // 启动所有已有附加目录的文件监听
       for (const session of sessions) {
         if (session.attachedDirectories) {
@@ -2662,7 +2698,8 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_SESSION_META,
     async (_, id: string): Promise<AgentSessionMeta | null> => {
       if (typeof id !== 'string' || !id.trim()) return null
-      return getAgentSessionMeta(id) ?? null
+      const meta = getAgentSessionMeta(id)
+      return isReviewOwnedAgentSession(meta) ? null : meta ?? null
     }
   )
 
@@ -2861,6 +2898,7 @@ export function registerIpcHandlers(): void {
   }
   const assertBrowserSessionAccess = (senderId: number, sessionId: string): void => {
     assertMainRenderer(senderId)
+    assertOrdinaryAgentSession(sessionId)
     const session = getAgentSessionMeta(sessionId)
     if (!session) throw new Error('Agent 会话不存在。')
     // 自动任务与协作子会话同样可以使用受管浏览器；仅校验会话仍存在。
@@ -3065,7 +3103,9 @@ export function registerIpcHandlers(): void {
   // opts.tail/before 传参时返回分页结果（桌面懒加载：首次只取尾部一页，触顶/按钮补更早）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SDK_MESSAGES,
-    async (_, id: string, opts?: { tail?: number; before?: number }): Promise<SDKMessage[] | import('./lib/agent-session-manager').SDKMessagePage> => {
+    async (event, id: string, opts?: { tail?: number; before?: number }): Promise<SDKMessage[] | import('./lib/agent-session-manager').SDKMessagePage> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(id)
       return opts ? getAgentSessionSDKMessages(id, opts) : getAgentSessionSDKMessages(id)
     }
   )
@@ -3073,7 +3113,10 @@ export function registerIpcHandlers(): void {
   // renderer 刷新后重新绑定所有仍活跃的 Agent 流，并回放本轮实时事件。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RESTORE_ACTIVE_STREAMS,
-    async (event): Promise<string[]> => restoreActiveAgentStreams(event.sender),
+    async (event): Promise<string[]> => {
+      assertSensitiveAgentIpcSender(event)
+      return restoreActiveAgentStreams(event.sender)
+    }
   )
   ipcMain.handle(AGENT_IPC_CHANNELS.FILE_PREVIEW_REVISION, async (event, filePath: string, access?: FileAccessOptions | string[]): Promise<string | null> => {
     assertSensitiveAgentIpcSender(event)
@@ -3085,10 +3128,14 @@ export function registerIpcHandlers(): void {
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.FILE_PREVIEW_REPORT, async (event, report: import('@profer/shared').AgentFilePreviewReport): Promise<boolean> => {
     assertSensitiveAgentIpcSender(event)
+    if (!report || typeof report.sessionId !== 'string') return false
+    assertOrdinaryAgentSession(report.sessionId)
     return agentFilePreviewSessionManager.reportReady(report)
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.FILE_PREVIEW_INSPECTION_RESULT, async (event, result: import('@profer/shared').AgentFilePreviewInspectResult): Promise<boolean> => {
     assertSensitiveAgentIpcSender(event)
+    if (!result || typeof result.sessionId !== 'string') return false
+    assertOrdinaryAgentSession(result.sessionId)
     return agentFilePreviewSessionManager.reportInspection(result)
   })
 
@@ -3096,6 +3143,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_TITLE,
     async (_, id: string, title: string): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(id)
       return updateAgentSessionUiMeta(id, { title, titleLockedAt: Date.now() })
     }
   )
@@ -3108,6 +3156,7 @@ export function registerIpcHandlers(): void {
       if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 200) {
         throw new Error('Agent 会话标识无效')
       }
+      assertOrdinaryAgentSession(sessionId)
       if (typeof enabled !== 'boolean') {
         throw new Error(`无效的队列自动发送状态: ${String(enabled)}`)
       }
@@ -3123,6 +3172,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_SESSION_MODEL,
     async (event, id: string, channelId?: string, modelId?: string): Promise<AgentSessionMeta> => {
       assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(id)
       if (isAgentSessionActive(id)) {
         throw new Error('Agent 正在运行，完成后再切换模型')
       }
@@ -3141,7 +3191,9 @@ export function registerIpcHandlers(): void {
   // 手动重新生成 Agent 会话标题：绕过定稿锁定，用前几轮有效消息重命名并重新锁定
   ipcMain.handle(
     AGENT_IPC_CHANNELS.REGENERATE_TITLE,
-    async (_, id: string, channelId?: string, modelId?: string): Promise<AgentSessionMeta | null> => {
+    async (event, id: string, channelId?: string, modelId?: string): Promise<AgentSessionMeta | null> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(id)
       const result = await regenerateAgentTitle(id, channelId, modelId)
       return result?.session ?? null
     }
@@ -3150,7 +3202,9 @@ export function registerIpcHandlers(): void {
   // 删除 Agent 会话：运行中时先中止并等待 finally 完整退出，避免删除后仍写入 JSONL/工作目录。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.DELETE_SESSION,
-    async (_, id: string): Promise<void> => {
+    async (event, id: string): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(id)
       return agentSessionDeletionCoordinator.delete(id, {
         beginDeletion: beginAgentSessionDeletion,
         endDeletion: endAgentSessionDeletion,
@@ -3171,7 +3225,9 @@ export function registerIpcHandlers(): void {
   // 迁移 Chat 对话记录到 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.MIGRATE_CHAT_TO_AGENT,
-    async (_, conversationId: string, agentSessionId: string): Promise<void> => {
+    async (event, conversationId: string, agentSessionId: string): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(agentSessionId)
       migrateChatToAgentSession(conversationId, agentSessionId)
     }
   )
@@ -3180,6 +3236,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.TOGGLE_PIN,
     async (_, id: string): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(id)
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
@@ -3197,6 +3254,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CLEAR_COMPLETION_STATE,
     async (_, id: string): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(id)
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
@@ -3212,6 +3270,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SET_COMPLETION_STATE,
     async (_, id: string): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(id)
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
@@ -3224,6 +3283,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_INTERRUPTION_STATE,
     (_e, input: UpdateAgentInterruptStateInput): AgentSessionMeta => {
       const { sessionId, state } = input
+      assertOrdinaryAgentSession(sessionId)
       return updateAgentSessionUiMeta(sessionId, state
         ? { lastInterruptReason: state.reason, lastInterruptLabel: state.label, lastInterruptAt: state.at }
         : { lastInterruptReason: undefined, lastInterruptLabel: undefined, lastInterruptAt: undefined })
@@ -3234,6 +3294,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.TOGGLE_ARCHIVE,
     async (_, id: string): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(id)
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
@@ -3267,6 +3328,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.MOVE_SESSION_TO_WORKSPACE,
     async (_, input: MoveSessionToWorkspaceInput): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(input.sessionId)
       // 渲染进程的 running 状态可能比主进程 activeSessions 清理更早变为 false
       // （STREAM_COMPLETE 在 finally 之前发送），短暂等待后重试一次
       if (isAgentSessionActive(input.sessionId)) {
@@ -3287,6 +3349,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_SESSION_PROCESS_COUNT,
     async (event, sessionId: string): Promise<number> => {
       assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(sessionId)
       const owned = await listOwnedRuntimeProcesses(sessionId)
       const keys = new Set<number>()
       for (const record of owned) {
@@ -3303,6 +3366,8 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.LIST_SESSION_PROCESSES,
     async (event, input: ListSessionProcessesInput): Promise<SessionProcessInfo[]> => {
       assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string') throw new Error('无效的会话标识')
+      assertOrdinaryAgentSession(input.sessionId)
       const results = new Map<number, SessionProcessInfo>()
       const owned = await listOwnedRuntimeProcesses(input.sessionId)
       for (const record of owned) {
@@ -3340,6 +3405,8 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.KILL_PROCESS,
     async (event, input: KillProcessInput): Promise<{ ok: boolean; message: string }> => {
       assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string') throw new Error('无效的会话标识')
+      assertOrdinaryAgentSession(input.sessionId)
       if (!input || typeof input.pid !== 'number') {
         throw new Error('无效的 kill 目标')
       }
@@ -3375,7 +3442,9 @@ export function registerIpcHandlers(): void {
   // 分叉 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.FORK_SESSION,
-    async (_, input: ForkSessionInput): Promise<AgentSessionMeta> => {
+    async (event, input: ForkSessionInput): Promise<AgentSessionMeta> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(input.sessionId)
       const session = await forkAgentSession(input)
       // Fork 直接在 session manager 内创建元数据，绕过 CREATE_SESSION 的镜像生命周期。
       // 将它作为新的桌面会话处理，确保 Pi fork 也会立即获得可双向续聊的飞书群。
@@ -3389,7 +3458,9 @@ export function registerIpcHandlers(): void {
   // 快照回退（同一会话内回退到指定点）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.REWIND_SESSION,
-    async (_, input: RewindSessionInput): Promise<RewindSessionResult> => {
+    async (event, input: RewindSessionInput): Promise<RewindSessionResult> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(input.sessionId)
       return rewindAgentSession(
         input.sessionId,
         input.assistantMessageUuid,
@@ -3763,6 +3834,8 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string') throw new Error('无效的会话 ID')
+      assertOrdinaryAgentSession(input.sessionId)
       const inputForRun: AgentSendInput = { ...input }
       try {
         const { getPiReviewBindingForSession, finishPiReviewRunV2 } = require('./lib/review/pi-case-review-service') as typeof import('./lib/review/pi-case-review-service')
@@ -3853,6 +3926,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.STOP_AGENT,
     async (event, sessionId: string): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(sessionId)
       feishuBridgeManager.stopSessionMirrorRun(sessionId)
       const goal = goalSessionService.get(sessionId)
       const ownedByGoal = isGoalRunActive(sessionId, goal?.activeRunId)
@@ -3872,6 +3946,8 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.QUEUE_MESSAGE,
     async (event, input: import('@profer/shared').AgentQueueMessageInput): Promise<string> => {
       assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string') throw new Error('会话标识无效')
+      assertOrdinaryAgentSession(input.sessionId)
       return queueAgentMessage(input, event.sender)
     }
   )
@@ -3883,6 +3959,8 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_TASK_OUTPUT,
     async (event, input: GetTaskOutputInput): Promise<GetTaskOutputResult> => {
       assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string') throw new Error('无效的会话标识')
+      assertOrdinaryAgentSession(input.sessionId)
       if (!input || typeof input !== 'object') throw new Error('无效的后台任务查询参数')
       if (typeof input.sessionId !== 'string' || !input.sessionId.trim() || input.sessionId.length > 200) {
         throw new Error('无效的后台任务会话标识')
@@ -3921,6 +3999,7 @@ export function registerIpcHandlers(): void {
     async (event, response: PermissionResponse): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
       const { requestId, behavior, alwaysAllow } = response
+      assertOrdinaryPendingRequestId(requestId, permissionService.getPendingRequests())
       const sessionId = permissionService.respondToPermission(requestId, behavior, alwaysAllow)
 
       // 发送 permission_resolved 事件给渲染进程
@@ -3945,6 +4024,8 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.STOP_TASK,
     async (event, input: StopTaskInput): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string') throw new Error('无效的会话标识')
+      assertOrdinaryAgentSession(input.sessionId)
       if (!input || typeof input !== 'object') throw new Error('无效的后台任务停止参数')
       if (typeof input.sessionId !== 'string' || !input.sessionId.trim() || input.sessionId.length > 200) {
         throw new Error('无效的后台任务会话标识')
@@ -3962,11 +4043,13 @@ export function registerIpcHandlers(): void {
   // 热切换指定会话的权限模式（运行中生效，不广播）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE,
-    async (_, sessionId: string, mode: ProferPermissionMode, expectedRevision?: number): Promise<AgentSessionMeta> => {
+    async (event, sessionId: string, mode: ProferPermissionMode, expectedRevision?: number): Promise<AgentSessionMeta> => {
+      assertSensitiveAgentIpcSender(event)
       if (!isProferPermissionMode(mode)) {
         throw new Error(`无效的权限模式: ${mode}`)
       }
       // 会话不存在时直接抛错（避免 updateAgentSessionMeta 的通用异常被降级为 warn）
+      assertOrdinaryAgentSession(sessionId)
       if (!getAgentSessionMeta(sessionId)) {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
       }
@@ -3992,6 +4075,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE,
     async (_, sessionId: string, enabled: boolean): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(sessionId)
       if (typeof enabled !== 'boolean') throw new Error(`无效的 Codex Fast Mode 状态: ${String(enabled)}`)
       if (!getAgentSessionMeta(sessionId)) throw new Error(`Agent 会话不存在: ${sessionId}`)
       if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换快速模式')
@@ -4003,6 +4087,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_OPENAI_THINKING,
     async (_, sessionId: string, level: AgentThinkingLevel | null): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(sessionId)
       const validLevels: (AgentThinkingLevel | null)[] = [null, 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
       // level 为 null 表示「使用全局默认」（清除会话级覆盖）
       if (level !== null && !validLevels.includes(level)) {
@@ -4019,6 +4104,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_EFFORT,
     async (_, sessionId: string, effort: AgentEffort | null): Promise<AgentSessionMeta> => {
+      assertOrdinaryAgentSession(sessionId)
       const validEfforts: (AgentEffort | null)[] = [null, 'low', 'medium', 'high', 'max']
       if (effort !== null && !validEfforts.includes(effort)) {
         throw new Error(`无效的推理强度: ${String(effort)}`)
@@ -4042,6 +4128,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_RUNTIME,
     async (event, sessionId: string, runtime: AgentRuntime): Promise<AgentSessionMeta> => {
       assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(sessionId)
       if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 200) {
         throw new Error('Agent 会话标识无效')
       }
@@ -4179,6 +4266,7 @@ export function registerIpcHandlers(): void {
     async (event, response: AskUserResponse): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
       const { requestId, answers } = response
+      assertOrdinaryPendingRequestId(requestId, askUserService.getPendingRequests())
       const sessionId = await askUserService.respondToAskUser(requestId, answers)
 
       if (sessionId) {
@@ -4200,6 +4288,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.EXIT_PLAN_MODE_RESPOND,
     async (event, response: ExitPlanModeResponse): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
+      assertOrdinaryPendingRequestId(response.requestId, exitPlanService.getPendingRequests())
       const result = exitPlanService.respondToExitPlanMode(response)
 
       if (result) {
@@ -4247,9 +4336,9 @@ export function registerIpcHandlers(): void {
     async (event): Promise<import('@profer/shared').PendingRequestsSnapshot> => {
       assertSensitiveAgentIpcSender(event)
       return {
-        permissions: permissionService.getPendingRequests(),
-        askUsers: askUserService.getPendingRequests(),
-        exitPlans: exitPlanService.getPendingRequests(),
+        permissions: filterOrdinaryPendingRequests(permissionService.getPendingRequests()),
+        askUsers: filterOrdinaryPendingRequests(askUserService.getPendingRequests()),
+        exitPlans: filterOrdinaryPendingRequests(exitPlanService.getPendingRequests()),
       }
     }
   )
@@ -4262,6 +4351,7 @@ export function registerIpcHandlers(): void {
       if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
         throw new Error('无效的会话标识')
       }
+      assertOrdinaryAgentSession(sessionId)
       const { loadGraph } = await import('./lib/project-graph-service')
       return loadGraph(sessionId)
     },
@@ -4274,6 +4364,7 @@ export function registerIpcHandlers(): void {
       if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 128) {
         throw new Error('无效的会话标识')
       }
+      assertOrdinaryAgentSession(sessionId)
       const { getGraphSummary } = await import('./lib/project-graph-service')
       return getGraphSummary(sessionId)
     },
@@ -4289,6 +4380,7 @@ export function registerIpcHandlers(): void {
       if (!graphEvent || typeof graphEvent !== 'object' || !graphEvent.type) {
         throw new Error('无效的图事件')
       }
+      assertOrdinaryAgentSession(sessionId)
       const { appendGraphEvent } = await import('./lib/project-graph-service')
       appendGraphEvent(sessionId, graphEvent)
     },
@@ -4296,7 +4388,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RUN_RETROSPECTIVE,
-    async (_event, sessionId: string) => {
+    async (event, sessionId: string) => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(sessionId)
       const { runRetrospective } = await import('./lib/retrospective-service')
       return runRetrospective(sessionId)
     },
@@ -4307,7 +4401,10 @@ export function registerIpcHandlers(): void {
   // 保存文件到 Agent session 工作目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SAVE_FILES_TO_SESSION,
-    async (_, input: AgentSaveFilesInput): Promise<AgentSavedFile[]> => {
+    async (event, input: AgentSaveFilesInput): Promise<AgentSavedFile[]> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input.sessionId !== 'string') throw new Error('无效的会话标识')
+      assertOrdinaryAgentSession(input.sessionId)
       return saveFilesToAgentSession(input)
     }
   )
@@ -4351,7 +4448,9 @@ export function registerIpcHandlers(): void {
   // 附加外部目录到 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.ATTACH_DIRECTORY,
-    async (_, input: AgentAttachDirectoryInput): Promise<string[]> => {
+    async (event, input: AgentAttachDirectoryInput): Promise<string[]> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(input.sessionId)
       const meta = getAgentSessionMeta(input.sessionId)
       if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
 
@@ -4369,7 +4468,9 @@ export function registerIpcHandlers(): void {
   // 移除会话的附加目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.DETACH_DIRECTORY,
-    async (_, input: AgentAttachDirectoryInput): Promise<string[]> => {
+    async (event, input: AgentAttachDirectoryInput): Promise<string[]> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(input.sessionId)
       const meta = getAgentSessionMeta(input.sessionId)
       if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
 
@@ -4385,7 +4486,9 @@ export function registerIpcHandlers(): void {
   // 附加外部文件到 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.ATTACH_FILE,
-    async (_, input: AgentAttachFileInput): Promise<string[]> => {
+    async (event, input: AgentAttachFileInput): Promise<string[]> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(input.sessionId)
       const meta = getAgentSessionMeta(input.sessionId)
       if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
 
@@ -4407,7 +4510,9 @@ export function registerIpcHandlers(): void {
   // 移除会话的附加文件
   ipcMain.handle(
     AGENT_IPC_CHANNELS.DETACH_FILE,
-    async (_, input: AgentAttachFileInput): Promise<string[]> => {
+    async (event, input: AgentAttachFileInput): Promise<string[]> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(input.sessionId)
       const meta = getAgentSessionMeta(input.sessionId)
       if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
 
@@ -4504,7 +4609,9 @@ export function registerIpcHandlers(): void {
   // 获取 session 工作路径
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SESSION_PATH,
-    async (_, _workspaceId: string, sessionId: string): Promise<string | null> => {
+    async (event, _workspaceId: string, sessionId: string): Promise<string | null> => {
+      assertSensitiveAgentIpcSender(event)
+      assertOrdinaryAgentSession(sessionId)
       const session = getAgentSessionMeta(sessionId)
       if (!session) return null
       const ws = session.workspaceId ? getAgentWorkspace(session.workspaceId) : undefined
@@ -4544,6 +4651,7 @@ export function registerIpcHandlers(): void {
       for (const item of items) {
         if (HIDDEN_FS_ENTRIES.has(item.name)) continue
         const fullPath = resolve(safePath, item.name)
+        if (isReviewPrivateDesktopPath(fullPath)) continue
         const isDirectory = item.isDirectory()
         const size = isDirectory ? undefined : statSync(fullPath).size
         entries.push({
@@ -4615,13 +4723,20 @@ export function registerIpcHandlers(): void {
       const { resolve, relative, join } = await import('node:path')
 
       const safePath = resolve(dirPath)
-      assertInsideAgentWorkspaces(safePath)
+      // Reading a workspace container is allowed, but its private descendants
+      // must never be enumerated. A direct private root request is rejected.
+      if (isReviewPrivateDesktopPath(safePath)) throw new Error('审核内部路径不可读取')
+      if (!isResolvedPathInsideRoot(safePath, getAgentWorkspacesDir())
+        || !isResolvedPathInsideRoot(realpathOrResolve(safePath), getAgentWorkspacesDir())) {
+        throw new Error('访问路径超出 Agent 工作区范围')
+      }
 
       const results: Array<{ relativePath: string; data: Uint8Array }> = []
       const walk = (currentDir: string) => {
         const items = readdirSync(currentDir, { withFileTypes: true })
         for (const item of items) {
           const full = join(currentDir, item.name)
+          if (isReviewPrivateDesktopPath(full)) continue
           if (item.isDirectory()) {
             walk(full)
           } else {
@@ -4771,6 +4886,7 @@ export function registerIpcHandlers(): void {
       const { resolveTargetPath } = await import('./lib/file-preview-service')
 
       const resolvedPath = resolveTargetPath(filePath, candidateBasePaths?.length ? candidateBasePaths : undefined)
+      if (isReviewPrivateDesktopPath(resolvedPath)) return false
       if (!existsSync(resolvedPath)) {
         console.warn('[IPC] shell:show-item-in-folder 路径不存在:', resolvedPath)
         return false
@@ -4823,8 +4939,12 @@ export function registerIpcHandlers(): void {
       if (!input || typeof input.sessionId !== 'string' || typeof input.requestId !== 'string' || typeof input.targetName !== 'string') {
         throw new Error('文件搜索请求无效')
       }
+      assertOrdinaryAgentSession(input.sessionId)
       const roots = getFileSearchRoots(input.sessionId)
-      if (roots.length === 0) throw new Error('Agent 会话不存在或没有授权搜索目录')
+      if (roots.length === 0) {
+        console.warn('[IPC] file:search-candidate 没有可用授权搜索目录:', input.sessionId)
+        throw new Error('没有授权搜索目录')
+      }
       if (activeFileSearches.has(input.requestId)) {
         return { requestId: input.requestId, done: true, cancelled: true, error: '搜索请求已在进行中' }
       }
@@ -4839,6 +4959,7 @@ export function registerIpcHandlers(): void {
           maxResults: input.mode === 'deep' ? 50 : 1,
           alreadyFound: input.alreadyFound,
           signal: controller.signal,
+          denyPath: isReviewPrivateDesktopPath,
         })
         return result
       } catch (error) {
@@ -4942,7 +5063,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标 PDF 文件路径、页码与归一化 BBox 坐标
+  // 解析双平行拓扑引用锚点（如 #f1:p1-b11 或 #p1-b11），反查目标文档（PDF/DOCX/PPTX/XLSX）路径、页码与坐标
   ipcMain.handle(
     'file:resolve-document-anchor',
     async (
@@ -4969,6 +5090,7 @@ export function registerIpcHandlers(): void {
         const workspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
         const slug = workspace?.slug || 'default'
         addDir(getAgentSessionWorkspacePath(slug, options.sessionId))
+        addDir(getStudySessionDir(options.sessionId))
         for (const root of getFileSearchRoots(options.sessionId)) addDir(root)
         if (meta?.attachedFiles) fallbackFiles.push(...meta.attachedFiles)
         if (workspace?.slug) {
@@ -4990,39 +5112,6 @@ export function registerIpcHandlers(): void {
       }
       return resolved
     },
-  )
-
-  // DOCX 转 HTML（内联预览使用 mammoth）
-  ipcMain.handle(
-    'file:docx-to-html',
-    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<{ resolvedPath: string; html: string } | null> => {
-      const { convertDocxToHtml, resolveFilePath } = await import('./lib/file-preview-service')
-      const options = normalizeFileAccessOptions(access)
-      const allowedBasePaths = getAllowedCandidateBasePaths(options)
-      const resolved = resolveFilePath(filePath, allowedBasePaths)
-      if (!resolved || !isPreviewPathAllowed(resolved, options)) {
-        console.warn('[IPC] file:docx-to-html 拒绝系统/凭据敏感路径:', resolved ?? filePath)
-        return null
-      }
-      const result = await convertDocxToHtml(resolved)
-      return result
-    }
-  )
-
-  // XLSX/PPTX 转 HTML（内联预览使用 OOXML 解析）
-  ipcMain.handle(
-    'file:office-to-html',
-    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<import('@profer/shared').OfficePreviewResult | null> => {
-      const { convertOfficeToHtml, resolveFilePath } = await import('./lib/file-preview-service')
-      const options = normalizeFileAccessOptions(access)
-      const allowedBasePaths = getAllowedCandidateBasePaths(options)
-      const resolved = resolveFilePath(filePath, allowedBasePaths)
-      if (!resolved || !isPreviewPathAllowed(resolved, options)) {
-        console.warn('[IPC] file:office-to-html 拒绝系统/凭据敏感路径:', resolved ?? filePath)
-        return null
-      }
-      return convertOfficeToHtml(resolved)
-    }
   )
 
   // 注册文件路径到 cdut-file:// 协议（只读预览）
@@ -5066,7 +5155,6 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RENAME_FILE,
     async (_, filePath: string, newName: string): Promise<void> => {
-      const { renameSync } = await import('node:fs')
       const { resolve, dirname, join, sep } = await import('node:path')
 
       if (newName.includes('/') || newName.includes('\\') || newName.includes('..') || newName.includes(sep)) {
@@ -5077,8 +5165,9 @@ export function registerIpcHandlers(): void {
       assertInsideAgentWorkspaces(safePath)
 
       const newPath = join(dirname(safePath), newName)
+      assertInsideAgentWorkspaces(newPath)
       try {
-        renameSync(safePath, newPath)
+        renameOrdinaryAgentFileEntry(safePath, newPath)
         console.log(`[Agent 文件] 已重命名: ${safePath} → ${newPath}`)
       } catch (err) {
         throw new Error(await toFsErrorMessage(err, '重命名', safePath))
@@ -5090,7 +5179,6 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.MOVE_FILE,
     async (_, filePath: string, targetDir: string): Promise<void> => {
-      const { renameSync } = await import('node:fs')
       const { resolve, basename, join } = await import('node:path')
 
       const safePath = resolve(filePath)
@@ -5099,7 +5187,8 @@ export function registerIpcHandlers(): void {
       assertInsideAgentWorkspaces(safeTarget)
 
       const newPath = join(safeTarget, basename(safePath))
-      renameSync(safePath, newPath)
+      assertInsideAgentWorkspaces(newPath)
+      renameOrdinaryAgentFileEntry(safePath, newPath)
       console.log(`[Agent 文件] 已移动: ${safePath} → ${newPath}`)
     }
   )
@@ -5122,6 +5211,7 @@ export function registerIpcHandlers(): void {
       for (const item of items) {
         if (HIDDEN_FS_ENTRIES.has(item.name)) continue
         const fullPath = resolve(safePath, item.name)
+        if (isReviewPrivateDesktopPath(fullPath)) continue
         const isDirectory = item.isDirectory()
         const size = isDirectory ? undefined : statSync(fullPath).size
         entries.push({
@@ -5160,6 +5250,11 @@ export function registerIpcHandlers(): void {
       const safePath = await realpath(resolve(filePath)).catch(() => {
         throw new Error(`文件不存在: ${filePath}`)
       })
+
+      if (isReviewPrivateDesktopPath(filePath) || isReviewPrivateDesktopPath(safePath)) {
+        throw new Error('审核内部路径不可读取')
+      }
+      if (sessionId) assertOrdinaryAgentSession(sessionId)
 
       // 收集所有允许的路径：会话/工作区附加目录、附加文件 + 工作区文件目录
       const allowedDirs: string[] = []
@@ -5228,19 +5323,19 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RENAME_ATTACHED_FILE,
     async (_, filePath: string, newName: string, access?: FileAccessOptions | string[]): Promise<void> => {
-      const { renameSync } = await import('node:fs')
       const { resolve, dirname, join, sep } = await import('node:path')
 
       if (newName.includes('/') || newName.includes('\\') || newName.includes('..') || newName.includes(sep)) {
         throw new Error('文件名不能包含路径分隔符或 ".."')
       }
       const safePath = resolve(filePath)
+      if (isUnsafeAgentWorkspaceMutationPath(safePath)) throw new Error('审核内部或共享容器路径不可操作')
       const options = normalizeFileAccessOptions(access)
       if (!isPathAllowed(safePath, options)) {
         throw new Error('访问路径不在允许范围内')
       }
       const newPath = join(dirname(safePath), newName)
-      renameSync(safePath, newPath)
+      renameOrdinaryAgentFileEntry(safePath, newPath)
       console.log(`[附加目录] 已重命名: ${safePath} → ${newPath}`)
     }
   )
@@ -5249,17 +5344,17 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.MOVE_ATTACHED_FILE,
     async (_, filePath: string, targetDir: string, access?: FileAccessOptions | string[]): Promise<void> => {
-      const { renameSync } = await import('node:fs')
       const { resolve, basename, join } = await import('node:path')
 
       const safePath = resolve(filePath)
+      if (isUnsafeAgentWorkspaceMutationPath(safePath)) throw new Error('审核内部或共享容器路径不可操作')
       const safeTarget = resolve(targetDir)
       const options = normalizeFileAccessOptions(access)
       if (!isPathAllowed(safePath, options) || !isPathAllowed(safeTarget, options)) {
         throw new Error('访问路径不在允许范围内')
       }
       const newPath = join(safeTarget, basename(safePath))
-      renameSync(safePath, newPath)
+      renameOrdinaryAgentFileEntry(safePath, newPath)
       console.log(`[附加目录] 已移动: ${safePath} → ${newPath}`)
     }
   )
@@ -5272,6 +5367,7 @@ export function registerIpcHandlers(): void {
       const { resolve } = await import('node:path')
 
       const safePath = resolve(filePath)
+      if (isUnsafeAgentWorkspaceMutationPath(safePath)) throw new Error('审核内部或共享容器路径不可操作')
       const options = normalizeFileAccessOptions(access)
       if (!isPathAllowed(safePath, options)) {
         throw new Error('访问路径不在允许范围内')
@@ -5291,6 +5387,7 @@ export function registerIpcHandlers(): void {
     async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<void> => {
       const { resolve } = await import('node:path')
       const safePath = resolve(filePath)
+      if (isUnsafeAgentWorkspaceMutationPath(safePath)) throw new Error('审核内部或共享容器路径不可操作')
       const options = normalizeFileAccessOptions(access)
       if (!isPathAllowed(safePath, options)) {
         throw new Error('访问路径不在允许范围内')
@@ -5312,6 +5409,7 @@ export function registerIpcHandlers(): void {
       const directories: string[] = []
       const files: string[] = []
       for (const p of paths) {
+        if (isReviewPrivateDesktopPath(p)) continue
         try {
           const stat = statSync(p)
           if (stat.isDirectory()) {
@@ -5353,7 +5451,7 @@ export function registerIpcHandlers(): void {
         useAbsPath: boolean,
         source: 'session' | 'workspace',
       ): void {
-        if (depth > 10) return
+        if (depth > 10 || isReviewPrivateDesktopPath(dir)) return
         try {
           const items = readdirSync(dir, { withFileTypes: true })
           for (const item of items) {
@@ -5361,6 +5459,7 @@ export function registerIpcHandlers(): void {
             if (item.isDirectory() && ignoreDirs.has(item.name)) continue
 
             const fullPath = resolve(dir, item.name)
+            if (isReviewPrivateDesktopPath(fullPath)) continue
             const entryPath = useAbsPath ? fullPath : relative(baseRoot, fullPath)
             target.push({
               name: item.name,
@@ -5381,6 +5480,7 @@ export function registerIpcHandlers(): void {
       function addAttachedPath(pathValue: string, target: Entry[], source: 'session' | 'workspace'): void {
         try {
           const attachedPath = resolve(pathValue)
+          if (isReviewPrivateDesktopPath(attachedPath)) return
           const name = basename(attachedPath)
           if (ignoreFiles.has(name)) return
 
@@ -6140,13 +6240,40 @@ export function registerIpcHandlers(): void {
     return { handled: resolveCdutGatekeeper(decision) }
   })
 
-  // ===== CDUT 专区 · 砚湖秒通（Yanhu Express）轻量级定制浏览器 =====
+  // 8 大业务域按需调用：直接调用教务业务域工具（支持已登录态真实抓取与未登录态/网络异常 Demo 数据回退）
+  ipcMain.handle(
+    CDUT_ZONE_IPC_CHANNELS.CALL_DOMAIN_TOOL,
+    async (_event, input: CdutToolInvokeParams): Promise<CdutDomainToolResult> => {
+      const { domain, params } = input
+      const profile = cdutAuthManager.getProfile()
+      const isOnline = profile.status === 'active' && !cdutDemoService.isActive()
+
+      if (isOnline) {
+        try {
+          const ses = session.fromPartition(CDUT_AUTH_PARTITION)
+          const result = await executeDomainTool(domain, ses, params)
+          if (result.success) {
+            return { ...result, isDemo: false }
+          }
+          console.warn(`[CDUT专区] 业务域 ${domain} 真实抓取未成功，自动回退高仿真演示数据:`, result.error)
+        } catch (error) {
+          console.warn(`[CDUT专区] 业务域 ${domain} 请求异常，自动回退高仿真演示数据:`, error)
+        }
+      }
+
+      // 演示数据无缝回退
+      const demoResult = cdutDemoService.execute(domain, params)
+      return { ...demoResult, isDemo: true }
+    },
+  )
+
+  // ===== CDUT 专区 · 智联万站（Yanhu Express）轻量级定制浏览器 =====
   // 前端 100% 纯净：仅暴露浏览器外壳所需通道；底层 CDP 能力静默预留、不提供任何调试 UI 入口。
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.INIT_OR_RESTORE, () => yanhuExpressManager.initOrRestore())
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.GET_TABS_STATE, () => yanhuExpressManager.getTabsState())
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.SHOW_VIEW, () => {
     const state = yanhuExpressManager.showView()
-    // 呈现砚湖秒通时同步唤起桌宠子窗口（紧凑包裹，随同主窗口生命周期）
+    // 呈现智联万站时同步唤起桌宠子窗口（紧凑包裹，随同主窗口生命周期）
     yanhuPetWindowManager.setPresented(true)
     return state
   })
@@ -6177,17 +6304,17 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CREATE_TAB, (_event, input: YanhuCreateTabInput) =>
     yanhuExpressManager.createTab(input ?? {}),
   )
-  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.ACTIVATE_TAB, (_event, input: YanhuTabRefInput) =>
-    yanhuExpressManager.activateTab(input.tabId),
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.ACTIVATE_TAB, (_event, input?: YanhuTabRefInput) =>
+    yanhuExpressManager.activateTab(input?.tabId ?? ''),
   )
-  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_TAB, (_event, input: YanhuTabRefInput) =>
-    yanhuExpressManager.closeTab(input.tabId),
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_TAB, (_event, input?: YanhuTabRefInput) =>
+    yanhuExpressManager.closeTab(input?.tabId ?? ''),
   )
-  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_OTHER_TABS, (_event, input: YanhuTabRefInput) =>
-    yanhuExpressManager.closeOtherTabs(input.tabId),
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_OTHER_TABS, (_event, input?: YanhuTabRefInput) =>
+    yanhuExpressManager.closeOtherTabs(input?.tabId ?? ''),
   )
-  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_RIGHT_TABS, (_event, input: YanhuCloseRightInput) =>
-    yanhuExpressManager.closeRightTabs(input.tabId),
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.CLOSE_RIGHT_TABS, (_event, input?: YanhuCloseRightInput) =>
+    yanhuExpressManager.closeRightTabs(input?.tabId ?? ''),
   )
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.REORDER_TABS, (_event, input: YanhuReorderTabsInput) =>
     yanhuExpressManager.reorderTabs(input.orderedTabIds ?? []),
@@ -6240,15 +6367,13 @@ export function registerIpcHandlers(): void {
     runYanhuCdp(() => yanhuExpressManager.cdpExecuteScript(input?.tabId, input?.expression ?? '')),
   )
 
-  // ===== 砚湖秒通 · 桌宠「砚小龙」（阉割版 Pi 运行时 + 紧凑包裹子窗口） =====
-  // 视口同步：主渲染窗口测得砚湖秒通视口（CSS 像素），驱动桌宠子窗口贴合定位
+  // ===== 智联万站 · 桌宠「砚小龙」（阉割版 Pi 运行时 + 紧凑包裹子窗口） =====
+  // 视口同步：主渲染窗口测得智联万站视口（CSS 像素），驱动桌宠子窗口贴合定位
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.PET_SYNC_VIEWPORT, (_event, rect: YanhuPetViewport) => {
-    if (rect) {
-      if (rect.width > 4 && rect.height > 4) {
-        yanhuPetWindowManager.setPresented(true)
-      }
-      yanhuPetWindowManager.syncViewport(rect)
-    }
+    // 仅同步几何：呈现态由 SHOW_VIEW / HIDE_VIEW / UPDATE_BOUNDS(visible) 单一来源驱动。
+    // 此前在此处 setPresented(true) 会让渲染层每帧上报视口都把桌宠重新置为呈现，
+    // 与隐藏指令互相打架，造成桌宠在拦截页/错误页 show/hide 抖动。
+    if (rect) yanhuPetWindowManager.syncViewport(rect)
     return { success: true }
   })
   // 桌宠渲染进程上报紧凑包裹几何（DIP）-> 主进程应用窗口 Bounds
@@ -6328,6 +6453,64 @@ export function registerIpcHandlers(): void {
     return { success: true }
   })
 
+  // ===== AI 速课堂（Chrome 风格动态多 Tab / 思维导图 / 抽认卡 / 测验） =====
+  ipcMain.handle(STUDY_IPC_CHANNELS.GET_TABS, (_event, sessionId: string) => getStudyTabs(sessionId))
+
+  ipcMain.handle(
+    STUDY_IPC_CHANNELS.SAVE_TABS,
+    (_event, input: { sessionId: string; tabs: AiClassRightTabItem[]; activeTabId: string }) =>
+      saveStudyTabs(input.sessionId, input.tabs ?? [], input.activeTabId ?? ''),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.GET_MINDMAP, (_event, input: { sessionId: string; mindmapId?: string }) =>
+    getStudyMindmap(input.sessionId, input.mindmapId),
+  )
+
+  ipcMain.handle(
+    STUDY_IPC_CHANNELS.SAVE_MINDMAP_COORDS,
+    (
+      _event,
+      input: { sessionId: string; mindmapId: string; coords: Record<string, { x: number; y: number }> },
+    ) => saveStudyMindmapCoords(input.sessionId, input.mindmapId, input.coords ?? {}),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.EXPORT_OPML, async (_event, input: { sessionId: string; mindmapId?: string }) => {
+    const mindmap = getStudyMindmap(input.sessionId, input.mindmapId)
+    if (!mindmap) return { success: false, error: '未找到可导出的思维导图' }
+    const result = await dialog.showSaveDialog({
+      title: '导出思维导图（OPML 2.0）',
+      defaultPath: `${(mindmap.title || 'mindmap').replace(/[\\/:*?"<>|]/g, '_')}.opml`,
+      filters: [{ name: 'OPML 2.0', extensions: ['opml'] }],
+    })
+    if (result.canceled || !result.filePath) return { success: false, canceled: true }
+    await writeFile(result.filePath, mindMapToOpml(mindmap), 'utf-8')
+    return { success: true, filePath: result.filePath }
+  })
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.GET_FLASHCARDS, (_event, input: { sessionId: string; deckId?: string }) =>
+    getStudyFlashcards(input.sessionId, input.deckId),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.UPDATE_CARD_RATING, (_event, input: StudyCardRatingInput) =>
+    updateStudyCardRating(input),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.GET_QUIZ, (_event, input: { sessionId: string; quizId?: string }) =>
+    getStudyQuiz(input.sessionId, input.quizId),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.SUBMIT_QUIZ_ANSWER, (_event, input: StudyQuizAnswerInput) =>
+    submitStudyQuizAnswer(input),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.GENERATE_ARTIFACT, async (_event, input: StudyGenerateArtifactInput) =>
+    generateStudyArtifact(input),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.LIST_ARTIFACTS, (_event, sessionId: string) =>
+    listStudyArtifacts(sessionId),
+  )
+
   // ===== AI 速课堂（专属工作区 / 会话 / 资料树图谱） =====
   ipcMain.handle(CDUT_AI_CLASS_IPC_CHANNELS.LIST_SESSIONS, () => {
     return listAiClassSessions()
@@ -6386,8 +6569,15 @@ export function registerIpcHandlers(): void {
       if (days > 0) {
         const archivedChats = autoArchiveConversations(days)
         const archivedSessions = autoArchiveAgentSessions(days)
-        if (archivedChats + archivedSessions > 0) {
+        const archivedTotal = archivedChats + archivedSessions
+        if (archivedTotal > 0) {
           console.log(`[自动归档] 已归档 ${archivedChats} 个对话, ${archivedSessions} 个 Agent 会话`)
+          // 静默自动归档发生时向所有窗口广播未读通知，点亮侧栏「已归档列表」红点
+          for (const window of BrowserWindow.getAllWindows()) {
+            if (!window.isDestroyed()) {
+              window.webContents.send(IPC_CHANNELS.ARCHIVED_UNREAD_CHANGED, archivedTotal)
+            }
+          }
         }
       }
     } catch (error) {

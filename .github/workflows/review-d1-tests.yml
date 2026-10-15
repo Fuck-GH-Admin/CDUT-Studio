@@ -16,7 +16,7 @@ permissions:
 jobs:
   authoring:
     name: D1 contract, parity, history, and regressions
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:

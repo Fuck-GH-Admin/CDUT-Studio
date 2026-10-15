@@ -23,11 +23,11 @@ export const SHORT_MESSAGE_THRESHOLD = 4
  * “消息过短或无明确主题时回退原文”来自历史上的真实幻觉修复：Chat 仍会对
  * ≤SHORT_MESSAGE_THRESHOLD 的输入本地短路，Agent 则由模型按同一指令处理。
  */
-const TITLE_PROMPT = '请根据用户的第一条请求，提炼一个简短、明确的会话标题（10字以内）。直接输出标题文本本身，严禁输出任何标点符号、引号、书名号，严禁包含“标题：”等前缀套话。若请求属于日常打招呼或过短（如“你好”），提炼为“日常问候”；若无法明确意图，直接截取用户前10个有效字符。'
+const TITLE_PROMPT = 'Based on the user\'s first request, distill a short, clear session title (no more than 10 characters) in the same language as the user\'s message. Output the title text itself only; never output any punctuation, quotation marks, book-title marks, or boilerplate prefixes like "Title:". If the request is a casual greeting or too short (e.g., "你好"), distill it as "日常问候". If the intent is unclear, directly take the first 10 meaningful characters of the user\'s message.'
 
 /** 构建标题生成 prompt（已拼接用户消息）。 */
 export function buildTitlePrompt(userMessage: string): string {
-  return `${TITLE_PROMPT}\n\n用户消息：${userMessage}`
+  return `${TITLE_PROMPT}\n\nUser message: ${userMessage}`
 }
 
 /**
@@ -134,7 +134,7 @@ const MIN_INFORMATIVE_LENGTH = 3
  * 历史数据里大量标题就是首条消息的截断（如 `ok，现在继续转战未来规划类，我学空间专`），
  * 多轮输入必须让模型概括主题，而不是复制粘贴。
  */
-const WINDOW_TITLE_PROMPT = '根据用户在会话最初几轮的消息，生成一个简短的对话标题（10字以内）。只输出标题，不要有任何其他内容、标点符号或引号。标题要概括用户真正想做的事（主题、任务或产物），不要照抄某一条消息的原文，也不要使用「用户」「对话」「会话」这类空泛词。如果这些消息都没有明确主题，直接使用其中最具体的一条原文作为标题。'
+const WINDOW_TITLE_PROMPT = 'Based on the user\'s messages from the first few turns of the session, generate a short conversation title (no more than 10 characters) in the same language as the user\'s messages. Output the title only—no other content, punctuation, or quotation marks. The title must summarize what the user actually wants to do (topic, task, or deliverable); never copy the verbatim text of one message, and never use vague words like "user", "conversation", or "session". If none of these messages has a clear topic, use the most concrete message verbatim as the title.'
 
 /**
  * 注入到用户消息里的上下文块。
@@ -258,7 +258,7 @@ export function collectTitleSources(messages: string[]): string[] {
 /** 构建「前几轮」窗口的命名 prompt（来源已由 collectTitleSources 过滤）。 */
 export function buildWindowTitlePrompt(sources: string[]): string {
   const list = sources.map((source, index) => `${index + 1}. ${source}`).join('\n')
-  return `${WINDOW_TITLE_PROMPT}\n\n用户消息：\n${list}`
+  return `${WINDOW_TITLE_PROMPT}\n\nUser messages:\n${list}`
 }
 
 /** 窗口路径的本地兜底：取最早一条有效来源的首行。 */

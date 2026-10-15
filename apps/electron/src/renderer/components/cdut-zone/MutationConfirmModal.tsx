@@ -10,20 +10,27 @@ import * as React from 'react'
 import { ShieldAlert } from 'lucide-react'
 import type { CdutMutationConfirmRequest } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
+import { Z_LAYER } from '@profer/ui'
+import { useGlobalOverlay } from '@/atoms/overlay-atoms'
 
 export function MutationConfirmModal(): React.ReactElement | null {
   const [request, setRequest] = React.useState<CdutMutationConfirmRequest | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
+  const [secondsLeft, setSecondsLeft] = React.useState(30)
+
+  // 全局模态叠加登记：写操作二次确认弹出时，智联万站原生视口必须让位
+  useGlobalOverlay(!!request)
 
   React.useEffect(() => {
     const unsub = window.electronAPI.cdutZone.onMutationRequest((req) => {
       setRequest(req)
       setSubmitting(false)
+      setSecondsLeft(30)
     })
     return () => unsub()
   }, [])
 
-  const respond = async (confirmed: boolean): Promise<void> => {
+  const respond = React.useCallback(async (confirmed: boolean): Promise<void> => {
     if (!request) return
     setSubmitting(true)
     try {
@@ -32,12 +39,29 @@ export function MutationConfirmModal(): React.ReactElement | null {
       setRequest(null)
       setSubmitting(false)
     }
-  }
+  }, [request])
+
+  // 30 秒自适应倒计时防卡死
+  React.useEffect(() => {
+    if (!request) return
+    setSecondsLeft(30)
+    const timer = setInterval(() => {
+      setSecondsLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer)
+          void respond(false)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [request, respond])
 
   if (!request) return null
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+    <div className={`fixed inset-0 ${Z_LAYER.confirm} flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm`}>
       <div className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl">
         <div className="flex items-start gap-3">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600">
@@ -66,7 +90,7 @@ export function MutationConfirmModal(): React.ReactElement | null {
 
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="outline" size="sm" disabled={submitting} onClick={() => void respond(false)}>
-            取消
+            取消 ({secondsLeft}s)
           </Button>
           <Button size="sm" disabled={submitting} onClick={() => void respond(true)}>
             {submitting ? '正在提交…' : '确认执行'}

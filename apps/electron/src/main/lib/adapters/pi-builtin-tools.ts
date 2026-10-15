@@ -128,7 +128,6 @@ import { describeCdutMutation, executeDomainTool, isCdutMutationAction } from '.
 import { requestCdutMutationConfirm } from '../cdut/cdut-mutation-guard'
 import { cdutDemoService } from '../cdut/cdut-demo/demo-service'
 import { buildPiStudyTools } from '../study/study-tools'
-import { executeReadDocumentArtifact } from '../document-parse-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -226,9 +225,9 @@ export function buildPiMemoryArchiveTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCo
     sdk.defineTool({
       name: 'mcp__memory-archive__search_memory',
       label: '搜索个人记忆',
-      description: '全文搜索当前工作区的长期个人记忆。用户询问之前研究、踩坑、做过什么或有没有记录时，先按关键词检索，再引用命中片段回答。只读，不修改记忆文件。',
+      description: 'Full-text search over the long-term personal memory of the current workspace. When the user asks about past research, pitfalls, what has been done before, or whether something was recorded, search by keywords first, then answer citing the matched excerpts. Read-only; it never modifies memory files.',
       parameters: Type.Object({
-        query: Type.String({ minLength: 1, maxLength: 200, description: '中文短语、英文/代码词、路径片段或版本号' }),
+        query: Type.String({ minLength: 1, maxLength: 200, description: 'Chinese phrases, English/code words, path fragments, or version numbers' }),
         topK: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
       }),
       async execute(_toolCallId, params) {
@@ -256,7 +255,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__list_todos',
       label: '列出规划 Todo',
-      description: '列出当前 Agent 项目中的规划 Todo。规划 Todo 与任务图不同，适合记录用户待办和后续事项。',
+      description: 'List the planning Todos in the current Agent project. Planning Todos differ from the 任务图 (task graph); use them to record user to-dos and follow-up items.',
       parameters: Type.Object({
         status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('completed')])),
         dueBefore: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
@@ -273,7 +272,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__get_todo',
       label: '读取规划 Todo',
-      description: '读取当前 Agent 项目中某个规划 Todo 的原始最新记录。更新前必须先读取，以获得 expectedUpdatedAt。',
+      description: 'Read the raw, latest record of one planning Todo in the current Agent project. You must read it before updating in order to obtain expectedUpdatedAt.',
       parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
       async execute(_toolCallId, params) {
         try {
@@ -287,7 +286,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__create_todo',
       label: '创建规划 Todo',
-      description: '在当前 Agent 项目的规划中心创建 Todo。仅在用户目标确实需要记录规划待办时使用。',
+      description: 'Create a Todo in the 规划中心 (Planning Center) of the current Agent project. Use it only when the user goal genuinely needs a planning to-do recorded.',
       parameters: Type.Object({
         title: Type.String({ minLength: 1, maxLength: 500 }),
         notes: Type.Optional(Type.String()),
@@ -309,7 +308,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__update_todo',
       label: '更新规划 Todo',
-      description: '更新当前 Agent 项目的规划 Todo。必须先读取最新 Todo，并把其 updatedAt 作为 expectedUpdatedAt；冲突时重新读取。',
+      description: 'Update a planning Todo in the current Agent project. You must read the latest Todo first and pass its updatedAt as expectedUpdatedAt; on conflict, re-read before retrying.',
       parameters: Type.Object({
         id: Type.String({ minLength: 1 }),
         expectedUpdatedAt: Type.Number({ exclusiveMinimum: 0 }),
@@ -333,7 +332,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__list_calendar_events',
       label: '列出本地日程',
-      description: '列出当前 Profer 工作区的本地日程；用户未明确要求外部日历时，日程默认指这里。',
+      description: 'List local calendar events in the current Profer workspace; when the user has not explicitly asked for an external calendar, calendar means these local events.',
       parameters: Type.Object({ from: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), to: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })) }),
       async execute(_toolCallId, params) {
         try { return jsonToolResult({ events: await listPlanningCalendarEvents({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, params as CalendarEventListQuery) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
@@ -342,7 +341,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__get_calendar_event',
       label: '读取本地日程',
-      description: '读取当前 Profer 工作区本地日程的最新记录；更新前必须先读取。',
+      description: 'Read the latest record of a local calendar event in the current Profer workspace; always read before updating.',
       parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
       async execute(_toolCallId, params) {
         try { return jsonToolResult({ event: await getPlanningCalendarEvent({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, (params as { id: string }).id) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
@@ -351,7 +350,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__create_calendar_event',
       label: '创建本地日程',
-      description: '在当前 Profer 工作区创建本地日程。除非用户明确要求 Google、Outlook 或其他外部日历，否则不要询问日历平台。',
+      description: 'Create a local calendar event in the current Profer workspace. Do not ask which calendar platform to use unless the user explicitly requests Google, Outlook, or another external calendar.',
       parameters: Type.Object({
         title: Type.String({ minLength: 1, maxLength: 500 }), notes: Type.Optional(Type.String()), startAt: Type.Number({ exclusiveMinimum: 0 }), endAt: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), allDay: Type.Optional(Type.Boolean()), groupId: Type.Optional(Type.String({ minLength: 1 })), tagIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))), reminders: Type.Optional(Type.Array(Type.Object({ triggerAt: Type.Number({ exclusiveMinimum: 0 }) }))), todoId: Type.Optional(Type.String({ minLength: 1 })),
       }),
@@ -362,7 +361,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__update_calendar_event',
       label: '更新本地日程',
-      description: '更新当前 Profer 工作区本地日程；必须先读取最新日程并传入 expectedUpdatedAt。',
+      description: 'Update a local calendar event in the current Profer workspace; you must read the latest event first and pass expectedUpdatedAt.',
       parameters: Type.Object({ id: Type.String({ minLength: 1 }), expectedUpdatedAt: Type.Number({ exclusiveMinimum: 0 }), title: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })), notes: Type.Optional(Type.String()), startAt: Type.Optional(Type.Number({ exclusiveMinimum: 0 })), endAt: Type.Optional(Type.Union([Type.Number({ exclusiveMinimum: 0 }), Type.Null()])), allDay: Type.Optional(Type.Boolean()), groupId: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])), tagIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))), todoId: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])), }),
       async execute(_toolCallId, params) {
         try { return jsonToolResult({ event: await updatePlanningCalendarEvent({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, params as Omit<UpdateCalendarEventInput, 'workspaceId'>) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
@@ -371,7 +370,7 @@ export function buildPiPlanningTools(
     sdk.defineTool({
       name: 'mcp__planning__delete_calendar_event',
       label: '删除本地日程',
-      description: '仅在用户明确要求时删除当前 Profer 工作区本地日程。',
+      description: 'Delete a local calendar event in the current Profer workspace only when the user explicitly asks.',
       parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
       async execute(_toolCallId, params) {
         try { return jsonToolResult({ deleted: await deletePlanningCalendarEvent({ sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, isTeamWorkspace: ctx.isTeamWorkspace }, (params as { id: string }).id) }) } catch (error) { return jsonToolResult({ error: error instanceof Error ? error.message : String(error) }) }
@@ -399,7 +398,7 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
     sdk.defineTool({
       name: 'mcp__task-graph__proma_task_create',
       label: '创建项目任务',
-      description: '创建任务。依赖用 dependsOn 数组直填。用此工具替代 TaskCreate。',
+      description: 'Create a task. Provide dependencies directly in the dependsOn array. Use this tool instead of TaskCreate.',
       parameters: Type.Object({
         subject: Type.String({ minLength: 1 }),
         description: Type.Optional(Type.String()),
@@ -433,7 +432,7 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
     sdk.defineTool({
       name: 'mcp__task-graph__proma_task_update',
       label: '更新项目任务',
-      description: '更新任务状态/依赖/放弃。发现遗漏的依赖关系时在此补 dependsOn。用此工具替代 TaskUpdate。',
+      description: 'Update task status/dependencies/abandonment. When a missing dependency is discovered, add it here via dependsOn. Use this tool instead of TaskUpdate.',
       parameters: Type.Object({
         taskId: Type.String({ minLength: 1 }),
         status: Type.Optional(Type.Union([
@@ -491,7 +490,7 @@ export function buildPiGoalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'g
   return [sdk.defineTool({
     name: 'update_goal',
     label: '更新 Goal 状态',
-    description: '向 Profer Goal 控制器报告当前轮次结果。该工具是内部控制通道，不是用户可见消息；complete 必须带真实证据，blocked 仅用于需要用户输入或外部状态变化的阻塞。',
+    description: 'Report the current iteration result to the Profer Goal controller. This tool is an internal control channel, not a user-visible message; complete must carry real evidence, and blocked is only for blockers that require user input or external state changes.',
     promptSnippet: 'update_goal: report structured Goal status to the host runtime',
     parameters: Type.Object({
       status: Type.Union([Type.Literal('continue'), Type.Literal('complete'), Type.Literal('blocked')]),
@@ -521,7 +520,7 @@ export function buildPiAgentPresetTools(
     sdk.defineTool({
       name: 'mcp__agent-presets__preset_list',
       label: '列出 Agent 预设',
-      description: '列出当前工作区可用的全部 Agent 预设，并标注默认预设。',
+      description: 'List all Agent presets available in the current workspace and mark the default preset.',
       parameters: Type.Object({}),
       async execute() {
         const presets = listAgentPresets(ctx.workspaceSlug)
@@ -540,7 +539,7 @@ export function buildPiAgentPresetTools(
     tools.push(sdk.defineTool({
       name: 'mcp__agent-presets__preset_create',
       label: '创建 Agent 预设',
-      description: '仅当用户明确要求创建预设或把当前工作方式固化为预设时使用。只创建当前工作区自定义预设，不切换当前会话，不修改默认预设。',
+      description: 'Use only when the user explicitly asks to create a preset or to solidify the current way of working into a preset. It only creates a custom preset for the current workspace; it does not switch the current session and does not modify the default preset.',
       parameters: Type.Object({
         name: Type.String({ minLength: 1 }),
         description: Type.Optional(Type.String()),
@@ -573,14 +572,14 @@ export function buildPiAgentPresetTools(
     tools.push(sdk.defineTool({
       name: 'mcp__agent-presets__preset_copy',
       label: '复制 Agent 预设',
-      description: '仅当用户明确要求复制预设时使用。复制为当前工作区自定义预设，不切换当前会话，不修改默认预设。',
+      description: 'Use only when the user explicitly asks to copy a preset. It copies the preset as a custom preset of the current workspace; it does not switch the current session and does not modify the default preset.',
       parameters: Type.Object({
-        fromId: Type.String({ minLength: 1, description: '源预设 ID；应先从 preset_list 的 presetReference 读取' }),
+        fromId: Type.String({ minLength: 1, description: 'Source preset ID; read it from presetReference in preset_list first' }),
         fromScope: Type.Union([
           Type.Literal('builtin-meta'),
           Type.Literal('user-global'),
           Type.Literal('workspace'),
-        ], { description: '源预设作用域；应与 preset_list 返回值一致' }),
+        ], { description: 'Source preset scope; must match the preset_list return value' }),
         name: Type.Optional(Type.String({ minLength: 1 })),
       }),
       async execute(_toolCallId, params) {
@@ -606,14 +605,14 @@ export function buildPiAgentPresetTools(
     tools.push(sdk.defineTool({
       name: 'mcp__agent-presets__preset_switch_session',
       label: '切换当前会话预设',
-      description: '仅当当前用户消息明确要求切换本会话预设时使用。返回能力差异和审计 ID；当前轮能力不变，下一轮生效。',
+      description: 'Use only when the current user message explicitly asks to switch the preset of this session. Returns capability differences and an audit ID; capabilities stay unchanged in the current turn and take effect from the next turn.',
       parameters: Type.Object({
-        targetId: Type.String({ minLength: 1, description: '目标预设 ID；应先从 preset_list 的 presetReference 读取' }),
+        targetId: Type.String({ minLength: 1, description: 'Target preset ID; read it from presetReference in preset_list first' }),
         targetScope: Type.Union([
           Type.Literal('builtin-meta'),
           Type.Literal('user-global'),
           Type.Literal('workspace'),
-        ], { description: '目标预设作用域；应与 preset_list 返回值一致' }),
+        ], { description: 'Target preset scope; must match the preset_list return value' }),
       }),
       async execute(_toolCallId, params) {
         try {
@@ -643,7 +642,7 @@ export function buildPiAgentPresetTools(
     tools.push(sdk.defineTool({
       name: 'mcp__agent-presets__preset_propose_update',
       label: '提议更新 Agent 预设',
-      description: '仅生成当前工作区预设更新提案，不写盘；返回影响摘要后等待用户明确确认。',
+      description: 'Only generates an update proposal for the current workspace preset without writing to disk; returns an impact summary and waits for explicit user confirmation.',
       parameters: Type.Object({
         targetId: Type.String({ minLength: 1 }),
         targetScope: Type.Literal('workspace'),
@@ -668,7 +667,7 @@ export function buildPiAgentPresetTools(
     tools.push(sdk.defineTool({
       name: 'mcp__agent-presets__preset_request_default_change',
       label: '提议修改默认预设',
-      description: '仅生成工作区默认预设变更提案，不写盘；返回影响摘要后等待用户明确确认。',
+      description: 'Only generates a change proposal for the workspace default preset without writing to disk; returns an impact summary and waits for explicit user confirmation.',
       parameters: Type.Object({
         targetId: Type.String({ minLength: 1 }),
         targetScope: Type.Union([Type.Literal('builtin-meta'), Type.Literal('user-global'), Type.Literal('workspace')]),
@@ -691,7 +690,7 @@ export function buildPiAgentPresetTools(
     tools.push(sdk.defineTool({
       name: 'mcp__agent-presets__preset_commit_change',
       label: '提交 Agent 预设变更',
-      description: '仅提交当前用户已明确确认的冻结预设提案；无参数，模型不能修改提案内容。',
+      description: 'Only commits the frozen preset proposal that the user has already explicitly confirmed; it takes no parameters, and the model must not modify the proposal content.',
       parameters: Type.Object({}),
       async execute() {
         try {
@@ -850,7 +849,7 @@ function buildPiPptDeliveryTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
     sdk.defineTool({
       name: 'plan_ppt_visuals',
       label: '规划 PPT 视觉',
-      description: '在生成多页 PPT 前创建逐页视觉计划。每页必须指定真实图片、图表、图解或数据大字之一。',
+      description: 'Create a slide-by-slide visual plan before generating a multi-page PPT. Each slide must specify one of: a real image, a chart, a diagram, or data typography.',
       promptSnippet: 'PlanPptVisuals: create a slide-by-slide visual plan before generating the active PPT deck.',
       parameters: Type.Object({
         deckIntent: Type.String({ minLength: 1, maxLength: 300 }),
@@ -868,7 +867,7 @@ function buildPiPptDeliveryTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
     sdk.defineTool({
       name: 'audit_ppt_delivery',
       label: '审计 PPT 交付',
-      description: 'PPT 生成后审计逐页图片、图表、形状与文本；若视觉计划未落地或整套无图片无图表，必须修订后再交付。',
+      description: 'After the PPT is generated, audit per-slide images, charts, shapes, and text; if the visual plan was not implemented, or the deck contains neither images nor charts, it must be revised before delivery.',
       promptSnippet: 'AuditPptDelivery: audit the generated PPTX against its visual plan before delivery.',
       parameters: Type.Object({
         filePath: Type.String({ minLength: 1 }),
@@ -1100,11 +1099,11 @@ function buildTeamMemoryTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
   if (!ctx.isTeamWorkspace || !ctx.workspaceId) return []
   const ops = teamMemoryOperations(ctx.workspaceId)
   return [
-    sdk.defineTool({ name: 'mcp__team-memory__list_team_memories', label: '列出团队记忆', description: '列出当前团队工作区的共享知识记忆。团队记忆不含成员个人记忆。', parameters: Type.Object({}), async execute() { return jsonToolResult(await ops.list()) } }),
-    sdk.defineTool({ name: 'mcp__team-memory__read_team_memory', label: '读取团队记忆', description: '按需读取一篇当前团队的共享知识记忆。', parameters: Type.Object({ memoryId: Type.String() }), async execute(_, params) { return jsonToolResult(await ops.read((params as { memoryId: string }).memoryId)) } }),
-    sdk.defineTool({ name: 'mcp__team-memory__search_team_memories', label: '搜索团队记忆', description: '按标题和路径搜索当前团队的共享知识记忆。', parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 200 }) }), async execute(_, params) { return jsonToolResult(await ops.search((params as { query: string }).query)) } }),
-    sdk.defineTool({ name: 'mcp__team-memory__create_team_memory', label: '创建团队记忆', description: '仅在用户明确确认要沉淀跨成员可复用项目事实时创建团队记忆。', parameters: Type.Object({ path: Type.String(), title: Type.String(), content: Type.String(), changeSummary: Type.Optional(Type.String()) }), async execute(_, params) { return jsonToolResult(await ops.create(params as { path: string; title: string; content: string; changeSummary?: string })) } }),
-    sdk.defineTool({ name: 'mcp__team-memory__update_team_memory', label: '更新团队记忆', description: '更新前先读取；发生版本冲突时必须向用户说明，不能自动覆盖。', parameters: Type.Object({ memoryId: Type.String(), expectedVersion: Type.Integer({ minimum: 1 }), path: Type.Optional(Type.String()), title: Type.Optional(Type.String()), content: Type.Optional(Type.String()), changeSummary: Type.Optional(Type.String()) }), async execute(_, params) { const { memoryId, expectedVersion, ...input } = params as { memoryId: string; expectedVersion: number; path?: string; title?: string; content?: string; changeSummary?: string }; return jsonToolResult(await ops.update(memoryId, expectedVersion, input)) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__list_team_memories', label: '列出团队记忆', description: 'List the shared knowledge memories of the current team workspace. Team memories do not include individual personal memories.', parameters: Type.Object({}), async execute() { return jsonToolResult(await ops.list()) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__read_team_memory', label: '读取团队记忆', description: 'Read one shared knowledge memory of the current team on demand.', parameters: Type.Object({ memoryId: Type.String() }), async execute(_, params) { return jsonToolResult(await ops.read((params as { memoryId: string }).memoryId)) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__search_team_memories', label: '搜索团队记忆', description: 'Search the shared knowledge memories of the current team by title and path.', parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 200 }) }), async execute(_, params) { return jsonToolResult(await ops.search((params as { query: string }).query)) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__create_team_memory', label: '创建团队记忆', description: 'Create a team memory only when the user explicitly confirms persisting reusable cross-member project facts.', parameters: Type.Object({ path: Type.String(), title: Type.String(), content: Type.String(), changeSummary: Type.Optional(Type.String()) }), async execute(_, params) { return jsonToolResult(await ops.create(params as { path: string; title: string; content: string; changeSummary?: string })) } }),
+    sdk.defineTool({ name: 'mcp__team-memory__update_team_memory', label: '更新团队记忆', description: 'Read before updating; if a version conflict occurs, you must explain it to the user instead of overwriting automatically.', parameters: Type.Object({ memoryId: Type.String(), expectedVersion: Type.Integer({ minimum: 1 }), path: Type.Optional(Type.String()), title: Type.Optional(Type.String()), content: Type.Optional(Type.String()), changeSummary: Type.Optional(Type.String()) }), async execute(_, params) { const { memoryId, expectedVersion, ...input } = params as { memoryId: string; expectedVersion: number; path?: string; title?: string; content?: string; changeSummary?: string }; return jsonToolResult(await ops.update(memoryId, expectedVersion, input)) } }),
   ] as unknown as ToolDefinition[]
 }
 
@@ -1113,10 +1112,10 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__list_automations',
       label: '列出定时任务',
-      description: '列出 Profer 持久化定时任务。用于查看已有长期反复任务、判断是否需要新建任务、检查运行状态和最近失败情况。',
+      description: 'List the persisted Profer 定时任务 (Automations). Use it to review existing long-running recurring tasks, decide whether a new task is needed, and check run status and recent failures.',
       parameters: Type.Object({
-        active: Type.Optional(Type.Boolean({ description: '只列出启用或暂停任务；不传则列出全部' })),
-        includeHistory: Type.Optional(Type.Boolean({ description: '是否包含运行历史，默认 false' })),
+        active: Type.Optional(Type.Boolean({ description: 'List only enabled or paused tasks; omit to list all' })),
+        includeHistory: Type.Optional(Type.Boolean({ description: 'Whether to include run history, default false' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as { active?: boolean; includeHistory?: boolean }
@@ -1129,9 +1128,9 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__get_automation',
       label: '查看定时任务',
-      description: '读取单个 Profer 定时任务详情和运行记录。定时任务自动执行中可以省略 id 来读取当前任务，用于自检和自迭代。',
+      description: 'Read a single Profer 定时任务 (Automation) with its details and run history. During an automated Automation run, id may be omitted to read the current task, for self-checking and self-iteration.',
       parameters: Type.Object({
-        id: Type.Optional(Type.String({ description: '定时任务 ID；定时任务自动执行中可省略以读取当前任务' })),
+        id: Type.Optional(Type.String({ description: 'Automation task ID; omit during an automated Automation run to read the current task' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as { id?: string }
@@ -1145,27 +1144,27 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__create_automation',
       label: '创建定时任务',
-      description: '创建 Profer 持久化定时任务。适合无人值守、有稳定价值的场景。纯提醒/闹钟、需要用户实时参与判断、或现在就该做完即终结的事不要创建。',
+      description: 'Create a persisted Profer 定时任务 (Automation). Suitable for unattended scenarios with stable recurring value. Do not create one for pure reminders/alarms, tasks that require real-time user judgment, or one-off work that should simply be finished now.',
       parameters: Type.Object({
-        name: Type.String({ description: '任务名，简短说明长期反复执行的目标' }),
-        prompt: Type.String({ description: '每次触发时发送给 Agent 的完整自然语言指令' }),
+        name: Type.String({ description: 'Task name, briefly stating the long-term recurring goal' }),
+        prompt: Type.String({ description: 'The full natural-language instruction sent to the Agent on each trigger' }),
         scheduleType: Type.Union([
           Type.Literal('interval'),
           Type.Literal('daily'),
           Type.Literal('weekly'),
           Type.Literal('monthly'),
           Type.Literal('once'),
-        ], { description: '调度类型' }),
-        intervalMinutes: Type.Optional(Type.Number({ description: '固定间隔分钟数；scheduleType=interval 时必填' })),
-        timeOfDay: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: '每天/每周/每月触发时间，HH:MM。支持单个时间或数组' })),
-        dayOfWeek: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: '每周触发日，0=周日，...，6=周六。支持单日或数组' })),
-        dayOfMonth: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: '每月触发日，1-31。支持单日或数组' })),
-        scheduledAt: Type.Optional(Type.Number({ description: '一次性任务的绝对触发时间（毫秒时间戳）；scheduleType=once 时必填' })),
-        maxRuns: Type.Optional(Type.Number({ description: '最大运行次数上限；达到后任务自动停用' })),
-        active: Type.Optional(Type.Boolean({ description: '创建后是否启用，默认 true' })),
-        agentRuntime: Type.Optional(Type.Union([Type.Literal('pi')], { description: '运行该任务的 Agent runtime；不传则继承当前会话 runtime' })),
-        sessionMode: Type.Optional(Type.Union([Type.Literal('daily'), Type.Literal('reuse')], { description: '会话模式' })),
-        presetId: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: '运行该任务的 Agent 预设 ID（内置 standard/code/minimal 或任务工作区的自定义预设）。不传则继承当前会话预设；未知 ID 回退 standard' })),
+        ], { description: 'Schedule type' }),
+        intervalMinutes: Type.Optional(Type.Number({ description: 'Fixed interval in minutes; required when scheduleType=interval' })),
+        timeOfDay: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: 'Trigger time(s) in HH:MM for daily/weekly/monthly schedules. Accepts a single time or an array' })),
+        dayOfWeek: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: 'Weekly trigger day(s), 0=Sunday, ..., 6=Saturday. Accepts a single day or an array' })),
+        dayOfMonth: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: 'Monthly trigger day(s), 1-31. Accepts a single day or an array' })),
+        scheduledAt: Type.Optional(Type.Number({ description: 'Absolute trigger time for one-off tasks (millisecond timestamp); required when scheduleType=once' })),
+        maxRuns: Type.Optional(Type.Number({ description: 'Maximum number of runs; the task is deactivated automatically once reached' })),
+        active: Type.Optional(Type.Boolean({ description: 'Whether the task is enabled after creation, default true' })),
+        agentRuntime: Type.Optional(Type.Union([Type.Literal('pi')], { description: 'Agent runtime that runs this task; inherits the current session runtime when omitted' })),
+        sessionMode: Type.Optional(Type.Union([Type.Literal('daily'), Type.Literal('reuse')], { description: 'Session mode' })),
+        presetId: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: 'Agent preset ID used to run this task (builtin standard/code/minimal, or a custom preset of the task workspace). Inherits the current session preset when omitted; unknown IDs fall back to standard' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as Record<string, unknown>
@@ -1215,11 +1214,11 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__update_automation',
       label: '修改定时任务',
-      description: '修改 Profer 定时任务，包括名称、执行提示词、频率和启用状态。定时任务自动执行中可以省略 id 来修改当前任务。',
+      description: 'Modify a Profer 定时任务 (Automation), including name, execution prompt, frequency, and enabled state. During an automated Automation run, id may be omitted to modify the current task.',
       parameters: Type.Object({
-        id: Type.Optional(Type.String({ description: '定时任务 ID；定时任务自动执行中可省略以更新当前任务' })),
-        name: Type.Optional(Type.String({ description: '新的任务名' })),
-        prompt: Type.Optional(Type.String({ description: '新的执行提示词' })),
+        id: Type.Optional(Type.String({ description: 'Automation task ID; omit during an automated Automation run to update the current task' })),
+        name: Type.Optional(Type.String({ description: 'New task name' })),
+        prompt: Type.Optional(Type.String({ description: 'New execution prompt' })),
         scheduleType: Type.Optional(Type.Union([
           Type.Literal('interval'),
           Type.Literal('daily'),
@@ -1227,16 +1226,16 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           Type.Literal('monthly'),
           Type.Literal('once'),
         ])),
-        intervalMinutes: Type.Optional(Type.Number({ description: '新的固定间隔分钟数' })),
-        timeOfDay: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: '新的每天/每周/每月触发时间。支持单个时间或数组' })),
-        dayOfWeek: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: '新的每周触发日。支持单日或数组' })),
-        dayOfMonth: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: '新的每月触发日。支持单日或数组' })),
-        scheduledAt: Type.Optional(Type.Number({ description: '新的一次性触发时间（毫秒时间戳）' })),
-        maxRuns: Type.Optional(Type.Number({ description: '新的最大运行次数上限' })),
-        active: Type.Optional(Type.Boolean({ description: '启用或暂停任务' })),
-        agentRuntime: Type.Optional(Type.Union([Type.Literal('pi')], { description: '新的 Agent runtime' })),
+        intervalMinutes: Type.Optional(Type.Number({ description: 'New fixed interval in minutes' })),
+        timeOfDay: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: 'New daily/weekly/monthly trigger time(s). Accepts a single time or an array' })),
+        dayOfWeek: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: 'New weekly trigger day(s). Accepts a single day or an array' })),
+        dayOfMonth: Type.Optional(Type.Union([Type.Number(), Type.Array(Type.Number())], { description: 'New monthly trigger day(s). Accepts a single day or an array' })),
+        scheduledAt: Type.Optional(Type.Number({ description: 'New one-off trigger time (millisecond timestamp)' })),
+        maxRuns: Type.Optional(Type.Number({ description: 'New maximum number of runs' })),
+        active: Type.Optional(Type.Boolean({ description: 'Enable or pause the task' })),
+        agentRuntime: Type.Optional(Type.Union([Type.Literal('pi')], { description: 'New Agent runtime' })),
         sessionMode: Type.Optional(Type.Union([Type.Literal('daily'), Type.Literal('reuse')])),
-        presetId: Type.Optional(Type.String({ maxLength: 200, description: '新的 Agent 预设 ID（内置或任务工作区的自定义预设）；下次触发生效。传空字符串恢复跟随工作区默认' })),
+        presetId: Type.Optional(Type.String({ maxLength: 200, description: 'New Agent preset ID (builtin, or a custom preset of the task workspace); takes effect on the next trigger. Pass an empty string to restore following the workspace default' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as Record<string, unknown>
@@ -1276,9 +1275,9 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__delete_automation',
       label: '删除定时任务',
-      description: '删除 Profer 定时任务。只在用户明确要求删除，或任务已经长期无价值且用户确认后使用。',
+      description: 'Delete a Profer 定时任务 (Automation). Use it only when the user explicitly requests deletion, or after a task has long been valueless and the user confirms.',
       parameters: Type.Object({
-        id: Type.String({ description: '要删除的定时任务 ID' }),
+        id: Type.String({ description: 'ID of the Automation task to delete' }),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as { id: string }
@@ -1290,9 +1289,9 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__run_automation_now',
       label: '立即运行定时任务',
-      description: '立即运行 Profer 定时任务。用于用户要求马上验证，或修改任务后需要试跑一次。',
+      description: 'Run a Profer 定时任务 (Automation) immediately. Use it when the user asks for immediate verification, or after modifying a task that needs a trial run.',
       parameters: Type.Object({
-        id: Type.Optional(Type.String({ description: '要立即运行的定时任务 ID；定时任务自动执行中可省略以运行当前任务' })),
+        id: Type.Optional(Type.String({ description: 'ID of the Automation task to run immediately; omit during an automated Automation run to run the current task' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as { id?: string }
@@ -1326,7 +1325,7 @@ function buildPiClipboardTools(sdk: PiSdk): ToolDefinition[] {
     sdk.defineTool({
       name: 'clipboard_read_text',
       label: '读取系统剪贴板文本',
-      description: '读取系统剪贴板文本。获取剪贴板内容请优先使用本工具，不要使用 PowerShell Get-Clipboard（Windows 控制台代码页会导致中文乱码）。',
+      description: 'Read the system clipboard text. Prefer this tool to obtain clipboard content; do not use PowerShell Get-Clipboard (the Windows console code page garbles Chinese text).',
       parameters: Type.Object({}),
       async execute() {
         const { text, truncated, totalChars } = readClipboardText()
@@ -1341,9 +1340,9 @@ function buildPiClipboardTools(sdk: PiSdk): ToolDefinition[] {
     sdk.defineTool({
       name: 'clipboard_write_text',
       label: '写入系统剪贴板文本',
-      description: '写入文本到系统剪贴板。需要把文本放到剪贴板供之后手动粘贴时使用本工具；写入前请确认文本不包含不应泄露到剪贴板的敏感信息。',
+      description: 'Write text to the system clipboard. Use this tool when text must be placed on the clipboard for later manual pasting; before writing, confirm the text contains no sensitive information that should not leak to the clipboard.',
       parameters: Type.Object({
-        text: Type.String({ description: '要写入系统剪贴板的完整文本。' }),
+        text: Type.String({ description: 'The complete text to write to the system clipboard.' }),
       }),
       async execute(_toolCallId, params) {
         const args = params as { text?: string }
@@ -1691,7 +1690,7 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_academic_profile',
       label: 'CDUT 学籍与个人档案',
       description:
-        '查询成都理工大学青果教务系统的学籍档案（证件照/学院/专业/班级/学籍状态）、个人联系方式、学籍异动记录、大类专业分流与辅修报名信息；提交大类分流志愿与辅修报名属于写操作，需用户二次确认。',
+        'Query the student status archive (photo, college, major, class, enrollment status), personal contact info, status-change records, and major-track split / minor signup information from the 成都理工大学 (CDUT) 青果教务 (Qingguo Academic Affairs) system; submitting major-split preferences or minor applications is a write operation that requires user confirmation.',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('get_profile'),
@@ -1718,7 +1717,7 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_schedule',
       label: 'CDUT 课表与作息日程',
       description:
-        '获取成都理工大学在读学期的周课表（课程、教师、教室、节次、单双周）；亦可按班级、教师或教室检索全校其他课表。',
+        'Retrieve the weekly timetable of the current semester at 成都理工大学 (CDUT) (courses, teachers, classrooms, class periods, odd/even weeks); you may also search other university timetables by class, teacher, or classroom.',
       parameters: Type.Object({
         action: Type.Union([Type.Literal('get_my_schedule'), Type.Literal('query_other_schedule')]),
         semester: Type.Optional(Type.String()),
@@ -1734,7 +1733,7 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_grades_assessment',
       label: 'CDUT 成绩与考核评定',
       description:
-        '查询成都理工大学历年全科成绩、学分与绩点 GPA、四六级/计算机等级考试成绩；查询社考成绩置换与查卷复核记录；提交查卷申请与社考认定属于写操作，需用户二次确认。',
+        'Query all historical course grades, credits and GPA, and CET / computer rank exam results at 成都理工大学 (CDUT); query social-exam credit replacement and paper-review records; submitting a paper review or a social-exam replacement is a write operation that requires user confirmation.',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('query_grades'),
@@ -1761,7 +1760,7 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_exam_affairs',
       label: 'CDUT 考务安排与报名',
       description:
-        '查询期末考试日程（时间、考场、座位号、准考证号）、补考名单与重修开课；查询缓考申请记录；提交补考报名、重修报名与缓考申请属于写操作，需用户二次确认。',
+        'Query final exam schedules (time, exam room, seat number, admission ticket number), makeup exam lists, and retake course offerings; query exam deferral application records; signing up for makeup exams or retakes, and applying for exam deferral, are write operations that require user confirmation.',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('query_exam_schedule'),
@@ -1790,7 +1789,7 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_classroom_resource',
       label: 'CDUT 教室资源与自习雷达',
       description:
-        '按校区（成都/宜宾）、教学楼、星期、周次与节次实时检索空闲自习教室及座位容量；亦可查阅指定教室的全天占用明细。',
+        'Search free self-study classrooms and seat capacity in real time by campus (Chengdu/Yibin), teaching building, weekday, week number, and class period; you may also inspect the full-day occupancy details of a specified classroom.',
       parameters: Type.Object({
         action: Type.Union([Type.Literal('query_empty_classrooms'), Type.Literal('query_room_occupancy')]),
         // 成都校区 / 宜宾校区
@@ -1809,7 +1808,7 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_curriculum_plan',
       label: 'CDUT 培养方案与毕业学分',
       description:
-        '查询指导性培养方案、各课程模块已修/欠缺学分与毕业要求达成情况；查询学位申请资格与延后毕业申请记录；提交学位申请与延毕申请属于写操作，需用户二次确认。',
+        'Query the guided training plan, completed/missing credits per course module, and graduation requirement attainment; query degree application eligibility and delayed graduation application records; submitting a degree application or a delayed graduation application is a write operation that requires user confirmation.',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('get_training_plan'),
@@ -1835,7 +1834,7 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_course_selection',
       label: 'CDUT 选课中心与选课结果',
       description:
-        '查询当前开放的选课轮次与截止时间、检索可选课程与余量名额、查询已选课程与总学分；提交选课与退课属于写操作，需用户二次确认。',
+        'Query currently open course selection rounds and deadlines, search selectable courses and remaining seats, and query selected courses and total credits; selecting or dropping a course is a write operation that requires user confirmation.',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('query_selection_rounds'),
@@ -1867,7 +1866,7 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_notices_system',
       label: 'CDUT 教务通知与系统服务',
       description:
-        '查询成都理工大学教务处通知公告、留言、在线问答与公共下载文档；查询学业预警状态与密码安全策略；发起在线提问与修改教务密码属于写操作，需用户二次确认。',
+        'Query the academic affairs notices, bulletins, messages, online Q&A, and public download documents of 成都理工大学 (CDUT); query academic warning status and the password security policy; posting an online question or changing the academic affairs password is a write operation that requires user confirmation.',
       parameters: Type.Object({
         action: Type.Union([
           Type.Literal('query_notices'),
@@ -1898,13 +1897,13 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_reverse_proxy_agent',
       label: 'CDUT 反代大模型接入',
       description:
-        'CDUT 专区第 9 个内置工具：由发起 AI 根据当前上下文自行构造提问内容，经主进程转发到逆向反代大模型接口取回另一路回答。适用于需要第二意见、跨模型交叉验证或补充推理的场景。调用受特区账户登录门禁保护。',
+        'CDUT 专区 (CDUT Zone) built-in tool #9: the initiating AI composes the query itself from the current context, and the main process forwards it to the reverse-proxy LLM endpoint to fetch a second answer. Suitable for second opinions, cross-model verification, or supplementary reasoning. Calls are protected by the 特区账户 (Special Zone account) login gate.',
       promptSnippet:
         'cdut_reverse_proxy_agent: forward an AI-generated query to the CDUT reverse-proxy LLM and return its answer. Requires the CDUT zone account.',
       parameters: Type.Object({
-        queryPrompt: Type.String({ minLength: 1, maxLength: 8000, description: '发起 AI 根据上下文自行构造的提问内容（必填）' }),
-        taskContext: Type.Optional(Type.String({ maxLength: 4000, description: '可选的任务上下文，帮助反代大模型理解背景' })),
-        targetTask: Type.Optional(Type.String({ maxLength: 200, description: '可选的目标任务标识，用于路由到特定反代任务' })),
+        queryPrompt: Type.String({ minLength: 1, maxLength: 8000, description: 'The query composed by the initiating AI from the current context (required)' }),
+        taskContext: Type.Optional(Type.String({ maxLength: 4000, description: 'Optional task context that helps the reverse-proxy LLM understand the background' })),
+        targetTask: Type.Optional(Type.String({ maxLength: 200, description: 'Optional target task identifier used to route to a specific reverse-proxy task' })),
       }),
       async execute(_toolCallId, params) {
         const gate = await checkCdutGatekeeper('cdut_reverse_proxy_agent', CDUT_TOOL_LABELS.cdut_reverse_proxy_agent!)
@@ -1963,75 +1962,6 @@ function buildWindowsShellInstallerTools(sdk: PiSdk, ctx: PiBuiltinToolsContext)
 }
 
 /**
- * Tier 0：内核文档产物按页/关键词切片检阅工具（常驻）。
- */
-function buildPiDocumentArtifactTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
-  return [
-    sdk.defineTool({
-      name: 'read_document_artifact',
-      label: '按页或关键词检阅文档产物',
-      description:
-        '按页码范围（如 "1-3"、"5"、"2,4,6-8"）或关键词/正则（query）按需读取已由内核前置解析的文档（PDF/DOCX/XLSX/PPTX）带双平行拓扑锚点的切片。注意：附件文档的完整纯净版 Markdown 已经由客户端内核在 0 秒内直写落盘至 <attached_document> 中的 clean_markdown_path；若用户仅要求“解析/转换为 Markdown 放到工作目录”，请直接引用该路径交付，严禁调用 Write/Edit 逐段手敲搬运全文！仅在需要阅读特定页面、回答细节问题或检索公式/表格时调用本工具。',
-      promptSnippet:
-        'read_document_artifact: read specific page ranges (pages="1-3") or search regex/keywords (query="...") in pre-parsed PDF/Office document artifacts with topology anchors.',
-      parameters: Type.Object({
-        file: Type.Optional(
-          Type.String({
-            description: '可选：文档文件名、artifact_id 或路径（省略时自动选取当前工作区已落盘的文档）',
-          }),
-        ),
-        filePath: Type.Optional(
-          Type.String({
-            description: '可选：同 file，兼容文件路径入参',
-          }),
-        ),
-        pages: Type.Optional(
-          Type.String({
-            description: '可选：页码范围，如 "1-3"、"5"、"2,4,6-8"（未提供 query 时默认读取 "1-3"）',
-          }),
-        ),
-        query: Type.Optional(
-          Type.String({
-            description: '可选：关键词或正则表达式，在全文档所有页中检索匹配段落并返回带双轨锚点的上下文',
-          }),
-        ),
-        includeAnchors: Type.Optional(
-          Type.Boolean({
-            description: '是否保留双平行拓扑锚点（默认 true，便于回答时按 [第X页·位置](#blockId) 引用）',
-          }),
-        ),
-      }),
-      async execute(_toolCallId, params) {
-        try {
-          const args = params as {
-            file?: string
-            filePath?: string
-            pages?: string
-            query?: string
-            includeAnchors?: boolean
-          }
-          const result = await executeReadDocumentArtifact(
-            {
-              file: args.file ?? args.filePath,
-              pages: args.pages,
-              query: args.query,
-              includeAnchors: args.includeAnchors,
-            },
-            {
-              agentCwd: ctx.agentCwd ?? '',
-              allowedRoots: ctx.allowedRoots ?? [],
-            },
-          )
-          return textToolResult(result.content, result)
-        } catch (error) {
-          return jsonToolError(error)
-        }
-      },
-    }),
-  ] as unknown as ToolDefinition[]
-}
-
-/**
  * Tier 2：能力发现兜底工具（轻量目录，约 150 Tokens）。
  *
  * 当模型需要某类能力（浏览器、定时任务、子 Agent 委派、PPT 等）但当前工具列表中
@@ -2047,9 +1977,9 @@ function buildDiscoverToolsTool(
   return sdk.defineTool({
     name: 'discover_tools',
     label: 'CDUT Studio 能力发现',
-    description: '查询 CDUT Studio 可用的工具能力分组（任务图 / 记忆 / 协作 / 自动化与规划 / 浏览器 / 预览 / 图片 / 网页检索 / PPT / CDUT 教务 / 速课堂学习等），以及被当前预设关闭的分组。当需要某类能力但当前工具列表中没有对应工具时，先调用它确认能力是否存在、是否被预设关闭。',
+    description: 'Query the tool capability groups available in CDUT Studio (任务图 (task graph) / memory / collaboration / automation & planning / browser / preview / image / web search / PPT / CDUT 教务 (academic affairs) / 速课堂 (speed class) study, etc.), plus the groups disabled by the current preset. When you need a capability whose tool is missing from the current tool list, call this first to confirm whether the capability exists and whether the preset disabled it.',
     parameters: Type.Object({
-      category: Type.Optional(Type.String({ description: '可选：能力组 id 或关键词，如 browser / automation / ppt；省略则返回全部分组。' })),
+      category: Type.Optional(Type.String({ description: 'Optional: capability group id or keyword, e.g. browser / automation / ppt; omit to return all groups.' })),
     }),
     async execute(_toolCallId, params) {
       const category = (params as { category?: string }).category?.trim().toLowerCase()
@@ -2080,14 +2010,10 @@ function buildDiscoverToolsTool(
 
       const isDocumentQuery = category && /(?:pdf|doc|docx|xlsx|pptx|parse|markdown|文档|解析)/i.test(category)
       const tip = isDocumentQuery
-        ? '【内核文档引擎】PDF/Office 附件已由客户端内核高精解析引擎前置解析并双态落盘：完整无损的纯净版 Markdown 已直接写入 <attached_documents> 中的 clean_markdown_path（无需再调 Write/Edit 重写）；如需按页码或关键词精读原文切片，请直接调用常驻工具 `read_document_artifact`。'
-        : 'mountedTools 表示当前已实际挂载、可直接调用的工具；enabled=false 表示该能力组被当前预设关闭，需用户在预设设置中启用后才能使用。'
+        ? '【Kernel Document Engine】PDF/Office attachments have already been pre-parsed and dual-state persisted by the client kernel high-precision document engine: the complete clean Markdown is written to clean_markdown_path inside <attached_documents>, workspace documents have a silent RAG index built, and relevant <document_evidence> excerpts are injected automatically when the user asks a question. No parsing tools are needed; trust this content and answer from it directly.'
+        : 'mountedTools lists the tools that are actually mounted right now and can be called directly; enabled=false means the capability group is disabled by the current preset, and the user must enable it in preset settings before it becomes usable.'
 
-      const payload = {
-        groups,
-        coreDocumentTools: mountedNames.has('read_document_artifact') ? ['read_document_artifact'] : [],
-        tip,
-      }
+      const payload = { groups, tip }
       return {
         content: [{ type: 'text', text: JSON.stringify(payload) }],
         details: payload,
@@ -2120,13 +2046,6 @@ export async function buildPiBuiltinTools(
   })
 
   const tools: ToolDefinition[] = []
-
-  // 0. 常驻内核文档切片检阅工具（Tier 0 核心能力）
-  try {
-    tools.push(...buildPiDocumentArtifactTools(sdk, ctx))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入文档产物切片工具失败:', error)
-  }
 
   if (ctx.reportGoalResult) {
     tools.push(...buildPiGoalTools(sdk, ctx))

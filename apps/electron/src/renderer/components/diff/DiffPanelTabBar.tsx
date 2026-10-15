@@ -6,11 +6,13 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { FileDiff, FolderOpen, FolderTree, PanelRightClose } from 'lucide-react'
+import { FileDiff, FileText, FolderOpen, FolderTree, PanelRightClose } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom, type AgentSidePanelTab } from '@/atoms/agent-atoms'
+import { previewFileMapAtom } from '@/atoms/preview-atoms'
 
 type DiffPanelTab = AgentSidePanelTab
 
@@ -101,6 +103,8 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
   const unseenChanges = unseenMap.get(currentSessionId ?? '') ?? false
+  const previewFile = useAtomValue(previewFileMapAtom).get(currentSessionId ?? '') ?? null
+  const previewLabel = previewFile ? `预览：${getFileBaseName(previewFile.filePath)}` : '预览'
   const prevTabStateRef = React.useRef<PreviousTabState>({ sessionId: currentSessionId, activeTab })
 
   const clearUnseen = React.useCallback((sessionId = currentSessionId) => {
@@ -121,6 +125,13 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
     }
     prevTabStateRef.current = { sessionId: currentSessionId, activeTab }
   }, [activeTab, currentSessionId, clearUnseen])
+
+  // 预览文件被关闭后，若面板仍停留在预览 Tab，则回退到「文件改动」，避免空占位视图
+  React.useEffect(() => {
+    if (activeTab === 'preview' && !previewFile) {
+      onTabChange('changes')
+    }
+  }, [activeTab, previewFile, onTabChange])
 
   const handleChangesClick = () => {
     clearUnseen()
@@ -155,6 +166,16 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
           badge={unseenChanges && activeTab !== 'changes'}
           onClick={handleChangesClick}
         />
+        {/* 预览 Tab 仅在会话内有激活预览文件时渲染，避免空占位标签 */}
+        {previewFile && (
+          <FileViewTabButton
+            active={activeTab === 'preview'}
+            isClassic={isClassic}
+            label={previewLabel}
+            icon={<FileText className="size-3.5" />}
+            onClick={() => onTabChange('preview')}
+          />
+        )}
       </div>
       {/* 折叠钮始终固定在右侧，不随大量探索 Tab 横向滚走。 */}
       {onClose && (

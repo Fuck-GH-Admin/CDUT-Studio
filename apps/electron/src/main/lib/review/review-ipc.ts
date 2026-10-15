@@ -12,6 +12,8 @@ import { assertSafeReviewStorageId } from './review-storage-id'
  */
 
 import { app, ipcMain } from 'electron'
+import { assertMainWindowSender } from '../ipc-sender-guard'
+import { getMainWindow } from '../main-window-state'
 import {
   REVIEW_MODEL_PROVIDERS,
   REVIEW_IPC_CHANNELS,
@@ -535,17 +537,23 @@ export function registerReviewIpc(): void {
   // ===== C1：审核操作可信指派（显式指派是 Agent 写权限唯一来源） =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.ASSIGNMENT_CREATE_V2, (_e, input: { sessionId: string; turnId: string; caseId?: string; templateId?: string; templateVersion?: number; actions: string[]; workRole?: 'reviewer' | 'student' }) => {
     if (!input || typeof input !== 'object' || !input.sessionId || !input.turnId) throw new Error('指派必须绑定会话与用户轮次')
+    const { assertOrdinaryAgentSession } = require('../agent-session-manager') as typeof import('../agent-session-manager')
+    assertOrdinaryAgentSession(input.sessionId)
     const { createAssignment } = require('./review-agent-assignment') as typeof import('./review-agent-assignment')
     return createAssignment({ sessionId: input.sessionId, turnId: input.turnId, caseId: input.caseId, templateId: input.templateId, templateVersion: input.templateVersion, actions: input.actions as never, workRole: input.workRole })
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.ASSIGNMENT_REVOKE_V2, (_e, assignmentId: string) => {
     if (typeof assignmentId !== 'string' || !assignmentId) throw new Error('参数 assignmentId 非法')
-    const { revokeAssignment } = require('./review-agent-assignment') as typeof import('./review-agent-assignment')
+    const { revokeAssignment, listAssignments } = require('./review-agent-assignment') as typeof import('./review-agent-assignment')
+    const { assertOrdinaryAgentSession } = require('../agent-session-manager') as typeof import('../agent-session-manager')
+    const assignment = listAssignments().find((item) => item.id === assignmentId)
+    if (assignment) assertOrdinaryAgentSession(assignment.sessionId)
     return revokeAssignment(assignmentId)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.ASSIGNMENT_LIST_V2, (_e, sessionId?: string) => {
     const { listAssignments } = require('./review-agent-assignment') as typeof import('./review-agent-assignment')
-    return listAssignments(sessionId)
+    const { isReviewOwnedOrDeletedAgentSessionId } = require('../agent-session-manager') as typeof import('../agent-session-manager')
+    return listAssignments(sessionId).filter((item) => !isReviewOwnedOrDeletedAgentSessionId(item.sessionId))
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.CASE_TIMELINE_V2, (_e, input: { caseId: string; filterOperator?: 'human' | 'agent' | 'mock' | 'school' | 'system' | 'unknown' }) => {
     if (!input || typeof input !== 'object' || typeof input.caseId !== 'string' || !input.caseId) throw new Error('参数 caseId 非法')
@@ -652,7 +660,8 @@ export function registerReviewIpc(): void {
       || (input.inheritReadReceipts !== undefined && typeof input.inheritReadReceipts !== 'boolean')) {
       throw new Error('审核案卷、Pi 会话和用户消息标识均为必填')
     }
-    const { getAgentSessionMeta } = require('../agent-session-manager') as typeof import('../agent-session-manager')
+    const { getAgentSessionMeta, assertOrdinaryAgentSession } = require('../agent-session-manager') as typeof import('../agent-session-manager')
+    assertOrdinaryAgentSession(input.sessionId)
     const session = getAgentSessionMeta(input.sessionId)
     if (!session) throw new Error('项目 Pi 会话不存在')
     if (session.agentRuntime && session.agentRuntime !== 'pi') throw new Error('审核工作台只能使用项目 Pi Agent')
@@ -664,10 +673,30 @@ export function registerReviewIpc(): void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.GET_PI_REVIEW_SESSION_V2, (_event, caseId: string) => {
     if (typeof caseId !== 'string' || !caseId) throw new Error('参数 caseId 非法')
     const { getPiReviewSessionForCase } = require('./pi-case-review-service') as typeof import('./pi-case-review-service')
-    return getPiReviewSessionForCase(caseId)
+    const { isReviewOwnedOrDeletedAgentSessionId } = require('../agent-session-manager') as typeof import('../agent-session-manager')
+    const sessionId = getPiReviewSessionForCase(caseId)
+    return sessionId && !isReviewOwnedOrDeletedAgentSessionId(sessionId) ? sessionId : null
+  })
+  // 后台启动/停止只接受当前主窗口，内部归属与指派均由 Main 建立。
+  ipcMain.handle(REVIEW_IPC_CHANNELS.START_BACKGROUND_PI_REVIEW_V2, (event, input: import('@profer/shared').ReviewBackgroundPiStartRequest) => {
+    assertMainWindowSender(event, getMainWindow)
+    const { startBackgroundPiReview } = require('./review-pi-run-bridge') as typeof import('./review-pi-run-bridge')
+    return startBackgroundPiReview(input, event.sender)
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.STOP_BACKGROUND_PI_REVIEW_V2, (event, input: { caseId: string; runId: string }) => {
+    assertMainWindowSender(event, getMainWindow)
+    const { stopBackgroundPiReview } = require('./review-pi-run-bridge') as typeof import('./review-pi-run-bridge')
+    return stopBackgroundPiReview(input)
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.GET_BACKGROUND_PI_REVIEW_STATE_V2, (_event, caseId: string) => {
+    assertSafeReviewStorageId(caseId, 'caseId')
+    const { getBackgroundPiReviewState } = require('./review-background-state') as typeof import('./review-background-state')
+    return getBackgroundPiReviewState(caseId)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.ABORT_PI_REVIEW_V2, (_event, input: { caseId: string; sessionId: string; assignmentId: string; runId: string }) => {
     if (!input?.caseId || !input.sessionId || !input.assignmentId || !input.runId) throw new Error('审核取消参数不完整')
+    const { assertOrdinaryAgentSession } = require('../agent-session-manager') as typeof import('../agent-session-manager')
+    assertOrdinaryAgentSession(input.sessionId)
     const { getPiReviewBindingForSession, finishPiReviewRunV2 } = require('./pi-case-review-service') as typeof import('./pi-case-review-service')
     const binding = getPiReviewBindingForSession(input.sessionId)
     if (!binding || binding.caseId !== input.caseId || binding.runId !== input.runId || binding.assignmentId !== input.assignmentId) return false

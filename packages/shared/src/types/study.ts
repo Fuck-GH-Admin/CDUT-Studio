@@ -195,7 +195,250 @@ export const STUDY_IPC_CHANNELS = {
   TOGGLE_DOCUMENT_ACTIVE: 'study:toggle-document-active',
   /** 批量设置资料激活状态并落盘 */
   SET_DOCUMENTS_ACTIVE: 'study:set-documents-active',
+
+  // ===== Chrome 风格动态多 Tab 拓扑 =====
+  /** 读取当前课堂打开的多 Tab 拓扑 */
+  GET_TABS: 'study:get-tabs',
+  /** 保存当前课堂的多 Tab 拓扑 */
+  SAVE_TABS: 'study:save-tabs',
+
+  // ===== 思维导图：生成、坐标持久化与 OPML 导出 =====
+  /** 读取某个课堂的思维导图数据 */
+  GET_MINDMAP: 'study:get-mindmap',
+  /** 保存用户拖拽后的导图气泡坐标 */
+  SAVE_MINDMAP_COORDS: 'study:save-mindmap-coords',
+  /** 导出思维导图为 OPML 2.0 文档（调起系统保存对话框） */
+  EXPORT_OPML: 'study:export-opml',
+
+  // ===== 抽认卡与 FSRS-7 记忆调度 =====
+  /** 读取某个课堂的抽认卡卡包（含 FSRS-7 学习状态） */
+  GET_FLASHCARDS: 'study:get-flashcards',
+  /** 提交一次卡片评分，驱动 FSRS-7 状态推进并落盘 */
+  UPDATE_CARD_RATING: 'study:update-card-rating',
+
+  // ===== 测验与 FIM 认知能力评估 =====
+  /** 读取某个课堂的测验题库 */
+  GET_QUIZ: 'study:get-quiz',
+  /** 提交单题作答，实时判分并更新 FIM 潜伏能力估计 */
+  SUBMIT_QUIZ_ANSWER: 'study:submit-quiz-answer',
+
+  // ===== 双轨联动生成（思维导图 / 抽认卡 / 测验）=====
+  /** 依据当前课堂资料生成学习工件（导图 / 抽认卡 / 测验）并落盘 */
+  GENERATE_ARTIFACT: 'study:generate-artifact',
+  /** 列出当前课堂已生成的全部学习工件摘要 */
+  LIST_ARTIFACTS: 'study:list-artifacts',
 } as const
+
+// ===== Chrome 风格动态多 Tab 右栏契约 =====
+
+/** 速课堂右栏标签类型 */
+export type AiClassTabType = 'home' | 'mindmap' | 'preview' | 'flashcard' | 'quiz'
+
+/** 速课堂右栏单个动态标签 */
+export interface AiClassRightTabItem {
+  id: string
+  type: AiClassTabType
+  title: string
+  /** 首页恒为 false，其余动态标签为 true */
+  closable: boolean
+  data: {
+    docId?: string
+    filePath?: string
+    mindmapId?: string
+    flashcardDeckId?: string
+    quizSessionId?: string
+    [key: string]: unknown
+  }
+}
+
+/** 速课堂右栏多 Tab 拓扑（持久化于 ~/.cdutai/study-sessions/{sessionId}/tabs.json） */
+export interface AiClassTabsState {
+  sessionId: string
+  tabs: AiClassRightTabItem[]
+  activeTabId: string
+}
+
+/** 固定首页标签 ID */
+export const AI_CLASS_HOME_TAB_ID = 'tab-home'
+
+// ===== 认知子系统 A：思维导图契约 =====
+
+/** 思维导图节点 */
+export interface MindMapNode {
+  id: string
+  label: string
+  notes?: string
+  /** 点击复制到剪贴板的伴学 Prompt */
+  studyPrompt?: string
+  /** 拖拽保存的坐标（DIP，相对画布左上角） */
+  position?: { x: number; y: number }
+  children?: MindMapNode[]
+}
+
+/** 思维导图完整数据 */
+export interface MindMapData {
+  id: string
+  title: string
+  /** 关联的课程文件标识 */
+  sourceDocs: string[]
+  createdAt: number
+  root: MindMapNode
+}
+
+// ===== 认知子系统 B：抽认卡与 FSRS-7 契约 =====
+
+/** FSRS-7 卡片状态机 */
+export type FlashcardFsrsState = 'new' | 'learning' | 'review' | 'relearning'
+
+/** FSRS-7 记忆状态参数 */
+export interface FlashcardFsrs {
+  /** 记忆稳定性 S（天） */
+  stability: number
+  /** 卡片难度 D（1~10） */
+  difficulty: number
+  /** 复习次数 */
+  reps: number
+  /** 遗忘次数 */
+  lapses: number
+  /** 上次复习时间戳 */
+  lastReview: number
+  /** 下次到期时间戳 */
+  nextReview: number
+  state: FlashcardFsrsState
+}
+
+/** 单张原子抽认卡 */
+export interface FlashcardItem {
+  id: string
+  /** 正面核心问题 / 术语 */
+  front: string
+  /** 背面精准解析 */
+  back: string
+  /** 所属细分主题 */
+  topic: string
+  /** 原文出处锚点 */
+  sourceAnchor?: string
+  fsrs: FlashcardFsrs
+}
+
+/** 抽认卡卡包 */
+export interface FlashcardDeck {
+  id: string
+  title: string
+  difficulty: 'easy' | 'medium' | 'hard'
+  mode: 'concise' | 'standard' | 'in_depth'
+  /** 创建时间戳（用于「已生成成果」列表按时间排序） */
+  createdAt?: number
+  cards: FlashcardItem[]
+}
+
+/** 抽认卡四挡评分 */
+export type FlashcardRating = 'again' | 'hard' | 'good' | 'easy'
+
+// ===== 认知子系统 C：测验与 FIM 认知评估契约 =====
+
+/** 题型 */
+export type QuizQuestionType = 'single' | 'multiple' | 'boolean'
+
+/** 单个选项 */
+export interface QuizOption {
+  key: string
+  text: string
+}
+
+/** 单道测验题 */
+export interface QuizQuestion {
+  id: string
+  type: QuizQuestionType
+  question: string
+  options: QuizOption[]
+  /** 正确答案 key 列表，如 ["B"] */
+  answer: string[]
+  /** 考点剖析与错误原因详析（判错溯源） */
+  explanation: string
+  /** 原文出处依据 */
+  sourceTrace: string
+  /** 用户作答结果 */
+  userSelection?: string[]
+  /** 批改结果 */
+  isCorrect?: boolean
+}
+
+/** 一次测验会话 */
+export interface QuizSession {
+  id: string
+  title: string
+  totalQuestions: number
+  difficulty: string
+  completed: boolean
+  /** 百分制得分 */
+  score: number
+  /** FIM 潜伏认知能力估计 θ ∈ [-3, +3] */
+  estimatedTheta: number
+  /** 创建时间戳（用于「已生成成果」列表按时间排序） */
+  createdAt?: number
+  questions: QuizQuestion[]
+}
+
+// ===== 学习工件生成契约（双轨联动）=====
+
+/** 学习工件类型（对应右栏动态 Tab 类型） */
+export type StudyArtifactKind = 'mindmap' | 'flashcard' | 'quiz'
+
+/** 学习工件生成入参 */
+export interface StudyGenerateArtifactInput {
+  sessionId: string
+  kind: StudyArtifactKind
+  /** 定向学习主题（选填） */
+  focusedTopic?: string
+  /** 抽认卡：卡片数量模式 */
+  cardMode?: 'concise' | 'standard' | 'in_depth'
+  /** 抽认卡 / 测验：难度等级 */
+  difficulty?: 'easy' | 'medium' | 'hard'
+  /** 测验：题目数量 */
+  questionCount?: number
+  /** 测验：题型范围 */
+  questionTypes?: QuizQuestionType[]
+  /** 显式指定使用的渠道（优先级最高；缺省时回退会话绑定渠道，再回退全局默认渠道） */
+  channelId?: string
+  /** 显式指定使用的模型（优先级最高；缺省时回退会话绑定模型，再回退全局默认模型） */
+  modelId?: string
+}
+
+/** 学习工件生成结果（联合体，按 kind 区分） */
+export type StudyGenerateArtifactResult =
+  | { kind: 'mindmap'; mindmap: MindMapData }
+  | { kind: 'flashcard'; deck: FlashcardDeck }
+  | { kind: 'quiz'; quiz: QuizSession }
+
+/** 已生成学习工件摘要（右侧工作台「已生成成果」常驻列表消费） */
+export interface StudyArtifactSummary {
+  id: string
+  kind: StudyArtifactKind
+  title: string
+  /** 创建时间戳（缺失视为 0，排序时排后） */
+  createdAt: number
+  /** 条目规模：导图节点数 / 卡片数 / 题目数 */
+  itemCount: number
+}
+
+/** 抽认卡评分入参 */
+export interface StudyCardRatingInput {
+  sessionId: string
+  deckId: string
+  cardId: string
+  rating: FlashcardRating
+  /** 评分发生时间戳（缺省为当前时间） */
+  reviewedAt?: number
+}
+
+/** 测验单题作答入参 */
+export interface StudyQuizAnswerInput {
+  sessionId: string
+  quizId: string
+  questionId: string
+  selection: string[]
+}
 
 // ===== 资料树（跨资料知识图谱）契约 =====
 

@@ -1,5 +1,5 @@
 /**
- * 砚湖秒通 · 无视感知（Vision-Less）DOM 蒸馏引擎（YanhuDomDistillationEngine）
+ * 智联万站 · 无视感知（Vision-Less）DOM 蒸馏引擎（YanhuDomDistillationEngine）
  *
  * 依据《The Architecture of Vision-Less Web Perception》研究成果，落地四级工业级算法流水线：
  *   第一级：AXTree / DOM 语义降噪——跳过排版容器、脚本文档与装饰性资源，仅保留语义元素；
@@ -60,6 +60,8 @@ export interface YanhuCollectedPage {
   textDigest?: string
   /** 渲染文本摘要（有界截断），随 PageDigest 投递给模型 */
   textSample?: string
+  /** 闭合 Shadow DOM 宿主标签集合（脚本端探测打标，主进程可经 CDP 深度补漏解析） */
+  closedShadowHosts?: string[]
 }
 
 /** 单次采集硬上限（防止超大页面拖垮主进程与大模型上下文，深层全景探测扩容至 1000） */
@@ -207,15 +209,68 @@ export function buildYanhuCollectorScript(): string {
       const MAX_COLLAPSED = ${MAX_COLLAPSED_ELEMENTS};
       const emit = [];
       const dataTables = [];
+      const closedShadowHosts = [];
       let collapsedCount = 0;
       // 分框架配额倾斜：判定当前框架是否属于导航 / 辅助框架（其采集量受 MAX_NAV 收敛）
       const isNavFramePath = (fp) => /(left|menu|nav|top|header|bottom|footer)/i.test(fp || '');
+
+      // ===== 第一道防线：原型方法安全隔离（根除 DOM Clobbering 与方法覆盖破坏）=====
+      // 某些高校老旧页面或恶意构造页面会用 <input name="title">、<form id="location"> 等
+      // 命名元素污染 document / window 上的命名属性，致使原生 document.title / location.href
+      // 返回 HTML 元素而非字符串，采集脚本在页面内抛 TypeError 进而全景失明。
+      // 此处前置声明不可篡改的原型方法脱敏切片，并以 Reflect.apply 显式绑定原生实现，
+      // 所有属性读取一律走 safe* 包装（内部 try/catch 兜底），从根源消除异常与污染。
+      const _Object = Object;
+      const _Reflect = Reflect;
+      const _hasElement = typeof Element !== 'undefined' && typeof Node !== 'undefined';
+      const _getAttr = _hasElement ? Element.prototype.getAttribute : null;
+      const _docTitleGetter = (typeof Document !== 'undefined')
+        ? _Object.getOwnPropertyDescriptor(Document.prototype, 'title') && _Object.getOwnPropertyDescriptor(Document.prototype, 'title').get
+        : null;
+      const _locHrefGetter = (typeof Location !== 'undefined')
+        ? _Object.getOwnPropertyDescriptor(Location.prototype, 'href') && _Object.getOwnPropertyDescriptor(Location.prototype, 'href').get
+        : null;
+
+      const safeGetAttr = (el, name) => {
+        try {
+          if (_getAttr) {
+            const v = _Reflect.apply(_getAttr, el, [name]);
+            return typeof v === 'string' ? v : '';
+          }
+          const raw = (el && el.getAttribute) ? el.getAttribute(name) : '';
+          return typeof raw === 'string' ? raw : '';
+        } catch (e) { return ''; }
+      };
+      const safeTitle = (doc) => {
+        try {
+          if (_docTitleGetter) {
+            const t = _Reflect.apply(_docTitleGetter, doc, []);
+            if (typeof t === 'string') return t;
+          }
+        } catch (e) {}
+        try {
+          const t = doc && doc.title;
+          return typeof t === 'string' ? t : '';
+        } catch (e) { return ''; }
+      };
+      const safeHref = (loc) => {
+        try {
+          if (_locHrefGetter) {
+            const v = _Reflect.apply(_locHrefGetter, loc, []);
+            if (typeof v === 'string' && v) return v;
+          }
+        } catch (e) {}
+        try {
+          const h = loc && loc.href;
+          return typeof h === 'string' ? h : '';
+        } catch (e) { return ''; }
+      };
 
       const ACTIONABLE_TAGS = new Set(['button','a','input','select','textarea','option','summary']);
       const ACTIONABLE_ROLES = new Set(['button','link','checkbox','radio','tab','menuitem','option','switch','textbox','searchbox','combobox','slider','spinbutton']);
 
       const tagOf = (el) => (el.tagName || '').toLowerCase();
-      const attr = (el, name) => (el.getAttribute ? (el.getAttribute(name) || '') : '');
+      const attr = (el, name) => safeGetAttr(el, name);
 
       // 通用「穿透 Shadow DOM」查询：现代 Web Components（Shoelace / 自研企业组件）把真实控件
       // 关进 shadowRoot，普通 querySelectorAll('*') 完全不可见。此处对每层 shadowRoot 递归下钻
@@ -228,8 +283,20 @@ export function buildYanhuCollectorScript(): string {
         for (let i = 0; i < list.length; i++) out.push(list[i]);
         const dive = (nodes) => {
           for (let i = 0; i < nodes.length; i++) {
-            const sr = nodes[i] && nodes[i].shadowRoot;
-            if (!sr || !sr.querySelectorAll) continue;
+            const host = nodes[i];
+            const sr = host && host.shadowRoot;
+            if (!sr || !sr.querySelectorAll) {
+              // 闭合 Shadow DOM 宿主探测：自定义元素（含连字符标签）且原生支持 attachShadow，
+              // 却拿不到 shadowRoot 时，判定其为闭合影子树宿主并打标；主进程收集后经
+              // CDP DOM.getDocument(depth:-1, pierce:true) 深度补漏解析。
+              try {
+                const ht = (host && host.tagName) ? String(host.tagName).toLowerCase() : '';
+                if (ht && ht.indexOf('-') >= 0 && typeof host.attachShadow === 'function' && closedShadowHosts.length < 40) {
+                  closedShadowHosts.push(ht);
+                }
+              } catch (e) {}
+              continue;
+            }
             let inner = [];
             try { inner = Array.from(sr.querySelectorAll(selector)); } catch (e) { inner = []; }
             for (let j = 0; j < inner.length; j++) out.push(inner[j]);
@@ -519,12 +586,16 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
       const cellText = (node) => ((node && node.textContent) || '').replace(/\\s+/g, ' ').trim().slice(0, ${MAX_DATA_CELL_CHARS}).replace(/\\|/g, '/');
       const extractDataTables = (doc) => {
         if (dataTables.length >= ${MAX_DATA_TABLES}) return;
+        // 第三道防线：单次表格提取 30ms 软熔断，超时立即退出并保留已提取内容，
+        // 绝不因超大 / 病态表格（嵌套量词回溯）阻塞渲染主线程卡死页面。
+        const __tableStart = Date.now();
         let tables = [];
         try {
           tables = queryAllDeep(doc, 'table');
         } catch (e) { return; }
         for (let ti = 0; ti < tables.length; ti++) {
           if (dataTables.length >= ${MAX_DATA_TABLES}) return;
+          if (Date.now() - __tableStart > 30) return;
           const t = tables[ti];
           // 跳过包裹型外层表（内部还嵌套子表），仅提取叶子业务表，避免表格内容重复膨胀
           try { if (t.querySelector && t.querySelector('table')) continue; } catch (e) {}
@@ -545,12 +616,25 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
           try { thCount = t.querySelectorAll('th').length; } catch (e) {}
           try { tdCount = t.querySelectorAll('td').length; } catch (e) {}
           const isSchedule = isKbClass || weekdayMatches >= 3;
-          // 业务数据表判定：含 th 表头，或具备多行多列的数据网格（排除纯布局小表）
-          const isBusinessTable = thCount >= 1 || (rows.length >= 3 && thCount + tdCount >= 6);
+          // 业务数据表判定（收紧）：排除纯展示表；表头型要求多行多列（避免 1 行布局表被误提），
+          // 无表头的纯 td 数据网格仍沿用「多行且格子数足够」的旧判据（兼容成绩 / 考务类网格）。
+          let maxCols = 0;
+          try {
+            for (let ri = 0; ri < rows.length; ri++) {
+              const cellCount = rows[ri].querySelectorAll('th,td').length;
+              if (cellCount > maxCols) maxCols = cellCount;
+            }
+          } catch (e) {}
+          const isPresentationTable = ((t.getAttribute && t.getAttribute('role')) || '') === 'presentation';
+          const isBusinessTable = !isPresentationTable && maxCols >= 2 && (
+            (thCount >= 1 && rows.length >= 2)
+            || (rows.length >= 3 && thCount + tdCount >= 6)
+          );
           if (!isSchedule && !isBusinessTable) continue;
 
           const grid = [];
           for (let ri = 0; ri < rows.length && grid.length < ${MAX_DATA_ROWS}; ri++) {
+            if (Date.now() - __tableStart > 30) break;
             let cells = [];
             try { cells = Array.from(rows[ri].querySelectorAll('th,td')); } catch (e) {}
             if (cells.length === 0) continue;
@@ -575,7 +659,10 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
         }
       };
 
-      const visitedDocs = new Set();
+      // 循环引用熔断：以 WeakSet 记录已遍历的 Document 引用（WeakSet 不阻碍 GC），
+      // 配合硬性递归深度上限 6，彻底阻断利用 src="about:blank" 或恶意 iframe 互相嵌套
+      // 导致的调用栈溢出（Maximum call stack size exceeded）。
+      const visitedDocs = new WeakSet();
 
       const collectFromDoc = (doc, framePath, offset, depth) => {
         if (!doc || depth > 6) return;
@@ -694,9 +781,22 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
             } catch {}
           }
 
-          const value = tag === 'input' || tag === 'textarea' || tag === 'select'
-            ? clip(el.value != null ? String(el.value) : '')
-            : undefined;
+          // radio / checkbox 的 el.value 恒为 "on"，无法反映勾选状态：改写入状态标记，
+          // 使页面指纹与 PageDigest 能感知「勾选态变化」，根除 read_page 误判「页面无变化」。
+          let value;
+          if (tag === 'input') {
+            const __inputType = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+            value = __inputType === 'radio' || __inputType === 'checkbox'
+              ? (el.checked ? '已勾选' : '未勾选')
+              : clip(el.value != null ? String(el.value) : '');
+          } else if (tag === 'textarea' || tag === 'select') {
+            value = clip(el.value != null ? String(el.value) : '');
+          } else if (role === 'radio' || role === 'checkbox') {
+            const __ariaChecked = attr(el, 'aria-checked');
+            value = __ariaChecked === 'true' ? '已勾选' : (__ariaChecked === 'false' ? '未勾选' : undefined);
+          } else {
+            value = undefined;
+          }
 
           emit.push({
             tag,
@@ -787,10 +887,11 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
       const textSample = fullText.slice(0, ${MAX_TEXT_SAMPLE_CHARS});
 
       return {
-        url: location.href,
-        title: document.title || '',
+        url: safeHref(location),
+        title: safeTitle(document) || '',
         elements: emit,
         dataTables: dataTables,
+        closedShadowHosts: closedShadowHosts,
         textDigest: textDigest,
         textSample: textSample,
       };
@@ -890,6 +991,8 @@ export interface SerializeDigestInput {
   dataTables?: readonly string[]
   /** 渲染内容摘要（可见文本，有界截断）：让「URL / 框架不变、仅内容变」的变化对模型可见 */
   textSample?: string
+  /** 闭合 Shadow DOM 宿主标签集合（非空时在 PageDigest 中标注，提示已交 CDP 深度补漏） */
+  closedShadowHosts?: readonly string[]
 }
 
 /** 判定区域是否属于可折叠的静态导航菜单 */
@@ -940,6 +1043,14 @@ export function serializePageDigest(input: SerializeDigestInput): string {
   if (input.textSample && input.textSample.trim()) {
     lines.push('[渲染内容摘要（可见文本，已截断）]')
     lines.push(input.textSample.trim())
+    lines.push('')
+  }
+
+  // 闭合 Shadow DOM 宿主提示：普通 querySelectorAll 无法穿透闭合影子树，
+  // 此处显式标注已探测到的宿主，提示其内容由 CDP DOM.getDocument(pierce) 深度补漏解析。
+  if (input.closedShadowHosts && input.closedShadowHosts.length > 0) {
+    const uniq = Array.from(new Set(input.closedShadowHosts)).slice(0, 8)
+    lines.push(`[闭合 Shadow DOM 宿主 ${uniq.length} 个：${uniq.join(', ')}（已交 CDP 深度补漏解析）]`)
     lines.push('')
   }
 
@@ -1031,7 +1142,7 @@ function nodeIdentity(node: YanhuBidNode): string {
 /**
  * 计算页面全要素结构指纹（Multi-Factor Fingerprint Hash）。
  *
- * 基于页面 URL、全部 BID 节点的「角色 + 名称 + 值 + 区域 + 框架」结构序列，
+ * 基于页面 URL、全部 BID 节点的「角色 + 名称 + 值」结构序列（勾选 / 选中态已并入 value），
  * 以及全框架穿透直提的数据表格 Markdown 内容共同计算快速哈希。
  *
  * 之所以纳入表格内容：成绩查询 / 考务等场景下，表格渲染在页面上但单元格内无 BID 控件，
@@ -1104,6 +1215,7 @@ export class YanhuDomDistillationEngine {
       axNodeCount: axNodes.length,
       dataTables,
       textSample: typeof collected.textSample === 'string' ? collected.textSample : undefined,
+      closedShadowHosts: Array.isArray(collected.closedShadowHosts) ? collected.closedShadowHosts : undefined,
     })
     const nodes: YanhuBidNode[] = records.map((record) => ({
       bid: record.bid,

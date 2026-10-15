@@ -1,4 +1,4 @@
-import { app, Menu, shell, BrowserWindow } from 'electron'
+import { app, clipboard, Menu, shell, BrowserWindow } from 'electron'
 import { DEFAULT_MAIN_WINDOW_ZOOM_FACTOR, resetWindowZoom } from './lib/mac-traffic-light'
 
 export type TextContextMenuParams = Pick<
@@ -6,14 +6,24 @@ export type TextContextMenuParams = Pick<
   'isEditable' | 'selectionText' | 'editFlags'
 >
 
+/** 纯文本粘贴与「像输入一样粘贴」的实际动作，由调用方注入以便模板保持纯函数可测。 */
+export interface TextContextMenuActions {
+  /** 粘贴为纯文本：将剪贴板文本原样插入当前焦点元素。 */
+  pastePlainText: () => void
+  /** 像输入一样粘贴：逐字符插入，模拟人工敲击的视觉节奏。 */
+  pasteLikeHuman: () => void
+}
+
 /**
  * 根据右键位置的编辑能力生成原生文本菜单。
  *
  * 非编辑区域只有存在文本选区时才返回菜单，避免盖住 Renderer 中已有的业务右键菜单。
+ * 传入 actions 时，可编辑区域会额外提供「粘贴为纯文本」与「像输入一样粘贴」。
  */
 export function createTextContextMenuTemplate(
   params: TextContextMenuParams,
   platform: NodeJS.Platform = process.platform,
+  actions?: TextContextMenuActions,
 ): Electron.MenuItemConstructorOptions[] {
   const { editFlags } = params
 
@@ -29,6 +39,20 @@ export function createTextContextMenuTemplate(
     { role: 'cut', label: '剪切', enabled: editFlags.canCut },
     { role: 'copy', label: '复制', enabled: editFlags.canCopy },
     { role: 'paste', label: '粘贴', enabled: editFlags.canPaste },
+    ...(actions
+      ? [
+          {
+            label: '粘贴为纯文本',
+            enabled: editFlags.canPaste,
+            click: () => actions.pastePlainText(),
+          },
+          {
+            label: '像输入一样粘贴',
+            enabled: editFlags.canPaste,
+            click: () => actions.pasteLikeHuman(),
+          },
+        ]
+      : []),
     ...(platform === 'darwin'
       ? [{ role: 'pasteAndMatchStyle' as const, label: '粘贴并匹配样式', enabled: editFlags.canPaste }]
       : []),
@@ -36,6 +60,52 @@ export function createTextContextMenuTemplate(
     { type: 'separator' },
     { role: 'selectAll', label: '全选', enabled: editFlags.canSelectAll },
   ]
+}
+
+/** 逐字符敲入的间隔（毫秒），模拟人工输入节奏以规避前端粘贴检测。 */
+const PASTE_LIKE_HUMAN_STEP_MS = 18
+
+/** 记录每个 WebContents 当前正在进行的「像输入一样粘贴」任务号，用于打断上一次输入。 */
+const humanPasteTaskIds = new WeakMap<Electron.WebContents, number>()
+
+/**
+ * 剪贴板文本插入前的安全化处理。
+ *
+ * 关键红线：`insertText` 会把 `\n` / `\r` 原样写入聚焦元素，而聊天输入框（TipTap 等）
+ * 会把插入的换行当作「回车」语义处理，进而在粘贴过程中或粘贴后立即误发送消息。
+ * 因此插入前必须折叠所有换行，并剔除可能被误判为按键语义的 C0 控制字符。
+ *
+ * @returns 安全化后的单行文本（原始内容不丢失，仅把换行折叠为空格）。
+ */
+export function sanitizeClipboardTextForInsertion(text: string): string {
+  return text
+    .replace(/\s*[\r\n]+\s*/g, ' ')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .trim()
+}
+
+/**
+ * 像输入一样粘贴：对已安全化（无换行/控制字符）的纯文本逐字符插入，营造人工敲击效果。
+ *
+ * 使用 insertText 逐字写入可触发标准 input 事件，保证受控输入框正常更新。
+ * 入参必须先经 `sanitizeClipboardTextForInsertion` 处理，否则中途插入的换行会触发误发送。
+ */
+function pasteLikeHuman(webContents: Electron.WebContents, text: string): void {
+  const taskId = (humanPasteTaskIds.get(webContents) ?? 0) + 1
+  humanPasteTaskIds.set(webContents, taskId)
+
+  let index = 0
+  const step = (): void => {
+    if (webContents.isDestroyed() || humanPasteTaskIds.get(webContents) !== taskId) return
+    if (index >= text.length) {
+      humanPasteTaskIds.delete(webContents)
+      return
+    }
+    webContents.insertText(text.charAt(index))
+    index += 1
+    setTimeout(step, PASTE_LIKE_HUMAN_STEP_MS)
+  }
+  step()
 }
 
 let textContextMenusInstalled = false
@@ -47,7 +117,24 @@ export function installTextContextMenus(): void {
 
   app.on('web-contents-created', (_event, webContents) => {
     webContents.on('context-menu', (_contextMenuEvent, params) => {
-      const template = createTextContextMenuTemplate(params)
+      const template = createTextContextMenuTemplate(params, process.platform, {
+        // 菜单点击发生在原生菜单收起的过程中，延后一帧确保焦点已回到输入框。
+        // 两者都必须先安全化剪贴板文本（折叠换行），否则插入的换行会被输入框当作回车误发送。
+        pastePlainText: () => {
+          setTimeout(() => {
+            if (webContents.isDestroyed()) return
+            const text = sanitizeClipboardTextForInsertion(clipboard.readText())
+            if (text) webContents.insertText(text)
+          }, 0)
+        },
+        pasteLikeHuman: () => {
+          setTimeout(() => {
+            if (webContents.isDestroyed()) return
+            const text = sanitizeClipboardTextForInsertion(clipboard.readText())
+            if (text) pasteLikeHuman(webContents, text)
+          }, 0)
+        },
+      })
       if (template.length === 0) return
 
       const ownerWindow = BrowserWindow.fromWebContents(webContents) ?? BrowserWindow.getFocusedWindow()

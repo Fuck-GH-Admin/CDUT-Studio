@@ -111,13 +111,13 @@ function assistantText(turn: { assistantMessages: SDKAssistantMessage[]; turnMes
   }
   const shownTools =
     toolLines.length > MAX_TOOLS_PER_TURN
-      ? [...toolLines.slice(0, MAX_TOOLS_PER_TURN), `· …另有 ${toolLines.length - MAX_TOOLS_PER_TURN} 个工具调用`]
+      ? [...toolLines.slice(0, MAX_TOOLS_PER_TURN), `· …and ${toolLines.length - MAX_TOOLS_PER_TURN} more tool calls`]
       : toolLines
   const segments: string[] = []
   const text = stripThink(textParts.join('\n')).trim()
   if (text) segments.push(text)
-  if (shownTools.length) segments.push('【执行】\n' + shownTools.join('\n'))
-  if (errorCount > 0) segments.push(`【本轮 ${errorCount} 处工具报错】`)
+  if (shownTools.length) segments.push('[Execution]\n' + shownTools.join('\n'))
+  if (errorCount > 0) segments.push(`[${errorCount} tool error(s) this turn]`)
   return segments.join('\n')
 }
 
@@ -141,9 +141,9 @@ function renderTranscript(turns: RenderedTurn[]): string {
   const render = (t: RenderedTurn): string => {
     const cap = t.role === 'user' ? USER_CAP : ASSISTANT_CAP
     let body = t.text
-    if (!body && t.role === 'assistant') body = '(仅工具调用，无文本)'
-    if (body.length > cap) body = body.slice(0, cap) + ' …[截断]'
-    return `[Turn ${t.idx}] ${t.role === 'user' ? '用户' : '助手'}：${body}`
+    if (!body && t.role === 'assistant') body = '(tool calls only, no text)'
+    if (body.length > cap) body = body.slice(0, cap) + ' …[truncated]'
+    return `[Turn ${t.idx}] ${t.role === 'user' ? 'user' : 'assistant'}: ${body}`
   }
   let picked = turns
   let text = picked.map(render).join('\n\n')
@@ -167,59 +167,59 @@ function renderTranscript(turns: RenderedTurn[]): string {
 
 // ===== Prompt =====
 
-const SYSTEM_PROMPT = `你是一个严谨的对话分析器，专门从「人 ↔ AI Agent」的工作会话记录里，抽取**被明确放弃的探索方向**，并把它映射到已有的任务节点上。你服务于一个科研/工程探索溯源工具——它只在图上标注**确凿可信**的放弃分支，因此首要目标是**高精确率（宁可漏，不可错）**。
+const SYSTEM_PROMPT = `You are a rigorous conversation analyzer that extracts **explicitly abandoned exploration directions** from human ↔ AI agent work session transcripts and maps them onto existing task nodes. You serve a research/engineering exploration provenance tool that only annotates **verifiably trustworthy** abandoned branches on the graph; therefore the top priority is **high precision (prefer missing one over a false positive)**.
 
-【只抓「显式放弃」——硬约束】
-只有对话里存在**明说的放弃语言**才算，例如："这个方案不行/走不通"、"换一个思路/换 X 来做"、"放弃 X"、"X 不适合"、"别用 X 了"、"算了不搞 X"、"推翻重来"、"否掉 A/B/C"、"改回去"。没有明确措辞的一律不抽。
+[Capture only "explicit abandonment" — hard constraint]
+Only count cases where the conversation contains **explicitly spoken abandonment language**, e.g., "this approach won't work", "let's try a different idea / do X instead", "abandon X", "X is not suitable", "stop using X", "forget X", "start over", "reject A/B/C", "revert it". Anything without explicit wording must not be extracted.
 
-【绝对不要把「迭代」误判为「放弃」——最常见最严重的错误】
-说"还是不对/不太行"之后**继续用同一方案调参、改配置、修 bug、重跑**，都是**同一方向内迭代，不是放弃**，禁止抽取。只有当「否定某方向」+「明确转向另一个不同方向 或 明确搁置」同时成立才算放弃。
+[Never misjudge "iteration" as "abandonment" — the most common and severe error]
+After saying "still wrong / not quite working", if the assistant **continues tuning parameters, changing config, fixing bugs, or re-running with the same approach**, that is **iteration within the same direction, not abandonment**—extraction is forbidden. Abandonment counts only when "negating a direction" AND "clearly switching to a different direction OR clearly shelving it" hold simultaneously.
 
-【善用「执行痕迹」判断放弃 vs 迭代】
-转录里助手轮带有 **【执行】** 段（列出实际调用的工具，如 TaskCreate/Edit/Bash 等）和 **【本轮 N 处工具报错】** 标记。请结合它们判断：一个方向若「建了任务/写了代码 → 报错或受阻 → 转去做另一件不同的事、且不再回来」才更可能是真放弃；若只是「报错 → 继续改同一处」则是迭代，不算。缺乏执行痕迹佐证、仅凭只言片语的，宁可不抽。
+[Use "execution traces" to judge abandonment vs iteration]
+Assistant turns in the transcript carry an **[Execution]** section (listing actual tool calls such as TaskCreate/Edit/Bash) and **[N tool error(s) this turn]** markers. Use them to judge: a direction that "created tasks / wrote code → errored or got stuck → moved on to a different thing and never came back" is more likely a genuine abandonment; "errored → kept fixing the same place" is iteration, not abandonment. When execution traces do not corroborate the wording, prefer not extracting at all.
 
-【禁止幻觉（grounding 硬约束）】
-direction 必须是 evidenceTurns 里**真实讨论过**的；reasonVerbatim 必须是对话里**确实出现过的原话摘录**（可截断，不得编造）。
+[No hallucination (grounding hard constraint)]
+direction must have been **genuinely discussed** in evidenceTurns; reasonVerbatim must be an **actual verbatim excerpt** from the conversation (truncation allowed, fabrication forbidden).
 
-【节点映射】
-下面会给出「现有任务节点」清单。对每条放弃，判断它对应哪个节点的 id 填入 mappedTaskId；找不到明确对应就填 null（宁缺毋滥，错误映射比不映射更糟）。若清单为空，全部填 null。
+[Node mapping]
+A list of "existing task nodes" is provided below. For each abandonment, decide which node's id it corresponds to and fill in mappedTaskId; when there is no clear match, fill null (wrong mappings are worse than no mapping). If the list is empty, fill null for all.
 
-【短会话/无探索】只是简单问答、单一任务顺利推进、无明确放弃 → 输出空数组。不要凑数。
+[Short sessions / no exploration] Simple Q&A, a single task advancing smoothly, no explicit abandonment → output an empty array. Do not pad.
 
-【置信度】confidence∈[0,1]，只反映"是不是显式放弃"的把握；<0.7 的不要输出。
+[Confidence] confidence∈[0,1] reflects only "how certain this is an explicit abandonment"; do not output entries below 0.7.
 
-严格输出 JSON，不要任何额外文字或 markdown 围栏。`
+Output strictly JSON with no extra text or markdown fences. Write \`direction\`, \`reason\`, and \`switchedTo\` in the conversation's language (the user's language); quote \`reasonVerbatim\` verbatim from the transcript.`
 
 function buildNodeList(nodes: TaskNode[]): string {
-  if (nodes.length === 0) return '（本会话暂无任务节点，所有放弃的 mappedTaskId 都填 null）'
+  if (nodes.length === 0) return '(No task nodes in this session; fill mappedTaskId with null for all abandonments)'
   return nodes
-    .map((n) => `- [${n.id}] ${n.subject}（${n.status}）`)
+    .map((n) => `- [${n.id}] ${n.subject} (${n.status})`)
     .join('\n')
 }
 
 function buildUserPrompt(transcript: string, nodes: TaskNode[], sessionId: string): string {
-  return `下面是「人 ↔ AI Agent」工作会话的增量记录（已按 turn 编号）。请按系统指令只抽取**显式放弃**的方向，并映射到现有任务节点。
+  return `Below is the incremental record of a human ↔ AI agent work session (turns are numbered). Following the system instructions, extract only **explicitly abandoned** directions and map them onto the existing task nodes.
 
-会话 ID: ${sessionId}
+Session ID: ${sessionId}
 
-现有任务节点（把放弃映射到其中之一的 id，无明确对应填 null）：
+Existing task nodes (map each abandonment to one of these ids; fill null when there is no clear match):
 ${buildNodeList(nodes)}
 
-=== 会话记录开始 ===
+=== Session transcript start ===
 ${transcript}
-=== 会话记录结束 ===
+=== Session transcript end ===
 
-只输出如下结构 JSON（abandonments 可为空数组）：
+Output only JSON with the following structure (abandonments may be an empty array):
 {
   "abandonments": [
     {
-      "direction": "被放弃方向的简短名称",
-      "reason": "放弃原因（一句话，从对话提炼）",
+      "direction": "short name of the abandoned direction (in the conversation's language)",
+      "reason": "reason for abandonment (one sentence, distilled from the conversation)",
       "reasonCategory": "technical_infeasibility|better_alternative_found|user_preference_change|cost_or_complexity|performance_unsatisfactory|scope_reduction|other",
-      "reasonVerbatim": "最能体现放弃的对话原话摘录（必须真实出现过）",
-      "evidenceTurns": [证据 turn 号],
-      "switchedTo": "放弃后转向了什么（没有填 null）",
-      "mappedTaskId": "对应的任务节点 id，无则 null",
+      "reasonVerbatim": "verbatim conversation excerpt best reflecting the abandonment (must have actually occurred)",
+      "evidenceTurns": [evidence turn numbers],
+      "switchedTo": "what was switched to after abandonment (null if none)",
+      "mappedTaskId": "the matching task node id, or null",
       "confidence": 0.0
     }
   ]

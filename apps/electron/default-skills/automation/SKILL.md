@@ -2,161 +2,162 @@
 name: automation
 description: Profer 内嵌自动任务与定时任务 Skill，属于 Profer 自带能力而不是用户临时安装的外部 Skill。触发要非常宽泛、非常冗余：只要用户的话里出现任何“未来还要做”“以后继续看”“重复做”“再跑一次也有价值”“定期/周期/每天/每周/每月/每隔一段时间”“持续关注/持续观察/长期跟进/长期监控”“自动检查/自动汇总/自动生成/自动复盘/自动维护”“无人值守”“有变化告诉我”“异常时提醒我”“结果不好就调整”“查看运行记录”“优化已有任务”“暂停/恢复/删除/立即运行任务”等迹象，就应该触发此 Skill，先判断是否适合 Profer 定时任务。模糊场景也可以触发：例行报告、日报周报、项目状态、GitHub/邮件/飞书/文件/发布/CI/价格/竞品/数据源的反复检查，重复研究流程，定期整理知识，自动化工作流维护。高频触发不代表必须创建任务；一次性任务、短期提醒、纯日历闹钟、需要用户实时判断或没有长期价值的事，要明确说明不推荐创建 Profer 定时任务，并给出替代做法。
 group: profer
-version: "1.0.11"
+version: "1.0.12"
 ---
 
 # Profer Automation
 
-你负责帮助用户判断、创建和维护 Profer 的定时任务（Automation）。这是 Profer 内嵌 Skill，会随 Profer 一起分发到默认 Skills 和工作区 Skills 中，不依赖用户额外安装。定时任务适合长期反复、无人值守、有稳定价值的工作，不适合临时提醒或一次性任务。
+You help the user judge, create, and maintain Profer's 定时任务 (Automation, scheduled tasks). This is a Profer built-in 技能 (Skill), distributed together with Profer into the default Skills and 工作区 (workspace) Skills; it does not depend on any extra user installation. Automations suit long-term recurring, unattended work with stable value; they do not suit temporary reminders or one-off tasks.
 
-Profer 已提供内置 `automation` MCP 工具。你必须通过这些工具操作定时任务，不要使用 `TaskCreate`、`CronCreate`、Bash `cron`、系统日历或隐藏注释协议来创建 Profer 定时任务。
+Profer ships built-in `automation` MCP tools. You must operate Automations through these tools; do not use `TaskCreate`, `CronCreate`, Bash `cron`, the system calendar, or hidden-comment protocols to create Profer Automations.
 
-## 触发策略
+## Trigger Strategy
 
-这个 Skill 的触发策略要宽：**宁可频繁触发，再判断“不建议创建”，也不要错过潜在的自动化机会**。
+This Skill's trigger strategy is broad: **better to trigger frequently and then judge "not recommended to create" than to miss a potential automation opportunity**.
 
-只要用户的需求里出现下面任意信号，就应该先使用本 Skill 做判断：
+Whenever the user's request contains any of the signals below, use this Skill to judge first:
 
-- 时间信号：定期、每天、每周、每月、每隔一段时间、长期、以后、下次、持续。
-- 重复信号：经常、反复、例行、固定流程、每次都要、还会再做。
-- 观察信号：关注、跟进、监控、检查、发现变化、异常提醒、状态更新。
-- 产出信号：日报、周报、报告、汇总、复盘、提醒我看结果、整理进展。
-- 自动化信号：自动跑、无人值守、后台执行、到点执行、帮我维护。
-- 维护信号：查看任务、运行记录、效果不好、修改频率、暂停、恢复、删除、立即运行。
+- Temporal signals (时间信号): 定期 (regularly), 每天 (every day), 每周 (every week), 每月 (every month), 每隔一段时间 (every once in a while), 长期 (long-term), 以后 (from now on), 下次 (next time), 持续 (continuously).
+- Recurrence signals (重复信号): 经常 (often), 反复 (repeatedly), 例行 (routine), 固定流程 (fixed workflow), 每次都要 (have to do it every time), 还会再做 (will do it again).
+- Observation signals (观察信号): 关注 (keep an eye on), 跟进 (follow up), 监控 (monitor), 检查 (check), 发现变化 (notice changes), 异常提醒 (alert on anomalies), 状态更新 (status updates).
+- Output signals (产出信号): 日报 (daily report), 周报 (weekly report), 报告 (report), 汇总 (summary), 复盘 (retrospective), 提醒我看结果 (remind me to check the results), 整理进展 (organize progress).
+- Automation signals (自动化信号): 自动跑 (run automatically), 无人值守 (unattended), 后台执行 (run in the background), 到点执行 (run on schedule), 帮我维护 (maintain it for me).
+- Maintenance signals (维护信号): 查看任务 (view tasks), 运行记录 (run history), 效果不好 (results are poor), 修改频率 (change the frequency), 暂停 (pause), 恢复 (resume), 删除 (delete), 立即运行 (run now).
 
-触发本 Skill 只是进入判断流程，不代表一定创建 Profer 定时任务。你要主动区分“适合长期自动化”和“只适合当前执行一次”。
+Triggering this Skill only enters the judgment flow; it does not mean a Profer Automation must be created. You must proactively distinguish "suited to long-term automation" from "only suited to run once right now".
 
-## 先判断是否值得创建
+## First Judge Whether Creation Is Worthwhile
 
-优先推荐定时任务的场景：
+Scenarios where Automations are recommended first:
 
-- 长期反复：每天、每周、每隔一段时间都要做，且会持续存在。
-- 无人值守：Agent 可以在没有用户即时参与的情况下完成主要工作。
-- 稳定目标：每次执行的输入来源、判断标准和交付物相对稳定。
-- 有复利价值：定期报告、持续监控、自动汇总、状态追踪、例行复盘。
-- 可验证：每次运行后能看出成功、失败、遗漏或质量问题。
+- Long-term recurrence: done every day, every week, or at intervals, and expected to keep existing.
+- Unattended: the Agent can complete the main work without the user's real-time participation.
+- Stable goal: each run's input sources, judgment criteria, and deliverables are relatively stable.
+- Compounding value: periodic reports, continuous monitoring, automatic summaries, status tracking, routine retrospectives.
+- Verifiable: after each run, success, failure, omissions, or quality problems are visible.
 
-不推荐创建定时任务的场景：
+Scenarios where creating an Automation is NOT recommended:
 
-- 一次性任务，或只需要现在执行一次。
-- 短期提醒、生活闹钟、简单倒计时。
-- 需要用户实时判断、批准或提供大量上下文。
-- 执行目标还没稳定，频率和交付物都不清楚。
-- 结果没有长期价值，只是为了“别忘了”。
+- One-off tasks, or something that only needs to run once right now.
+- Short-term reminders, life alarms, simple countdowns.
+- Requires real-time user judgment, approval, or a large amount of context.
+- The execution goal is not yet stable; frequency and deliverables are unclear.
+- The result has no long-term value and exists only so you "don't forget".
 
-当不推荐时，直接说明原因，并给出更合适的替代方式：现在执行一次、把流程沉淀成 Skill、写入项目计划、让用户去日历/提醒工具设置提醒等。
+When not recommending, state the reason directly and offer a more suitable alternative: run it once now, persist the workflow as a 技能 (Skill), write it into the project plan, or have the user set a reminder in a calendar/reminder tool.
 
-## 创建前要想清楚
+## Think It Through Before Creating
 
-创建定时任务前，至少明确这些信息：
+Before creating an Automation, clarify at minimum:
 
-- `name`：短名称，描述长期目标，不要写成一次性动作。
-- `scheduleType` + 对应字段：频率要克制，除非任务确实需要高频监控。选择策略见下表。
-- `prompt`：每次自动执行时发给 Agent 的完整指令。
-- 权限模式：默认 `bypassPermissions` 适合无人值守；高风险场景可以设为 `auto`，但可能因为需要审批而挂起。
-- 会话模式（`sessionMode`）：默认 `daily`，同一自然日内的触发复用同一个子会话、跨日自动新建；`reuse` 始终复用同一个子会话保留长期上下文。选择策略见下文。
-- Agent 预设（`presetId`，可选）：内置 `standard`/`code`/`minimal` 或任务工作区的自定义预设，决定子会话的提示词段、工具裁剪和推理强度。创建时不传则继承当前会话的预设；未指派的任务跟随工作区默认预设。预设的权限设置不覆盖任务的权限模式，无人值守安全优先。
+- `name`: a short name describing the long-term goal; do not write it as a one-off action.
+- `scheduleType` + the corresponding fields: keep the frequency restrained unless the task genuinely needs high-frequency monitoring. See the table below for the selection strategy.
+- `prompt`: the complete instruction sent to the Agent on each automatic run.
+- Permission mode: the default `bypassPermissions` suits unattended runs; high-risk scenarios can set `auto`, but the run may hang because it needs approval.
+- Session mode (`sessionMode`): default `daily` — triggers within the same calendar day reuse the same sub-session, and a new one is created automatically when the day changes; `reuse` always reuses the same sub-session to preserve long-term context. See below for the selection strategy.
+- Agent preset (预设) (`presetId`, optional): the built-in `standard`/`code`/`minimal` or a custom preset of the task's 工作区 (workspace); it determines the sub-session's prompt segments, tool trimming, and reasoning strength. If omitted at creation, the current session's preset is inherited; tasks without an assignment follow the workspace default preset. A preset's permission settings do not override the task's permission mode — unattended safety comes first.
 
-### 调度类型怎么选
+### How to Choose the Schedule Type
 
-| scheduleType | 适用场景 | 必填字段 |
+| scheduleType | Suitable scenarios | Required fields |
 |---|---|---|
-| `interval` | 高频监控（CI 状态、价格、库存、聊天提醒），分钟级响应 | `intervalMinutes` |
-| `daily` | 每日早报、日报、晨间汇总 | `timeOfDay` |
-| `weekly` | 周报、周度复盘、每周例会前准备 | `dayOfWeek` + `timeOfDay` |
-| `monthly` | 月度报告、月初对账、月底结算、月度复盘 | `dayOfMonth` + `timeOfDay` |
+| `interval` | High-frequency monitoring (CI status, prices, inventory, chat reminders), minute-level response | `intervalMinutes` |
+| `daily` | Daily morning briefings, daily reports, morning summaries | `timeOfDay` |
+| `weekly` | Weekly reports, weekly retrospectives, preparation before weekly meetings | `dayOfWeek` + `timeOfDay` |
+| `monthly` | Monthly reports, start-of-month reconciliation, end-of-month settlement, monthly retrospectives | `dayOfMonth` + `timeOfDay` |
 
-`timeOfDay` 用 24 小时制 `HH:MM`（如 `09:30`、`22:00`）。`dayOfWeek` 0=周日、1=周一 … 6=周六。`dayOfMonth` 1-31。
+`timeOfDay` uses 24-hour `HH:MM` (e.g., `09:30`, `22:00`). `dayOfWeek`: 0=Sunday, 1=Monday … 6=Saturday. `dayOfMonth`: 1-31.
 
-### monthly 的短月回退行为（重要）
+### Short-Month Fallback Behavior of `monthly` (Important)
 
-`dayOfMonth` 选 29/30/31 时，2 月（28/29 天）和 4/6/9/11 月（30 天）会**自动落在当月最后一天**执行，而不是跳过。这意味着：
+When `dayOfMonth` is 29/30/31, February (28/29 days) and the 30-day months April/June/September/November **automatically fall on the last day of that month** instead of being skipped. This means:
 
-- 选 31 号 → 一年实际只触发 7 次（1/3/5/7/8/10/12 月），其他月份落在月末。
-- 选 29 号 → 平年 2 月落在 2/28，闰年落在 2/29。
+- Choosing 31 → actually triggers only 7 times a year (Jan/Mar/May/Jul/Aug/Oct/Dec); other months fall at month end.
+- Choosing 29 → falls on Feb 28 in common years and Feb 29 in leap years.
 
-用户说"每月底"时，建议**主动用 28 号**而不是 31 号，否则用户可能误以为每月都跑、实际并非如此；或者明确告知这个回退行为，让用户自己决定。
+When the user says "每月底" ("at the end of every month"), proactively suggest **the 28th** instead of the 31st; otherwise the user may assume it runs every month when it actually does not. Alternatively, explicitly explain this fallback behavior and let the user decide.
 
-### sessionMode 怎么选
+### How to Choose sessionMode
 
-- `daily`（默认）：同一自然日内的所有触发写入同一个子会话，跨日时自动新建。**绝大多数定时任务用这个**——既能让一天内的多次运行共享上下文（少占左侧栏 tab），又能每天自动归零、避免 token 长期累积。低频任务（间隔 ≥ 24 小时）的实际行为等价于"每次新建"，无需用户单独配置。
-- `reuse`：始终复用同一个子会话，保留长期对话历史。适合**真的需要跨日记忆、且明知会有 token 成本**的任务——持续追踪同一个长期 issue、迭代优化同一个文档。
+- `daily` (default): all triggers within the same calendar day write into the same sub-session; a new one is created automatically when the day changes. **Use this for the vast majority of Automations** — multiple runs within one day share context (fewer tabs in the left sidebar), and it resets automatically every day to avoid long-term token accumulation. For low-frequency tasks (interval ≥ 24 hours) the actual behavior is equivalent to "create new every time"; no separate configuration is needed.
+- `reuse`: always reuse the same sub-session, preserving the long-term conversation history. Fits tasks that **genuinely need cross-day memory and knowingly accept the token cost** — continuously tracking the same long-lived issue, iteratively refining the same document.
 
-`reuse` 的代价：上下文会随运行次数无限增长，长任务可能因为 token 累积导致成本上升或触发自动压缩。如果任务每次产出独立（如"看一下今天有什么新 PR"），就用默认的 `daily`，别选 `reuse`。
+The cost of `reuse`: context grows without bound as runs accumulate, and long tasks may face rising costs or automatic compaction from token buildup. If each run's output is independent (e.g., "看一下今天有什么新 PR" ("see what new PRs exist today")), use the default `daily`, not `reuse`.
 
-如果用户只说“帮我定期做 X”，但频率或结果不清楚，用 `AskUserQuestion` 最多问一次，把缺失项收敛到可执行配置。不要让用户填写表单式长信息。
+If the user only says "帮我定期做 X" ("help me do X regularly") but the frequency or deliverable is unclear, use `AskUserQuestion` at most once to converge the missing pieces into an executable configuration. Do not make the user fill in long form-style text.
 
-## Prompt 写法
+## How to Write the Prompt
 
-定时任务的 `prompt` 要像“未来每次都能独立执行的任务说明”，不要依赖当前对话隐含上下文。
+An Automation's `prompt` must read like "task instructions that can run independently on every future run"; do not rely on implicit context from the current conversation.
 
-高质量 prompt 应包含：
+A high-quality prompt includes:
 
-- 目标：这次自动执行要完成什么。
-- 范围：查哪些仓库、文件、系统、群聊、邮件、文档或数据源。
-- 判断标准：什么算异常、重要、需要汇报。
-- 输出格式：最终要给用户什么，例如摘要、列表、报告、行动建议。
-- 失败处理：无法访问、信息不足、工具失败时如何记录和降级。
-- 跨运行记忆（强烈推荐）：在工作区维护 `.context/automation/<task-slug>/notes.md`，让每次运行都能在前次发现上累积，而不是从零开始。**这一段必须写进 prompt 本身**，运行时 Agent 才会执行：
-  - 触发时先 `Read` 该文件（首次运行不存在则跳过），延续前几次的观察、判断和待办。
-  - 运行结束时 `Edit` 同一文件：在顶部追加 `## YYYY-MM-DD` 条目记录本次新发现；同时**主动清理已经解决、过时或不再适用的旧条目**——文件是滚动维护的工作记忆，不是无限追加的日志。本次执行中只要接触到相关信息（检查某仓库、看 CI 状态、读某个文档），就顺手判断旧条目是否还成立，能删就删，避免 notes.md 越积越胖变成新的上下文负担。
-- 自迭代要求：如果连续失败、结果价值低或频率不合适，先 `Read` 笔记和 `get_automation` 的运行记录，再用 `update_automation` 修改当前任务（prompt、频率、`sessionMode`），必要时暂停。
+- Goal: what this automatic run should accomplish.
+- Scope: which repositories, files, systems, group chats, mailboxes, documents, or data sources to check.
+- Judgment criteria: what counts as anomalous, important, or worth reporting.
+- Output format: what the user finally receives — e.g., a summary, a list, a report, action suggestions.
+- Failure handling: how to record and degrade when access fails, information is insufficient, or tools fail.
+- Cross-run memory (strongly recommended): maintain `.context/automation/<task-slug>/notes.md` in the 工作区 (workspace) so each run accumulates on previous findings instead of starting from zero. **This section must be written into the prompt itself**, so the Agent actually executes it at runtime:
+  - On trigger, first `Read` the file (skip if it does not exist on the first run), carrying over the observations, judgments, and todos from previous runs.
+  - At the end of the run, `Edit` the same file: prepend a `## YYYY-MM-DD` entry recording this run's new findings; at the same time **proactively clean up old entries that are resolved, outdated, or no longer applicable** — the file is a rolling working memory, not an append-only log. Whenever this run touches related information (checked a repository, looked at CI status, read a document), judge on the spot whether old entries still hold and delete whatever can be deleted, so notes.md does not bloat into a new context burden.
+- Self-iteration requirement: on consecutive failures, low-value output, or an unsuitable frequency, first `Read` the notes and the run history via `get_automation`, then use `update_automation` to modify the current task (prompt, frequency, `sessionMode`), pausing it if necessary.
 
-`<task-slug>` 在创建任务时由你直接敲定并写进 prompt：把任务名转成 kebab-case（小写、空格和标点转 `-`、只保留字母数字），例如任务名"每月 GitHub PR 汇总" → slug `monthly-github-pr-summary`。一旦定下就不要再改，否则笔记路径会断。
+`<task-slug>` is decided by you at creation time and written into the prompt: convert the task name to kebab-case (lowercase, spaces and punctuation → `-`, keep alphanumerics only), e.g., task name "每月 GitHub PR 汇总" ("monthly GitHub PR summary") → slug `monthly-github-pr-summary`. Once set, never change it, or the notes path breaks.
 
-不要把“请创建定时任务”写进 prompt。prompt 是每次触发时要执行的工作，不是创建指令。
+Do not write "请创建定时任务" ("please create a scheduled task") into the prompt. The prompt is the work to execute on each trigger, not a creation instruction.
 
-### Prompt 模板示例
+### Prompt Template Example
 
-一个 monthly 月度报告任务的 prompt 范本（创建任务时按这个结构写，跨运行记忆段落直接照搬）：
+A model prompt for a monthly report Automation (follow this structure when creating a task; copy the cross-run memory section verbatim):
 
-    目标：汇总本月 Yuan-lai-ru-ci/ProferAI 仓库合入的 PR，按类别归类并标注影响。
-    范围：读取 Yuan-lai-ru-ci/ProferAI 的 closed PR 列表，筛选本月合入的。
-    判断标准：每个 PR 是否引入破坏性变更、是否影响用户配置、是否需要更新文档。
-    输出格式：Markdown 报告，分「重大变更」「新功能」「修复」「文档」四组。
+    Goal: summarize the PRs merged into the Yuan-lai-ru-ci/ProferAI repository this month, grouped by category with impact noted.
+    Scope: read the closed PR list of Yuan-lai-ru-ci/ProferAI and filter to those merged this month.
+    Judgment criteria: for each PR, whether it introduces breaking changes, affects user configuration, or requires documentation updates.
+    Output format: a Markdown report grouped into four sections: 「重大变更」(Major changes), 「新功能」(New features), 「修复」(Fixes), 「文档」(Documentation).
 
-    跨运行记忆：
-    - 开始前 Read .context/automation/monthly-pr-summary/notes.md（首次不存在则跳过），延续前几次的判断和待办
-    - 结束后 Edit 同一文件，在顶部追加 ## YYYY-MM-DD 条目；本次执行中顺手清理已解决/过时的旧条目，notes.md 保持精简
+    Cross-run memory:
+    - Before starting, Read .context/automation/monthly-pr-summary/notes.md (skip if it does not exist on the first run), carrying over previous judgments and todos
+    - When done, Edit the same file and prepend a ## YYYY-MM-DD entry; while at it, clean up resolved/outdated old entries and keep notes.md lean
 
-    自迭代：连续 2 次失败或输出价值低，用 get_automation 读取当前任务，调整 prompt 或频率。
+    Self-iteration: after 2 consecutive failures or low-value output, use get_automation to read the current task and adjust the prompt or frequency.
 
-不适合用跨运行记忆的任务：每次产出完全独立、不需要累积上下文（如"看一下今天有什么新 PR"）。这类任务的 prompt 里不需要写跨运行记忆段落。
+Tasks unsuited to cross-run memory: each run's output is fully independent and needs no accumulated context (e.g., "看一下今天有什么新 PR" ("see what new PRs exist today")). Such prompts do not need a cross-run memory section.
 
-## 工具使用
+## Tool Usage
 
-根据场景调用 `automation` MCP 工具。工具名按 runtime：Claude 运行时用裸名（如下列）；Pi Runtime 下同名工具带 `mcp__automation__` 前缀（如 `mcp__automation__list_automations`）。
+Call the `automation` MCP tools according to the scenario. Tool names depend on the runtime: on the Claude runtime use the bare names (as listed below); on the Pi Runtime the same tools carry the `mcp__automation__` prefix (e.g., `mcp__automation__list_automations`).
 
-- `list_automations`：查看已有任务，避免重复创建，也用于了解启用/暂停状态。
-- `get_automation`：查看单个任务详情和运行记录；自动任务执行中可省略 `id` 读取当前任务。
-- `create_automation`：创建新的 Profer 定时任务，只用于确认值得长期反复执行的场景。
-- `update_automation`：修改任意字段——`name`、`prompt`、`scheduleType`/`intervalMinutes`/`timeOfDay`/`dayOfWeek`/`dayOfMonth`（频率）、`permissionMode`（权限模式）、`sessionMode`（会话模式）、`presetId`（Agent 预设）、`active`（启用/暂停）。调度相关字段变化时会自动重算下次运行时间。自动任务执行中可省略 `id` 更新当前任务。
-- `delete_automation`：删除任务。除非用户明确要求，否则删除前要确认。
-- `run_automation_now`：用户要求立即验证，或你刚修改任务后需要试跑时使用。自动任务执行中不要触发自身重入。
+- `list_automations`: view existing tasks, avoid duplicate creation, and learn enabled/paused states.
+- `get_automation`: view a single task's details and run history; while an Automation is executing, `id` may be omitted to read the current task.
+- `create_automation`: create a new Profer Automation (定时任务); use it only for scenarios confirmed to be worth long-term recurrence.
+- `update_automation`: modify any field — `name`, `prompt`, `scheduleType`/`intervalMinutes`/`timeOfDay`/`dayOfWeek`/`dayOfMonth` (frequency), `permissionMode` (permission mode), `sessionMode` (session mode), `presetId` (Agent preset/预设), `active` (enable/pause). Changing schedule-related fields automatically recomputes the next run time. While an Automation is executing, `id` may be omitted to update the current task.
+- `delete_automation`: delete a task. Confirm before deleting unless the user explicitly asked.
+- `run_automation_now`: use when the user asks for immediate verification, or when you need a trial run right after modifying a task. Do not trigger self re-entry while an Automation is executing.
 
-创建任务前先用 `list_automations` 检查是否已有相同或近似任务。已有任务能改就改，不要重复创建。
+Before creating, use `list_automations` to check whether an identical or similar task already exists. If an existing task can be edited, edit it; do not duplicate.
 
-## 维护和自迭代
+## Maintenance and Self-Iteration
 
-用户查看或抱怨定时任务效果不好时：
+When the user reviews or complains that an Automation is underperforming:
 
-1. 用 `get_automation` 查看 prompt、频率、权限模式和最近运行记录。
-2. 判断问题属于哪一类：频率不合适、prompt 太泛、范围不清、工具权限不足、外部系统不可用、任务本身不适合自动化。
-3. 如果能直接修复，用 `update_automation` 修改 prompt、频率或暂停状态。
-4. 如需验证，用 `run_automation_now` 试跑。
-5. 向用户说明改了什么，以及下一次触发会如何不同。
+1. Use `get_automation` to view the prompt, frequency, permission mode, and recent run history.
+2. Classify the problem: unsuitable frequency, prompt too vague, unclear scope, insufficient tool permissions, external system unavailable, or the task itself is unsuited to automation.
+3. If it can be fixed directly, use `update_automation` to modify the prompt, frequency, or paused state.
+4. If verification is needed, trial-run with `run_automation_now`.
+5. Tell the user what changed and how the next trigger will differ.
 
-当你自己就是某个定时任务自动触发的 Agent 时：
+When you yourself are the Agent auto-triggered by an Automation:
 
-- 不要创建新的定时任务。
-- 先直接执行本轮任务。
-- 如果发现当前任务连续失败、输出价值低、频率太高或 prompt 不完整，可以调用 `get_automation` 读取当前任务，再用 `update_automation` 修改当前任务，必要时暂停。
-- 修改自身任务后，在最终回复里说明原因和修改内容。
+- Do not create new Automations.
+- Execute the current round's task first.
+- If you find the current task failing consecutively, producing low-value output, running too frequently, or carrying an incomplete prompt, call `get_automation` to read the current task, then use `update_automation` to modify it, pausing it if necessary.
+- After modifying your own task, explain the reason and the changes in your final reply.
 
-## 回复方式
+## Response Style
 
-- 创建、修改、暂停、删除后，用自然语言告诉用户具体结果。
-- 创建新任务后，提醒用户：可以点击左上角的「自动任务」入口，找到刚创建的任务，设置任务执行时使用的模型（不同模型在成本和能力上有差异，建议根据任务复杂度选择合适的模型）。
-- 不要暴露内部工具调用 JSON。
-- 如果不推荐定时任务，要明确说“不建议创建 Profer 定时任务”，并说明更适合的处理方式。
-- 对长期反复任务，主动建议用户后续可以从侧边栏的定时任务入口查看运行记录和调整配置。
+- After creating, modifying, pausing, or deleting, tell the user the concrete result in natural language.
+- **Output language rule**: All user-facing output must be written in the user's language (e.g., Simplified Chinese when the user writes in Chinese).
+- After creating a new task, remind the user: they can click the 「自动任务」 (Automation tasks) entry at the top left, find the newly created task, and set the model used when the task runs (models differ in cost and capability; choose one that matches the task's complexity).
+- Do not expose internal tool-call JSON.
+- When an Automation is not recommended, state explicitly that creating a Profer Automation (定时任务) is not recommended, and explain the more suitable way to handle it.
+- For long-term recurring tasks, proactively suggest that the user can later check run history and adjust configuration from the Automation (定时任务) entry in the sidebar.

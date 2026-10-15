@@ -37,8 +37,10 @@ import {
   TooltipTrigger,
 } from '@profer/ui/primitives/tooltip'
 import { LoadingIndicator } from '@profer/ui/primitives/loading-indicator'
-import { CodeBlock, MermaidBlock, shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock } from '@profer/ui'
-import { detectLanguage } from '@profer/core'
+import { CodeBlock, MermaidBlock, shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock, shouldRenderMindMapCodeBlock } from '@profer/ui'
+import { detectLanguage } from '@profer/core/highlight'
+import { parseMindMapText } from '@profer/shared'
+import { MindMapBlock } from './MindMapBlock'
 import { FilePathChip, isAbsoluteFilePath, isRelativeFilePath } from './file-path-chip'
 import { useFileAccessSessionId } from './file-access-context'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -530,8 +532,8 @@ const WIKILINK_URL_RE = /^wikilink:\/\/(.+)$/
 /** mention:// URL 匹配 */
 const MENTION_URL_RE = /^mention:\/\/(file|skill|mcp|session)\/(.+)$/
 
-/** 双平行拓扑文档锚点匹配（如 #f1:p1-b11, #f2-p3-b4, #p1-b11, #p2） */
-const DOCUMENT_ANCHOR_RE = /^#(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-b\d+)?)$/i
+/** 双平行拓扑文档锚点匹配（如 #f1:p1-b11, #f2-p3-b4, #f1:p2-tbl1, #f3:p1-cB4, #f3:p3-cA10:B10, #f3:p3-r10, #p1-b11, #p2） */
+const DOCUMENT_ANCHOR_RE = /^#(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-(?:b\d+|tbl\d+|r\d+|c[a-zA-Z]+\d+(?::[a-zA-Z]+\d+)?))?)$/i
 
 /** 外部链接 / mention chip / 学术溯源胶囊 渲染器 */
 const MarkdownLink = React.memo(function MarkdownLink({
@@ -611,10 +613,12 @@ const MarkdownLink = React.memo(function MarkdownLink({
             sessionId,
             fileId: resolved.fileId,
             filePath: resolved.filePath,
+            format: resolved.format ?? 'pdf',
             pageNumber: resolved.pageNumber,
             blockId: resolved.blockId,
             bbox: resolved.bbox,
-            label: cleanLabel || resolved.label,
+            cellRef: resolved.cellRef,
+            label: resolved.label || cleanLabel,
           })
 
           openPreview(sessionId, {
@@ -854,6 +858,15 @@ const MarkdownPre = React.memo(function MarkdownPre({
     const codeProps = codeChild.props as { className?: string; children?: React.ReactNode }
     const className = codeProps.className ?? ''
     const hasExplicitLang = /\blanguage-\S+/.test(className)
+
+    // ```mindmap 思维导图代码块：对话流只读预览 + 全屏可拖拽大图（§7.2）。
+    // 解析失败时静默回退到后续通用代码块 / Mermaid 渲染路径。
+    if (shouldRenderMindMapCodeBlock(className, extractText(codeProps.children))) {
+      const mindmapCode = extractText(codeProps.children).replace(/\r\n?/g, '\n').replace(/\n$/, '')
+      if (parseMindMapText(mindmapCode)) {
+        return <MindMapBlock code={mindmapCode} />
+      }
+    }
 
     // 先用共享 mermaid 识别（覆盖 language-mermaid/mmd 以及未标语言但内容像 Mermaid 的情况）
     if (shouldInspectMermaidCodeBlock(className)) {
@@ -1604,10 +1617,12 @@ interface MessageAttachmentImageProps {
   isSingle?: boolean
 }
 
-/** 图片附件展示（单图: max 500px，多图: 280px 方块），点击可预览大图 */
+/** 图片附件展示（单图: max 500px，多图: 280px 方块），点击在右侧栏预览 */
 function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachmentImageProps): React.ReactElement {
   const [imageSrc, setImageSrc] = React.useState<string | null>(null)
   const [lightboxOpen, setLightboxOpen] = React.useState(false)
+  const sessionId = useFileAccessSessionId()
+  const openPreview = useOpenPreview()
 
   React.useEffect(() => {
     window.electronAPI
@@ -1625,6 +1640,15 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
     window.electronAPI.saveImageAs(attachment.localPath, attachment.filename)
   }, [attachment.localPath, attachment.filename])
 
+  /** 点击图片：优先在右侧边栏打开只读预览，无会话上下文时回退到 Lightbox */
+  const handlePreviewImage = React.useCallback((): void => {
+    if (sessionId && attachment.localPath) {
+      openPreview(sessionId, { filePath: attachment.localPath, previewOnly: true, readOnly: true })
+      return
+    }
+    setLightboxOpen(true)
+  }, [sessionId, attachment.localPath, openPreview])
+
   if (!imageSrc) {
     return (
       <div className={cn(
@@ -1639,14 +1663,14 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
       src={imageSrc}
       alt={attachment.filename}
       className="max-w-[500px] max-h-[min(500px,50vh)] rounded-lg object-contain cursor-pointer"
-      onClick={() => setLightboxOpen(true)}
+      onClick={handlePreviewImage}
     />
   ) : (
     <img
       src={imageSrc}
       alt={attachment.filename}
       className="size-[280px] rounded-lg object-cover shrink-0 cursor-pointer"
-      onClick={() => setLightboxOpen(true)}
+      onClick={handlePreviewImage}
     />
   )
 
@@ -1678,18 +1702,31 @@ interface MessageAttachmentFileProps {
   attachment: FileAttachment
 }
 
-/** 文件附件展示（标签样式，teal 色调） */
+/** 文件附件展示（标签样式，teal 色调，点击可在右侧栏只读预览） */
 function MessageAttachmentFile({ attachment }: MessageAttachmentFileProps): React.ReactElement {
+  const sessionId = useFileAccessSessionId()
+  const openPreview = useOpenPreview()
+
   /** 截断文件名 */
   const displayName = attachment.filename.length > 20
     ? attachment.filename.slice(0, 17) + '...'
     : attachment.filename
 
+  const handleClick = React.useCallback((): void => {
+    if (!sessionId || !attachment.localPath) return
+    openPreview(sessionId, { filePath: attachment.localPath, previewOnly: true, readOnly: true })
+  }, [sessionId, attachment.localPath, openPreview])
+
   return (
-    <div className="flex items-center gap-2 rounded-lg bg-[#37a5aa]/10 border border-[#37a5aa]/20 px-3 py-1.5 text-[13px] text-[#37a5aa] shrink-0">
+    <button
+      type="button"
+      onClick={handleClick}
+      title={`预览 ${attachment.filename}`}
+      className="flex items-center gap-2 rounded-lg bg-[#37a5aa]/10 border border-[#37a5aa]/20 px-3 py-1.5 text-[13px] text-[#37a5aa] shrink-0 cursor-pointer hover:bg-[#37a5aa]/20 transition-colors"
+    >
       <Paperclip className="size-4" />
       <span>{displayName}</span>
-    </div>
+    </button>
   )
 }
 

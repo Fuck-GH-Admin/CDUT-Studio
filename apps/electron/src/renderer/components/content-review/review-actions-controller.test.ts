@@ -724,3 +724,155 @@ describe('review-actions-controller（M0/H05 并发与按案写入）', () => {
     expect(store.get(selectedCaseIdAtom)).toBe('case-B')
   })
 })
+
+
+describe('Main 后台审核前台接线', () => {
+  function backgroundFixture() {
+    const { api } = makeApi()
+    const source = makeCase('background-A', { documents: [{ id: 'doc', fileName: '合成申请.txt', role: 'application', mimeType: 'text/plain', sizeBytes: 1, parseStatus: 'parsed', blocks: [{ id: 'b', kind: 'text', text: '合成申请' }], origin: 'upload' } as never] })
+    const aggregate = { caseV2: { id: source.id, templateId: 't', templateVersion: 1, title: source.title, objectType: 'person', caseFields: {}, subjects: [], documents: [], stage: 'submitted', revision: 0, createdAt: '', updatedAt: '' }, observations: [], evidenceLinks: [], dispositions: [], tasks: [], decisions: [], supplements: [], appeals: [], receiptLog: [] } as CaseAggregateV2
+    let run: ReviewRunV2 | null = null
+    api.getCase = async (id) => id === source.id ? source : makeCase(id)
+    api.getAggregateV2 = async () => aggregate
+    api.getTemplateV2 = async () => ({ materialSlots: [], fields: [], sections: [] }) as never
+    api.listRunsV2 = async (id) => id === source.id && run ? [run] : []
+    api.getRunObservationsV2 = async () => []
+    api.getWorkspaceRunValidityV2 = async () => false
+    api.getBackgroundPiReviewStateV2 = async () => ({ caseId: source.id, phase: run?.status === 'running' ? 'accepted' : 'incomplete', runId: run?.id, runStatus: run?.status })
+    const runningRun = { id: 'run-pi-background', caseId: source.id, templateId: 't', templateVersion: 1, inputManifest: { hash: 'h', templateVersion: 1, policyVersions: [], documentVersions: [], observationIds: [], evidenceLinkIds: [] }, status: 'running', checkpoints: [], checks: [], opinions: [], coverage: { documents: [], plannedChecks: 1, completedChecks: 0, effectiveVerdicts: 0, pendingChecks: 1 }, diagnostics: [], startedAt: '' } as ReviewRunV2
+    return { api, source, runningRun, setRun: (value: ReviewRunV2) => { run = value } }
+  }
+
+  test('ACK 前不显示已受理，ACK 后释放前台等待且切案不污染新案', async () => {
+    const fixture = backgroundFixture()
+    const store = createStore()
+    const gate = new Deferred()
+    let requested = false
+    const actions = createReviewActionsController(store, fixture.api, async () => {
+      requested = true
+      await gate.promise
+      fixture.setRun(fixture.runningRun)
+      return fixture.runningRun
+    })
+    await actions.selectCase(fixture.source.id)
+    const starting = actions.runFullReview()
+    while (!requested) await Bun.sleep(0)
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('preparing')
+    await actions.selectCase('background-B')
+    gate.resolve(null)
+    await starting
+    expect(store.get(selectedCaseIdAtom)).toBe('background-B')
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('running')
+    expect(store.get(reviewTasksByCaseAtom)[fixture.source.id]?.running).toBeFalse()
+  })
+
+  test('新页面从持久 V2 回读 running/failed，无需原 Hook 或旧内存', async () => {
+    const fixture = backgroundFixture()
+    fixture.setRun(fixture.runningRun)
+    const store = createStore()
+    const actions = createReviewActionsController(store, fixture.api)
+    await actions.selectCase(fixture.source.id)
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('running')
+    fixture.setRun({ ...fixture.runningRun, status: 'failed', error: '合成模型失败' })
+    await actions.refreshBackgroundReview(fixture.source.id)
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('failed')
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.error).toBe('合成模型失败')
+  })
+
+  test('重新选择案卷时 V2 running 不能覆盖 Main 的未受理状态', async () => {
+    const fixture = backgroundFixture()
+    fixture.setRun(fixture.runningRun)
+    fixture.api.getBackgroundPiReviewStateV2 = async () => ({ caseId: fixture.source.id, runId: fixture.runningRun.id, phase: 'preparing', runStatus: 'running' })
+    const store = createStore()
+    const actions = createReviewActionsController(store, fixture.api)
+    await actions.selectCase(fixture.source.id)
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('preparing')
+    await actions.refreshBackgroundReview(fixture.source.id)
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('preparing')
+  })
+
+  test('停止动作只发案卷与本轮 ID，回读取消结果', async () => {
+    const fixture = backgroundFixture()
+    fixture.setRun(fixture.runningRun)
+    let target: unknown
+    fixture.api.stopBackgroundPiReviewV2 = async (input) => {
+      target = input
+      fixture.setRun({ ...fixture.runningRun, status: 'cancelled' })
+      return { caseId: input.caseId, runId: input.runId, phase: 'incomplete', runStatus: 'cancelled' }
+    }
+    const store = createStore()
+    const actions = createReviewActionsController(store, fixture.api)
+    await actions.selectCase(fixture.source.id)
+    await actions.stopReview()
+    expect(target).toEqual({ caseId: fixture.source.id, runId: fixture.runningRun.id })
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('cancelled')
+  })
+
+
+  test('P06-S02 a slow first snapshot cannot repaint the newer run of the same case', async () => {
+    const fixture = backgroundFixture()
+    const previous = { ...fixture.runningRun, id: 'run-pi-previous', status: 'failed' as const, error: 'old error' }
+    const next = { ...fixture.runningRun, id: 'run-pi-next' }
+    fixture.setRun(previous)
+    const store = createStore()
+    const actions = createReviewActionsController(store, fixture.api)
+    await actions.selectCase(fixture.source.id)
+    const delayed = new Deferred()
+    let listReads = 0
+    fixture.api.listRunsV2 = async () => {
+      listReads++
+      return listReads === 1 ? delayed.promise as Promise<ReviewRunV2[]> : [next]
+    }
+    fixture.api.getBackgroundPiReviewStateV2 = async () => ({ caseId: fixture.source.id, runId: next.id, runStatus: next.status, phase: 'accepted' })
+    const oldRefresh = actions.refreshBackgroundReview(fixture.source.id)
+    while (listReads === 0) await Bun.sleep(0)
+    await actions.refreshBackgroundReview(fixture.source.id)
+    expect(store.get(reviewWorkspaceRunsByCaseAtom)[fixture.source.id]?.id).toBe(next.id)
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('running')
+    delayed.resolve([previous])
+    await oldRefresh
+    expect(store.get(reviewWorkspaceRunsByCaseAtom)[fixture.source.id]?.id).toBe(next.id)
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('running')
+  })
+
+  test('P06-S02 late first acceptance response cannot replace second round UI status', async () => {
+    const fixture = backgroundFixture()
+    const first = { ...fixture.runningRun, id: 'run-pi-first' }
+    const second = { ...fixture.runningRun, id: 'run-pi-second' }
+    fixture.setRun(first)
+    const store = createStore()
+    const actions = createReviewActionsController(store, fixture.api)
+    await actions.selectCase(fixture.source.id)
+    const delayed = new Deferred()
+    let read = 0
+    fixture.api.getBackgroundPiReviewStateV2 = async () => {
+      read++
+      return read === 1 ? delayed.promise as Promise<import('@profer/shared').ReviewBackgroundPiRunState>
+        : { caseId: fixture.source.id, runId: second.id, runStatus: second.status, phase: 'accepted' }
+    }
+    fixture.api.listRunsV2 = async () => read === 0 ? [first] : [second]
+    const oldRefresh = actions.refreshBackgroundReview(fixture.source.id)
+    while (read === 0) await Bun.sleep(0)
+    await actions.refreshBackgroundReview(fixture.source.id)
+    expect(store.get(reviewWorkspaceRunsByCaseAtom)[fixture.source.id]?.id).toBe(second.id)
+    delayed.resolve({ caseId: fixture.source.id, runId: first.id, runStatus: first.status, phase: 'accepted' })
+    await oldRefresh
+    expect(store.get(reviewWorkspaceRunsByCaseAtom)[fixture.source.id]?.id).toBe(second.id)
+    expect(store.get(reviewExecutionByCaseAtom)[fixture.source.id]?.status).toBe('running')
+  })
+
+  test('预检失败的业务错误卡和提示只显示原因，不显示 IPC 包装', async () => {
+    const fixture = backgroundFixture()
+    const store = createStore()
+    const actions = createReviewActionsController(store, fixture.api, async () => {
+      throw new Error("Error invoking remote method 'review-v2:start-background-pi-review': Error: 审核渠道或模型未配置")
+    })
+    await actions.selectCase(fixture.source.id)
+    await actions.runFullReview()
+    const execution = store.get(reviewExecutionByCaseAtom)[fixture.source.id]
+    expect(execution?.status).toBe('failed')
+    expect(execution?.error).toBe('审核渠道或模型未配置')
+    expect(execution?.message).toBe('本次审核未完成')
+    expect(store.get(reviewErrorAtom)).toBe('审核未完成：审核渠道或模型未配置')
+  })
+})

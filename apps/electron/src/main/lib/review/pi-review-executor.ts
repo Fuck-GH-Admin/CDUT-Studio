@@ -118,6 +118,7 @@ export const REVIEW_SYSTEM_PROMPT = [
   '禁止改换近义词重复搜索或探索模板未要求的事实；短文件可一次完整读取，工作簿按工作表/行范围读取，避免把无关表格或全文重复带入上下文。',
   '证据足够后优先用 record_observations 一次记录全部事实、用 submit_checks 一次提交全部检查，然后返回结果；不要为了填满字段或追求穷尽而继续搜索。',
   '最后仍须输出符合任务要求的结构化 JSON；工具结果不能替代人工审批。',
+  '面向用户的结论和理由使用用户的语言，材料的逐字引文保留原文。',
 ].join('\n')
 
 /** 单页图像读取是审核 Agent 的能力调用，不承担规则判断，也不依赖 Pi 工具。 */
@@ -139,13 +140,13 @@ export function buildReviewExecutors(deps: ReviewExecutorDeps, tools: ReviewTool
     extract: async (node, inputHash) => {
       if (deps.signal?.aborted) throw new Error('已取消（模型调用前）')
       const toolSummary = allowedTools.map((tool) => tool.name).join(',')
-      await deps.client.complete({ prompt: `节点 ${node.id}（提取）· 输入 ${inputHash} · 可用工具：${toolSummary}`, system: REVIEW_SYSTEM_PROMPT, signal: deps.signal })
+      await deps.client.complete({ prompt: `Node ${node.id} (extract) · input ${inputHash} · available tools: ${toolSummary}`, system: REVIEW_SYSTEM_PROMPT, signal: deps.signal })
       if (deps.signal?.aborted) throw new Error('已取消（模型调用后）')
       return { status: 'done', inputHash, artifact: { sourceIds: [], observations: [], summary: `extract via ${deps.client.protocol}` } }
     },
     check: async (node, inputHash) => {
       if (deps.signal?.aborted) throw new Error('已取消（模型调用前）')
-      await deps.client.complete({ prompt: `节点 ${node.id}（语义检查）· 输入 ${inputHash}`, system: REVIEW_SYSTEM_PROMPT, signal: deps.signal })
+      await deps.client.complete({ prompt: `Node ${node.id} (semantic check) · input ${inputHash}`, system: REVIEW_SYSTEM_PROMPT, signal: deps.signal })
       if (deps.signal?.aborted) throw new Error('已取消（模型调用后）')
       return { status: 'done', inputHash, artifact: { sourceIds: [], opinions: [], summary: 'semantic check' } }
     },

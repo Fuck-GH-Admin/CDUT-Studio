@@ -1,5 +1,5 @@
 ﻿/**
- * 砚湖秒通 · 专属门禁工具集（yanhu-browser-tools）单元测试
+ * 智联万站 · 专属门禁工具集（yanhu-browser-tools）单元测试
  *
  * 覆盖：门禁工具集装配、微胶囊标签生成、
  * 嵌套框架内页防扯脱守卫（严禁在 xsMainV 下直接导航子框架 URL）。
@@ -65,9 +65,9 @@ function stubYanhuCausalityEdge(): () => void {
 }
 
 describe('YanhuBrowserTools（门禁工具集与防扯脱守卫）', () => {
-  test('装配全部 15 项门禁工具并正确标记开发者级能力', () => {
+  test('装配全部 14 项门禁工具并正确标记开发者级能力', () => {
     const tools = buildYanhuBrowserTools(() => 'tab-mock-1')
-    expect(tools).toHaveLength(15)
+    expect(tools).toHaveLength(14)
 
     const toolNames = tools.map((t) => t.definition.name)
     expect(toolNames).toContain('yanhu_read_page')
@@ -85,7 +85,6 @@ describe('YanhuBrowserTools（门禁工具集与防扯脱守卫）', () => {
     expect(toolNames).toContain('yanhu_get_network_logs')
     expect(toolNames).toContain('yanhu_get_console_logs')
     expect(toolNames).toContain('yanhu_tab_actions')
-    expect(toolNames).toContain('yanhu_upload_file')
 
     const devTools = tools.filter((t) => t.developer)
     expect(devTools.map((t) => t.definition.name)).toEqual([
@@ -221,11 +220,11 @@ describe('sanitizeYanhuNetworkLogs（网络日志净化与硬熔断）', () => {
 })
 
 describe('开发者级工具暴露契约', () => {
-  test('默认工具集共 15 项，其中开发者级 4 项（关闭时为 11 项）', () => {
+  test('默认工具集共 14 项，其中开发者级 4 项（关闭时为 10 项）', () => {
     const tools = buildYanhuBrowserTools(() => 'tab-mock-1')
-    expect(tools).toHaveLength(15)
+    expect(tools).toHaveLength(14)
     expect(tools.filter((t) => t.developer)).toHaveLength(4)
-    expect(tools.filter((t) => !t.developer)).toHaveLength(11)
+    expect(tools.filter((t) => !t.developer)).toHaveLength(10)
   })
 })
 
@@ -1745,7 +1744,7 @@ describe('日期时间选择器根治与全链路提速回归（BUG-44 ~ BUG-47�
 
 })
 
-describe('复杂布局与表单加固回归（Shadow DOM / 富文本 / 附件上传 / 吸顶遮挡）', () => {
+describe('复杂布局与表单加固回归（Shadow DOM / 富文本 / 吸顶遮挡）', () => {
   test('buildHardwareClickTargetScript 内置吸顶头遮挡绕过（微调可滚动祖先）', () => {
     const script = buildHardwareClickTargetScript({
       bid: 1,
@@ -1827,19 +1826,19 @@ describe('复杂布局与表单加固回归（Shadow DOM / 富文本 / 附件上
     }
   })
 
-  test('yanhu_upload_file 定位 file input 并经 DOM.setFileInputFiles 注入本机文件', async () => {
+  test('yanhu_fill 降级脚本的下发事件链完备（PointerDown->MouseDown->Focus->Value->Input->Change->PointerUp->MouseUp->Blur）', async () => {
     const originalEval = yanhuExpressManager.evalInPage
     const originalAx = yanhuExpressManager.getFullAXTree
-    const originalObjectId = yanhuExpressManager.evalForObjectId
-    const originalSetFiles = yanhuExpressManager.setFileInputFiles
     const originalStable = yanhuExpressManager.awaitStable
+    const originalTextInput = yanhuExpressManager.dispatchHumanTextInput
+    const exprs: string[] = []
     try {
       const elements = [
         {
           tag: 'input',
           role: 'textbox',
-          name: '上传证明材料',
-          bounds: { x: 10, y: 20, width: 120, height: 30 },
+          name: '学号',
+          bounds: { x: 10, y: 20, width: 200, height: 28 },
           visible: true,
           ariaHidden: false,
           occluded: false,
@@ -1847,16 +1846,16 @@ describe('复杂布局与表单加固回归（Shadow DOM / 富文本 / 附件上
           actionable: true,
         },
       ]
-      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) =>
-        expr === buildYanhuCollectorScript() ? { url: 'https://x/y', title: 't', elements } : { ok: true }
-      yanhuExpressManager.getFullAXTree = async () => []
-      const captured: { objectId: string; paths: string[] } = { objectId: '', paths: [] }
-      yanhuExpressManager.evalForObjectId = async () => 'obj-123'
-      yanhuExpressManager.setFileInputFiles = async (_tabId, objectId, paths) => {
-        captured.objectId = objectId
-        captured.paths = [...paths]
-        return true
+      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) => {
+        exprs.push(expr)
+        if (expr === buildYanhuCollectorScript()) return { url: 'https://x/y', title: 't', elements }
+        if (expr.includes('editableInput')) {
+          return { ok: true, editable: true, tag: 'input', type: 'text', role: 'textbox' }
+        }
+        if (expr.includes('hitOk')) return { ok: false, reason: 'not-found' }
+        return { ok: true }
       }
+      yanhuExpressManager.getFullAXTree = async () => []
       yanhuExpressManager.awaitStable = async () => ({
         settled: true,
         timedOut: false,
@@ -1866,101 +1865,31 @@ describe('复杂布局与表单加固回归（Shadow DOM / 富文本 / 附件上
         mutations: 0,
         lastActivityAt: 0,
       })
+      yanhuExpressManager.dispatchHumanTextInput = async () => {}
 
-      const tools = buildYanhuBrowserTools(() => 'tab-upload')
+      const tools = buildYanhuBrowserTools(() => 'tab-event-chain')
       await tools.find((t) => t.definition.name === 'yanhu_read_page')!.execute({})
-      const upload = tools.find((t) => t.definition.name === 'yanhu_upload_file')!
-      const res = await upload.execute({ bid: 1, filePath: 'C:/tmp/proof.png' })
+      const fill = tools.find((t) => t.definition.name === 'yanhu_fill')!
+      await fill.execute({ bid: 1, value: '20210001' })
 
-      expect(res.isError).toBeFalsy()
-      expect(res.content).toContain('proof.png')
-      expect(captured.objectId).toBe('obj-123')
-      expect(captured.paths).toEqual(['C:/tmp/proof.png'])
+      const legacy = exprs.find((e) => e.includes('HTMLInputElement.prototype')) ?? ''
+      expect(legacy).not.toBe('')
+      // 完备合成事件链：缺任一环都可能导致 Vue v-model / React onChange 未同步而被回滚
+      expect(legacy).toContain("'pointerdown'")
+      expect(legacy).toContain("'mousedown'")
+      expect(legacy).toContain("'pointerup'")
+      expect(legacy).toContain("'mouseup'")
+      expect(legacy).toContain("new Event('input'")
+      expect(legacy).toContain("new Event('change'")
+      // 原生原型 setter 写入（绝不直接 el.value = next，否则 Vue/React 感知不到）
+      expect(legacy).toContain("Object.getOwnPropertyDescriptor(proto, 'value')")
+      // 页面脚本必须可被 JS 引擎解析
+      expect(() => new Function('document', 'window', legacy)).not.toThrow()
     } finally {
       yanhuExpressManager.evalInPage = originalEval
       yanhuExpressManager.getFullAXTree = originalAx
-      yanhuExpressManager.evalForObjectId = originalObjectId
-      yanhuExpressManager.setFileInputFiles = originalSetFiles
       yanhuExpressManager.awaitStable = originalStable
-    }
-  })
-
-  test('yanhu_upload_file 空 filePath 直接拒绝，绝不触碰底层', async () => {
-    const originalEval = yanhuExpressManager.evalInPage
-    const originalAx = yanhuExpressManager.getFullAXTree
-    const originalObjectId = yanhuExpressManager.evalForObjectId
-    try {
-      const elements = [
-        {
-          tag: 'input',
-          role: 'textbox',
-          name: '上传证明材料',
-          bounds: { x: 10, y: 20, width: 120, height: 30 },
-          visible: true,
-          ariaHidden: false,
-          occluded: false,
-          region: '业务表单',
-          actionable: true,
-        },
-      ]
-      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) =>
-        expr === buildYanhuCollectorScript() ? { url: 'https://x/y', title: 't', elements } : { ok: true }
-      yanhuExpressManager.getFullAXTree = async () => []
-      let objectIdCalls = 0
-      yanhuExpressManager.evalForObjectId = async () => {
-        objectIdCalls += 1
-        return 'obj-1'
-      }
-
-      const tools = buildYanhuBrowserTools(() => 'tab-upload-empty')
-      await tools.find((t) => t.definition.name === 'yanhu_read_page')!.execute({})
-      const upload = tools.find((t) => t.definition.name === 'yanhu_upload_file')!
-      const res = await upload.execute({ bid: 1, filePath: '' })
-
-      expect(res.isError).toBe(true)
-      expect(res.content).toContain('filePath 为空')
-      expect(objectIdCalls).toBe(0)
-    } finally {
-      yanhuExpressManager.evalInPage = originalEval
-      yanhuExpressManager.getFullAXTree = originalAx
-      yanhuExpressManager.evalForObjectId = originalObjectId
-    }
-  })
-
-  test('yanhu_upload_file 未定位到 file input 时如实报错（不误报成功）', async () => {
-    const originalEval = yanhuExpressManager.evalInPage
-    const originalAx = yanhuExpressManager.getFullAXTree
-    const originalObjectId = yanhuExpressManager.evalForObjectId
-    try {
-      const elements = [
-        {
-          tag: 'div',
-          role: 'button',
-          name: '上传',
-          bounds: { x: 10, y: 20, width: 120, height: 30 },
-          visible: true,
-          ariaHidden: false,
-          occluded: false,
-          region: '业务表单',
-          actionable: true,
-        },
-      ]
-      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) =>
-        expr === buildYanhuCollectorScript() ? { url: 'https://x/y', title: 't', elements } : { ok: true }
-      yanhuExpressManager.getFullAXTree = async () => []
-      yanhuExpressManager.evalForObjectId = async () => null
-
-      const tools = buildYanhuBrowserTools(() => 'tab-upload-miss')
-      await tools.find((t) => t.definition.name === 'yanhu_read_page')!.execute({})
-      const upload = tools.find((t) => t.definition.name === 'yanhu_upload_file')!
-      const res = await upload.execute({ bid: 1, filePath: 'C:/tmp/proof.png' })
-
-      expect(res.isError).toBe(true)
-      expect(res.content).toContain('input[type=file]')
-    } finally {
-      yanhuExpressManager.evalInPage = originalEval
-      yanhuExpressManager.getFullAXTree = originalAx
-      yanhuExpressManager.evalForObjectId = originalObjectId
+      yanhuExpressManager.dispatchHumanTextInput = originalTextInput
     }
   })
 

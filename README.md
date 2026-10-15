@@ -44,7 +44,7 @@
       </td>
       <td width="33%" align="center">
         <h3>🌐 智联万站</h3>
-        <p>内置定制浏览器，视频平台、学校系统等各种网站全面支持 AI 自动化操作。</p>
+        <p>内置定制浏览器：支持任意网站访问与 AI 自动化操作（默认内置校内书签，不构成访问限制）。</p>
       </td>
       <td width="33%" align="center">
         <h3>📑 材料审核</h3>
@@ -150,9 +150,13 @@
 
 测试仓库现已整合上游 PDF/RAG 更新与审核模块，整合依据和冲突处理见[上游整合记录](docs/design/review-agent/25-upstream-review-integration.md)。当前阶段产物将以 Draft PR 提交上游评审，已完成与未完成部分见[阶段交付状态](docs/design/review-agent/28-review-stage-delivery-status.md)：模块化模板完成初次验证后仍在开发，大批试测模板未纳入提交，富文本完整解析等待上游更新。
 
-直接审核当前仍会打开普通 Agent 会话。[后台审核会话方案](docs/design/review-agent/27-background-review-session-proposal.md)分析归属、展示、设置和交互改动，本轮只提交建议，没有实现隐藏功能。
+直接案卷审核的 Pi 阶段已在测试仓库 Draft PR #21 接入 Main 后台入口：Main 创建内部会话、等待真实受理后持续执行，用户在案卷查看结果与停止；普通聊天列表不显示新内部会话。材料准备与事项识别仍在前台，需等待“审核中，可切换页面”后再离开。已有普通审核聊天不批量迁移。启动恢复会先拒绝旧运行授权，再原子保存中断状态；存储故障时拒止仍生效，不能把未落盘状态当作恢复完成。实施边界见[最小规范](docs/design/review-agent/27-background-review-session-proposal.md)，当前验收、实机复验与外部阻断见[证据台账](docs/design/review-agent/29-background-session-preflight-audit.md)。当前仍为开发阶段，未合并或放行完整生产链路。Main/A0 历史证据见 [34 号](docs/design/review-agent/34-pre-p06-main-a0-acceptance-20261013.md)，P06 原始实机失败与累计审计分别保留在 [37 号](docs/design/review-agent/37-p06-s02-local-acceptance-20261013.md)和 [38 号](docs/design/review-agent/38-p01-p06-s02-cumulative-risk-audit-20261013.md)。
 
 上游后续照片蒙版与空闲态压缩已同步，离线审核入口和批量页面已通过实际 `bun run dev` 回放，结果见[dev 复验记录](docs/design/review-agent/26-upstream-refresh-dev-acceptance.md)。
+
+2026-10-15 同步：本仓库 main 将整合原项目 `c179f257` 与审核分支 `60e805cf` 的完整受控源码。通用 Office 解析使用上游新引擎，文件预览使用只读侧栏；审核材料引用继续保留弹窗入口和专用 DOCX/XLSX 结构提取。同步记录见 [48 号](docs/design/review-agent/48-upstream-cloud-main-integration-20261015.md)。P06 实机结论继续限定于原冻结版本，未签收门禁不因本次 main 同步而升级；后续工作按 [47 号](docs/design/review-agent/47-p06-evidence-driven-followup-plan-20261015.md) 执行。
+
+Pi 工具执行接入 Main 的权限回调，普通会话的自动审批、计划模式和手动拒止采用既有权限服务。审核专用工具继续核验本轮案卷指派，完整兼容矩阵以 29 号验收台账为准。
 
 同一份合成综测案卷的基线与能力库复跑记录见 [审核 Agent 能力库对照](outputs/template-review-suite-2026-10-08/run-results-deepseek-capabilities/COMPARISON.md)。该单案测试显示材料覆盖从 0/4 个被记为已读提高到 4/4、修正了一个错误自动通过；总 token 约下降 6.6%，耗时约增加 1.9 秒。基线把文本材料预注入提示，但没有逐份读取日志，故 0/4 指能力覆盖记账，不表示模型完全没看到文本材料。
 
@@ -342,3 +346,5 @@ graph TD
   <br/><br/>
   <a href="#cdut-studio-">⬆ 返回顶部</a>
 </div>
+
+P06 实机批量补修：case/group 级检查不依赖非空 subjectIds 判定有效工具结果；无有效提交继续生成 execution-failed。真实验收状态仍见 docs/design/review-agent/29-background-session-preflight-audit.md。
