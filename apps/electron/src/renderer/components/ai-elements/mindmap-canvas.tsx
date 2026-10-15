@@ -217,10 +217,26 @@ export interface ViewportApi {
 export function useMindMapViewport(sceneWidth: number, sceneHeight: number, enabled = true): ViewportApi {
   const viewportRef = React.useRef<HTMLDivElement>(null)
   const [size, setSize] = React.useState({ w: 0, h: 0 })
-  const [zoom, setZoom] = React.useState(1)
-  const [pan, setPan] = React.useState<MindMapPt>({ x: 0, y: 0 })
+  const [view, setView] = React.useState<{ zoom: number; pan: MindMapPt }>({ zoom: 1, pan: { x: 0, y: 0 } })
   const panRef = React.useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null)
   const fittedRef = React.useRef(false)
+
+  const zoom = view.zoom
+  const pan = view.pan
+
+  const setZoom = React.useCallback((valueOrUpdater: React.SetStateAction<number>) => {
+    setView((prev) => ({
+      ...prev,
+      zoom: typeof valueOrUpdater === 'function' ? valueOrUpdater(prev.zoom) : valueOrUpdater,
+    }))
+  }, [])
+
+  const setPan = React.useCallback((valueOrUpdater: React.SetStateAction<MindMapPt>) => {
+    setView((prev) => ({
+      ...prev,
+      pan: typeof valueOrUpdater === 'function' ? valueOrUpdater(prev.pan) : valueOrUpdater,
+    }))
+  }, [])
 
   React.useEffect(() => {
     const el = viewportRef.current
@@ -235,8 +251,10 @@ export function useMindMapViewport(sceneWidth: number, sceneHeight: number, enab
     if (size.w <= 0 || size.h <= 0 || sceneWidth <= 0 || sceneHeight <= 0) return
     const nextZoom = Math.min(size.w / sceneWidth, size.h / sceneHeight) * 0.92
     const clamped = Math.min(MINDMAP_ZOOM_MAX, Math.max(MINDMAP_ZOOM_MIN, nextZoom))
-    setZoom(clamped)
-    setPan({ x: (size.w - sceneWidth * clamped) / 2, y: (size.h - sceneHeight * clamped) / 2 })
+    setView({
+      zoom: clamped,
+      pan: { x: (size.w - sceneWidth * clamped) / 2, y: (size.h - sceneHeight * clamped) / 2 },
+    })
   }, [size, sceneWidth, sceneHeight])
 
   // 首帧（或场景尺寸变化时）自适应一次
@@ -258,12 +276,17 @@ export function useMindMapViewport(sceneWidth: number, sceneHeight: number, enab
       const rect = viewportRef.current?.getBoundingClientRect()
       const cx = rect ? event.clientX - rect.left : 0
       const cy = rect ? event.clientY - rect.top : 0
-      setZoom((prevZoom) => {
-        const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12
-        const nextZoom = Math.min(MINDMAP_ZOOM_MAX, Math.max(MINDMAP_ZOOM_MIN, prevZoom * factor))
-        const k = nextZoom / prevZoom
-        setPan((prevPan) => ({ x: cx - k * (cx - prevPan.x), y: cy - k * (cy - prevPan.y) }))
-        return nextZoom
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12
+      setView((prev) => {
+        const nextZoom = Math.min(MINDMAP_ZOOM_MAX, Math.max(MINDMAP_ZOOM_MIN, prev.zoom * factor))
+        const k = nextZoom / prev.zoom
+        return {
+          zoom: nextZoom,
+          pan: {
+            x: cx - k * (cx - prev.pan.x),
+            y: cy - k * (cy - prev.pan.y),
+          },
+        }
       })
     },
     [enabled],
@@ -272,15 +295,18 @@ export function useMindMapViewport(sceneWidth: number, sceneHeight: number, enab
   const beginPan = React.useCallback(
     (event: React.PointerEvent): void => {
       if (!enabled) return
-      panRef.current = { startX: event.clientX, startY: event.clientY, originX: pan.x, originY: pan.y }
+      panRef.current = { startX: event.clientX, startY: event.clientY, originX: view.pan.x, originY: view.pan.y }
     },
-    [enabled, pan.x, pan.y],
+    [enabled, view.pan.x, view.pan.y],
   )
 
   const movePan = React.useCallback((event: React.PointerEvent): void => {
     const state = panRef.current
     if (!state) return
-    setPan({ x: state.originX + (event.clientX - state.startX), y: state.originY + (event.clientY - state.startY) })
+    setView((prev) => ({
+      ...prev,
+      pan: { x: state.originX + (event.clientX - state.startX), y: state.originY + (event.clientY - state.startY) },
+    }))
   }, [])
 
   const endPan = React.useCallback((): void => {

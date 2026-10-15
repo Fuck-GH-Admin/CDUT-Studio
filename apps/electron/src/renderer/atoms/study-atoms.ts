@@ -6,7 +6,6 @@
  */
 
 import { atom } from 'jotai'
-import { atomWithStorage } from 'jotai/utils'
 import {
   AI_CLASS_HOME_TAB_ID,
   type AiClassRightTabItem,
@@ -28,8 +27,8 @@ export const studyActiveDocumentIdAtom = atom<string | null>(null)
 /** 右侧留白可折叠边栏是否收起（默认展开） */
 export const studyRightPanelCollapsedAtom = atom<boolean>(false)
 
-/** 右侧课程资料高保真预览栏宽度（px，拖拽左边缘调节后持久化） */
-export const studyRightPanelWidthAtom = atomWithStorage<number>('profer-study-right-panel-width', 520)
+/** 右侧课程资料高保真预览栏宽度（px，拖拽左边缘实时调节） */
+export const studyRightPanelWidthAtom = atom<number>(520)
 
 /** 是否正在解析导入的学习资料 */
 export const studyIngestingAtom = atom<boolean>(false)

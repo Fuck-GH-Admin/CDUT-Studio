@@ -184,6 +184,9 @@ export function AiClassRightTabs({ sessionId }: AiClassRightTabsProps): React.Re
     if (index < 0) return
     const next = tabsRef.current.filter((tab, i) => i <= index || !tab.closable)
     setTabs(next)
+    if (!next.some((tab) => tab.id === activeIdRef.current)) {
+      setActiveTabId(tabId)
+    }
     setMenuTabId(null)
   }
 

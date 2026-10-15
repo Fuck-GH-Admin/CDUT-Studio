@@ -32,9 +32,14 @@ export function AiClassFlashcardTab({ sessionId, deckId }: AiClassFlashcardTabPr
 
   React.useEffect(() => {
     let alive = true
+    if (!deckId) {
+      setDeck(null)
+      setLoading(false)
+      return
+    }
     setLoading(true)
     window.electronAPI.study
-      .getFlashcards({ sessionId, deckId: deckId || undefined })
+      .getFlashcards({ sessionId, deckId })
       .then((data) => {
         if (!alive) return
         setDeck(data)

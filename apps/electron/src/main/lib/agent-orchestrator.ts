@@ -1218,11 +1218,12 @@ export class AgentOrchestrator {
 
       console.log(`[Agent 编排] 启动 Pi runtime，模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`)
 
-      // 确定 Agent 工作目录
+      // 确定 Agent 工作目录（优先本轮入参，回退会话持久化元数据中的工作区，避免后续轮次退化为默认沙箱）
       workspaceSlug = undefined
       workspace = undefined
-      if (workspaceId) {
-        workspace = getAgentWorkspace(workspaceId)
+      const targetWorkspaceId = workspaceId ?? sessionMeta?.workspaceId
+      if (targetWorkspaceId) {
+        workspace = getAgentWorkspace(targetWorkspaceId)
       } else {
         // 无工作区模式下，统一使用默认工作区提供会话隔离沙箱，严禁在个人主目录运行
         try {
@@ -1248,7 +1249,7 @@ export class AgentOrchestrator {
         agentCwd = homedir()
       }
 
-      const effectiveWorkspaceId = workspaceId ?? workspace?.id
+      const effectiveWorkspaceId = targetWorkspaceId ?? workspace?.id
       const effectiveWorkspaceSlug = workspaceSlug ?? workspace?.slug
       // AI 速课堂专属会话判定：独立工作区（cdut-ai-class）的会话走专用带教身份与学习工具，
       // 常规 Agent 会话不再被注入速课堂铁律与学习工具，实现两套系统提示词彻底分家。

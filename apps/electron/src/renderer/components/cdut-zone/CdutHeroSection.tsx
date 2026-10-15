@@ -64,12 +64,11 @@ const BENTO_MODULES: BentoModule[] = [
 
 export function CdutHeroSection({ onSelect }: CdutHeroSectionProps): React.ReactElement {
   return (
-    <section className="flex flex-1 -translate-y-6 flex-col items-center justify-center gap-8">
+    <section className="my-auto flex flex-1 flex-col items-center justify-center gap-6 py-4 sm:gap-8 sm:py-6">
       {/* 居中校徽（含微淡晕影） */}
       <div className="flex flex-col items-center gap-3">
-        {/* Logo 容器固定占位高度 h-40（锁定副标题/板块位置与 Logo↔副标题间距），
-            图片底部对齐容器底边，仅向上生长 */}
-        <div className="relative flex h-40 items-end justify-center">
+        {/* Logo 容器自适应高度，图片底部对齐容器底边 */}
+        <div className="relative flex h-36 items-end justify-center sm:h-44">
           {/* 校徽底层微淡晕影 */}
           <span
             className="pointer-events-none absolute left-1/2 top-1/2 size-64 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-indigo-400/10 via-primary/5 to-emerald-400/10 blur-3xl"
@@ -82,7 +81,7 @@ export function CdutHeroSection({ onSelect }: CdutHeroSectionProps): React.React
           <img
             src={cdutCeLogo}
             alt="成都理工大学校徽"
-            className="relative h-48 w-auto object-contain drop-shadow-sm dark:brightness-125 dark:drop-shadow-[0_0_24px_rgba(255,255,255,0.3)]"
+            className="relative h-40 w-auto object-contain drop-shadow-sm sm:h-48 dark:brightness-125 dark:drop-shadow-[0_0_24px_rgba(255,255,255,0.3)]"
           />
         </div>
         <p className="text-xs font-medium tracking-wide text-muted-foreground">

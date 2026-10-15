@@ -88,12 +88,5 @@ export function estimateTheta(
   return theta
 }
 
-/** 把连续 θ 映射为可读的能力等级标签（面向结算页展示） */
-export function describeTheta(theta: number): string {
-  if (theta >= 2) return '卓越（已显著超越课程要求）'
-  if (theta >= 1) return '优秀（知识体系扎实）'
-  if (theta >= 0) return '良好（基本掌握，仍有提升空间）'
-  if (theta >= -1) return '及格（存在若干知识盲区）'
-  if (theta >= -2) return '待提升（薄弱环节较多）'
-  return '亟需巩固（建议系统重学）'
-}
+/** 把连续 θ 映射为可读的能力等级标签（统一从 @profer/shared 导出） */
+export { describeTheta } from '@profer/shared'

@@ -15,14 +15,15 @@
  */
 
 import { BrowserWindow, session } from 'electron'
-import { existsSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type {
   CdutAccountProfile,
   CdutLoginInput,
   CdutLoginResult,
   CdutSavedAccountSummary,
 } from '@profer/shared'
-import { getCdutAccountPath } from '../config-paths'
+import { getCdutAccountPath, resolveConfigDir } from '../config-paths'
 import { encryptToken, decryptToken } from '../token-crypto'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
 import {
@@ -42,6 +43,46 @@ const JW_HOME_URL = 'https://jw.cdut.edu.cn/jsxsd/framework/xsMainV.htmlx'
 
 /** 特区账户专属隔离分区，与通用账户、其它业务会话物理隔离 */
 export const CDUT_AUTH_PARTITION = 'persist:cdut-auth-zone'
+
+/** 获取学生证件照离线二进制缓存路径（~/.cdutai/cache/avatars/{studentId}.jpg） */
+function getAvatarCachePath(studentId: string): string {
+  return join(resolveConfigDir(), 'cache', 'avatars', `${studentId}.jpg`)
+}
+
+/** 将 Base64 头像保存为二进制独立图片文件，避免 JSON 膨胀 */
+function saveAvatarToCache(studentId: string, avatarDataUrl: string): void {
+  if (!studentId || !avatarDataUrl || !avatarDataUrl.startsWith('data:')) return
+  try {
+    const match = avatarDataUrl.match(/^data:image\/[a-zA-Z+]+;base64,(.+)$/)
+    if (match && match[1]) {
+      const buf = Buffer.from(match[1], 'base64')
+      const dir = join(resolveConfigDir(), 'cache', 'avatars')
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true })
+      }
+      writeFileSync(getAvatarCachePath(studentId), buf)
+    }
+  } catch (err) {
+    console.warn('[CdutAuthManager] 保存头像缓存失败:', err)
+  }
+}
+
+/** 从本地二进制缓存恢复 Base64 头像 */
+function loadAvatarFromCache(studentId: string): string | undefined {
+  if (!studentId) return undefined
+  try {
+    const p = getAvatarCachePath(studentId)
+    if (existsSync(p)) {
+      const buf = readFileSync(p)
+      if (buf.length > 0) {
+        return `data:image/jpeg;base64,${buf.toString('base64')}`
+      }
+    }
+  } catch {
+    // 忽略异常
+  }
+  return undefined
+}
 
 /** 心跳保活周期：10 分钟 */
 const KEEP_ALIVE_INTERVAL_MS = 10 * 60 * 1000
@@ -655,10 +696,11 @@ export class CdutAuthManager {
 
       const data = readJsonFileSafe<StoredCdutAccount>(filePath)
       if (data && data.studentId) {
+        const cachedAvatar = loadAvatarFromCache(data.studentId)
         this.profile = {
           studentId: data.studentId,
           studentName: data.studentName || data.studentId,
-          avatar: data.avatar,
+          avatar: data.avatar || cachedAvatar,
           college: data.college,
           major: data.major,
           classCode: data.classCode,
@@ -698,11 +740,12 @@ export class CdutAuthManager {
       const data = readJsonFileSafe<StoredCdutAccount>(getCdutAccountPath())
       if (!data || !data.studentId) return { hasSaved: false }
 
+      const cachedAvatar = data.studentId ? loadAvatarFromCache(data.studentId) : undefined
       const summary: CdutSavedAccountSummary = {
         hasSaved: true,
         studentId: data.studentId,
         studentName: data.studentName || data.studentId,
-        avatar: data.avatar,
+        avatar: data.avatar || cachedAvatar,
         rememberPassword: !!data.rememberPassword,
       }
       if (data.rememberPassword && data.encryptedPassword) {
@@ -747,6 +790,7 @@ export class CdutAuthManager {
         const res = await authSession.fetch(JW_HOME_URL, {
           method: 'GET',
           redirect: 'manual',
+          signal: AbortSignal.timeout(8000),
         })
         // 重定向至 CAS 或返回未授权，判定会话已过期
         const location = res.headers.get('location') || ''
@@ -1121,8 +1165,19 @@ export class CdutAuthManager {
     // 复位演示态：确保演示账户登出后工具层立即回落真实门禁
     cdutDemoService.reset()
 
-    // 1) 删除本地持久化凭据（含 .bak / .tmp 残留）
+    // 1) 删除本地持久化凭据（含 .bak / .tmp 残留）与证件照缓存
     try {
+      if (this.profile.studentId) {
+        const avatarPath = getAvatarCachePath(this.profile.studentId)
+        if (existsSync(avatarPath)) {
+          try {
+            unlinkSync(avatarPath)
+          } catch (avatarErr) {
+            console.warn('[CdutAuthManager] 删除头像缓存失败:', avatarErr)
+          }
+        }
+      }
+
       const filePath = getCdutAccountPath()
       for (const candidate of [filePath, filePath + '.bak', filePath + '.tmp']) {
         if (existsSync(candidate)) {
@@ -1157,6 +1212,10 @@ export class CdutAuthManager {
   /** 加密落盘保存特区账户（仅密码字段加密） */
   private persistAccount(params: CdutAccountProfile & { password?: string }): void {
     try {
+      if (params.studentId && params.avatar) {
+        saveAvatarToCache(params.studentId, params.avatar)
+      }
+
       const { password, rememberPassword, ...profileData } = params
       const encryptedPassword = rememberPassword && password ? encryptToken(password) : ''
 

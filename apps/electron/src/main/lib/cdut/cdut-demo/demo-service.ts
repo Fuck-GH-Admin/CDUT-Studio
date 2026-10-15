@@ -21,6 +21,7 @@ import {
   DEMO_CLASSROOM_QUERY,
   DEMO_CONTACT_INFO,
   DEMO_EMPTY_CLASSROOMS,
+  DEMO_EXAMS,
   DEMO_GRADES,
   DEMO_LEVEL_EXAMS,
   DEMO_NO_DATA_TEXT,
@@ -47,11 +48,11 @@ function mdTable(headers: string[], rows: string[][]): string {
   return body ? `${head}\n${sep}\n${body}` : `${head}\n${sep}`
 }
 
-/** 成功结果：Markdown 正文 + 结构化 JSON 代码块（与真实链路输出风格保持一致） */
+/** 成功结果：Markdown 正文 + 结构化 JSON 代码块（与真实链路输出风格保持一致，标注 isDemo: true） */
 function buildResult(markdown: string, json?: unknown, mutated = false): CdutDomainToolResult {
   const jsonBlock =
     json === undefined ? '' : '\n\n```json\n' + JSON.stringify(json, null, 2) + '\n```'
-  return { success: true, markdown: `${markdown}${jsonBlock}`, json, mutated }
+  return { success: true, markdown: `${markdown}${jsonBlock}`, json, mutated, isDemo: true }
 }
 
 class CdutDemoService {
@@ -220,7 +221,16 @@ class CdutDemoService {
 
   private executeExams(action: string): CdutDomainToolResult {
     if (action === 'query_exam_schedule') {
-      return buildResult('### 考试安排\n\n近期无考试安排。', { exams: [] })
+      const rows = DEMO_EXAMS.map((e) => [
+        e.courseName,
+        e.examTime,
+        e.classroom,
+        e.seatNumber,
+        e.ticketNumber,
+        e.examType,
+      ])
+      const table = mdTable(['课程名称', '考试时间', '考场教室', '座位号', '准考证号', '类别'], rows)
+      return buildResult(`### 期末考试日程安排\n\n${table}`, { exams: DEMO_EXAMS })
     }
     if (action === 'query_makeup_exams' || action === 'query_retake_courses' || action === 'query_deferral_status') {
       return buildResult(DEMO_NO_DATA_TEXT, { records: [] })

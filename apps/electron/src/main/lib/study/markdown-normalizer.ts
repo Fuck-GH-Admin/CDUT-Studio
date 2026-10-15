@@ -16,8 +16,15 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
 
 /** 中文序号标题正则（第一章 / 第1节 / 第三讲 …） */
 const CN_HEADING = /^第\s*[0-9一二三四五六七八九十百零两]+\s*[章节讲篇部]\s*[\s、.．:：]*/
-/** 阿拉伯数字分级标题正则（1.1 / 2.3.4 / 3） */
-const NUM_HEADING = /^(\d+(?:\.\d+)*)\s*[\s、.．:：]?\s*\S/
+/** 阿拉伯数字多级编号标题正则（1.1 / 2.3.4，至少含一个点号，排除数量词与年份） */
+const MULTI_NUM_HEADING = /^(\d+(?:\.\d+)+)(?:\s*[\s、.．:：]\s*|\s+)(?![0-9年月日万亿个条项名人元点%度是为])\S/
+/**
+ * 阿拉伯数字单级编号标题正则（1. / 2、 / 3: / 1 引言）。
+ *
+ * 允许单空格分隔，但要求其后标题正文至少 2 个非空白字符，并排除年份 / 数量词 / 常见计量单位，
+ * 以防「2023年…」「3.5 万人」「5 分钟」等普通正文被误升格为标题。
+ */
+const SINGLE_NUM_HEADING = /^([1-9]\d?)(?:[、.．:：]|\s+)\s*(?![0-9年月日万亿个条项名人元点%度是为分秒米克吨页步倍层遍期题张])\S{2,}/
 
 /** 单行是否为 Markdown 标题（已带 # 前缀） */
 function isMarkdownHeading(line: string): boolean {
@@ -75,14 +82,22 @@ function normalizeHeadings(lines: string[]): string[] {
   return lines.map((line) => {
     const trimmed = line.trim()
     if (!trimmed || isMarkdownHeading(trimmed)) return line
+    // 排除以句末标点结尾的普通陈述句
+    if (/[。！？；]$/.test(trimmed)) return line
     if (CN_HEADING.test(trimmed)) {
       // 章节级标题统一补为二级标题，避免与文档主标题冲突
       return `## ${trimmed}`
     }
-    const numMatch = NUM_HEADING.exec(trimmed)
-    if (numMatch && trimmed.length <= 60) {
-      const level = Math.min(numMatch[1]!.split('.').length + 1, 6)
-      return `${'#'.repeat(level)} ${trimmed}`
+    if (trimmed.length <= 60) {
+      const multiMatch = MULTI_NUM_HEADING.exec(trimmed)
+      if (multiMatch) {
+        const level = Math.min(multiMatch[1]!.split('.').length + 1, 6)
+        return `${'#'.repeat(level)} ${trimmed}`
+      }
+      const singleMatch = SINGLE_NUM_HEADING.exec(trimmed)
+      if (singleMatch) {
+        return `## ${trimmed}`
+      }
     }
     return line
   })

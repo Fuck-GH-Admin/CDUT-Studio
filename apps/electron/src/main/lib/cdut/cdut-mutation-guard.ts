@@ -21,8 +21,8 @@ interface PendingConfirm {
 /** 进行中的确认请求（requestId -> 挂起 Promise 与超时定时器） */
 const pendingConfirms = new Map<string, PendingConfirm>()
 
-/** 用户未在 2 分钟内抉择则视为拒绝 */
-const CONFIRM_TIMEOUT_MS = 120_000
+/** 用户未在 30 秒内抉择则自适应超时，视为拒绝 */
+const CONFIRM_TIMEOUT_MS = 30_000
 
 /**
  * 派发一次写操作确认请求，并等待用户在界面上确认或拒绝。

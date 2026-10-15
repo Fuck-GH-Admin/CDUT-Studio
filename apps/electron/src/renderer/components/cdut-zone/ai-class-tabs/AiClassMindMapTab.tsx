@@ -30,9 +30,14 @@ export function AiClassMindMapTab({ sessionId, mindmapId }: AiClassMindMapTabPro
 
   React.useEffect(() => {
     let alive = true
+    if (!mindmapId) {
+      setMindmap(null)
+      setLoading(false)
+      return
+    }
     setLoading(true)
     window.electronAPI.study
-      .getMindmap({ sessionId, mindmapId: mindmapId || undefined })
+      .getMindmap({ sessionId, mindmapId })
       .then((data) => {
         if (!alive) return
         setMindmap(data)

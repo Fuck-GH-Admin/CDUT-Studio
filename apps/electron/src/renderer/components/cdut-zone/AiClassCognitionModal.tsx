@@ -123,7 +123,7 @@ export function AiClassCognitionModal(): React.ReactElement {
         tag: '🌐 分层社群大纲 · 期末系统串讲',
         scene: '期末大复习、全书核心理论演进答疑、跨章节概念横向对比、综合性大题破题。',
         advantage:
-          '将知识点深度命题化，自动聚类出顶层核心思想、中层大章脉络与底层细化考点，能站在全书全局高度回答系统性宏观大题。',
+          '结合原子命题化与分层社群聚类，自动梳理顶层核心思想、中层大章脉络与底层细化考点，能站在全书全局高度回答系统性宏观大题。',
         risk: '内存与算力开销：纯内存构建多层级社区图谱额外占用约 10MB~30MB 运行内存；宏观多层遍历会导致首字生成耗时微增约 0.5~1.5 秒。',
         tech: '底层技术：Leiden 分层社群图谱检索 (Hierarchical GraphRAG)',
         accent: 'text-violet-600 dark:text-violet-400',

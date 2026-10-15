@@ -26,6 +26,7 @@ import {
   getStudyFlashcardsPath,
   getStudyMindmapsPath,
   getStudyQuizzesPath,
+  getStudySessionDataDir,
   getStudyTabsPath,
 } from '../config-paths'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
@@ -34,6 +35,16 @@ import { estimateTheta, itemParamsForDifficulty } from './fim-estimator'
 
 /** 存储结构版本（后续迁移用） */
 export const STUDY_SESSION_STORE_VERSION = 1
+
+/**
+ * 写入前确保课堂专属存储目录存在。
+ *
+ * `writeJsonFileAtomic` 不会自动创建父目录，而 `getStudySessionDataDir` 默认纯路径解析
+ * （无创建副作用，避免读取即建目录），故所有写入路径必须先显式确保目录存在。
+ */
+function ensureSessionDataDir(sessionId: string): void {
+  getStudySessionDataDir(sessionId, { create: true })
+}
 
 /** 构造固定的首页标签 */
 export function createHomeTab(): AiClassRightTabItem {
@@ -75,6 +86,7 @@ export function saveTabs(
   activeTabId: string,
 ): AiClassTabsState {
   const state = normalizeTabsState(sessionId, tabs, activeTabId)
+  ensureSessionDataDir(sessionId)
   writeJsonFileAtomic(getStudyTabsPath(sessionId), {
     version: STUDY_SESSION_STORE_VERSION,
     tabs: state.tabs,
@@ -109,6 +121,7 @@ export function saveMindmap(sessionId: string, mindmap: MindMapData): void {
   const index = list.findIndex((m) => m.id === mindmap.id)
   if (index >= 0) list[index] = mindmap
   else list.push(mindmap)
+  ensureSessionDataDir(sessionId)
   writeJsonFileAtomic(getStudyMindmapsPath(sessionId), {
     version: STUDY_SESSION_STORE_VERSION,
     mindmaps: list,
@@ -131,6 +144,7 @@ export function saveMindmapCoords(
     for (const child of node.children ?? []) apply(child)
   }
   apply(mindmap.root)
+  ensureSessionDataDir(sessionId)
   writeJsonFileAtomic(getStudyMindmapsPath(sessionId), {
     version: STUDY_SESSION_STORE_VERSION,
     mindmaps: list,
@@ -164,6 +178,7 @@ export function saveFlashcardDeck(sessionId: string, deck: FlashcardDeck): void 
   const index = list.findIndex((d) => d.id === deck.id)
   if (index >= 0) list[index] = deck
   else list.push(deck)
+  ensureSessionDataDir(sessionId)
   writeJsonFileAtomic(getStudyFlashcardsPath(sessionId), {
     version: STUDY_SESSION_STORE_VERSION,
     decks: list,
@@ -188,6 +203,7 @@ export function updateCardRating(input: {
   if (!card) return null
   const reviewedAt = input.reviewedAt ?? Date.now()
   card.fsrs = scheduleFsrs(card.fsrs, input.rating, reviewedAt)
+  ensureSessionDataDir(input.sessionId)
   writeJsonFileAtomic(getStudyFlashcardsPath(input.sessionId), {
     version: STUDY_SESSION_STORE_VERSION,
     decks: list,
@@ -228,6 +244,7 @@ export function saveQuiz(sessionId: string, quiz: QuizSession): void {
   const index = list.findIndex((q) => q.id === quiz.id)
   if (index >= 0) list[index] = quiz
   else list.push(quiz)
+  ensureSessionDataDir(sessionId)
   writeJsonFileAtomic(getStudyQuizzesPath(sessionId), {
     version: STUDY_SESSION_STORE_VERSION,
     quizzes: list,
@@ -261,6 +278,7 @@ export function submitQuizAnswer(input: {
     answered.map((q) => ({ item: itemParamsForDifficulty(quiz.difficulty), correct: q.isCorrect === true })),
   )
 
+  ensureSessionDataDir(input.sessionId)
   writeJsonFileAtomic(getStudyQuizzesPath(input.sessionId), {
     version: STUDY_SESSION_STORE_VERSION,
     quizzes: list,
