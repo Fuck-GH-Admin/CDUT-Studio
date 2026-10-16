@@ -30,7 +30,8 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           # 固定到已在本地验证过的版本，避免 latest 改变 lockfile 或测试行为。
-          bun-version: 1.3.14
+          # 1.4.2 与本地开发环境一致，可解析 lockfileVersion 2 的 bun.lock。
+          bun-version: 1.4.2
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
