@@ -79,7 +79,14 @@ jobs:
 
       - name: Build and package macOS arm64
         working-directory: apps/electron
-        run: bun run dist:mac
+        run: |
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo "worktree dirty: $(git status --porcelain | head -5)"
+          echo '--- build-ooxml.mjs (first 18 lines) ---'
+          sed -n '1,18p' scripts/build-ooxml.mjs
+          echo '--- ooxml resolve ---'
+          node -e "console.log(require.resolve('@silurus/ooxml'))"
+          bun run dist:mac
 
       - name: Verify macOS updater metadata
         working-directory: apps/electron
