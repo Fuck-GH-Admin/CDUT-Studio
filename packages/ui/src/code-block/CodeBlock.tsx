@@ -210,10 +210,10 @@ export function CodeBlock({ children, headerActions, bodyOverride }: CodeBlockPr
 
   return (
     <div className="code-block-wrapper not-prose group/code rounded-lg overflow-hidden my-2 border border-border/50">
-      {/* 头部栏：语言标签 + 复制按钮 */}
-      <div className="flex items-center justify-between h-[34px] px-2 py-1 bg-muted/60 text-muted-foreground text-xs">
+      {/* 头部栏：语言标签 + 复制按钮（整条 select-none，杜绝工具条文字混入用户选区） */}
+      <div className="flex h-[34px] select-none items-center justify-between px-2 py-1 bg-muted/60 text-muted-foreground text-xs">
         <span className="font-medium select-none">{getDisplayName(language)}</span>
-        <div className="flex items-center gap-1">
+        <div className="flex select-none items-center gap-1">
           {headerActions}
           <button
             type="button"

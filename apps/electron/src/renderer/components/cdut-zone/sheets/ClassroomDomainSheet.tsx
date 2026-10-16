@@ -33,15 +33,44 @@ interface ClassroomItem {
   hasAirConditioner: boolean
 }
 
-const CHENGDU_BUILDINGS = ['东区1教', '东区9教', '6教', '艺术大楼', '地灾国重'] as const
-const YIBIN_BUILDINGS = ['甲教A座', '甲教B座', '乙教', '综合楼'] as const
+/**
+ * 动态楼宇条目（唯一来源：教务 jsjy_processAjax 实时发现的真实楼宇 + jxlbh 代码）。
+ * 严禁再维护任何硬编码楼宇清单——虚构楼名属于演示假数据，会让筛选与真实教务口径不符。
+ */
+interface BuildingItem {
+  name: string
+  code: string
+}
 
+/**
+ * 精确对应成都理工大学官方作息的节次筛选选项（11 节制，严禁出现第 12 节课）。
+ * 中午 12:00-13:55 为午休空档，不作为可选教学节次。
+ */
 const TIME_SLOTS: { id: string; label: string; sections?: number[] }[] = [
-  { id: 'morning', label: '上午 (1-4节)', sections: [1, 2, 3, 4] },
-  { id: 'afternoon', label: '下午 (5-8节)', sections: [5, 6, 7, 8] },
-  { id: 'evening', label: '晚自习 (9-10节)', sections: [9, 10] },
+  { id: 'p12', label: '01-02节 (08:10-09:45)', sections: [1, 2] },
+  { id: 'p34', label: '03-04节 (10:15-11:50)', sections: [3, 4] },
+  { id: 'p56', label: '05-06节 (14:30-16:05)', sections: [5, 6] },
+  { id: 'p78', label: '07-08节 (16:25-18:00)', sections: [7, 8] },
+  { id: 'p910', label: '09-10节 (19:10-20:45)', sections: [9, 10] },
+  { id: 'p11', label: '11节 (20:50-21:35)', sections: [11] },
   { id: 'all', label: '全天时段', sections: undefined },
 ]
+
+/** 从查询结果 JSON 中提取动态楼宇清单（旧版式 / Demo 数据无此字段时返回空数组） */
+function normalizeBuildings(rawJson: unknown): BuildingItem[] {
+  if (!rawJson || typeof rawJson !== 'object') return []
+  const list = (rawJson as Record<string, unknown>).buildings
+  if (!Array.isArray(list)) return []
+  const result: BuildingItem[] = []
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue
+    const b = item as Record<string, unknown>
+    const name = String(b.name ?? '').trim()
+    const code = String(b.code ?? '').trim()
+    if (name && code) result.push({ name, code })
+  }
+  return result
+}
 
 /** 规范化空闲教室列表 */
 function normalizeClassrooms(rawJson: unknown): ClassroomItem[] {
@@ -91,9 +120,11 @@ function normalizeClassrooms(rawJson: unknown): ClassroomItem[] {
 
 export function ClassroomDomainSheet(): React.ReactElement {
   const [campus, setCampus] = React.useState<'chengdu' | 'yibin'>('chengdu')
-  const [building, setBuilding] = React.useState<string>('东区1教')
-  const [timeSlotId, setTimeSlotId] = React.useState<string>('afternoon')
+  const [building, setBuilding] = React.useState<string>('') // 空串 = 全部教学楼（选中楼宇时由教务服务端按 jxlbh 权威筛选）
+  const [timeSlotId, setTimeSlotId] = React.useState<string>('p12')
   const [acOnly, setAcOnly] = React.useState(false)
+  // 动态楼宇清单：来自教务实时发现，优先于静态兜底清单
+  const [dynamicBuildings, setDynamicBuildings] = React.useState<BuildingItem[]>([])
 
   const [loading, setLoading] = React.useState(true)
   const [result, setResult] = React.useState<CdutDomainToolResult | null>(null)
@@ -112,6 +143,8 @@ export function ClassroomDomainSheet(): React.ReactElement {
         },
       })
       setResult(res)
+      const buildings = normalizeBuildings(res?.json)
+      if (buildings.length > 0) setDynamicBuildings(buildings)
     } catch (err) {
       setResult({
         success: false,
@@ -124,12 +157,12 @@ export function ClassroomDomainSheet(): React.ReactElement {
     }
   }, [campus, building, timeSlotId])
 
-  // 校区切换时自动更新默认建筑
+  // 校区切换：回退全部教学楼并清空上一校区的动态楼宇清单，待新一轮查询刷新
   const handleCampusChange = (c: 'chengdu' | 'yibin') => {
     setCampus(c)
-    setBuilding(c === 'chengdu' ? CHENGDU_BUILDINGS[0] : YIBIN_BUILDINGS[0])
+    setBuilding('')
+    setDynamicBuildings([])
   }
-
   React.useEffect(() => {
     void queryClassrooms()
   }, [queryClassrooms])
@@ -140,7 +173,9 @@ export function ClassroomDomainSheet(): React.ReactElement {
     return list
   }, [result?.json, acOnly])
 
-  const currentBuildings = campus === 'chengdu' ? CHENGDU_BUILDINGS : YIBIN_BUILDINGS
+  // 楼宇 chips 唯一来源：教务实时发现的动态清单。
+  // 严禁回退到硬编码楼名（属演示假数据，且与真实教务楼宇口径不一致会导致筛选落空）。
+  const buildingNames: string[] = dynamicBuildings.map((b) => b.name)
 
   return (
     <div className="flex h-full flex-col">
@@ -204,13 +239,13 @@ export function ClassroomDomainSheet(): React.ReactElement {
           </div>
         </div>
 
-        {/* 教学楼胶囊 */}
+        {/* 教学楼胶囊（首项为「全部」；楼名全部来自教务实时下发） */}
         <div>
           <span className="mb-1.5 block text-xs font-medium text-muted-foreground">教学楼</span>
           <div className="flex flex-wrap gap-1.5">
-            {currentBuildings.map((b) => (
+            {['', ...buildingNames].map((b) => (
               <button
-                key={b}
+                key={b || 'all'}
                 type="button"
                 onClick={() => setBuilding(b)}
                 className={cn(
@@ -220,10 +255,15 @@ export function ClassroomDomainSheet(): React.ReactElement {
                     : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
               >
-                {b}
+                {b || '全部教学楼'}
               </button>
             ))}
           </div>
+          {buildingNames.length === 0 && (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground/80">
+              {loading ? '正在向教务拉取真实教学楼列表…' : '未获取到真实教学楼列表：请登录特区账户后重试（不提供任何虚构楼名）'}
+            </p>
+          )}
         </div>
 
         {/* 时段与空调 */}

@@ -272,6 +272,24 @@ export function AiClassRightTabs({ sessionId }: AiClassRightTabsProps): React.Re
     setMenuState(null)
   }
 
+  /**
+   * 点击切换标签：预览类标签必须实时联动更新 previewFileMap，
+   * 否则预览内容将永远停留在初次打开的文件上（切换 Tab 内容纹丝不动的根因）。
+   */
+  const handleTabClick = (tab: AiClassRightTabItem): void => {
+    setActiveTabId(tab.id)
+    const targetPath = tab.data.filePath
+    if (tab.type === 'preview' && typeof targetPath === 'string' && targetPath) {
+      setPreviewFileMap((prev) => {
+        const current = prev.get(sessionId)
+        if (current?.filePath === targetPath) return prev
+        const next = new Map(prev)
+        next.set(sessionId, { filePath: targetPath, previewOnly: true, readOnly: true })
+        return next
+      })
+    }
+  }
+
   const duplicateTab = (tabId: string): void => {
     const index = tabsRef.current.findIndex((tab) => tab.id === tabId)
     const target = tabsRef.current[index]
@@ -415,7 +433,7 @@ export function AiClassRightTabs({ sessionId }: AiClassRightTabsProps): React.Re
                     closeTab(tab.id)
                   }
                 }}
-                onClick={() => setActiveTabId(tab.id)}
+                onClick={() => handleTabClick(tab)}
                 className={cn(
                   'group/tab flex max-w-[170px] shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition-colors',
                   isActive
@@ -495,7 +513,8 @@ export function AiClassRightTabs({ sessionId }: AiClassRightTabsProps): React.Re
         )}
         {activeTab?.type === 'preview' && (
           <div className="flex h-full min-h-0 flex-col">
-            <SidebarFilePreview sessionId={sessionId} />
+            {/* 动态唯一 key：文件路径变化时强制重挂载，确保重新加载文件流 */}
+            <SidebarFilePreview key={previewFile?.filePath || 'empty'} sessionId={sessionId} />
           </div>
         )}
         {activeTab?.type === 'mindmap' && (

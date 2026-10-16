@@ -62,6 +62,8 @@ export interface YanhuCollectedPage {
   textSample?: string
   /** 闭合 Shadow DOM 宿主标签集合（脚本端探测打标，主进程可经 CDP 深度补漏解析） */
   closedShadowHosts?: string[]
+  /** 未被渲染的可交互元素统计（折叠菜单 / 隐藏面板 / 未激活标签页等，不分配 BID） */
+  unrendered?: { count: number; regions: string[] }
 }
 
 /** 单次采集硬上限（防止超大页面拖垮主进程与大模型上下文，深层全景探测扩容至 1000） */
@@ -74,8 +76,6 @@ const MAX_COLLECTED_ELEMENTS = 1000
  * 框架的宝贵额度，从根源杜绝页面靠后深层业务元素被丢弃。
  */
 const MAX_NAV_FRAME_ELEMENTS = 120
-/** 折叠/后台隐藏元素的独立采集上限（仅采集「有名称且可交互」者，避免 Token 与候选集膨胀） */
-const MAX_COLLAPSED_ELEMENTS = 80
 /** 元素名称最大字符数 */
 const MAX_NAME_CHARS = 80
 
@@ -100,6 +100,121 @@ export const YANHU_ACCESSIBLE_NAME_SNIPPET = `
         const t = (raw || '').replace(/\\s+/g, ' ').trim();
         return t.length > ${MAX_NAME_CHARS} ? t.slice(0, ${MAX_NAME_CHARS}) + '…' : t;
       };
+      // 企业级表单封装的「标签载体」属性：金智 EMAP / 自研组件把中文标签挂在容器的 data-caption 上，
+      // 而控件自身（input / div）没有任何 ARIA / label / title / placeholder。
+      const __yanhuCaptionAttrs = ['data-caption', 'data-label', 'data-field-label'];
+      const __yanhuCaptionOf = (el) => {
+        let node = el, depth = 0;
+        while (node && node.nodeType === 1 && depth < 6) {
+          for (let i = 0; i < __yanhuCaptionAttrs.length; i++) {
+            const v = node.getAttribute ? (node.getAttribute(__yanhuCaptionAttrs[i]) || '') : '';
+            if (v) return v;
+          }
+          node = node.parentElement;
+          depth += 1;
+        }
+        return '';
+      };
+      /** 元素「自身直接文本」（只拼接直接子文本节点，不含子孙文本） */
+      const __yanhuOwnText = (el) => {
+        let out = '';
+        try {
+          const nodes = el.childNodes || [];
+          for (let i = 0; i < nodes.length; i++) {
+            const n = nodes[i];
+            if (n && n.nodeType === 3) out += (n.nodeValue || '') + ' ';
+          }
+        } catch (e) {}
+        return out.replace(/\\s+/g, ' ').trim();
+      };
+      /** 首个「带文本的叶子后代」文本（自身无直接文本时的回退，长度有界） */
+      const __yanhuFirstLeafText = (el, maxChars) => {
+        try {
+          const all = el.querySelectorAll ? el.querySelectorAll('*') : [];
+          for (let i = 0; i < all.length; i++) {
+            const node = all[i];
+            if (node.children && node.children.length > 0) continue;
+            const t = (node.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!t) continue;
+            return t.length > maxChars ? t.slice(0, maxChars) + '…' : t;
+          }
+        } catch (e) {}
+        return '';
+      };
+      /**
+       * 控件的「当前显示文本」——自身直接文本优先，为空时回退首个叶子后代文本。
+       *
+       * 这是本轮两条修复共用的核心口径：
+       *   ① 命名（#3）：聚合容器的名字此前是**全部子孙文本拼接**（如「请选择... 香港特别行政区
+       *      吉林省 贵州省 …」），语义不明，模型要花大量推理去猜它到底是什么；
+       *   ② 取值（#1）：非输入型控件（自定义下拉 / 树选择 / 日期控件）的 value 此前恒为空，
+       *      模型因此无法核对「选区到底写进去没有」，只能反复试、最后撞熔断。
+       * 两者都改用同一份「自身直接文本 → 首个叶子后代」的短文本口径。
+       */
+      const __yanhuDisplayText = (el) => {
+        const own = __yanhuOwnText(el);
+        if (own) return own;
+        const leaf = __yanhuFirstLeafText(el, 40);
+        if (leaf) return leaf;
+        // 走到这里意味着「自身与后代都没有文本节点」。真实 DOM 中此时 innerText / textContent
+        // 必然也为空，故本行等价于返回空串——它只会在结构信息不自洽的极简宿主（测试桩）上取到文本，
+        // 因此不会复活「名字=子孙拼接」的老问题。
+        return (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+      };
+      /**
+       * 通用占位提示词（未选择 / 未进入填写状态的提示），**不配作为控件名称**。
+       *
+       * 金智 EMAP 表单里十几个未填写的下拉 / 树选择，显示文本全是「请选择...」；
+       * 若放任它占用名字，模型只会看到十几个一模一样的控件、被迫盲猜 [BID]（历史事故）。
+       * 注意：只匹配「请选择 / 点击选择 / select / choose」这类**完整的占位语义**，
+       * 不匹配「选择时间」这种本身有意义的按钮名，避免误改真实控件文本。
+       */
+      const __yanhuPlaceholderPattern = /^(请选择|请选取|点击选择|select|choose|please select)/i;
+      const __yanhuIsPlaceholderText = (raw) => {
+        const text = (raw || '').replace(/\\s+/g, ' ').trim();
+        if (!text) return false;
+        // 「...」/「…」结尾的短文本（请选择...、Select...）一律视为占位
+        if (text.indexOf('...') >= 0 || text.indexOf('…') >= 0) {
+          return text.replace(/[.。\u2026\\s]+$/g, '').length <= 8;
+        }
+        return __yanhuPlaceholderPattern.test(text) && text.length <= 12;
+      };
+      /**
+       * 是否为**泛化占位提示**——去掉提示前缀与省略号后不剩任何字段信息（「请选择...」）。
+       *
+       * 与「请选择日期」这种含具体名词的 placeholder 严格区分：后者本身就能标识字段，必须保留；
+       * 只有泛化提示才允许让位给权威业务标签（data-caption / label）。
+       */
+      const __yanhuIsGenericPlaceholder = (raw) => {
+        const text = (raw || '').replace(/\\s+/g, ' ').trim();
+        if (!text || !__yanhuPlaceholderPattern.test(text)) return false;
+        const rest = text.replace(__yanhuPlaceholderPattern, '').replace(/[.。\u2026\s]+/g, '');
+        return rest.length === 0;
+      };
+      /** 表单元素的原生标签关联（W3C AccName 核心路径）；不适用时返回空串 */
+      const __yanhuNativeLabelOf = (el, doc) => {
+        try {
+          if (el.labels && el.labels.length > 0) {
+            for (let i = 0; i < el.labels.length; i++) {
+              const lt = (el.labels[i].textContent || '').trim();
+              if (lt) return lt;
+            }
+          }
+          if (el.id && doc && doc.querySelector) {
+            const forLabel = doc.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+            if (forLabel && forLabel.textContent) {
+              const lt = forLabel.textContent.trim();
+              if (lt) return lt;
+            }
+          }
+          const parentLabel = el.closest ? el.closest('label') : null;
+          if (parentLabel && parentLabel.textContent) {
+            const lt = parentLabel.textContent.trim();
+            if (lt) return lt;
+          }
+        } catch (e) {}
+        return '';
+      };
       const __yanhuDeriveName = (el, doc) => {
         const attrOf = (n) => (el.getAttribute ? (el.getAttribute(n) || '') : '');
         const tag = (el.tagName || '').toLowerCase();
@@ -117,29 +232,8 @@ export const YANHU_ACCESSIBLE_NAME_SNIPPET = `
 
         // 2. 表单元素原生标签关联（W3C AccName 规范核心）
         if (tag === 'input' || tag === 'select' || tag === 'textarea' || role === 'radio' || role === 'checkbox') {
-          // 2a. HTMLInputElement.labels
-          if (el.labels && el.labels.length > 0) {
-            for (let i = 0; i < el.labels.length; i++) {
-              const lt = (el.labels[i].textContent || '').trim();
-              if (lt) return __yanhuCleanName(lt);
-            }
-          }
-          // 2b. 外部 <label for="id">
-          if (el.id && doc && doc.querySelector) {
-            try {
-              const forLabel = doc.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-              if (forLabel && forLabel.textContent) {
-                const lt = forLabel.textContent.trim();
-                if (lt) return __yanhuCleanName(lt);
-              }
-            } catch (e) {}
-          }
-          // 2c. 向上追溯祖先 <label>（Vue / Element / EMAP 封装常见）
-          const parentLabel = el.closest ? el.closest('label') : null;
-          if (parentLabel && parentLabel.textContent) {
-            const lt = parentLabel.textContent.trim();
-            if (lt) return __yanhuCleanName(lt);
-          }
+          const nativeLabel = __yanhuNativeLabelOf(el, doc);
+          if (nativeLabel) return __yanhuCleanName(nativeLabel);
           // 2d. 单选 / 复选同级兄弟文本节点与紧邻容器文本
           if (type === 'radio' || type === 'checkbox' || role === 'radio' || role === 'checkbox') {
             let sib = el.nextElementSibling;
@@ -165,9 +259,33 @@ export const YANHU_ACCESSIBLE_NAME_SNIPPET = `
         const placeholder = attrOf('placeholder');
         const alt = attrOf('alt');
 
-        // 4. 内联文本与通用回退
-        const text = el.innerText || el.textContent || '';
-        return __yanhuCleanName(text || title || placeholder || alt || '');
+        // 4. 显示文本与通用回退（自身直接文本优先，为空则取首个叶子后代文本）
+        //
+        // 历史缺陷：此处原为 el.innerText || el.textContent —— 对**容器**而言那是「全部子孙文本
+        // 的拼接」，于是树形/级联选择器的容器名会变成「请选择... 香港特别行政区 吉林省 贵州省 …」
+        // 这种语义不明的长串，模型只能靠猜。改用短文本口径后，名字稳定收敛为一个短词。
+        const text = __yanhuDisplayText(el);
+        const direct = text || title || placeholder || alt || '';
+        if (direct) {
+          // 占位符不配当控件名：若拿到的只是「请选择...」这类**泛化提示**，而该控件又具备权威业务标签
+          // （data-caption / label），则**提升标签为控件名**，让占位符退化为「当前值」。
+          // 这样模型看到的是 [BID: 24] combobox "出校去向"，而不是第 10 个「请选择...」。
+          // 注意仅限泛化提示：placeholder 为「请选择日期」这类含字段名词者仍然保留。
+          if (__yanhuIsGenericPlaceholder(direct)) {
+            return __yanhuCleanName(__yanhuCaptionOf(el) || __yanhuNativeLabelOf(el, doc) || direct);
+          }
+          return __yanhuCleanName(direct);
+        }
+
+        // 5. 最终回退：企业级表单封装的容器级标签（data-caption 等）。
+        //
+        // 历史缺陷（致命）：EMAP「请假开始时间 / 请假结束时间」这类日期时间控件，其 <input> 自身
+        // 无 ARIA / label / title / placeholder，中文标签挂在祖先 div 的 data-caption 上。
+        // 采集端靠「空间近邻猜测」拿到了名字，而**定位端没有空间猜测能力**，只能推导出空名 →
+        // 名称恒不匹配 → 点击与填写双双报「未能在页面中定位」，模型被迫转去猜像素坐标。
+        // 把这条权威标签载体纳入两端共用的推导链后，采集与定位得到完全一致的名称，从根上消除。
+        // 仅在控件自身确实没有任何文本时启用，绝不覆盖按钮 / 链接的内联文本。
+        return __yanhuCleanName(__yanhuCaptionOf(el));
       };
     `
 /** 键值最大字符数 */
@@ -196,6 +314,35 @@ export const DIFF_MAX_ADDED_ITEMS = 8
 export const MAX_TEXT_SAMPLE_CHARS = 480
 
 /**
+ * 浮动面板（下拉 / 选择器 / 浮层）根节点选择器。
+ *
+ * **单一真源**：采集端「浮层内叶子选项纳管」与主进程侧「面板内点选选项」必须用同一份清单，
+ * 否则两端判定漂移（历史上正是这类漂移导致「选择器能点到、采集端看不到」的诡异组合）。
+ */
+export const YANHU_POPUP_SELECTORS = [
+  '.bh-pull-down-list',
+  '.bh-select-dropdown',
+  '.bh-dropdown-menu',
+  // jqx / EMAP 的浮动面板容器（实测：出校去向的树面板是 .jqx-dropdownbutton-popup）
+  '.jqx-dropdownbutton-popup',
+  '.jqx-dropdownlist-popup',
+  // 树形选择器面板内的树容器（实测：#tree_xxx.dropdown-tree）
+  '[class*="dropdown-tree"]',
+  '[class*="popper"]',
+  '[class*="popover"]',
+  '[class*="picker"]',
+  '[role="listbox"]',
+  '[id*="innerListBox"]',
+  '[id*="listBoxContent"]',
+  '.jqx-listbox',
+]
+
+/** 单次采集中，浮层内叶子选项的纳管上限（防止带浮层的页面把台账撑爆） */
+const MAX_COLLECTED_POPUP_OPTIONS = 60
+/** 浮层内叶子选项的文本长度上限（超过即视为正文而非选项） */
+const MAX_POPUP_OPTION_CHARS = 40
+
+/**
  * 生成注入页面主上下文运行的采集脚本。
  *
  * 该脚本在页面内完成第一 ~ 第四级的原始数据采集（语义降噪 / 布局可视性 / 遮挡校验 / 区域解构），
@@ -206,11 +353,14 @@ export function buildYanhuCollectorScript(): string {
     try {
       const MAX = ${MAX_COLLECTED_ELEMENTS};
       const MAX_NAV = ${MAX_NAV_FRAME_ELEMENTS};
-      const MAX_COLLAPSED = ${MAX_COLLAPSED_ELEMENTS};
       const emit = [];
       const dataTables = [];
       const closedShadowHosts = [];
-      let collapsedCount = 0;
+      // 未渲染元素的统计口径（仅计数与区域归属，绝不分配 BID）
+      let unrenderedCount = 0;
+      const unrenderedRegions = [];
+      /** 已分配 BID 的 DOM 节点（供浮层叶子选项纳管去重，避免同一元素重复编号） */
+      const emittedNodes = [];
       // 分框架配额倾斜：判定当前框架是否属于导航 / 辅助框架（其采集量受 MAX_NAV 收敛）
       const isNavFramePath = (fp) => /(left|menu|nav|top|header|bottom|footer)/i.test(fp || '');
 
@@ -364,6 +514,70 @@ export function buildYanhuCollectorScript(): string {
         return t.length > ${MAX_VALUE_CHARS} ? t.slice(0, ${MAX_VALUE_CHARS}) + '…' : t;
       };
 
+      /**
+       * 渲染判定（决定该元素能否进入 BID 台账的唯一权威口径）。
+       *
+       * 计算样式三道闸门（display / visibility / opacity）之外，额外要求：
+       *   1. content-visibility 不得为 hidden —— 其子树不渲染，但后代自身的计算样式完全正常，
+       *      单看 display 会「看得见调不到」；
+       *   2. 必须存在真实布局盒（getClientRects 非空）—— 这是覆盖「display:contents」「未挂载子树」
+       *      「content-visibility:hidden 后代」等一切未渲染形态的最可靠判据。
+       * 拿不到布局信息的宿主（单测桩 / 老旧内核）按可见处理，绝不因探测能力缺失而误杀。
+       */
+      const isRenderedElement = (el, style, rect) => {
+        if (style) {
+          if (style.display === 'none') return false;
+          if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+          if (parseFloat(style.opacity || '1') <= 0) return false;
+          if (style.contentVisibility === 'hidden') return false;
+        }
+        if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+        try {
+          if (typeof el.getClientRects === 'function' && el.getClientRects().length === 0) return false;
+        } catch (e) {}
+        return true;
+      };
+
+      // 控件尺度上限：「磁吸」与「可见代理重绑定」只在小尺度控件上成立，
+      // 绝不把面板 / 表单级大容器当成控件（否则会把点击拖到容器中心，落点完全跑偏）。
+      const MAX_CONTROL_SIDE = 480;
+      const MAX_CONTROL_HEIGHT = 140;
+
+      /**
+       * 找出隐藏控件的「可见代理」——真正承载视觉与交互的那个已渲染节点。
+       *
+       * 自定义单选 / 复选（layui / EMAP / Element 等）会把原生 input 元素视觉隐藏成 0×0 或
+       * opacity:0，用户与鼠标实际作用的对象是外层 label 或小尺度可点击包裹。若只按
+       * 「未渲染」把它丢弃，模型在整个 [BID] 台账里就再也找不到「因私请假 / 是否出校」这类选项，
+       * 只能退化成猜像素坐标——这正是「仅凭 DOM 解析也点不上单选」的根因。
+       */
+      const __yanhuRenderedProxyOf = (el, doc) => {
+        const withinControlScale = (node) => {
+          let r = null;
+          try { r = node.getBoundingClientRect(); } catch (e) {}
+          if (!r || r.width <= 0 || r.height <= 0) return false;
+          if (r.width > MAX_CONTROL_SIDE || r.height > MAX_CONTROL_HEIGHT) return false;
+          const text = (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
+          return text.length > 0 && text.length <= 40;
+        };
+        // 1. 关联 <label>：原生语义保证点击 label 即切换其控件
+        let label = null;
+        try { label = el.closest ? el.closest('label') : null; } catch (e) {}
+        if (!label && el.id && doc && doc.querySelector) {
+          try { label = doc.querySelector('label[for="' + CSS.escape(el.id) + '"]'); } catch (e) {}
+        }
+        if (label && withinControlScale(label)) return label;
+        // 2. 最近的「控件尺度」祖先包裹（自定义控件形态：<span class="radio"><i></i>因私请假</span>）
+        let node = el.parentElement;
+        let depth = 0;
+        while (node && node.nodeType === 1 && depth < 4) {
+          if (withinControlScale(node)) return node;
+          node = node.parentElement;
+          depth += 1;
+        }
+        return null;
+      };
+
 ${YANHU_ACCESSIBLE_NAME_SNIPPET}
       const computeName = (el, _tag, doc) => __yanhuDeriveName(el, doc);
 
@@ -436,7 +650,11 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
       // 仅依赖 HTML5 语义标签会导致 90% 节点退化为「主要内容」，此处以类名 / ID 线索补齐解构精度。
       const REGION_CLASS_HINTS = [
         [/nav|menu|sidebar/, '导航菜单'],
-        [/table|list|grid/, '数据表格'],
+        // 「数据表格」的 list / grid 必须带词尾边界：listBox / gridCell 这类**表单控件内部命名**
+        // 若被裸子串命中，会把下拉框、表格布局的表单项误标成「数据表格」，
+        // 诱使模型把它们当成列表筛选器而不敢操作（历史故障：模型据此怀疑「这些 BID 可能是
+        // 我的请假 tab 的筛选器」）。table 保留裸匹配——命中 table 的表就是表格，无误判风险。
+        [/table|list(?![a-z])|grid(?![a-z])/, '数据表格'],
         [/form|search|filter|query/, '业务表单'],
         [/header|banner|(^|[^a-z])top([^a-z]|$)/, '顶栏区'],
         [/footer|bottom|copyright/, '底栏区'],
@@ -458,6 +676,45 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
         }
         return '';
       };
+
+      /** 判定为「可输入控件」的 input type 白名单（用于区分布局表格与数据表格） */
+      const LAYOUT_ENTRY_INPUT_TYPES = new Set([
+        'text','search','password','email','tel','url','number',
+        'date','datetime-local','month','week','time','',
+      ]);
+
+      /**
+       * 判定 table 元素是「布局表格」还是「数据表格」。
+       *
+       * 企业级表单（金智 EMAP / 旧版教务）惯用 table 做栅格布局，表内承载的是输入控件；
+       * 真正的数据表格里只有文本与链接。不加区分会把表单字段整体标成「数据表格」，
+       * 模型据此误判为列表筛选器而不敢下手。
+       *
+       * 金智 EMAP 的栅格表格里往往只有 div 包装的自定义组件与 input[type=hidden]，
+       * 因此除原生控件外还必须识别 EMAP / JQWidgets 的组件线索。
+       */
+      const LAYOUT_TABLE_COMPONENT_CLUES = [
+        '[data-caption]', '[data-name]', '[xtype]',
+        '[role="combobox"]', '[role="tree"]', '[role="radio"]', '[role="checkbox"]',
+        '.bh-form-group', '.jqx-widget',
+      ];
+      const isLayoutTable = (table) => {
+        try {
+          if (!table.querySelectorAll) return false;
+          const fields = table.querySelectorAll('input, select, textarea');
+          for (let i = 0; i < fields.length; i++) {
+            const field = fields[i];
+            const ftag = tagOf(field);
+            if (ftag === 'select' || ftag === 'textarea') return true;
+            const ftype = (field.getAttribute ? (field.getAttribute('type') || '') : '').toLowerCase();
+            if (LAYOUT_ENTRY_INPUT_TYPES.has(ftype)) return true;
+          }
+          const clue = table.querySelector ? table.querySelector(LAYOUT_TABLE_COMPONENT_CLUES.join(',')) : null;
+          if (clue) return true;
+        } catch (e) {}
+        return false;
+      };
+
       const computeRegion = (el, framePath) => {
         let node = el;
         let depth = 0;
@@ -467,7 +724,8 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
           if (REGION_TAGS.has(tag) || REGION_ROLES.has(role)) {
             if (tag === 'nav' || role === 'navigation') return deriveRegionLabel(node, '导航栏');
             if (tag === 'form' || role === 'form' || role === 'search') return deriveRegionLabel(node, '表单区');
-            if (tag === 'table') return deriveRegionLabel(node, '数据表格');
+            // 表格布局的表单 → 归入「表单区」，避免表单字段被误读成列表筛选器
+            if (tag === 'table') return deriveRegionLabel(node, isLayoutTable(node) ? '表单区' : '数据表格');
             if (tag === 'header' || role === 'banner') return deriveRegionLabel(node, '页头');
             if (tag === 'footer' || role === 'contentinfo') return deriveRegionLabel(node, '页脚');
             if (tag === 'aside' || role === 'complementary') return deriveRegionLabel(node, '侧栏');
@@ -664,6 +922,61 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
       // 导致的调用栈溢出（Maximum call stack size exceeded）。
       const visitedDocs = new WeakSet();
 
+      // ===== 浮层（下拉 / 树选择 / 级联 / 日期面板）统一纳管 =====
+      //
+      // 为什么必须由浮层统一纳管，而不是让主遍历顺手采掉：
+      //   1. **身份突变**：jqxTree 选中一个节点后会给它加 tabindex="0" / class*="selected"，
+      //      下一次采集时它会以 actionable generic 的身份在主遍历里提前拿到 [BID]，随后被
+      //      去重挡在浮层纳管之外 —— 选项在台账里凭空蒸发，模型误判「已生效」（5 轮死锁原点）；
+      //   2. **双胞胎**：外层弹窗容器（.jqx-dropdownlist-popup）与内层列表容器
+      //      （[id*=innerListBox]）会各自命中一次浮层选择器，同一份省份被采集两遍，
+      //      第二份还会撞上限被腰斩，诱导模型误以为是「两级级联」。
+      // 因此：浮层内的元素一律不在主遍历阶段采集，统一由 emitPopupOptions 以 role=option 输出。
+      // 关键约束：**两端必须共用同一判定函数**（isPopupOwned），否则元素会两头落空而丢失 [BID]。
+      const POPUP_SELECTORS = ${JSON.stringify(YANHU_POPUP_SELECTORS)};
+      const topWin = document.defaultView || window;
+      const __popupIsFloatingScale = (node) => {
+        let r = null;
+        try { r = node.getBoundingClientRect(); } catch (e) {}
+        if (!r || r.width <= 0 || r.height <= 0) return false;
+        const vw = topWin.innerWidth || 1200;
+        const vh = topWin.innerHeight || 800;
+        // 占满整页的常规容器不算浮层，否则会把页面主体整体吞掉
+        return r.width < vw * 0.9 && r.height < vh * 0.8;
+      };
+      const popupRootOf = (el) => {
+        let node = el;
+        let depth = 0;
+        while (node && node.nodeType === 1 && depth < 8) {
+          let hit = false;
+          try { hit = node.matches ? node.matches(POPUP_SELECTORS.join(',')) : false; } catch (e) { hit = false; }
+          if (hit && __popupIsFloatingScale(node)) return node;
+          node = node.parentElement;
+          depth += 1;
+        }
+        return null;
+      };
+      const MAX_POPUP_CHARS = ${MAX_POPUP_OPTION_CHARS};
+      /**
+       * 元素是否**由浮层纳管**（改由 emitPopupOptions 以 role=option 输出）。
+       *
+       * 两条硬约束，缺一不可：
+       *   1. **必须是浮层根的严格后代**（root !== el）。历史事故：jqx-dropdownlist-state-normal
+       *      这类控件自身类名就含 dropdown，会让触发器自己成为「浮层根」，而浮层端只发后代不发根
+       *      → 整个触发器凭空失去 [BID]（出校去向 / 请假类型 / 冲突课程集体消失，台账腰斩）。
+       *   2. **必须能取到自身的短文本**（且非占位提示）。这是"无损"保证：主遍历跳过的每一个元素，
+       *      浮层端都必然以同一段 own 文本重新编号；反之若放行无文本元素（如图标按钮），
+       *      它会两头落空而丢失 [BID]。
+       */
+      const isPopupOwned = (el, style, rect) => {
+        const root = popupRootOf(el);
+        if (!root || root === el) return false;
+        if (!isRenderedElement(el, style, rect)) return false;
+        const own = __yanhuOwnText(el);
+        if (!own || own.length > MAX_POPUP_CHARS) return false;
+        return !__yanhuIsPlaceholderText(own);
+      };
+
       const collectFromDoc = (doc, framePath, offset, depth) => {
         if (!doc || depth > 6) return;
         if (visitedDocs.has(doc)) return;
@@ -704,7 +1017,6 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
           try {
             rect = el.getBoundingClientRect();
           } catch {}
-
           const role = computeRole(el, tag);
           const inlineOnclick = !!(el.onclick || attr(el, 'onclick'));
           const tabindex = attr(el, 'tabindex');
@@ -726,32 +1038,72 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
           if (!actionable && !name) continue;
           if (!actionable && (role === 'generic' || role === 'none')) continue;
 
-          const isVisibleAndSized = visible && rect.width > 0 && rect.height > 0;
-          if (!isVisibleAndSized) {
-            // 折叠路径：限量采集「有名称且可交互」的后台 / 折叠隐藏元素（display:none、零高宽、
-            // 未激活 tab-pane 等），赋予 BID 并标注 [Collapsed]，使模型可感知屏幕外/未展开入口。
-            // 装饰性（aria-hidden=true）与无名称元素一律剔除，避免 Token 与候选集膨胀。
-            if (collapsedCount >= MAX_COLLAPSED) continue;
-            if (!actionable || !name || attr(el, 'aria-hidden') === 'true') continue;
-            collapsedCount += 1;
-            emit.push({
-              tag,
-              role,
-              name,
-              value: undefined,
-              bounds: { x: 0, y: 0, width: 0, height: 0 },
-              visible: false,
-              ariaHidden: false,
-              occluded: false,
-              region: computeRegion(el, framePath),
-              framePath: framePath || undefined,
-              actionable,
-              collapsed: true,
-              options: collectOptions(el),
-            });
-            if (isNav) navCount += 1;
+          if (!isRenderedElement(el, style, rect)) {
+            // ===== 可见代理重绑定：隐藏的原生控件改绑到它的可见载体上 =====
+            // 自定义单选 / 复选把原生 input 隐藏，真正的点击目标（<label> 或小尺度包裹）是渲染中的。
+            // 此时把 BID 绑到代理上：渲染红线不破（几何与可见性均取代理），
+            // 且原生 label 语义保证点击该 [BID] 即切换选项。
+            const inputType = (tag === 'input') ? (attr(el, 'type') || '').toLowerCase() : '';
+            if (actionable && inputType !== 'hidden' && (tag === 'input' || tag === 'select' || tag === 'textarea')) {
+              const proxy = __yanhuRenderedProxyOf(el, doc);
+              if (proxy) {
+                const proxyText = __yanhuCleanName(proxy.innerText || proxy.textContent || '');
+                const effectiveName = name || proxyText;
+                if (effectiveName) {
+                  let pr = { left: 0, top: 0, width: 0, height: 0 };
+                  try { pr = proxy.getBoundingClientRect(); } catch (e) {}
+                  // 勾选状态必须随代理一起投递：radio / checkbox 常被视觉隐藏（0×0）而以 label 承载，
+                  // 若 value 恒空，模型就无法核对「是否出校 = 是」这类点击是否真的生效（历史事故）。
+                  const __inputType = ((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+                  const __proxyValue =
+                    __inputType === 'radio' || __inputType === 'checkbox'
+                      ? (el.checked ? '已勾选' : '未勾选')
+                      : clip(el.value != null ? String(el.value) : '')
+                  emit.push({
+                    tag: tagOf(proxy),
+                    role,
+                    name: effectiveName,
+                    value: __proxyValue || undefined,
+                    bounds: {
+                      x: Math.round(offset.x + pr.left),
+                      y: Math.round(offset.y + pr.top),
+                      width: Math.round(pr.width),
+                      height: Math.round(pr.height),
+                    },
+                    visible: true,
+                    ariaHidden: false,
+                    occluded: false,
+                    region: computeRegion(proxy, framePath),
+                    framePath: framePath || undefined,
+                    actionable: true,
+                    options: collectOptions(el),
+                  });
+                  emittedNodes.push(proxy);
+                  if (isNav) navCount += 1;
+                  continue;
+                }
+              }
+            }
+
+            // 渲染红线：其余未被渲染的元素绝不分配 BID。
+            //
+            // 历史缺陷：这类元素曾被标为 [Collapsed] 并投递给模型，但它们的边界盒恒为 0×0，
+            // 点击必然被网页驳回（No-Op），逐层「解封」还会强行把 display 改回 '' 而打乱真实页面
+            // 状态；模型因此反复重试、反复重读页面，既烧 Token 又烧时间。
+            // 现在只做计数与区域归属统计，用于在摘要末尾给出一行提示，引导模型先点击可见入口展开。
+            if (actionable && name && attr(el, 'aria-hidden') !== 'true') {
+              unrenderedCount += 1;
+              const uRegion = computeRegion(el, framePath);
+              if (uRegion && unrenderedRegions.indexOf(uRegion) < 0 && unrenderedRegions.length < 6) {
+                unrenderedRegions.push(uRegion);
+              }
+            }
             continue;
           }
+
+          // 浮层内的元素统一交由 emitPopupOptions 以 role=option 输出：
+          // 判定函数与浮层纳管端完全一致（isPopupOwned），杜绝「两头落空丢 BID」与「重复编号」。
+          if (!isNav && isPopupOwned(el, style, rect)) continue;
 
           // 「可点击容器」直接子项拆分：命中则跳过容器本身，改由其直接子项承载可点击性，
           // 从而把「学生管理 / 成长计划」拆为两个独立 BID，消除聚合名称误导与子项漏采。
@@ -795,7 +1147,12 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
             const __ariaChecked = attr(el, 'aria-checked');
             value = __ariaChecked === 'true' ? '已勾选' : (__ariaChecked === 'false' ? '未勾选' : undefined);
           } else {
-            value = undefined;
+            // 非输入型控件（自定义下拉 / 树选择 / 日期控件 / 按钮）的「当前显示值」此前恒为空，
+            // 模型因此**无法核对选区是否写入**（历史事故：出校去向选了香港，模型却无从证实，
+            // 只能反复试、最后撞熔断）。这里补上显示文本；与解析出的 name 完全相同时不再重复投递，
+            // 以免给台账添冗余噪音。
+            const __displayValue = __yanhuDisplayText(el);
+            value = __displayValue && __displayValue !== name ? clip(__displayValue) : undefined;
           }
 
           emit.push({
@@ -817,6 +1174,7 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
             actionable,
             options: collectOptions(el),
           });
+          emittedNodes.push(el);
           if (isNav) navCount += 1;
         }
 
@@ -854,6 +1212,90 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
       };
 
       collectFromDoc(document, '', { x: 0, y: 0 }, 0);
+
+      // ===== 浮层选项统一纳管（emitPopupOptions）=====
+      //
+      // 由 isPopupOwned 判定（与主遍历共用同一函数）的元素在此以 role=option 规范输出：
+      //   - 事件委托型的树节点 / 选项行自身没有交互标记，主遍历会把它剪掉；
+      //   - 被 jqxTree 附加 tabindex 的选中节点则相反，会"身份突变"成 generic —— 由主遍历让位解决。
+      // 两道去重：
+      //   ① 嵌套浮层包含去重：外层弹窗已处理过，内层列表容器不再重复采集
+      //      （历史上同一份省份被采集两遍，第二份还撞上限腰斩，诱导模型以为是「两级级联」）；
+      //   ② 已编号节点去重（emittedNodes）：同一 DOM 节点绝不重复编号。
+      // 新编号一律**追加在台账末尾**，保证既有元素的 BID 编号完全不变（不破坏已跑通的流程）。
+      const MAX_POPUP_OPTIONS = ${MAX_COLLECTED_POPUP_OPTIONS};
+      let popupOptionCount = 0;
+      const processedPopups = [];
+      const emitPopupOptions = (doc, framePath, offset, depth) => {
+        if (!doc || depth > 6) return;
+        let popups = [];
+        try { popups = Array.from(doc.querySelectorAll(POPUP_SELECTORS.join(','))); } catch (e) { popups = []; }
+        for (let pi = 0; pi < popups.length; pi++) {
+          if (emit.length >= MAX || popupOptionCount >= MAX_POPUP_OPTIONS) return;
+          const popup = popups[pi];
+          if (!__popupIsFloatingScale(popup)) continue;
+          // ① 已被外层浮层覆盖：跳过，避免同一份选项被采集两遍
+          let covered = false;
+          for (let qi = 0; qi < processedPopups.length; qi++) {
+            const outer = processedPopups[qi];
+            if (outer !== popup && outer.contains && outer.contains(popup)) { covered = true; break; }
+          }
+          if (covered) continue;
+          processedPopups.push(popup);
+          let items = [];
+          try { items = Array.from(popup.querySelectorAll('*')); } catch (e) { items = []; }
+          for (let ii = 0; ii < items.length; ii++) {
+            if (emit.length >= MAX || popupOptionCount >= MAX_POPUP_OPTIONS) break;
+            const item = items[ii];
+            // ② 已编号节点去重
+            if (emittedNodes.indexOf(item) >= 0) continue;
+            let istyle = null;
+            try { istyle = topWin.getComputedStyle ? topWin.getComputedStyle(item) : null; } catch (e) { continue; }
+            let irect = { left: 0, top: 0, width: 0, height: 0 };
+            try { irect = item.getBoundingClientRect(); } catch (e) {}
+            if (!isPopupOwned(item, istyle, irect)) continue;
+            const own = __yanhuOwnText(item);
+            const label = own || __yanhuFirstLeafText(item, MAX_POPUP_CHARS) || '';
+            if (!label) continue;
+            popupOptionCount += 1;
+            emittedNodes.push(item);
+            emit.push({
+              tag: tagOf(item),
+              role: 'option',
+              name: __yanhuCleanName(label),
+              value: undefined,
+              bounds: {
+                x: Math.round(offset.x + irect.left),
+                y: Math.round(offset.y + irect.top),
+                width: Math.round(irect.width),
+                height: Math.round(irect.height),
+              },
+              visible: true,
+              ariaHidden: false,
+              occluded: false,
+              region: computeRegion(item, framePath),
+              framePath: framePath || undefined,
+              actionable: true,
+            });
+          }
+        }
+        let frames = [];
+        try { frames = doc.querySelectorAll ? Array.from(doc.querySelectorAll('frame, iframe')) : []; } catch (e) { frames = []; }
+        for (let fi = 0; fi < frames.length; fi++) {
+          try {
+            const f = frames[fi];
+            let fr = { left: 0, top: 0 };
+            try { fr = f.getBoundingClientRect(); } catch (e) {}
+            const fName = attr(f, 'name') || attr(f, 'id') || ('frame_' + fi);
+            const nextPath = framePath ? (framePath + '/' + fName) : fName;
+            const sub = f.contentDocument || (f.contentWindow && f.contentWindow.document);
+            if (sub) {
+              emitPopupOptions(sub, nextPath, { x: offset.x + (fr.left || 0), y: offset.y + (fr.top || 0) }, depth + 1);
+            }
+          } catch (e) {}
+        }
+      };
+      try { emitPopupOptions(document, '', { x: 0, y: 0 }, 0); } catch (e) {}
 
       // ===== 渲染内容指纹：URL / 框架不变、仅「被渲染出来的内容」变化时的唯一可观测信号 =====
       // innerText 天然剔除 display:none / script / style，即「用户实际看得见的文本」。
@@ -894,6 +1336,7 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
         closedShadowHosts: closedShadowHosts,
         textDigest: textDigest,
         textSample: textSample,
+        unrendered: { count: unrenderedCount, regions: unrenderedRegions },
       };
     } catch (err) {
       return { url: '', title: '', elements: [], dataTables: [], error: String(err && err.message ? err.message : err) };
@@ -904,14 +1347,14 @@ ${YANHU_ACCESSIBLE_NAME_SNIPPET}
 /**
  * 第二级：布局与可视性剪枝 + 交互候选集过滤（定义 1）。
  *
- * 绝对剔除条件：width ≤ 0 ∨ height ≤ 0 ∨ !visible ∨ aria-hidden。
- * 仅保留具备交互能力的元素作为 BID 候选。
+ * **渲染红线**：只有当前真实渲染在页面上的元素才可能进入 BID 台账。
+ * 未渲染元素（display:none / visibility:hidden / opacity:0 / content-visibility:hidden / 零尺寸 /
+ * 无布局盒）一律剔除——它们的点击必然被网页驳回，且会污染 BID 双射、抬高 Token 与定位歧义。
+ * 这类元素的存在由 `unrendered` 汇总在 PageDigest 末尾以纯文本提示（不含 BID）。
  */
 export function filterActionableElements(elements: readonly YanhuRawElement[]): YanhuRawElement[] {
   return elements.filter((el) => {
     if (!el.actionable || el.ariaHidden) return false
-    // 折叠元素：放宽可见性与面积要求（折叠态尺寸为 0），仅要求具备名称（已由采集端限量收敛）
-    if (el.collapsed) return el.name.length > 0
     return el.visible && el.bounds.width > 0 && el.bounds.height > 0
   })
 }
@@ -980,6 +1423,18 @@ export function enrichRolesFromAx(
   })
 }
 
+/** 归一化「未渲染元素」统计（防御非法结构，空统计归零） */
+function normalizeUnrendered(raw: unknown): { count: number; regions: string[] } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const candidate = raw as { count?: unknown; regions?: unknown }
+  const count = typeof candidate.count === 'number' && candidate.count > 0 ? Math.trunc(candidate.count) : 0
+  if (count === 0) return undefined
+  const regions = Array.isArray(candidate.regions)
+    ? candidate.regions.filter((r): r is string => typeof r === 'string' && r.length > 0).slice(0, 6)
+    : []
+  return { count, regions }
+}
+
 /** 压缩序列化上下文 */
 export interface SerializeDigestInput {
   url: string
@@ -993,6 +1448,8 @@ export interface SerializeDigestInput {
   textSample?: string
   /** 闭合 Shadow DOM 宿主标签集合（非空时在 PageDigest 中标注，提示已交 CDP 深度补漏） */
   closedShadowHosts?: readonly string[]
+  /** 未被渲染的可交互元素统计（不分配 BID，仅汇总提示） */
+  unrendered?: { count: number; regions: string[] }
 }
 
 /** 判定区域是否属于可折叠的静态导航菜单 */
@@ -1030,6 +1487,14 @@ export function serializePageDigest(input: SerializeDigestInput): string {
   const meta = [`URL: ${input.url}`, `BIDs: ${input.records.length}`]
   if (typeof input.axNodeCount === 'number') meta.push(`AX: ${input.axNodeCount}`)
   lines.push(meta.join(' | '))
+  // 未渲染元素汇总：只在存在时输出，且紧贴头部（避免被 Token 预算截断而丢失最关键的一条线索）。
+  // 不给 BID——未渲染控件点击必被网页驳回；只提示「先点可见入口展开，再重新读取」。
+  if (input.unrendered && input.unrendered.count > 0) {
+    const where = input.unrendered.regions.length > 0 ? `，主要位于：${input.unrendered.regions.join('、')}` : ''
+    lines.push(
+      `[未渲染元素 ${input.unrendered.count} 个${where}（折叠菜单 / 隐藏面板 / 未激活标签页）——未分配 [BID]：请先点击其可见入口展开，再 yanhu_read_page 获取新 [BID]]`,
+    )
+  }
   lines.push('')
 
   // 通用业务数据表格穿透直提：结构化 Markdown 优先输出，模型无需滚动 / 猜测即可一步读取
@@ -1107,7 +1572,7 @@ export function serializePageDigest(input: SerializeDigestInput): string {
 }
 
 /** 单条 BID 的紧凑文本表达（兼容 BidNodeRecord 与 YanhuBidNode） */
-function formatBidLine(record: YanhuBidNode): string {
+export function formatBidLine(record: YanhuBidNode): string {
   const parts: string[] = [`[BID: ${record.bid}]`, record.role || 'element']
   if (record.name) parts.push(`"${record.name}"`)
   if (record.value) parts.push(`value="${record.value}"`)
@@ -1216,6 +1681,7 @@ export class YanhuDomDistillationEngine {
       dataTables,
       textSample: typeof collected.textSample === 'string' ? collected.textSample : undefined,
       closedShadowHosts: Array.isArray(collected.closedShadowHosts) ? collected.closedShadowHosts : undefined,
+      unrendered: normalizeUnrendered(collected.unrendered),
     })
     const nodes: YanhuBidNode[] = records.map((record) => ({
       bid: record.bid,
@@ -1240,6 +1706,7 @@ export class YanhuDomDistillationEngine {
       dataTables,
       textDigest: typeof collected.textDigest === 'string' ? collected.textDigest : undefined,
       textSample: typeof collected.textSample === 'string' ? collected.textSample : undefined,
+      unrendered: normalizeUnrendered(collected.unrendered),
       timestamp: Date.now(),
     }
     const index = new Map<number, BidNodeRecord>()

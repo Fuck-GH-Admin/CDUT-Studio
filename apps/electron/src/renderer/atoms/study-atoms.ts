@@ -9,7 +9,7 @@
  */
 
 import * as React from 'react'
-import { atom, useAtom } from 'jotai'
+import { atom, useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   AI_CLASS_HOME_TAB_ID,
   type AiClassRightTabItem,
@@ -166,4 +166,35 @@ export function useAiClassArtifacts(sessionId: string): readonly [StudyArtifactS
     [sessionId, setArtifactsMap],
   )
   return [artifacts, setArtifacts]
+}
+
+// ===== 学习数据版本号（驱动只读派生视图实时刷新） =====
+
+/**
+ * 按 sessionId 隔离的学习数据版本号。
+ *
+ * 背景：「学习情况速览」等只读派生视图的数据来自 study IPC（测验得分 / FIM θ / 闪卡复习数），
+ * 这些写操作**不会**改变「已生成工件摘要」（artifacts），因此仅靠 artifacts 变化无法触发刷新，
+ * 表现为「作答后速览卡纹丝不动」。
+ *
+ * 约定：任何改变学习数据的行为（提交作答、重置测验、卡片评分、生成工件）完成后，
+ * 调用 `useBumpStudyRevision` 返回的函数自增该版本号；消费方把版本号放进 useEffect 依赖即可。
+ */
+export const studyDataRevisionMapAtom = atom<Map<string, number>>(new Map())
+
+/** 通知指定课堂的学习数据已变更（消费方据此重新拉取） */
+export function useBumpStudyRevision(sessionId: string): () => void {
+  const setRevisionMap = useSetAtom(studyDataRevisionMapAtom)
+  return React.useCallback((): void => {
+    setRevisionMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+      return map
+    })
+  }, [sessionId, setRevisionMap])
+}
+
+/** 读取指定课堂的学习数据版本号（作为 useEffect 依赖触发重拉） */
+export function useStudyDataRevision(sessionId: string): number {
+  return useAtomValue(studyDataRevisionMapAtom).get(sessionId) ?? 0
 }

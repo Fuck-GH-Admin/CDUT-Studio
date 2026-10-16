@@ -156,14 +156,14 @@ export function AiClassMindMapTab({ sessionId, mindmapId }: AiClassMindMapTabPro
     <div className="relative flex h-full min-h-0 flex-col">
       {/* 工具栏 */}
       <div className={`absolute right-3 top-3 ${Z_LAYER.toolbar} flex items-center gap-1 rounded-lg border border-border/60 bg-background/80 p-1 shadow-sm backdrop-blur-sm`}>
-        <button type="button" title="缩小" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => viewport.setZoom((z) => Math.max(0.2, z / 1.15))}>
+        <button type="button" title="缩小" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => viewport.zoomBy(1 / 1.15)}>
           <Minus size={13} />
         </button>
         <span className="w-10 text-center text-[10px] text-muted-foreground">{Math.round(viewport.zoom * 100)}%</span>
-        <button type="button" title="放大" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => viewport.setZoom((z) => Math.min(3, z * 1.15))}>
+        <button type="button" title="放大" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => viewport.zoomBy(1.15)}>
           <Plus size={13} />
         </button>
-        <button type="button" title="自适应复位" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={viewport.fit}>
+        <button type="button" title="自适应复位" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => viewport.fit()}>
           <RotateCcw size={13} />
         </button>
         <button type="button" title="全屏大图" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setFullscreen(true)}>
@@ -205,6 +205,8 @@ export function AiClassMindMapTab({ sessionId, mindmapId }: AiClassMindMapTabPro
           onOverridesChange={setOverrides}
           onPersist={persistCoords}
           onNodeClick={(node) => void copyStudyPrompt(node)}
+          onResetOverrides={resetLayout}
+          onExportOpml={exportOpml}
           onClose={() => setFullscreen(false)}
         />
       )}

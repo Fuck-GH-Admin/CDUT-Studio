@@ -110,6 +110,24 @@ export function getCdutAccountPath(): string {
 }
 
 /**
+ * 获取 CDUT 课表离线缓存路径（SWR 秒开渲染）
+ *
+ * @returns ~/.cdutai/cdut-schedule-cache.json
+ */
+export function getCdutScheduleCachePath(): string {
+  return join(getConfigDir(), 'cdut-schedule-cache.json')
+}
+
+/**
+ * 获取 CDUT 成绩离线缓存路径（SWR 秒开渲染）
+ *
+ * @returns ~/.cdutai/cdut-grades-cache.json
+ */
+export function getCdutGradesCachePath(): string {
+  return join(getConfigDir(), 'cdut-grades-cache.json')
+}
+
+/**
  * 获取对话索引文件路径
  *
  * @returns ~/.cdutai/conversations.json

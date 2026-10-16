@@ -120,18 +120,26 @@ export const DEMO_LEVEL_EXAMS = [
   { examName: '大学英语四级（CET-4）', score: 600, passed: true },
 ] as const
 
-/** 空教室查询条件与结果（classrooms 域） */
-export const DEMO_CLASSROOM_QUERY = {
-  campus: '成都校区',
-  building: '东区1教',
-  week: 6,
-  dayOfWeek: 1,
-  timeSlots: '05-08节',
-  minSeats: 120,
-} as const
+/** 演示全校班级课表（query_other_schedule，对齐 OtherClassCourse 契约） */
+export interface DemoOtherClassCourse {
+  name: string
+  code: string
+  credit: string
+  teachers: string[]
+  rooms: string[]
+  classNames: string[]
+  campus: string
+  remark: string
+}
 
-/** 空闲教室列表 */
-export const DEMO_EMPTY_CLASSROOMS = ['东区1教-E1A106'] as const
+export const DEMO_OTHER_CLASS_COURSES: DemoOtherClassCourse[] = [
+  { name: '房屋建筑学', code: 'B0500101', credit: '3', teachers: ['高涌涛'], rooms: ['(宜）甲A202'], classNames: ['2025191101'], campus: '宜宾校区', remark: '' },
+  { name: '线性代数', code: 'B0300202', credit: '2.5', teachers: ['潘浪'], rooms: ['（宜）乙308'], classNames: ['2025191101'], campus: '宜宾校区', remark: '' },
+  { name: '工程力学Ⅱ', code: 'B0400303', credit: '3', teachers: ['杨东旭'], rooms: ['(宜）甲A308'], classNames: ['2025191101'], campus: '宜宾校区', remark: '' },
+]
+
+/** 演示态无数据时的统一提示语 */
+export const DEMO_NO_DATA_TEXT = '演示账户暂无此项数据。'
 
 /** 教务通知（notices 域） */
 export const DEMO_NOTICES = [
@@ -154,6 +162,3 @@ export const DEMO_EXAMS: DemoExamEntry[] = [
   { courseName: '线性代数', examTime: '2026-11-24 14:30-16:30', classroom: '（宜）乙308', seatNumber: '15', ticketNumber: '20252026010102', examType: '期末统考' },
   { courseName: '大学物理学III（2）', examTime: '2026-12-02 09:00-11:00', classroom: '（宜）甲A204', seatNumber: '32', ticketNumber: '20252026010103', examType: '期末统考' },
 ]
-
-/** 演示态无数据时的统一提示语 */
-export const DEMO_NO_DATA_TEXT = '演示账户暂无此项数据。'

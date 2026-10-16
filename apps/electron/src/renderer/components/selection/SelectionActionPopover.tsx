@@ -92,7 +92,7 @@ export function SelectionActionPopover({
     <div
       ref={rootRef}
       data-selection-action-popover
-      className={`fixed ${Z_LAYER.menu} ${translateClass} rounded-xl bg-popover/95 px-2 py-1.5 text-popover-foreground shadow-xl ring-1 ring-border/40 backdrop-blur`}
+      className={`fixed ${Z_LAYER.menu} select-none ${translateClass} rounded-xl bg-popover/95 px-2 py-1.5 text-popover-foreground shadow-xl ring-1 ring-border/40 backdrop-blur`}
       style={{ left: x, top: y }}
       onMouseDown={(event) => event.preventDefault()}
     >

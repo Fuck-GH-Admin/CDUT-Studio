@@ -117,4 +117,73 @@ describe('buildVisualSnapScript（页内 DOM 磁吸脚本）', () => {
     expect(script).toContain('const R = 12')
     expect(script).toContain('elementFromPoint')
   })
+
+  /** 构造最小 DOM 桩：elementFromPoint 恒返回同一个命中元素 */
+  function runSnap(hit: Record<string, unknown>, x: number, y: number, radius = 12) {
+    const script = buildVisualSnapScript(x, y, radius)
+    const runner = new Function('document', `return ${script}`)
+    return runner({ elementFromPoint: () => hit }) as {
+      ok: boolean
+      x: number
+      y: number
+      snapped: boolean
+      hit: { tag: string; name: string } | null
+    }
+  }
+
+  test('Given 命中一个小尺度控件 When 磁吸 Then 吸附到其几何中心', () => {
+    const span = {
+      nodeType: 1,
+      tagName: 'SPAN',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 90, top: 92, width: 30, height: 16 }),
+      innerText: '因私请假',
+      parentElement: null,
+    }
+    const result = runSnap(span, 100, 100)
+    expect(result.snapped).toBe(true)
+    expect(result.x).toBe(105)
+    expect(result.y).toBe(100)
+    expect(result.hit?.name).toBe('因私请假')
+  })
+
+  test('Given 命中面板级大容器 When 磁吸 Then 放弃吸附、按原始坐标落地（绝不把点击拖到容器中心）', () => {
+    const hugeDiv = {
+      nodeType: 1,
+      tagName: 'DIV',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 1200, height: 600 }),
+      innerText: '请假信息',
+      parentElement: null,
+    }
+    const result = runSnap(hugeDiv, 320, 274)
+    expect(result.snapped).toBe(false)
+    expect(result.x).toBe(320)
+    expect(result.y).toBe(274)
+  })
+
+  test('Given 命中文本节点而其祖先是大容器 When 磁吸 Then 不因上溯而吸附到容器中心', () => {
+    const hugeDiv = {
+      nodeType: 1,
+      tagName: 'DIV',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 1200, height: 600 }),
+      innerText: '请假信息',
+      parentElement: null,
+    }
+    // 命中的小文本节点：自身在控件尺度内，允许吸附到它自己的中心
+    const smallText = {
+      nodeType: 1,
+      tagName: 'SPAN',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 315, top: 270, width: 40, height: 18 }),
+      innerText: '因私请假',
+      parentElement: hugeDiv,
+    }
+    const result = runSnap(smallText, 320, 274)
+    expect(result.snapped).toBe(true)
+    // 吸附目标是文本节点自身的中心（335, 279），而不是 1200×600 容器的中心（600, 300）
+    expect(result.x).toBe(335)
+    expect(result.y).toBe(279)
+  })
 })

@@ -8,7 +8,7 @@ import { Z_LAYER } from '@profer/ui'
 import { useCreateSession } from './hooks/useCreateSession'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { openTutorialTab } from './lib/tab-activation'
-import { replayIntroEnvironmentTestAtom, replayIntroOpenAtom } from './atoms/intro-atoms'
+import { replayIntroOpenAtom, replayWelcomeTourAtom } from './atoms/intro-atoms'
 import { IntroWaterRipple } from './components/onboarding/IntroWaterRipple'
 import { CoachTourOverlay } from './components/onboarding/coach-tour/CoachTourOverlay'
 import { coachTourOpenAtom } from './atoms/coach-tour-atoms'
@@ -25,11 +25,11 @@ export default function App(): React.ReactElement {
   const store = useStore()
   const [isLoading, setIsLoading] = React.useState(true)
   const [showOnboarding, setShowOnboarding] = React.useState(false)
-  const [showOnboardingEnvironmentTest, setShowOnboardingEnvironmentTest] = useAtom(replayIntroEnvironmentTestAtom)
+  const [showWelcomeTourReplay, setShowWelcomeTourReplay] = useAtom(replayWelcomeTourAtom)
 
   // 初始化：检查是否需要显示 Onboarding
-  // macOS/Linux 上 SDK 自带 claude native binary 不依赖宿主 Node/Git；
-  // Windows 上仍需 Git Bash/WSL，由 Onboarding Step 2 与聊天错误卡片引导用户安装。
+  // 平台差异已收敛为静默自适应执行环境（Windows: Git Bash > 内置 BusyBox > WSL > PowerShell），
+  // 首启不再需要环境检测页；环境自检仍可从「设置 → 关于」随时发起。
   React.useEffect(() => {
     const initialize = async () => {
       try {
@@ -73,15 +73,16 @@ export default function App(): React.ReactElement {
     )
   }
 
-  // 主界面开屏测试结束后，复用首次 onboarding 的完整环境配置页；不写持久化状态。
-  if (showOnboardingEnvironmentTest) {
+  // 主界面「首次欢迎导览」重放：完整走一遍首启流程（欢迎 → 功能导览 → 导入数据 → 诗意插页 → 欢迎您）；
+  // persistCompletion=false，不写 onboardingCompleted，可反复重放。
+  if (showWelcomeTourReplay) {
     return (
       <TooltipProvider delayDuration={200}>
         <React.Suspense fallback={null}>
           <OnboardingView
             initialStep="welcome"
             persistCompletion={false}
-            onComplete={() => setShowOnboardingEnvironmentTest(false)}
+            onComplete={() => setShowWelcomeTourReplay(false)}
           />
         </React.Suspense>
       </TooltipProvider>
@@ -168,13 +169,13 @@ function OnboardingRoute({
 
 /**
  * 全屏开屏动画重播遮罩：
- * 主界面顶栏点按钮 → replayIntroOpenAtom=true → 渲染 IntroWaterRipple
- * 动画结束（或点按跳过）后重置 atom，回到主界面。
- * 不改动 onboardingCompleted，纯重播/测试用途。
+ * 设置「首次欢迎导览 → 重新播放」→ replayIntroOpenAtom=true → 渲染 IntroWaterRipple，
+ * 水波纹结束后接力整段首次欢迎导览（见 showWelcomeTourReplay 分支）。
+ * 不改动 onboardingCompleted，纯重播用途。
  */
 function IntroReplayOverlay(): React.ReactElement | null {
   const [open, setOpen] = useAtom(replayIntroOpenAtom)
-  const [, setShowOnboardingEnvironmentTest] = useAtom(replayIntroEnvironmentTestAtom)
+  const [, setShowWelcomeTourReplay] = useAtom(replayWelcomeTourAtom)
   if (!open) return null
   return (
     <div
@@ -187,8 +188,8 @@ function IntroReplayOverlay(): React.ReactElement | null {
       <IntroWaterRipple
         onDone={() => {
           setOpen(false)
-          // 复用首次安装时的完整环境配置页，不触碰 onboardingCompleted。
-          setShowOnboardingEnvironmentTest(true)
+          // 接力首次欢迎导览，不触碰 onboardingCompleted。
+          setShowWelcomeTourReplay(true)
         }}
       />
     </div>

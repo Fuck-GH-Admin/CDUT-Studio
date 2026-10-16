@@ -67,10 +67,12 @@ export type {
 } from './automation-schedule'
 export { pruneToolOutputByEntropy } from './context-entropy-pruner'
 export type { EntropyPruneOptions } from './context-entropy-pruner'
-// 思维导图引擎（双曲 Poincaré 布局 / 贝塞尔连线 / OPML 2.0 导出），主进程与渲染进程共用
+// 思维导图引擎（径向整齐树布局 / 贝塞尔连线 / OPML 2.0 导出），主进程与渲染进程共用
 export {
   layoutMindMap,
+  estimateMindMapNodeSize,
   buildBezierPath,
+  computeAnchorZoomPan,
   flattenMindMap,
   buildNodeStudyPrompt,
   mindMapToOpml,

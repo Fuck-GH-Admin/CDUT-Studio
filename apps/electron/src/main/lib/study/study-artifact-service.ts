@@ -23,6 +23,7 @@ import type {
   StudyGenerateArtifactResult,
 } from '@profer/shared'
 import { oneShotJsonCompletion, type OneShotCompletionOptions } from '../cdut/cdut-ai-class-manager'
+import { shuffleQuiz } from './quiz-options'
 import { getAgentSessionMeta } from '../agent-session-manager'
 import { listStudyDocuments } from './study-document-indexer'
 import { createInitialFsrs } from './fsrs-scheduler'
@@ -200,7 +201,8 @@ function normalizeQuiz(json: unknown, input: StudyGenerateArtifactInput): QuizSe
     score: 0,
     estimatedTheta: 0,
     createdAt: Date.now(),
-    questions,
+    // 初次生成即打乱题序与选项序（杜绝「答案全是 A」并防止靠位置记忆作答）
+    questions: shuffleQuiz(questions),
   }
 }
 
@@ -211,6 +213,8 @@ function buildMindMapPrompts(source: string, input: StudyGenerateArtifactInput):
     'You are the Lead Knowledge Architect (带教导师) for AI速课堂 (AI Quick Classroom) at 成都理工大学 (Chengdu University of Technology), specialized in synthesizing course materials into hierarchical concept mind maps (思维导图).',
     'Language Convention: The mind map is shown directly to the student. All generated student-facing content (node labels, notes, study prompts) MUST be written in the student\'s language — the language of the course material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
     'Output format: Return strictly valid JSON without Markdown code fences or explanatory prose.',
+    // 思维导图渲染协议锁定：产出由专用交互导图画布（径向贝塞尔）消费，严禁混入 Mermaid 图语法
+    'Rendering Contract (STRICT): The JSON tree is rendered by the dedicated interactive mind-map canvas engine. NEVER embed Mermaid diagram syntax (```mermaid, flowchart TD, graph TD, node-link arrows like -->, or shape wrappers like ((x)) / [x] in labels) anywhere in the JSON payload; hierarchy MUST be expressed solely through the nested "children" structure.',
   ].join('\n')
   const focus = input.focusedTopic ? `\nFocused Topic: ${input.focusedTopic}` : ''
   const user = [
@@ -265,6 +269,8 @@ function buildQuizPrompts(source: string, input: StudyGenerateArtifactInput): { 
   const system = [
     'You are an expert psychometrician designing diagnostic assessment quizzes.',
     'Enforce first-order logic mutual exclusion (Z3 SMT formalization) for multiple-choice distractors: for every distractor d, (d ∩ CorrectAnswer = ∅) ∧ IsA(d, DomainConcept). Ensure each distractor is factually incorrect and semantically disjoint from the correct key.',
+    // 位置分布红线：模型天然倾向于把正确答案放首位（A），会产出「答案全是 A」的废卷
+    'Answer-Position Distribution (STRICT): The correct option MUST NOT be biased toward the first position. Distribute correct answers across A/B/C/D as evenly as possible over the whole quiz (roughly 1/4 each for 4-option questions); NEVER place the correct answer at the first position for consecutive questions.',
     'Language Convention: The quiz is shown directly to the student. All generated content (questions, options, answers, explanations) MUST be written in the student\'s language — the language of the course material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
     'Output format: Return strictly valid JSON without Markdown code fences or explanatory prose.',
   ].join('\n')

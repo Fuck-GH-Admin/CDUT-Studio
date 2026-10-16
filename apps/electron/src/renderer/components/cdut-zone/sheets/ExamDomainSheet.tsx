@@ -2,7 +2,8 @@
  * ExamDomainSheet — CDUT 专区「期末考场日程」抽屉业务卡片
  *
  * 核心交互：
- *   - 考场日程倒计时卡片（距下一门考试天数、场次总览）；
+ *   - 高保真电子准考证风格：座位号大字号粗体展示 + 距开考倒计时雷达；
+ *   - 最近一场考试置顶呼吸光晕，已考科目自动置灰归档；
  *   - 详细考场卡片（考试科目、时间段、考场教室、座位号、准考证号、统考形式）；
  *   - 考前防作弊与考务注意事项贴士；
  *   - 兼容实时教务与演示数据无缝回退。
@@ -65,9 +66,43 @@ function normalizeExams(rawJson: unknown): ExamItem[] {
   return list
 }
 
+/** 从考试时间文本解析开考时刻（如 "2027-01-18 14:30~16:30"）；失败返回 null */
+function parseExamStart(time: string): Date | null {
+  const m = time.match(/(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})\s*(\d{1,2})?:?(\d{2})?/)
+  if (!m?.[1] || !m[2] || !m[3]) return null
+  const date = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    m[4] ? Number(m[4]) : 0,
+    m[5] ? Number(m[5]) : 0,
+  )
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/** 倒计时描述：天 / 时 / 分 */
+function describeCountdown(target: Date, now: Date): { text: string; urgent: boolean } | null {
+  const diff = target.getTime() - now.getTime()
+  if (diff <= 0) return null
+  const minutes = Math.floor(diff / 60000)
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  const mins = minutes % 60
+  if (days >= 1) return { text: `${days} 天 ${hours} 小时后开考`, urgent: days <= 1 }
+  if (hours >= 1) return { text: `${hours} 小时 ${mins} 分后开考`, urgent: true }
+  return { text: `${mins} 分钟后开考`, urgent: true }
+}
+
 export function ExamDomainSheet(): React.ReactElement {
   const [loading, setLoading] = React.useState(true)
   const [result, setResult] = React.useState<CdutDomainToolResult | null>(null)
+  const [now, setNow] = React.useState(() => new Date())
+
+  // 倒计时每 30 秒刷新一次（不阻塞渲染，卸载即清理）
+  React.useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
 
   const fetchExams = React.useCallback(async () => {
     setLoading(true)
@@ -96,6 +131,93 @@ export function ExamDomainSheet(): React.ReactElement {
   const exams = React.useMemo(() => {
     return normalizeExams(result?.json)
   }, [result?.json])
+
+  // 已考（开始时间已过）置底置灰归档；未考按开考时间升序
+  const { upcoming, archived } = React.useMemo(() => {
+    const withTime = exams.map((exam) => ({ exam, start: parseExamStart(exam.time) }))
+    const upcoming = withTime
+      .filter((e) => e.start === null || e.start.getTime() > now.getTime())
+      .sort((a, b) => (a.start?.getTime() ?? Infinity) - (b.start?.getTime() ?? Infinity))
+      .map((e) => e.exam)
+    const archived = withTime
+      .filter((e) => e.start !== null && e.start.getTime() <= now.getTime())
+      .map((e) => e.exam)
+    return { upcoming, archived }
+  }, [exams, now])
+
+  const nextExam = upcoming[0]
+  const nextCountdown = nextExam ? (() => {
+    const start = parseExamStart(nextExam.time)
+    return start ? describeCountdown(start, now) : null
+  })() : null
+
+  const renderExamCard = (exam: ExamItem, idx: number, isArchived: boolean, isNext: boolean): React.ReactElement => (
+    <div
+      key={`${exam.courseName}-${idx}`}
+      className={cn(
+        'rounded-xl border bg-card p-4 shadow-xs transition',
+        isArchived
+          ? 'border-surface-border/40 opacity-55'
+          : isNext
+            ? 'border-primary/50 ring-1 ring-primary/20 shadow-md'
+            : 'border-surface-border/60 hover:border-surface-border hover:shadow-sm',
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-foreground">{exam.courseName}</span>
+            <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{exam.form}</span>
+            {isNext && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-primary px-1.5 py-0.5 text-[10px] font-bold text-primary-foreground">
+                <Clock size={10} />
+                最近一场
+              </span>
+            )}
+            {isArchived && <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已结束</span>}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Clock className="size-3.5 text-primary" />
+            <span className="font-medium text-foreground">{exam.time}</span>
+          </div>
+          {isNext && nextCountdown && (
+            <div
+              className={cn(
+                'mt-1.5 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-bold',
+                nextCountdown.urgent ? 'animate-pulse bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'bg-muted text-foreground',
+              )}
+            >
+              ⏱ {nextCountdown.text}
+            </div>
+          )}
+        </div>
+
+        {/* 座位号：高保真电子准考证大字风格 */}
+        <div className="flex flex-col items-center rounded-xl border-2 border-dashed border-primary/30 bg-primary/5 px-3 py-1.5">
+          <div className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+            <Hash className="size-3" />
+            座位号
+          </div>
+          <span className="text-2xl font-black leading-tight tracking-wider text-primary">{exam.seat}</span>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-surface-border/40 pt-3 text-xs">
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <MapPin className="size-3.5 text-rose-500" />
+          <span className="font-medium text-foreground">{exam.room}</span>
+        </div>
+
+        {exam.ticket && exam.ticket !== '—' && (
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Ticket className="size-3" />
+            <span>准考证：</span>
+            <span className="font-mono">{exam.ticket}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 
   return (
     <div className="flex h-full flex-col">
@@ -137,6 +259,9 @@ export function ExamDomainSheet(): React.ReactElement {
               </span>
               <span className="text-xs text-muted-foreground">门考试已排期</span>
             </div>
+            {nextCountdown && (
+              <div className="mt-1 text-[11px] font-semibold text-primary">距下一门：{nextCountdown.text}</div>
+            )}
           </div>
           <div className="rounded-xl bg-primary/10 p-2.5 text-primary">
             <Calendar className="size-6" />
@@ -156,7 +281,9 @@ export function ExamDomainSheet(): React.ReactElement {
       {/* 考场日程清单 */}
       <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
         <span>考试日程明细</span>
-        <span>共 {exams.length} 门</span>
+        <span>
+          未考 {upcoming.length} 门{archived.length > 0 ? ` · 已结束 ${archived.length} 门` : ''}
+        </span>
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto pr-1">
@@ -169,56 +296,13 @@ export function ExamDomainSheet(): React.ReactElement {
           <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-dashed border-surface-border/60 bg-muted/10 p-6 text-center text-muted-foreground">
             <Calendar className="size-8 opacity-30" />
             <p className="mt-2 text-xs">暂无正在进行的考试日程安排</p>
-            <p className="mt-1 text-[11px] text-muted-foreground/75">
-              教务处尚未发布排考或考试已经圆满结束
-            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground/75">教务处尚未发布排考或考试已经圆满结束</p>
           </div>
         ) : (
-          exams.map((exam, idx) => (
-            <div
-              key={`${exam.courseName}-${idx}`}
-              className="rounded-xl border border-surface-border/60 bg-card p-4 shadow-xs transition hover:border-surface-border hover:shadow-sm"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-bold text-foreground">{exam.courseName}</span>
-                    <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                      {exam.form}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Clock className="size-3.5 text-primary" />
-                    <span className="font-medium text-foreground">{exam.time}</span>
-                  </div>
-                </div>
-
-                {/* 座位号徽标 */}
-                <div className="flex flex-col items-end">
-                  <div className="flex items-center gap-1 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-1 text-primary">
-                    <Hash className="size-3.5" />
-                    <span className="text-xs font-semibold">座位号</span>
-                    <span className="text-sm font-bold">{exam.seat}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-surface-border/40 pt-3 text-xs">
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <MapPin className="size-3.5 text-rose-500" />
-                  <span className="font-medium text-foreground">{exam.room}</span>
-                </div>
-
-                {exam.ticket && exam.ticket !== '—' && (
-                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <Ticket className="size-3" />
-                    <span>准考证：</span>
-                    <span className="font-mono">{exam.ticket}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))
+          <>
+            {upcoming.map((exam, idx) => renderExamCard(exam, idx, false, idx === 0))}
+            {archived.map((exam, idx) => renderExamCard(exam, idx, true, false))}
+          </>
         )}
       </div>
     </div>

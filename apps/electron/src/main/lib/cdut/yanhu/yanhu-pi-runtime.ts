@@ -35,6 +35,10 @@ import { getFetchFn } from '../../proxy-fetch'
 import { getEffectiveProxyUrl } from '../../proxy-settings-service'
 import { buildYanhuBrowserTools, createYanhuToolLabeler, type YanhuBrowserTool } from './yanhu-browser-tools'
 import {
+  buildYanhuPetSystemPrompt,
+  YANHU_PET_SYSTEM_PROMPT,
+} from './yanhu-pet-prompt'
+import {
   nextYanhuMessageId,
   resolveInjectedHistory,
   toChatMessages,
@@ -42,9 +46,41 @@ import {
   getYanhuPetHistoryPath,
 } from './yanhu-pet-memory'
 import { pruneYanhuContinuationMessages, slimYanhuToolResultForHistory } from './yanhu-context-pruning'
+import { appendYanhuThinkingRecord, buildYanhuThinkingRecord } from './yanhu-thinking-log'
 
 /** 单次对话工具循环最大轮次（防止失控） */
 const MAX_TOOL_ITERATIONS = 500
+
+/**
+ * 可安全并行派发的工具白名单。
+ *
+ * 仅收录「页面内局部读写、不改变页面拓扑、不共享因果基线」的工具：表单写入与只读诊断之间
+ * 没有先后依赖，并行派发可把 N 次「本地写入 + 稳态收口」压成一次收口耗时。
+ * `yanhu_click` / `yanhu_navigate` / `yanhu_tab_actions` / `yanhu_read_page` 一律串行——
+ * 它们要么共享混合分派器的因果基线，要么会改变页面拓扑与后续工具的定位前提。
+ */
+const YANHU_PARALLEL_SAFE_TOOLS = new Set([
+  'yanhu_fill',
+  'yanhu_select',
+  'yanhu_scroll',
+  'yanhu_inspect_element',
+  'yanhu_get_network_logs',
+  'yanhu_get_console_logs',
+])
+
+/** 判定同轮工具调用是否可以并行派发（单个调用无需并行，退化为串行路径） */
+function canRunInParallel(calls: readonly ToolCall[]): boolean {
+  return calls.length > 1 && calls.every((call) => YANHU_PARALLEL_SAFE_TOOLS.has(call.name))
+}
+
+/** 把工具执行结果归一为续接消息所需的 ToolResult（串行 / 并行两条路径共用，避免口径分裂） */
+function toToolResult(call: ToolCall, invocation: YanhuPetToolInvocation): ToolResult {
+  return {
+    toolCallId: call.id,
+    content: typeof invocation.result === 'string' ? invocation.result : JSON.stringify(invocation.result ?? ''),
+    isError: invocation.status === 'error',
+  }
+}
 
 /** CJK 字符与全角符号匹配（用于 Token 估算） */
 const CJK_CHAR_PATTERN = /[\u3000-\u9fff\uff00-\uffef]/g
@@ -68,91 +104,8 @@ export type YanhuRuntimeEmit = (event: YanhuPetStreamEvent) => void
 /** 单轮 Token 软阈值（超过时打印告警，便于观测 ≤10k 硬目标） */
 export const YANHU_TOKEN_WARN_THRESHOLD = 10_000
 
-/**
- * 砚小龙高可用专属系统提示词（完全重构版）
- *
- * 核心架构：
- * 1. 角色使命与 Action-First 绝对执行铁律（100% 忠实用户意图，绝对禁止道德说教与推诿）；
- * 2. 门禁工具箱速查字典（与底层实现强绑定，明确每个工具的专长与误用红线）；
- * 3. 表单极速流水线填报 SOP（Batch Tool Calls 提速秘诀，整表填报 1~2 轮压缩）；
-
- * 5. 提交门禁与软约束遵守（“别提交 / 填写完就行”填完即停，汇报已填清单，严禁点击提交）；
- * 6. 自愈与防恐慌刷新铁律（表单填报全流程绝对禁止调用 yanhu_reload）。
- */
-const YANHU_PET_SYSTEM_PROMPT = `<identity>
-You are "砚小龙", the automated browser navigator and companion embedded in CDUT Studio for the intranet environment (智联万站) at 成都理工大学.
-Your mission is to execute web operations on internal university systems (办事大厅, 学生请假, 青果教务, 课表, 成绩单, 空教室, etc.) directly within the isolated sandbox to fulfill academic and administrative workflows.
-</identity>
-
-<language_convention>
-User-facing output must be written in the user's language (e.g., Simplified Chinese when the user writes in Chinese). Every reply is in-character speech from 砚小龙 to the student: keep the warm, supportive Simplified Chinese campus-companion persona tone, and default to Simplified Chinese when the user language is ambiguous or unspecified.
-</language_convention>
-
-<execution_principles>
-- Action-First Execution: Complete tasks by directly invoking browser gate tools in the embedded browser until tangible results appear on screen. Deliver verified results in place.
-- Faithful Input Recording: Record all user-specified details (purposes, date ranges, notes, and remarks) directly into form fields as authentic, authorized inputs without unilateral alteration.
-- Single-Page Application Continuity: Preserve active router and form state during complex workflows by diagnosing and resolving field values within the active DOM.
-- Pre-Submission Review: Maintain the form state at the completed pre-submission stage and present a structured summary of entered data for student verification. Execute final submission upon explicit user confirmation.
-</execution_principles>
-
-<browser_control>
-## CDUT Intranet Operations
-1. Four-Tier DOM Distillation & BIDs:
-   - Call \`yanhu_read_page\` upon initial page navigation or route change to obtain the compact PageDigest and numeric element identifiers [BID].
-   - Proceed directly with operations using identified BIDs.
-2. Visual Screenshot Recognition & Dual-Plane Anchors:
-   - When visual geometry, custom Canvas graphics, CAPTCHAs, or heavily occluded layouts require optical inspection, call \`yanhu_capture_visual\`.
-   - The vision engine provides visual landmarks and a homography matrix H mapping visual normalized coordinates [u, v] in [0, 1000]^2 to physical DIP coordinates. Invoke \`yanhu_click_visual(u, v)\` to dispatch clicks with automatic DOM magnetic snapping.
-3. Form Calendar & Datetime Integration:
-   - Assign standardized datetime strings ("YYYY-MM-DD HH:mm") directly to target input fields using \`yanhu_fill(bid, value)\` to trigger native change events in EMAP and JQWidgets.
-4. Cascading Select & Radio Controls:
-   - Use \`yanhu_select(bid, valueOrText)\` in hierarchical order: select primary categories (e.g. "因私请假") prior to secondary subcategories (e.g. "事假").
-5. Intranet Routing & Frame Navigation:
-   - Navigate directly to target URLs via \`yanhu_navigate(url)\`. In 青果教务 frameworks (xsMainV), the system smoothly loads mainFrame content while preserving navigation chrome.
-</browser_control>
-
-<dynamic_tooling>
-## Core Gate Toolset (10 Core Capabilities)
-1. Active Tools:
-   - \`yanhu_read_page\`: Inspects distilled DOM and returns BID assignments.
-   - \`yanhu_capture_visual\`: Captures viewport screenshot and computes dual-plane parallel coordinate anchors for visual recognition.
-   - \`yanhu_click_visual\`: Dispatches physical click to visual coordinates [u, v] in [0, 1000]^2 with DOM magnetic snapping.
-   - \`yanhu_click\`: Dispatches hardware-grade CDP mouse click or native click to [BID].
-   - \`yanhu_fill\`: Fills text inputs, textareas, or contenteditable fields with event cascades.
-   - \`yanhu_select\`: Selects options in native selects, custom dropdowns, or radio groups.
-   - \`yanhu_scroll\`: Scrolls viewport in specified directions.
-   - \`yanhu_navigate\`: Navigates to target intranet URLs with frame handling.
-   - \`yanhu_eval_script\`: Evaluates isolated JavaScript in page context when programmatic inspection is required.
-   - \`yanhu_tab_actions\`: Manages tab creation, switching, and inspection.
-2. Batch Pipeline Processing:
-   - Pipeline form inputs concurrently within a single assistant turn using batch tool calls after acquiring BIDs.
-</dynamic_tooling>
-
-<task_orchestration>
-## Workflow Execution & Reporting
-1. Administrative Workflows:
-   - Traverse end-to-end steps: search in 办事大厅 -> open micro-app -> handle iframes -> batch fill fields -> summarize at pre-submission gate.
-2. Query Workflows:
-   - Drive queries to their final data tables (grades, class schedules, empty classrooms), extract structured facts, and present clear tabular findings to the user.
-3. Self-Healing:
-   - Adjust locator parameters in place within the current DOM based on tool diagnostic feedback.
-</task_orchestration>
-
-<submission_gate>
-## Submission Gate & Verification Reporting
-- Pre-Submission Gate:
-  When the user requests verification prior to submission ("先别提交", "填完我看下", etc.), pause after completing all form entries and present a structured summary of entered parameters for review:
-  * Entered item summary (category, subcategory, start/end time, leave reason, remarks);
-  * Clear status confirmation: "All form fields have been populated. The workflow is paused before final submission as requested. Please review the details and submit manually."
-- Final Submission Confirmation:
-  Invoke \`yanhu_click\` on the submission button upon explicit confirmation ("提交", "直接提交", "确认发送"), and verify the final confirmation modal or state.
-</submission_gate>
-
-<communication_style>
-- Maintain a concise, supportive campus companion tone (砚小龙).
-- Present structured facts clearly with complete verification details.
-- Provide clear explanations and next steps during network or authentication exceptions.
-</communication_style>`
+// 系统提示词（基础人设 + 条件化能力指引 + 实际挂载工具清单）已收敛至 ./yanhu-pet-prompt，
+// 由纯函数统一装配，保证「提示词中出现的工具名 ⊆ 实际挂载工具」这一不变式可被单测守卫。
 
 /** 解析后的目标渠道 */
 interface ResolvedChannel {
@@ -261,6 +214,14 @@ export class YanhuPiRuntime {
 
     let content = ''
     const invocations: YanhuPetToolInvocation[] = []
+    /**
+     * 本轮思考链（跨步累积）。
+     *
+     * 供应商只在流式过程中回传思考增量，一旦本轮结束就再无来源；因此这里逐步累积，
+     * 在落盘助手消息的同时把完整思考链追加写入 `~/.cdutai/yanhu-thinking.jsonl`，
+     * 使「模型为什么这么做」成为可离线复查的一等记录。
+     */
+    const reasoningParts: string[] = []
     let continuationMessages: ContinuationMessage[] = []
     /** 本轮累计输入 Token（含系统提示词、历史与工具结果） */
     let inputTokens = 0
@@ -296,6 +257,14 @@ export class YanhuPiRuntime {
       const proxyUrl = await getEffectiveProxyUrl()
       const fetchFn = getFetchFn(proxyUrl)
 
+      // 系统提示词在整轮多步循环中恒定不变：移到循环外装配一次，避免每步重复拼装与重复估算
+      const systemMessage = buildYanhuPetSystemPrompt(YANHU_PET_SYSTEM_PROMPT, tools)
+      console.log(
+        `[yanhu:context] system=${estimateYanhuTokens(systemMessage)} tools=${estimateYanhuTokens(
+          JSON.stringify(toolDefinitions),
+        )} history=${estimateYanhuTokens(JSON.stringify(history))}`,
+      )
+
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
         if (signal.aborted) break
         // 上下文剪枝：压缩「最后 keepSteps 步之前」的旧工具结果，阻断多步循环 O(N²) 膨胀
@@ -306,7 +275,8 @@ export class YanhuPiRuntime {
           modelId: resolved.modelId,
           history,
           userMessage: text,
-          systemMessage: YANHU_PET_SYSTEM_PROMPT,
+          // 系统提示词的工具清单由「实际挂载的 tools」动态生成，杜绝提示词与工具清单脱节
+          systemMessage,
           readImageAttachments: () => [],
           thinkingEnabled: false,
           tools: toolDefinitions,
@@ -328,6 +298,7 @@ export class YanhuPiRuntime {
         })
 
         content = result.content || content
+        if (result.reasoning) reasoningParts.push(result.reasoning)
 
         // Token 计量：优先供应商回传的真实 usage，缺失时回退启发式估算
         const real = result.usage
@@ -343,7 +314,9 @@ export class YanhuPiRuntime {
 
         const runningTotal = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
         console.log(
-          `[yanhu:token] step=${iteration + 1} in=${stepInput} out=${stepOutput} real=${real ? 'yes' : 'estimate'} total=${runningTotal}`,
+          `[yanhu:token] step=${iteration + 1} in=${stepInput} out=${stepOutput} ctx=${estimateYanhuTokens(
+            JSON.stringify(prunedContinuation),
+          )} real=${real ? 'yes' : 'estimate'} total=${runningTotal}`,
         )
         if (runningTotal > YANHU_TOKEN_WARN_THRESHOLD) {
           console.warn(`[yanhu:token] 单轮累计 Token 已超 ${YANHU_TOKEN_WARN_THRESHOLD} 阈值：${runningTotal}`)
@@ -351,17 +324,37 @@ export class YanhuPiRuntime {
 
         if (!result.toolCalls || result.toolCalls.length === 0) break
 
+        // 中止必须「立刻生效」，而不是等到整批工具跑完。
+        //
+        // 历史缺陷：`signal.aborted` 只在循环顶层检查一次，工具阶段完全不看信号。而每个工具
+        // 都带「稳态收口观察窗」（300~1500ms，多工具时更长），于是用户点了中止之后，整批工具
+        // 仍会逐个跑完才停 —— 体感就是「点了没反应 / 死活停不下来」。
+        // 这里在工具批次开始前与每个工具之间各查一次，命中即把已产生的部分结果照常收口。
+        if (signal.aborted) break
+
         // 执行工具并组装续接消息
-        const results: ToolResult[] = []
-        for (const call of result.toolCalls) {
-          const invocation = await this.executeTool(call, toolIndex, labelOf, emit, requestId)
-          invocations.push(invocation)
-          results.push({
-            toolCallId: call.id,
-            content:
-              typeof invocation.result === 'string' ? invocation.result : JSON.stringify(invocation.result ?? ''),
-            isError: invocation.status === 'error',
-          })
+        const calls = result.toolCalls
+        let results: ToolResult[]
+        if (canRunInParallel(calls)) {
+          // 同轮批量并行：模型按提示词一次性下发多个表单写入时，把 N 次「本地写入 + 稳态收口」
+          // 压缩到一次收口耗时内（此前串行 await，3 个字段就要 3 倍观察窗，是后段明显变慢的来源之一）。
+          const settled = await Promise.all(
+            calls.map(async (call) => {
+              const invocation = await this.executeTool(call, toolIndex, labelOf, emit, requestId)
+              return { invocation, toolResult: toToolResult(call, invocation) }
+            }),
+          )
+          invocations.push(...settled.map((item) => item.invocation))
+          results = settled.map((item) => item.toolResult)
+        } else {
+          results = []
+          for (const call of calls) {
+            // 逐个工具之间同样查一次中止：串行批次不该把整批跑完才停
+            if (signal.aborted) break
+            const invocation = await this.executeTool(call, toolIndex, labelOf, emit, requestId)
+            invocations.push(invocation)
+            results.push(toToolResult(call, invocation))
+          }
         }
 
         continuationMessages = [
@@ -391,17 +384,35 @@ export class YanhuPiRuntime {
       // 避免下一轮加载历史时前几轮上下文继续以数万 Token 规模重复注入。
       const slimmedInvocations = invocations.map((invocation) => ({
         ...invocation,
-        result: slimYanhuToolResultForHistory(invocation.toolName, invocation.result),
+        result: slimYanhuToolResultForHistory(invocation.toolName, invocation.result, invocation.status === 'error'),
       }))
+      // 用户手动中止时走的是「循环顶层 break」而非异常路径，这里必须同样如实标注，
+      // 否则中止会被渲染成一次正常完成，用户根本看不出自己已经停下来了。
+      const abortedLate = signal.aborted
       const assistantMessage: YanhuPetMessage = {
         id: nextYanhuMessageId(),
         role: 'assistant',
-        content: content || '（砚小龙已完成操作）',
+        content: content
+          ? `${content}${abortedLate ? '\n\n（操作已由用户手动中止）' : ''}`
+          : abortedLate
+            ? '（操作已由用户手动中止）'
+            : '（砚小龙已完成操作）',
         timestamp: Date.now(),
         toolInvocations: slimmedInvocations.length > 0 ? slimmedInvocations : undefined,
         usage,
       }
       this.store.appendMessages([assistantMessage])
+      // 思考链异步追加落盘：不阻塞主线程，也绝不因写盘失败影响对话结果
+      void appendYanhuThinkingRecord(
+        buildYanhuThinkingRecord({
+          messageId: assistantMessage.id,
+          userText: text,
+          reasoning: abortedLate
+            ? `${reasoningParts.join('\n\n')}\n\n[本轮由用户手动中止]`
+            : reasoningParts.join('\n\n'),
+          tools: slimmedInvocations,
+        }),
+      )
       emit({ requestId, type: 'done', usage })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -419,7 +430,7 @@ export class YanhuPiRuntime {
       }
       const slimmedInvocations = invocations.map((invocation) => ({
         ...invocation,
-        result: slimYanhuToolResultForHistory(invocation.toolName, invocation.result),
+        result: slimYanhuToolResultForHistory(invocation.toolName, invocation.result, invocation.status === 'error'),
       }))
 
       let fallbackText = ''
@@ -440,6 +451,17 @@ export class YanhuPiRuntime {
         usage: errUsage,
       }
       this.store.appendMessages([errorAssistantMessage])
+      // 异常 / 手动中止同样是排查重点：把已产生的思考链与工具时间线一并落盘（含中止原因）
+      void appendYanhuThinkingRecord(
+        buildYanhuThinkingRecord({
+          messageId: errorAssistantMessage.id,
+          userText: text,
+          reasoning: aborted
+            ? `${reasoningParts.join('\n\n')}\n\n[本轮由用户手动中止]`
+            : `${reasoningParts.join('\n\n')}\n\n[本轮异常中断：${message}]`,
+          tools: slimmedInvocations,
+        }),
+      )
 
       emit({ requestId, type: aborted ? 'done' : 'error', error: aborted ? undefined : message, usage: errUsage })
     } finally {
@@ -468,8 +490,13 @@ export class YanhuPiRuntime {
 
     const tool = toolIndex.get(call.name)
     if (!tool) {
+      // 可自愈的报错：直接回传当前可用工具清单，模型下一轮即可改用正确工具，
+      // 不再只抛一句无从下手的「未知工具」（历史问题：提示词宣传了未挂载的开发者级工具）
+      const available = [...toolIndex.keys()].join(', ')
       invocation.status = 'error'
-      invocation.result = `未知工具：${call.name}`
+      invocation.result =
+        `未知工具：${call.name}。该工具当前未挂载（开发者级 / 视觉类工具默认关闭）。` +
+        `当前可用工具：${available}。请改用上述可用工具重试。`
       emit({ requestId, type: 'tool-end', tool: { ...invocation } })
       return invocation
     }
