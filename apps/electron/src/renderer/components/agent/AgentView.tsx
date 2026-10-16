@@ -79,6 +79,7 @@ import {
   agentSessionModelMapAtom,
   currentAgentWorkspaceIdAtom,
   agentPendingPromptAtom,
+  agentComposerInjectionAtom,
   agentPendingFilesAtomFamily,
   agentWorkspacesAtom,
   agentStreamErrorsAtom,
@@ -840,6 +841,21 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       return map
     })
   }, [sessionId, setDraftHtmlMap])
+
+  // 新手引导一次性注入：把外部请求的文本写入当前会话输入框草稿，并清掉旧 HTML 草稿，
+  // 让受控值按 Markdown 重建编辑器内容；随后聚焦输入框，用户可直接回车发送。
+  const [composerInjection, setComposerInjection] = useAtom(agentComposerInjectionAtom)
+  React.useEffect(() => {
+    if (!composerInjection || composerInjection.sessionId !== sessionId) return
+    const injectedText = composerInjection.text
+    setComposerInjection(null)
+    setInputContent(injectedText)
+    setInputHtmlContent('')
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus()
+    })
+  }, [composerInjection, sessionId, setComposerInjection, setInputContent, setInputHtmlContent])
+
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
   const setSessionPathMap = useSetAtom(agentSessionPathMapAtom)
   const sessionPath = sessionPathMap.get(sessionId) ?? null

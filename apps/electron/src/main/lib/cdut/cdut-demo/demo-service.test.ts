@@ -94,10 +94,13 @@ describe('CDUT 演示账户 8 大业务域数据', () => {
     expect(res.markdown).toContain('线性代数')
   })
 
-  test('Given 成绩域 When 读取成绩 Then 输出加权平均绩点', () => {
+  test('Given 成绩域 When 读取成绩 Then 输出双轨加权绩点与课程明细', () => {
     const res = run('grades', 'query_grades')
-    expect(res.markdown).toContain('加权平均绩点')
+    expect(res.markdown).toContain('加权绩点')
     expect(res.markdown).toContain('碳中和技术概论')
+    const json = res.json as { latest?: { weightedGpa?: number }; records?: unknown[] }
+    expect(Array.isArray(json.records)).toBe(true)
+    expect(typeof json.latest?.weightedGpa).toBe('number')
   })
 
   test('Given 写操作 When 演示选课 Then 仅返回模拟执行结果', () => {

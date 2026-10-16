@@ -1,11 +1,11 @@
 /**
- * 思维导图引擎（双曲 Poincaré 投影布局 + 贝塞尔连线 + OPML 2.0 导出）
+ * 思维导图引擎（径向整齐树布局 + 贝塞尔连线 + OPML 2.0 导出）
  *
- * 布局思想：传统欧氏平面在层级较深时边缘节点互相挤压；本引擎把径向欧氏坐标经
- * 双曲正切投影 r_disk = tanh(r_euclid / scale) · diskRadius 映射到 Poincaré 圆盘，
- * 根节点居中，子分支按测地线角向外辐射扩散，天然避免深层节点重叠。
+ * 布局思想：角度按「子树叶子数占比」切分扇区（相邻子树角度互不重叠），半径采用
+ * **线性等距环 + 径向/切向双约束自适应**（r(d) 逐层单调递增，保证同环弧长足以排布宽气泡）。
+ * 尺寸估算唯一真源为 `estimateMindMapNodeSize`，布局、包围盒与连线锚点三处共用同一口径。
  *
- * 连线采用三次样条贝塞尔曲线（控制点按起终点相对几何向量自适应水平偏移）：
+ * 连线采用三次样条贝塞尔曲线：
  *   C(t) = (1-t)³P₀ + 3(1-t)²t P₁ + 3(1-t)t² P₂ + t³ P₃
  * **连接线路径数学公式锁定不可变更；气泡节点允许用户自由拖拽覆盖坐标。**
  *
@@ -28,11 +28,11 @@ export interface MindMapPoint {
 export interface MindMapLayoutOptions {
   centerX?: number
   centerY?: number
-  /** 相邻层级间的欧氏基准半径（映射到圆盘前） */
+  /** 相邻层级的基础环距（同时作为径向与切向约束的下界） */
   baseRadius?: number
-  /** 圆盘半径上限（DIP） */
+  /** 圆盘半径上限（DIP）；超出时整体等比压缩 */
   diskRadius?: number
-  /** 双曲压缩尺度（越大越接近欧氏） */
+  /** @deprecated 双曲压缩尺度已废弃（tanh 投影存在结构性重叠缺陷），仅为兼容旧调用点保留 */
   scale?: number
 }
 
@@ -45,12 +45,54 @@ function countLeaves(node: MindMapNode): number {
   return total
 }
 
+/** 判定是否为「宽字符」（CJK / 全角标点），用于气泡尺寸估算的视觉宽度换算 */
+function isWideChar(ch: string): boolean {
+  return /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60]/.test(ch)
+}
+
+/** 气泡尺寸估算的实测口径常量（与 mindmap-canvas 的气泡样式严格对齐） */
+const BUBBLE_MAX_WIDTH = 160
+const BUBBLE_PADDING_X = 22
+const BUBBLE_LINE_HEIGHT = 17
+const BUBBLE_PADDING_Y = 14
+const CHAR_WIDTH = 11.5
+
 /**
- * 双曲 Poincaré 圆盘布局：返回以节点 id 为键的位置表。
+ * 估算气泡节点的渲染尺寸（与 `max-w-[160px] / px-2.5 / text-[11px] leading-snug` 样式对齐）。
  *
- * 角度分配采用「按子树叶子数占比切分扇区」的经典整齐树（tidy radial tree）算法：
- * 根节点占据整圆，其子分支按各自叶子数占比平分角度扇区，深层节点递归切分父扇区。
- * 这样相邻子树的角度范围互不重叠，天然避免边缘节点挤压与连线交错。
+ * 该函数是布局与连线的**唯一尺寸真源**：
+ *   - 布局据此计算「同环弧长是否够排布」，根治同层气泡互相重叠；
+ *   - 场景包围盒据此向外扩张，根治边缘气泡被裁切；
+ *   - 连线锚点在 DOM 实测前据此保底，根治首帧锚点跳变抽搐。
+ */
+export function estimateMindMapNodeSize(label: string): { width: number; height: number } {
+  const text = (label ?? '').trim()
+  let visualLen = 0
+  for (const ch of text) visualLen += isWideChar(ch) ? 1 : 0.55
+  const width = Math.min(BUBBLE_MAX_WIDTH, Math.max(84, Math.round(visualLen * CHAR_WIDTH) + BUBBLE_PADDING_X))
+  const contentWidth = Math.max(24, width - BUBBLE_PADDING_X)
+  const lines = Math.max(1, Math.ceil((visualLen * CHAR_WIDTH) / contentWidth))
+  const height = Math.round(lines * BUBBLE_LINE_HEIGHT + BUBBLE_PADDING_Y)
+  return { width, height }
+}
+
+/**
+ * 径向整齐树布局（tidy radial tree）：
+ * 角度按「子树叶子数占比」切分扇区（相邻子树角度范围互不重叠），
+ * 半径采用**线性等距环 + 双约束自适应扩展**。
+ *
+ * 为什么放弃双曲 tanh 压缩：
+ *   原实现按 r_disk = tanh(depth·base/scale)·diskRadius 投影，在 baseRadius=300 / scale=1000 下
+ *   第一层半径仅 tanh(0.3)·460 ≈ 134px，而气泡宽度可达 100~160px —— 同环相邻分支的弧长
+ *   （2π·134 / n）远小于气泡宽度，必然互相压叠；同时外层各环半径被 tanh 挤压到几乎相同
+ *   （depth 2≈247、3≈329、4≈384、5≈416），深层节点径向几乎贴在一起。
+ *   这属于数学层面的结构性缺陷，无法靠调参收敛，因此改为线性环距并同时满足两个硬约束：
+ *
+ *   1. 径向不重叠：r(d) ≥ r(d-1) + 父层最大半高 + 本层最大半高 + 基础环距；
+ *   2. 切向不拥挤：r(d) ≥ 本层节点数 × (本层最大半宽×2 + 间隙) / 2π（保证同环弧长够排布）。
+ *
+ * 若推算出的最外层半径超出 `diskRadius`，整体按比例压缩（保持层级次序与相对间距），
+ * 从而既杜绝重叠，又不会把画布撑到失真。
  */
 export function layoutMindMap(
   root: MindMapNode,
@@ -58,76 +100,161 @@ export function layoutMindMap(
 ): Map<string, MindMapPoint> {
   const centerX = options.centerX ?? 0
   const centerY = options.centerY ?? 0
-  const baseRadius = options.baseRadius ?? 120
-  const diskRadius = options.diskRadius ?? 460
-  const scale = options.scale ?? 900
-  const positions = new Map<string, MindMapPoint>()
+  const ringGap = Math.max(60, options.baseRadius ?? 120)
+  const diskRadius = Math.max(ringGap, options.diskRadius ?? 460)
 
-  const project = (depth: number, angle: number): { x: number; y: number } => {
-    const radiusEuclid = depth * baseRadius
-    const rDisk = Math.tanh(radiusEuclid / scale) * diskRadius
-    return {
-      x: Math.round(centerX + rDisk * Math.cos(angle)),
-      y: Math.round(centerY + rDisk * Math.sin(angle)),
-    }
+  interface Slot {
+    node: MindMapNode
+    depth: number
+    angle: number
   }
+  const slots: Slot[] = []
+  const maxHalfWidthByDepth = new Map<number, number>()
+  const nodesPerDepth = new Map<number, number>()
 
-  const assign = (node: MindMapNode, depth: number, angle: number, sector: number): void => {
-    const projected = project(depth, angle)
-    positions.set(node.id, { x: projected.x, y: projected.y, depth, angle })
+  // ===== Pass 1：按叶子占比切分角度扇区，同时统计每层气泡尺寸与节点数 =====
+  const collect = (node: MindMapNode, depth: number, angle: number, sector: number): void => {
+    slots.push({ node, depth, angle })
+    const halfWidth = estimateMindMapNodeSize(node.label).width / 2
+    maxHalfWidthByDepth.set(depth, Math.max(maxHalfWidthByDepth.get(depth) ?? 0, halfWidth))
+    nodesPerDepth.set(depth, (nodesPerDepth.get(depth) ?? 0) + 1)
+
     const kids = node.children ?? []
     if (kids.length === 0) return
     const totalLeaves = kids.reduce((sum, child) => sum + countLeaves(child), 0) || 1
-    // 自扇区起始角顺次切分：每个子分支按其叶子数占比获得一段连续角度
     let cursor = angle - sector / 2
     for (const child of kids) {
       const childSector = (sector * countLeaves(child)) / totalLeaves
-      const childAngle = cursor + childSector / 2
-      assign(child, depth + 1, childAngle, childSector)
+      collect(child, depth + 1, cursor + childSector / 2, childSector)
       cursor += childSector
     }
   }
+  collect(root, 0, -Math.PI / 2, Math.PI * 2)
 
-  // 根节点：整圆扇区（其自身角度仅作占位，半径恒为 0）
-  assign(root, 0, -Math.PI / 2, Math.PI * 2)
+  // ===== Pass 2：逐层推算半径（径向 + 切向双约束，且严格单调递增） =====
+  const maxDepth = slots.reduce((max, slot) => Math.max(max, slot.depth), 0)
+  const radiusByDepth = new Map<number, number>([[0, 0]])
+  let previousRadius = 0
+  for (let depth = 1; depth <= maxDepth; depth++) {
+    const count = nodesPerDepth.get(depth) ?? 0
+    const halfWidth = maxHalfWidthByDepth.get(depth) ?? 48
+    const parentHalfWidth = maxHalfWidthByDepth.get(depth - 1) ?? halfWidth
+    // 径向约束：父子气泡外缘留出基础环距
+    const radialNeed = previousRadius + parentHalfWidth + halfWidth + ringGap * 0.5
+    // 切向约束：本层周长需容纳全部节点（含横向间隙）
+    const tangentialNeed = count > 1 ? (count * (halfWidth * 2 + 24)) / (2 * Math.PI) : 0
+    const radius = Math.max(previousRadius + ringGap, radialNeed, tangentialNeed)
+    radiusByDepth.set(depth, radius)
+    previousRadius = radius
+  }
+
+  // 超出圆盘上限时整体等比压缩
+  const outermost = previousRadius
+  const shrink = outermost > diskRadius ? diskRadius / outermost : 1
+
+  const positions = new Map<string, MindMapPoint>()
+  for (const slot of slots) {
+    const radius = (radiusByDepth.get(slot.depth) ?? 0) * shrink
+    positions.set(slot.node.id, {
+      x: Math.round(centerX + radius * Math.cos(slot.angle)),
+      y: Math.round(centerY + radius * Math.sin(slot.angle)),
+      depth: slot.depth,
+      angle: slot.angle,
+    })
+  }
   return positions
 }
 
 /**
- * 生成三次样条贝塞尔连线路径。
- *
- * - 提供 `center`（圆盘中心）时采用**径向弧线**控制点：起始控制点取父节点极角、半径为父子
- *   半径中值，末端控制点取子节点极角、同半径——连线沿测地线平滑辐射，树形结构下互不相交；
- * - 未提供 `center` 时退化为沿起终点相对几何向量自适应偏移（避免固定水平切线导致的 S 形回绕）。
+ * 现代平滑辐射贝塞尔曲线生成算法：
+ * 起点 P0(x0, y0)，终点 P1(x1, y1)，弦向量 D = (x1 - x0, y1 - y0)，距离 dist = hypot(dx, dy)。
+ * 1. 起点切线 C1:
+ *    - 若起点为中心根节点，直接沿连线方向发射: u0 = D / dist;
+ *    - 若起点为子节点，沿其自身生长方向（极径）与连线方向的加权混合向外辐射。
+ * 2. 终点切线 C2:
+ *    - 终点平滑接纳切线必须沿 (P1 - P0) 方向汇入，严禁反向拉向全局原点 (0,0)！
+ *      （旧实现用终点相对圆心的极径向量作为 u1，当子节点与父节点不在同一极径上时，
+ *      C2 会向圆心凹陷，形成向后绕圈的怪异「蠕动/抽搐」曲线。）
+ *    - 控制点距离：handle = Math.min(dist * 0.38, 140)。
+ *    - C1 = P0 + u0 * handle，C2 = P1 - (D / dist) * handle。
+ * 3. 经典树状模式（无中心基准）：水平 S 曲线，控制点按水平分量比例偏移。
  */
 export function buildBezierPath(
   from: MindMapPoint,
   to: MindMapPoint,
   center?: { x: number; y: number },
 ): string {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const dist = Math.hypot(dx, dy)
+  if (dist < 1e-4) {
+    return `M ${from.x} ${from.y} L ${to.x} ${to.y}`
+  }
+
+  const dirX = dx / dist
+  const dirY = dy / dist
+  const handleLen = Math.min(dist * 0.38, 140)
+
   let c1x: number
   let c1y: number
   let c2x: number
   let c2y: number
+
   if (center) {
-    const a0 = Math.atan2(from.y - center.y, from.x - center.x)
-    const a1 = Math.atan2(to.y - center.y, to.x - center.x)
+    // 径向平滑向外放射模式
     const r0 = Math.hypot(from.x - center.x, from.y - center.y)
-    const r1 = Math.hypot(to.x - center.x, to.y - center.y)
-    const rm = (r0 + r1) / 2
-    c1x = center.x + rm * Math.cos(a0)
-    c1y = center.y + rm * Math.sin(a0)
-    c2x = center.x + rm * Math.cos(a1)
-    c2y = center.y + rm * Math.sin(a1)
+    if (r0 < 2.0) {
+      // 根节点（位于圆心）：直接沿连线方向射出，规避 atan2(0,0) 极角退化
+      c1x = from.x + dirX * handleLen
+      c1y = from.y + dirY * handleLen
+    } else {
+      // 分支节点：沿向外极径与连线方向的加权混合向量射出，保持辐射张力又不回弯
+      const radX = (from.x - center.x) / r0
+      const radY = (from.y - center.y) / r0
+      const blendX = radX * 0.6 + dirX * 0.4
+      const blendY = radY * 0.6 + dirY * 0.4
+      const blendLen = Math.hypot(blendX, blendY) || 1
+      c1x = from.x + (blendX / blendLen) * handleLen
+      c1y = from.y + (blendY / blendLen) * handleLen
+    }
+    // 终点控制点：平滑汇入气泡，绝不往原点扭曲
+    c2x = to.x - dirX * handleLen
+    c2y = to.y - dirY * handleLen
   } else {
-    const dx = to.x - from.x
-    const dy = to.y - from.y
-    c1x = from.x + dx * 0.33
-    c1y = from.y + dy * 0.33
-    c2x = from.x + dx * 0.67
-    c2y = from.y + dy * 0.67
+    // 经典平滑水平 S 曲线
+    const kx = Math.abs(dx) * 0.45
+    c1x = from.x + (dx >= 0 ? kx : -kx)
+    c1y = from.y
+    c2x = to.x - (dx >= 0 ? kx : -kx)
+    c2y = to.y
   }
-  return `M ${from.x} ${from.y} C ${c1x} ${c1y} ${c2x} ${c2y} ${to.x} ${to.y}`
+
+  return `M ${from.x.toFixed(2)} ${from.y.toFixed(2)} C ${c1x.toFixed(2)} ${c1y.toFixed(2)}, ${c2x.toFixed(2)} ${c2y.toFixed(2)}, ${to.x.toFixed(2)} ${to.y.toFixed(2)}`
+}
+
+/**
+ * 光标锚定缩放的视口矩阵变换（纯函数，供视口 Hook 与单元测试共用）。
+ *
+ * 公式：t' = P_anchor - (s'/s) * (P_anchor - t)
+ * 其中 P_anchor 为锚点的屏幕坐标，s 为旧缩放、s' 为新缩放，t 为旧平移、t' 为新平移。
+ * 该变换保证锚点对应的场景点在缩放前后始终投影到同一屏幕位置（可逆、无漂移）。
+ */
+export function computeAnchorZoomPan(
+  prev: { zoom: number; pan: { x: number; y: number } },
+  anchor: { x: number; y: number },
+  nextZoom: number,
+): { zoom: number; pan: { x: number; y: number } } {
+  if (!Number.isFinite(prev.zoom) || prev.zoom <= 0 || !Number.isFinite(nextZoom) || nextZoom <= 0) {
+    return { zoom: prev.zoom, pan: prev.pan }
+  }
+  const k = nextZoom / prev.zoom
+  return {
+    zoom: nextZoom,
+    pan: {
+      x: anchor.x - k * (anchor.x - prev.pan.x),
+      y: anchor.y - k * (anchor.y - prev.pan.y),
+    },
+  }
 }
 
 /** 前序遍历展开导图节点（渲染层按序绘制气泡与连线） */

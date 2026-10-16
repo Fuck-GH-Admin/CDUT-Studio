@@ -10,7 +10,7 @@ import { IPC_CHANNELS, REVIEW_IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANN
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
 import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
 import type {
   RuntimeStatus,
@@ -1580,6 +1580,10 @@ export interface ElectronAPI {
     gatekeeperRespond: (decision: CdutGatekeeperDecision) => Promise<{ handled: boolean }>
     /** 调用 8 大业务域工具（支持在线抓取与高仿真离线演示数据回退） */
     callDomainTool: (params: CdutToolInvokeParams) => Promise<CdutDomainToolResult>
+    /** 读取业务域离线缓存（SWR 秒开渲染；无缓存返回 null） */
+    readDomainCache: (name: CdutDomainCacheName) => Promise<unknown>
+    /** 写入业务域离线缓存（网络成功后原子落盘） */
+    writeDomainCache: (input: { name: CdutDomainCacheName; payload: unknown }) => Promise<{ success: boolean }>
   }
 
   // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
@@ -1671,6 +1675,7 @@ export interface ElectronAPI {
     // 测验与 FIM
     getQuiz: (input: { sessionId: string; quizId?: string }) => Promise<QuizSession | null>
     submitQuizAnswer: (input: StudyQuizAnswerInput) => Promise<QuizSession | null>
+    resetQuiz: (input: { sessionId: string; quizId: string }) => Promise<QuizSession | null>
     // 双轨联动生成
     generateArtifact: (input: StudyGenerateArtifactInput) => Promise<StudyGenerateArtifactResult>
     // 已生成成果总览（右侧工作台常驻列表）
@@ -3744,6 +3749,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.GATEKEEPER_RESPOND, decision),
     callDomainTool: (params: CdutToolInvokeParams) =>
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.CALL_DOMAIN_TOOL, params),
+    readDomainCache: (name: CdutDomainCacheName) =>
+      ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.READ_DOMAIN_CACHE, name),
+    writeDomainCache: (input: { name: CdutDomainCacheName; payload: unknown }) =>
+      ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.WRITE_DOMAIN_CACHE, input),
   },
 
   // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
@@ -3873,6 +3882,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_QUIZ, input),
     submitQuizAnswer: (input: StudyQuizAnswerInput) =>
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.SUBMIT_QUIZ_ANSWER, input),
+    resetQuiz: (input: { sessionId: string; quizId: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.RESET_QUIZ, input),
     // 双轨联动生成
     generateArtifact: (input: StudyGenerateArtifactInput) =>
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.GENERATE_ARTIFACT, input),

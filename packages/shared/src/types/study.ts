@@ -221,6 +221,8 @@ export const STUDY_IPC_CHANNELS = {
   GET_QUIZ: 'study:get-quiz',
   /** 提交单题作答，实时判分并更新 FIM 潜伏能力估计 */
   SUBMIT_QUIZ_ANSWER: 'study:submit-quiz-answer',
+  /** 重置测验：清空全部作答记录与判分状态，支持反复练习 */
+  RESET_QUIZ: 'study:reset-quiz',
 
   // ===== 双轨联动生成（思维导图 / 抽认卡 / 测验）=====
   /** 依据当前课堂资料生成学习工件（导图 / 抽认卡 / 测验）并落盘 */

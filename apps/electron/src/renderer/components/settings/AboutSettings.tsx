@@ -321,14 +321,14 @@ export function AboutSettings(): React.ReactElement {
         title="关于 CDUT Studio"
         description="集成通用 AI Agent 的下一代人工智能软件 — CDUT Studio"
       >
-        {/* 环境检测卡片 */}
+        {/* 1. 核心研发团队（5 位核心成员横排 Contributors 头像画廊）置于副标题正下方 */}
+        <TeamCreditsCard />
+
+        {/* 2. 环境检测卡片置于头像画廊正下方 */}
         <EnvironmentCard />
 
-        {/* Shell 环境卡片（仅 Windows） */}
+        {/* 3. Shell 环境卡片（仅 Windows） */}
         <ShellEnvironmentCard />
-
-        {/* 核心研发团队（GitHub Contributors 风格头像画廊） */}
-        <TeamCreditsCard />
       </SettingsSection>
     </div>
   )

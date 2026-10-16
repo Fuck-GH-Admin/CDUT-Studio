@@ -18,7 +18,8 @@ describe('agent block copy serialization', () => {
     expect(source).not.toContain('-left-14')
     expect(source).toContain('data-agent-toolbar-block-id={toolbarBlock.id}')
     expect(source).toContain('data-agent-toolbar-corridor="true"')
-    expect(source).toContain('className="pointer-events-auto absolute -right-1 -top-9 z-20 flex h-9 items-end pb-0.5"')
+    // 悬浮操作条整层 select-none：杜绝 "Markdown/纯文本/复制此块" 等工具条文字混入用户原生选区
+    expect(source).toContain('className="pointer-events-auto absolute -right-1 -top-9 z-20 flex h-9 items-end pb-0.5 select-none"')
     expect(source).not.toContain("hasToolbarLane && 'pt-9'")
     expect(source).toContain("const selectionPaddingClassName = selected")
     expect(source).toContain("? cn(selectionGroupStart && 'pt-2', selectionGroupEnd && 'pb-2')")
@@ -31,7 +32,10 @@ describe('agent block copy serialization', () => {
     expect(source).toContain('previewVisible={!selecting && toolbarExpanded && toolbarBlock?.id === block.id}')
     expect(source).toContain("selectionGroupStart && 'rounded-t-md border-t-[3px]'")
     expect(source).toContain("selectionGroupEnd ? 'bottom-0 rounded-b-md border-b-[3px]' : selectionBridgeAfterClassName")
-    expect(source).toContain("selecting && 'select-none'")
+    // 块选择模式不再静态施加全局 select-none（否则 Ctrl+C 无法读取原生选区）：
+    // 通过 pointerDown 位移阈值区分「点击勾选块」与「拖拽选中文本」
+    expect(source).not.toContain("selecting && 'select-none'")
+    expect(source).toContain('pointerDownPosRef.current')
     expect(source).not.toContain('group/table')
     expect(source).not.toContain('before:absolute')
     expect(source).not.toContain('absolute -top-8 right-0')

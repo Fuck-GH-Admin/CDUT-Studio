@@ -872,6 +872,11 @@ const MarkdownPre = React.memo(function MarkdownPre({
     if (shouldInspectMermaidCodeBlock(className)) {
       // normalize Windows/legacy-Mac line endings before feeding to Mermaid parser
       const mermaidCode = extractText(codeProps.children).replace(/\r\n?/g, '\n').replace(/\n$/, '')
+      // 防御性语法侦测：LLM 偶尔遗漏标记，将 Mermaid mindmap 语法误包进 ```mermaid 围栏。
+      // 命中首行/次行显式声明 mindmap 时自动改道专用导图画布，绝不回退为静态 Mermaid SVG
+      if (/^\s*mindmap\b/m.test(mermaidCode) && parseMindMapText(mermaidCode)) {
+        return <MindMapBlock code={mermaidCode} />
+      }
       if (shouldRenderMermaidCodeBlock(className, mermaidCode)) {
         return <MermaidBlock code={mermaidCode} />
       }
@@ -1207,13 +1212,13 @@ function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, sel
       {selectionFrameClassName && <div aria-hidden="true" className={selectionFrameClassName} />}
       {toolbarVisible && toolbarBlock && (
         <div
-          data-agent-toolbar-block-id={toolbarBlock.id}
-          data-agent-toolbar-corridor="true"
-          className="pointer-events-auto absolute -right-1 -top-9 z-20 flex h-9 items-end pb-0.5"
-          onMouseEnter={onToolbarEnter}
-          onMouseLeave={onToolbarLeave}
-        >
-          <div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-background/95 px-0.5 py-0.5 shadow-sm" onClick={(event) => event.stopPropagation()}>
+            data-agent-toolbar-block-id={toolbarBlock.id}
+            data-agent-toolbar-corridor="true"
+            className="pointer-events-auto absolute -right-1 -top-9 z-20 flex h-9 items-end pb-0.5 select-none"
+            onMouseEnter={onToolbarEnter}
+            onMouseLeave={onToolbarLeave}
+          >
+            <div className="flex select-none items-center gap-0.5 rounded-md border border-border/60 bg-background/95 px-0.5 py-0.5 shadow-sm" onClick={(event) => event.stopPropagation()}>
             {toolbarBlock.kind === 'markdown' && (selecting || toolbarExpanded) && (selectionFormatMode === 'markdown' || selectionFormatMode === 'plainText') && (
               <div className="flex items-center rounded bg-muted/70 p-0.5 text-xs">
                 <button type="button" className={cn('rounded px-1.5 py-0.5', markdownFormat === 'markdown' && 'bg-background shadow-sm')} onClick={() => onMarkdownFormatChange('markdown')}>Markdown</button>
@@ -1254,6 +1259,8 @@ export const MessageResponse = React.memo(
     const toolbarLeaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
     const [markdownFormat, setMarkdownFormat] = React.useState<'markdown' | 'plainText'>('markdown')
     const [tableFormats, setTableFormats] = React.useState<Map<string, 'markdown' | 'tsv'>>(new Map())
+    /** 记录按下位置：用于区分「点击勾选块」与「拖拽选中文本」（松手 click） */
+    const pointerDownPosRef = React.useRef<{ x: number; y: number } | null>(null)
 
     const exitSelection = React.useCallback(() => {
       setSelection({ selectedIds: new Set(), selecting: false })
@@ -1354,6 +1361,10 @@ export const MessageResponse = React.memo(
     }, [blocks, markdownFormat, markCopied, selectedIds, tableFormats])
     const toggleBlock = React.useCallback((block: AgentMarkdownBlock, event: React.MouseEvent<HTMLDivElement>) => {
       if (!selecting || (event.target as HTMLElement).closest(AGENT_BLOCK_INTERACTION_SELECTOR)) return
+      // 拖拽选中文本（松手触发 click）不视为块选勾选：按下/抬起位移超过阈值时跳过，
+      // 保证多选模式下原生文字选区仍然可用（Ctrl+C 可正常复制所见文本）
+      const down = pointerDownPosRef.current
+      if (down && (Math.abs(event.clientX - down.x) > 4 || Math.abs(event.clientY - down.y) > 4)) return
       if (!rangeEstablished && selectionAnchorId && selectionAnchorId !== block.id) {
         setSelection({ selectedIds: selectAgentBlockRange(blocks, selectionAnchorId, block.id), selecting: true })
         setRangeEstablished(true)
@@ -1427,7 +1438,13 @@ export const MessageResponse = React.memo(
 
     return (
       <>
-        <div className={cn(containerClassName, selecting && 'select-none')} onPointerLeave={() => { clearHoverSwitchTimer(); scheduleHoverLeave() }}>
+        {/* 不再静态施加 select-none：块选择模式下仍保留原生文字选区能力，
+            点击勾选与拖拽选中通过 pointerDown 位移阈值区分（见 toggleBlock） */}
+        <div
+          className={containerClassName}
+          onPointerDown={(event) => { pointerDownPosRef.current = { x: event.clientX, y: event.clientY } }}
+          onPointerLeave={() => { clearHoverSwitchTimer(); scheduleHoverLeave() }}
+        >
           {blocks.map((block, index) => {
             const plugins = [...(remarkPlugins ? [...REMARK_PLUGINS, ...remarkPlugins] : [...REMARK_PLUGINS]), remarkTableSource(block.source)]
             const toolbarBlock = selecting && !selectedIds.has(block.id)

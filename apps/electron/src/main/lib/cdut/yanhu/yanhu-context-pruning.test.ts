@@ -1,13 +1,15 @@
 /**
  * 智联万站 · 多步工具循环上下文剪枝（yanhu-context-pruning）单元测试
  *
- * 覆盖：步骤不足时原样返回、超限时仅压缩旧步骤、read_page 巨型结果被替换为继承摘要、
- * 通用结果截断、toolCallId / isError 完整性保留、keepSteps 可配置。
+ * 覆盖：步骤不足时原样返回、超限时仅压缩旧步骤、更早的 read_page 巨型结果被替换为占位提示、
+ * 最近一次观测结果（read_page / capture_visual）逐字保留、通用结果截断、
+ * toolCallId / isError 完整性保留、keepSteps 可配置。
  */
 
 import { describe, expect, test } from 'bun:test'
 import type { ContinuationMessage } from '@profer/core'
 import {
+  HISTORY_ERROR_MAX_CHARS,
   HISTORY_RESULT_MAX_CHARS,
   PRUNE_KEEP_STEPS,
   pruneYanhuContinuationMessages,
@@ -44,15 +46,15 @@ describe('pruneYanhuContinuationMessages（多步上下文剪枝）', () => {
     const messages = [
       ...buildStep(1, 'yanhu_read_page', '超长页面观察……'.repeat(50)),
       ...buildStep(2, 'yanhu_get_network_logs', 'HTTP 日志……'.repeat(50)),
-      ...buildStep(3, 'yanhu_click', 'ok-3'),
+      ...buildStep(3, 'yanhu_read_page', '最新的页面观察台账'),
       ...buildStep(4, 'yanhu_click', 'ok-4'),
     ]
     const pruned = pruneYanhuContinuationMessages(messages)
     expect(pruned).toHaveLength(8)
 
-    // 第 1 步（最旧）：read_page → 继承摘要
+    // 第 1 步（最旧）：read_page → 压缩为占位提示（更晚的第 3 步已有更新的台账）
     const step1Tool = pruned[1] as { results: Array<{ content: string; toolCallId: string }> }
-    expect(step1Tool.results[0]?.content).toBe('[前序页面观察记录已由最新一步结果继承更新]')
+    expect(step1Tool.results[0]?.content).toContain('较早的页面观察记录已压缩')
     expect(step1Tool.results[0]?.toolCallId).toBe('call-1')
 
     // 第 2 步：network_logs → 日志压缩
@@ -60,8 +62,34 @@ describe('pruneYanhuContinuationMessages（多步上下文剪枝）', () => {
     expect(step2Tool.results[0]?.content).toBe('[前序日志已压缩]')
 
     // 第 3、4 步（保留窗口内）：原样保留
-    expect((pruned[5] as { results: Array<{ content: string }> }).results[0]?.content).toBe('ok-3')
+    expect((pruned[5] as { results: Array<{ content: string }> }).results[0]?.content).toBe('最新的页面观察台账')
     expect((pruned[7] as { results: Array<{ content: string }> }).results[0]?.content).toBe('ok-4')
+  })
+
+  test('最近一次 read_page 台账即便远离保留窗口也逐字保留（杜绝模型失去 [BID] 台账）', () => {
+    const ledger = '=== [PageDigest: 学生请假] ===\n- [BID: 8] textbox "请假开始时间"'
+    const messages = [
+      ...buildStep(1, 'yanhu_read_page', ledger),
+      ...buildStep(2, 'yanhu_fill', 'ok-2'),
+      ...buildStep(3, 'yanhu_fill', 'ok-3'),
+      ...buildStep(4, 'yanhu_fill', 'ok-4'),
+      ...buildStep(5, 'yanhu_click', 'ok-5'),
+    ]
+    const pruned = pruneYanhuContinuationMessages(messages)
+    // 第 1 步的 read_page 是全场唯一观测结果：必须完整保留，否则模型无从得知任何 [BID]
+    expect((pruned[1] as { results: Array<{ content: string }> }).results[0]?.content).toBe(ledger)
+  })
+
+  test('最近一次 capture_visual 标定表同样被保留（供后续视觉点击换算）', () => {
+    const calibration = '地标：u=301,v=345 → x=489,y=300'
+    const messages = [
+      ...buildStep(1, 'yanhu_capture_visual', calibration),
+      ...buildStep(2, 'yanhu_fill', 'ok-2'),
+      ...buildStep(3, 'yanhu_fill', 'ok-3'),
+      ...buildStep(4, 'yanhu_click', 'ok-4'),
+    ]
+    const pruned = pruneYanhuContinuationMessages(messages)
+    expect((pruned[1] as { results: Array<{ content: string }> }).results[0]?.content).toBe(calibration)
   })
 
   test('通用长结果被截断至 80 字符并追加省略号', () => {
@@ -79,27 +107,28 @@ describe('pruneYanhuContinuationMessages（多步上下文剪枝）', () => {
   test('isError 标志在压缩后保持完整', () => {
     const messages = [
       ...buildStep(1, 'yanhu_read_page', 'boom', true),
-      ...buildStep(2, 'yanhu_click', 'a'),
-      ...buildStep(3, 'yanhu_click', 'b'),
+      ...buildStep(2, 'yanhu_read_page', 'later'),
+      ...buildStep(3, 'yanhu_click', 'a'),
+      ...buildStep(4, 'yanhu_click', 'b'),
     ]
     const pruned = pruneYanhuContinuationMessages(messages)
     const step1Tool = pruned[1] as { results: Array<{ isError?: boolean }> }
     expect(step1Tool.results[0]?.isError).toBe(true)
   })
 
-  test('keepSteps 可配置：keepSteps=1 时压缩更早的两步', () => {
+  test('keepSteps 可配置：keepSteps=1 时压缩更早的步骤，但最新台账仍保留', () => {
     const messages = [
       ...buildStep(1, 'yanhu_read_page', 'p1'),
       ...buildStep(2, 'yanhu_read_page', 'p2'),
       ...buildStep(3, 'yanhu_click', 'ok'),
     ]
     const pruned = pruneYanhuContinuationMessages(messages, { keepSteps: 1 })
-    expect((pruned[1] as { results: Array<{ content: string }> }).results[0]?.content).toBe(
-      '[前序页面观察记录已由最新一步结果继承更新]',
+    // 第 1 步被压缩（更晚的第 2 步已有更新台账）
+    expect((pruned[1] as { results: Array<{ content: string }> }).results[0]?.content).toContain(
+      '较早的页面观察记录已压缩',
     )
-    expect((pruned[3] as { results: Array<{ content: string }> }).results[0]?.content).toBe(
-      '[前序页面观察记录已由最新一步结果继承更新]',
-    )
+    // 第 2 步是全场最新观测：即便超出 keepSteps=1 的窗口也必须逐字保留
+    expect((pruned[3] as { results: Array<{ content: string }> }).results[0]?.content).toBe('p2')
     expect((pruned[5] as { results: Array<{ content: string }> }).results[0]?.content).toBe('ok')
   })
 
@@ -126,6 +155,22 @@ describe('slimYanhuToolResultForHistory（跨轮次历史脱敏瘦身）', () =>
   test('网络 / 控制台日志被替换为折叠摘要', () => {
     expect(slimYanhuToolResultForHistory('yanhu_get_network_logs', 'x'.repeat(5000))).toBe('[网络日志已折叠]')
     expect(slimYanhuToolResultForHistory('yanhu_get_console_logs', 'y'.repeat(5000))).toBe('[控制台日志已折叠]')
+  })
+
+  test('错误回执绝不套用成功态摘要模板（熔断 / 失败诊断必须保留）', () => {
+    // 真实事故：read_page 的熔断提示不含 PageDigest 头，被压成 `[已读取页面]`，
+    // 模型重启后从历史里只看到这句废话，只能靠猜。
+    const notice = '【熔断拦截】当前页面与上一状态完全一致且未执行任何交互操作，禁止重复刷新读取！请直接使用已有 [BID] 执行点击、选择等操作，或向用户汇报结果。'
+    expect(slimYanhuToolResultForHistory('yanhu_read_page', notice, true)).toBe(notice)
+    // 成功态仍走原摘要模板
+    expect(slimYanhuToolResultForHistory('yanhu_read_page', '随便一段文本', false)).toBe('[已读取页面]')
+  })
+
+  test('错误回执按更大的上限截断（保住完整诊断，而非 200 字的通用上限）', () => {
+    const long = `选择失败：${'诊'.repeat(1000)}`
+    const slimmed = String(slimYanhuToolResultForHistory('yanhu_select', long, true))
+    expect(slimmed.length).toBe(HISTORY_ERROR_MAX_CHARS + 1)
+    expect(slimmed.startsWith('选择失败：')).toBe(true)
   })
 
   test('通用超长结果被截断，短结果原样保留', () => {

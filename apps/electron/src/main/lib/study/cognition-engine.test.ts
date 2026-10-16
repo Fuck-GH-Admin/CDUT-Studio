@@ -175,7 +175,7 @@ describe('思维导图引擎（BDD-MINDMAP-01）', () => {
 
   test('贝塞尔连线为三次样条路径', () => {
     const path = buildBezierPath({ x: 0, y: 0, depth: 0, angle: 0 }, { x: 100, y: 40, depth: 1, angle: 0 })
-    expect(path).toMatch(/^M 0 0 C [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ 100 40$/)
+    expect(path).toMatch(/^M 0\.00 0\.00 C [-\d.]+ [-\d.]+, [-\d.]+ [-\d.]+, 100\.00 40\.00$/)
   })
 
   test('OPML 2.0 导出包含嵌套 outline 与 XML 转义', () => {
@@ -270,21 +270,21 @@ describe('思维导图整齐布局与径向连线（连线交错修复）', () =
     expect(b.angle).toBeLessThan(c.angle)
   })
 
-  test('提供圆心时径向弧线控制点共线（同角度父子连线为直线，杜绝 S 形回绕）', () => {
+  test('提供圆心时径向弧线切向辐射（同角度父子连线为直线，杜绝 S 形回绕）', () => {
     const path = buildBezierPath(
       { x: 500, y: 400, depth: 1, angle: 0 },
       { x: 500, y: 300, depth: 2, angle: 0 },
       { x: 500, y: 500 },
     )
-    // 父在上方、子更远且同角度 → 控制点 x 恒为 500，曲线退化为沿半径的直线
-    expect(path).toContain('C 500 ')
-    expect(path).toMatch(/^M 500 400 C 500 [-\d.]+ 500 [-\d.]+ 500 300$/)
+    // 父在上方、子更远且同角度 → 切向单位向量均沿极径向外，控制点 x 恒为 500，
+    // 曲线退化为沿半径的直线（现代切向几何向量算法：u0/u1 各自沿极径放射）
+    expect(path).toMatch(/^M 500\.00 400\.00 C 500\.00 [-\d.]+, 500\.00 [-\d.]+, 500\.00 300\.00$/)
   })
 
   test('未提供圆心时按相对几何向量自适应（避免固定水平切线）', () => {
     const path = buildBezierPath({ x: 0, y: 0, depth: 0, angle: 0 }, { x: 0, y: 100, depth: 1, angle: 0 })
-    // 竖直连线亦不回绕：控制点落在同一直线上
-    expect(path).toBe('M 0 0 C 0 33 0 67 0 100')
+    // 竖直连线水平分量为零 → S 曲线控制点退化到两端点，仍落在同一直线上不回绕
+    expect(path).toBe('M 0.00 0.00 C 0.00 0.00, 0.00 100.00, 0.00 100.00')
   })
 })
 

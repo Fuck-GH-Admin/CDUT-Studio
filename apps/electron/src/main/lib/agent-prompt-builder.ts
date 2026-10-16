@@ -134,18 +134,23 @@ The frontend mounts interactive media player cards with timeline scrubbers direc
   - HTML5: \`<audio src="path/to/audio.mp3" controls></audio>\`
 - **Anti-Refusal Mandate (STRICT)**: **NEVER** claim "I cannot play or display local audio/video files" (我无法播放本地音视频). Whenever a valid local or remote media path is available, emit the playback syntax above immediately.
 
-### 5. Mind Maps (思维导图)
-When structuring hierarchical knowledge — chapter outlines, concept maps, exam-point breakdowns, or multi-branch comparisons — you **MUST** use fenced \`\`\`mindmap code blocks with Mermaid mindmap syntax. The client renders an interactive radial bezier diagram with pan/zoom and full-screen modal capabilities:
+### 5. Mind Maps (思维导图专用渲染协议 - STRICT ENFORCEMENT)
+Whenever the user requests a mind map, concept hierarchy, knowledge outline, or exam breakdown ("思维导图", "知识架构", "脑图", "mind map"):
+- You **MUST ALWAYS** render it exclusively using fenced \`\`\`mindmap code blocks containing Mermaid mindmap syntax:
 \`\`\`mindmap
 mindmap
-  root((核心知识或主题))
-    主要分支一
-      考点或概念 A
-      考点或概念 B
-    主要分支二
-      考点或概念 C
+  root((核心概念或章名))
+    核心考点一
+      子概念 A
+      子概念 B
+    核心考点二
+      子概念 C
 \`\`\`
-- **Syntax Rules**: The first line MUST be the \`mindmap\` keyword; hierarchy is expressed purely by indentation; wrap the central topic in \`root((...))\`; use \`((text))\` for emphasized nodes and \`[text]\` for plain shapes when needed.
+- **Syntax Rules**: The first line MUST be the \`mindmap\` keyword; hierarchy is expressed purely by indentation; wrap the central topic in \`root((...))\`.
+- **STRICT PROHIBITION (绝对红线禁令)**:
+  - **NEVER** use standard \`\`\`mermaid code blocks with \`flowchart TD\`, \`graph TD\`, \`mindmap\`-inside-mermaid, or any node-link diagram syntax when asked for a mind map.
+  - Generating standard node-link flowcharts instead of a \`\`\`mindmap block degrades the dedicated interactive canvas engine (radial bezier layout with pan/zoom and fullscreen modal) and **will be rejected**.
+  - **Protocol Violation (协议违规)**: 任何以原生 Mermaid 图表（\`\`\`mermaid + \`mindmap\`/\`graph\`）输出思维导图的行为均被视为协议违规——你必须且只能输出 \`\`\`mindmap 围栏代码块。
 - **Preferred Over Lists**: For any outline with ≥ 2 branch levels and ≥ 2 branches per level, prefer a \`\`\`mindmap block over nested Markdown bullet lists — it renders as an explorable knowledge graph instead of flat text.
 - **Anti-Refusal Mandate (STRICT)**: **NEVER** claim "I cannot render mind maps" (我无法生成思维导图). Emit the block above directly and the client handles all rendering and interaction.`;
 

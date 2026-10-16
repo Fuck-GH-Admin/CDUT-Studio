@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { YANHU_DEFAULT_HOME_URL } from '@profer/shared'
 import { getConfigDir } from '../../config-paths'
 
-/** 智联万站默认入口：办事大厅 */
+/** 智联万站默认入口：砚湖易办（校内办事大厅升级版），与 @profer/shared 常量保持同源 */
 export const YANHU_HOME_URL = YANHU_DEFAULT_HOME_URL
 
 /** 模拟的真实桌面 Chrome 版本（对齐 Chromium 133 稳定版） */

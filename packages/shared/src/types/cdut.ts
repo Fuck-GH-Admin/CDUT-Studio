@@ -93,8 +93,12 @@ export interface CdutScheduleParams {
   semester?: string
   /** 指定周次（1-20，留空返回全周课表） */
   week?: number
-  queryType?: 'class' | 'teacher' | 'classroom'
-  queryKeyword?: string
+  /** 查询目标班级：班级名称（如 "智能2班"）或班级代码（如 "2025191101"），支持模糊匹配 */
+  className?: string
+  /** 查询目标班级 ID（教务系统内部 xx04id，优先于 className） */
+  classId?: string
+  /** 标记本次查询周次即当前周：启用「正在上课 / 下节课程预告」实时雷达判定 */
+  isCurrentWeek?: boolean
 }
 
 /** Tool 3：成绩与考核评定 */
@@ -368,9 +372,9 @@ export interface StudySearchKnowledgeResult {
 // 底层 CDP 采集仅为二期 AI 自动化预留高可用信道，前端不暴露任何调试 UI。
 
 /**
- * 智联万站默认入口：办事大厅（未指定工作区时冷启动直达）。
+ * 智联万站默认入口：砚湖易办（校内办事大厅升级版，未指定工作区时冷启动直达）。
  */
-export const YANHU_DEFAULT_HOME_URL = 'https://bsdt.cdut.edu.cn/EIP/caslogin.jsp'
+export const YANHU_DEFAULT_HOME_URL = 'https://bsdt.cdut.edu.cn/EIP/onewebsitehande/toPersonalCenterPage.htm'
 
 /**
  * 智联万站高频校内书签（导航栏快捷胶囊，顺序即展示顺序）。
@@ -382,10 +386,10 @@ export interface YanhuBookmark {
 }
 
 export const YANHU_BOOKMARKS: readonly YanhuBookmark[] = [
-  { id: 'bsdt', label: '办事大厅', url: 'https://bsdt.cdut.edu.cn/EIP/caslogin.jsp' },
-  { id: 'jw', label: '青果教务', url: 'https://jw.cdut.edu.cn/jsxsd/framework/xsMainV.htmlx' },
-  { id: 'library', label: '图书馆', url: 'https://library.cdut.edu.cn' },
-  { id: 'gra', label: '研究生院', url: 'https://gra.cdut.edu.cn' },
+  { id: 'bsdt', label: '砚湖易办', url: 'https://bsdt.cdut.edu.cn/EIP/onewebsitehande/toPersonalCenterPage.htm' },
+  { id: 'jw', label: '教务系统', url: 'https://jw.cdut.edu.cn/jsxsd/framework/xsMainV.htmlx' },
+  { id: 'library', label: '问渠学堂', url: 'https://classroom.wqxt.cdut.edu.cn/' },
+  { id: 'gra', label: '学工系统', url: 'https://xgfw.cdut.edu.cn/xsfw/sys/xggzptapp/*default/index.do?min=1#/gzzm' },
 ] as const
 
 /** 内置拦截页哨兵协议前缀；标签 url 命中该前缀时，渲染层改渲染 YanhuBlockedPage 卡片 */
@@ -745,6 +749,13 @@ export interface YanhuDistilledPage {
   textDigest?: string
   /** 渲染文本摘要（有界截断），随 PageDigest 投递给模型，让内容变化「看得见」 */
   textSample?: string
+  /**
+   * 未被渲染的可交互元素统计（折叠菜单 / 隐藏面板 / 未激活标签页等）。
+   *
+   * 这些元素**不分配 BID**（未渲染的控件点击必被网页驳回），仅在摘要末尾汇总提示，
+   * 引导模型先点击可见入口展开后再读取。
+   */
+  unrendered?: { count: number; regions: string[] }
   timestamp: number
 }
 
@@ -848,4 +859,11 @@ export const CDUT_ZONE_IPC_CHANNELS = {
   GATEKEEPER_BLOCKED: 'cdut-zone:gatekeeper-blocked',
   /** 渲染端回传统一门禁用户决策 */
   GATEKEEPER_RESPOND: 'cdut-zone:gatekeeper-respond',
+  /** 读取业务域离线缓存（SWR 秒开渲染：schedule / grades） */
+  READ_DOMAIN_CACHE: 'cdut-zone:read-domain-cache',
+  /** 写入业务域离线缓存（网络成功后原子落盘） */
+  WRITE_DOMAIN_CACHE: 'cdut-zone:write-domain-cache',
 } as const
+
+/** 业务域离线缓存文件标识 */
+export type CdutDomainCacheName = 'schedule' | 'grades'

@@ -15,14 +15,21 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtom, useStore } from 'jotai'
-import { X } from 'lucide-react'
+import { KeyRound, Terminal, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { coachTourOpenAtom } from '@/atoms/coach-tour-atoms'
 import { activeViewAtom, type ActiveView } from '@/atoms/active-view'
+import { agentComposerInjectionAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import { Button } from '@profer/ui/primitives/button'
 import { Z_LAYER } from '@profer/ui'
 import { cn } from '@/lib/utils'
-import { COACH_TOUR_STEPS, CURRENT_COACH_TOUR_VERSION, type CoachTourStep } from './coach-tour-steps'
+import {
+  COACH_TOUR_STEPS,
+  CURRENT_COACH_TOUR_VERSION,
+  DEMO_BROWSER_PROMPT,
+  DEMO_CDUT_ACCOUNT,
+  type CoachTourStep,
+} from './coach-tour-steps'
 import { computeCardPosition, unionRects, type AnchorRect, type CardSize } from './coach-tour-position'
 import { claimCoachTourOwnership } from './coach-tour-owner'
 
@@ -161,6 +168,42 @@ export function CoachTourOverlay(): React.ReactElement | null {
   const previous = React.useCallback(() => {
     setStepIndex((current) => Math.max(0, current - 1))
   }, [])
+
+  // 气泡专属操作①：把演示特区账户填入 CDUT 专区登录表单。
+  // 受控 input 必须走「原型 value setter + input 事件」，否则 React 不会感知改动。
+  const fillDemoAccount = React.useCallback((): void => {
+    const setNativeValue = (el: HTMLInputElement | null, value: string): boolean => {
+      if (!el) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+      setter?.call(el, value)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    }
+    const usernameEl = document.querySelector<HTMLInputElement>('[data-tour="cdut-login-username"]')
+    const passwordEl = document.querySelector<HTMLInputElement>('[data-tour="cdut-login-password"]')
+    const filledUser = setNativeValue(usernameEl, DEMO_CDUT_ACCOUNT.username)
+    const filledPwd = setNativeValue(passwordEl, DEMO_CDUT_ACCOUNT.password)
+    if (filledUser && filledPwd) {
+      toast.success('已填入演示账号，点「一键连接特区账户」即可登录')
+    } else {
+      toast.info('未找到登录表单，请先进入 CDUT 专区')
+    }
+  }, [])
+
+  // 气泡专属操作②：把内置浏览器演示指令注入当前会话输入框（只填入、不代发送）。
+  const fillBrowserPrompt = React.useCallback((): void => {
+    const sessionId = store.get(currentAgentSessionIdAtom)
+    if (!sessionId) {
+      toast.info('请先新建或选择一个会话')
+      return
+    }
+    store.set(agentComposerInjectionAtom, {
+      sessionId,
+      text: DEMO_BROWSER_PROMPT,
+      nonce: Date.now(),
+    })
+    toast.success('已填入演示指令，按 Enter 即可发送')
+  }, [store])
 
   // 切步/退出时清掉未触发的交互前进定时器
   React.useEffect(() => {
@@ -363,6 +406,30 @@ export function CoachTourOverlay(): React.ReactElement | null {
               <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
               点击高亮区域继续
             </p>
+          )}
+
+          {/* 气泡专属快捷操作：仅在引导气泡内出现，绝不入侵真实业务界面 */}
+          {step.action === 'fill-demo-account' && (
+            <Button
+              type="button"
+              size="sm"
+              className="mt-3 h-8 w-full gap-1.5 text-xs font-semibold"
+              onClick={fillDemoAccount}
+            >
+              <KeyRound size={13} />
+              一键填入演示账号
+            </Button>
+          )}
+          {step.action === 'fill-browser-prompt' && (
+            <Button
+              type="button"
+              size="sm"
+              className="mt-3 h-8 w-full gap-1.5 text-xs font-semibold"
+              onClick={fillBrowserPrompt}
+            >
+              <Terminal size={13} />
+              填入演示指令
+            </Button>
           )}
         </div>
 

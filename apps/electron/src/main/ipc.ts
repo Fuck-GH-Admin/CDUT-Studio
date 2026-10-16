@@ -131,7 +131,7 @@ import type {
   BrowserAddBookmarkInput,
 } from '@profer/shared'
 import { KNOWLEDGE_IPC_CHANNELS } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type CdutToolInvokeParams, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type CdutToolInvokeParams, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { browserController } from './lib/browser-controller'
@@ -185,6 +185,7 @@ import {
   updateCardRating as updateStudyCardRating,
   getQuiz as getStudyQuiz,
   submitQuizAnswer as submitStudyQuizAnswer,
+  resetQuiz as resetStudyQuiz,
   listStudyArtifacts,
 } from './lib/study/study-session-store'
 import { generateStudyArtifact } from './lib/study/study-artifact-service'
@@ -332,7 +333,8 @@ import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
 import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath, getStudySessionDir } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath, getStudySessionDir, getCdutScheduleCachePath, getCdutGradesCachePath } from './lib/config-paths'
+import { writeJsonFileAtomic, readJsonFileSafe } from './lib/safe-file'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import { compactAgentSessionStorage, previewAgentSessionCompaction } from './lib/agent-session-compaction'
 import { resolveMessageBlobs } from './lib/agent-session-manager'
@@ -6142,6 +6144,39 @@ export function registerIpcHandlers(): void {
     },
   )
 
+  // ===== 业务域离线缓存（SWR：抽屉打开先读缓存秒开，网络成功后原子落盘） =====
+  const CDUT_CACHE_PATHS: Record<CdutDomainCacheName, () => string> = {
+    schedule: getCdutScheduleCachePath,
+    grades: getCdutGradesCachePath,
+  }
+
+  ipcMain.handle(
+    CDUT_ZONE_IPC_CHANNELS.READ_DOMAIN_CACHE,
+    (_event, name: CdutDomainCacheName): unknown => {
+      const pathOf = CDUT_CACHE_PATHS[name]
+      if (!pathOf) return null
+      try {
+        return readJsonFileSafe<unknown>(pathOf())
+      } catch {
+        return null
+      }
+    },
+  )
+
+  ipcMain.handle(
+    CDUT_ZONE_IPC_CHANNELS.WRITE_DOMAIN_CACHE,
+    (_event, input: { name: CdutDomainCacheName; payload: unknown }): { success: boolean } => {
+      const pathOf = CDUT_CACHE_PATHS[input.name]
+      if (!pathOf || input.payload === null || typeof input.payload !== 'object') return { success: false }
+      try {
+        writeJsonFileAtomic(pathOf(), { savedAt: Date.now(), data: input.payload })
+        return { success: true }
+      } catch {
+        return { success: false }
+      }
+    },
+  )
+
   // ===== CDUT 专区 · 智联万站（Yanhu Express）轻量级定制浏览器 =====
   // 前端 100% 纯净：仅暴露浏览器外壳所需通道；底层 CDP 能力静默预留、不提供任何调试 UI 入口。
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.INIT_OR_RESTORE, () => yanhuExpressManager.initOrRestore())
@@ -6376,6 +6411,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(STUDY_IPC_CHANNELS.SUBMIT_QUIZ_ANSWER, (_event, input: StudyQuizAnswerInput) =>
     submitStudyQuizAnswer(input),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.RESET_QUIZ, (_event, input: { sessionId: string; quizId: string }) =>
+    resetStudyQuiz(input),
   )
 
   ipcMain.handle(STUDY_IPC_CHANNELS.GENERATE_ARTIFACT, async (_event, input: StudyGenerateArtifactInput) =>

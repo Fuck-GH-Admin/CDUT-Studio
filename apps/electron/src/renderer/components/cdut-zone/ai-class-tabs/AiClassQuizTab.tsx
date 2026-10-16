@@ -7,10 +7,11 @@
  */
 
 import * as React from 'react'
-import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { CheckCircle2, Loader2, RotateCcw, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { describeTheta, type QuizQuestion, type QuizSession } from '@profer/shared'
 import { cn } from '@/lib/utils'
+import { useBumpStudyRevision } from '@/atoms/study-atoms'
 import { StudySourceTrace } from './StudySourceTrace'
 
 interface AiClassQuizTabProps {
@@ -23,6 +24,8 @@ export function AiClassQuizTab({ sessionId, quizId }: AiClassQuizTabProps): Reac
   const [loading, setLoading] = React.useState(true)
   const [selections, setSelections] = React.useState<Record<string, string[]>>({})
   const [submittingId, setSubmittingId] = React.useState<string | null>(null)
+  // 作答 / 重置后自增学习数据版本号，驱动「学习情况速览」实时刷新
+  const bumpStudyRevision = useBumpStudyRevision(sessionId)
 
   React.useEffect(() => {
     let alive = true
@@ -76,11 +79,29 @@ export function AiClassQuizTab({ sessionId, quizId }: AiClassQuizTabProps): Reac
         questionId: question.id,
         selection,
       })
-      if (updated) setQuiz(updated)
+      if (updated) {
+        setQuiz(updated)
+        // 作答改变了得分与 FIM θ → 通知速览卡重拉
+        bumpStudyRevision()
+      }
     } catch {
       toast.error('提交失败，请重试')
     } finally {
       setSubmittingId(null)
+    }
+  }
+
+  /** 再练一次：清空全部作答与判分状态（同步落盘重置），回到首题重新开始 */
+  const handleResetQuiz = async (): Promise<void> => {
+    if (!quiz) return
+    setSelections({})
+    setSubmittingId(null)
+    try {
+      const reset = await window.electronAPI.study.resetQuiz({ sessionId, quizId: quiz.id })
+      setQuiz(reset)
+      bumpStudyRevision()
+    } catch {
+      toast.error('重置失败，请重试')
     }
   }
 
@@ -113,9 +134,18 @@ export function AiClassQuizTab({ sessionId, quizId }: AiClassQuizTabProps): Reac
             <span className="text-xs font-semibold text-foreground">本次得分</span>
             <span className="text-lg font-bold text-primary">{quiz.score} 分</span>
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            FIM 潜伏认知能力 θ = {quiz.estimatedTheta.toFixed(2)} · {describeTheta(quiz.estimatedTheta)}
-          </p>
+          {/* FIM 指标高对比度条（历史反馈：原小字看不清） */}
+          <div className="mt-2 flex items-center justify-between rounded-lg border border-primary/25 bg-primary/10 px-2.5 py-2">
+            <span className="text-[11px] font-medium text-muted-foreground">FIM 潜伏认知能力</span>
+            <span className="flex items-baseline gap-1.5">
+              <span className="font-mono text-base font-bold leading-none text-primary">
+                θ = {quiz.estimatedTheta.toFixed(2)}
+              </span>
+              <span className="rounded-md bg-primary/15 px-1.5 py-0.5 text-[11px] font-semibold text-primary">
+                {describeTheta(quiz.estimatedTheta)}
+              </span>
+            </span>
+          </div>
           {wrongQuestions.length > 0 && (
             <div className="mt-2 rounded-lg bg-background/60 p-2">
               <p className="text-[10px] font-medium text-foreground">薄弱环节诊断清单</p>
@@ -126,6 +156,16 @@ export function AiClassQuizTab({ sessionId, quizId }: AiClassQuizTabProps): Reac
               </ul>
             </div>
           )}
+          <div className="mt-2.5 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => void handleResetQuiz()}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground font-medium shadow-sm hover:opacity-90 transition-all text-xs"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              再练一次
+            </button>
+          </div>
         </div>
       )}
 

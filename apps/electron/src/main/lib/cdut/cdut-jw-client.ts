@@ -748,7 +748,7 @@ export async function executeProfileDomain(
 
 // ===== Tool 2：课表与作息日程 =====
 
-interface ScheduleCourse {
+export interface ScheduleCourse {
   name: string
   dayOfWeek: number
   startSection: number
@@ -756,21 +756,321 @@ interface ScheduleCourse {
   location: string
   teacher: string
   weeks: string
+  /** 通用周次展开列表（如 "1-4,6-8(周)" → [1,2,3,4,6,7,8]） */
+  weekList: number[]
+  /** 授课班级（青果 ktmcstr 字段，可能为空） */
+  className?: string
+  /** 实时雷达：当前时段正在上课 */
+  isOngoing?: boolean
+  /** 实时雷达：下一节即将开始的课程 */
+  isNext?: boolean
 }
 
-/** 解析「第1-2节 / 1-2节 / 3节」等节次标签 */
+/**
+ * 通用周次解析器：将青果课表「周次(节次)」文本展开为离散周次列表。
+ * 兼容全部已知版式：
+ *   - 连续周："1-16(周)" → [1..16]
+ *   - 离散周："1-4,6-8(周)" → [1,2,3,4,6,7,8]；"9,11-13(周)" → [9,11,12,13]
+ *   - 单双周："1-15(单)" → [1,3,5..15]；"2-16(双)" → [2,4,6..16]
+ *   - 复合格式："14(周)[01-02节]" → [14]（节次方括号整体剔除，不参与周次解析）
+ * 纯函数、零耦合：不含任何特定学期的硬编码字面量。
+ */
+export function parseWeekSpecification(text: string): number[] {
+  if (!text) return []
+  const weeks = new Set<number>()
+  // 先剔除节次方括号组（如 "[01-02节]"），避免把节次数字误当周次
+  const cleaned = text.replace(/\[[^\[\]]*\]/g, ' ')
+  for (const seg of cleaned.split(/[,，、]+/)) {
+    const s = seg.trim()
+    if (!s) continue
+    const parity = /单/.test(s) ? 'odd' : /双/.test(s) ? 'even' : null
+    // 剔除括号注记与「周」字，仅保留数字与连接符
+    const body = s
+      .replace(/[（(][^）)]*[）)]/g, ' ')
+      .replace(/周/g, ' ')
+      .trim()
+    for (const part of body.split(/\s+/)) {
+      if (!part) continue
+      const range = part.match(/^(\d+)\s*[-~－—]+\s*(\d+)$/)
+      if (range?.[1] && range[2]) {
+        const a = Number(range[1])
+        const b = Number(range[2])
+        for (let w = Math.min(a, b); w <= Math.max(a, b); w++) {
+          if (parity === 'odd' && w % 2 === 0) continue
+          if (parity === 'even' && w % 2 === 1) continue
+          weeks.add(w)
+        }
+        continue
+      }
+      const single = part.match(/^(\d+)$/)
+      if (single?.[1]) {
+        const w = Number(single[1])
+        if (parity === 'odd' && w % 2 === 0) continue
+        if (parity === 'even' && w % 2 === 1) continue
+        weeks.add(w)
+      }
+    }
+  }
+  return [...weeks].sort((a, b) => a - b)
+}
+
+/**
+ * 成都理工大学官方作息表（11 节制契约，严禁出现第 12 节课）。
+ * 每节课 45 分钟、节间休息 5 分钟；第 11 节为单节（全校最晚时段 20:50-21:35）。
+ */
+export const CDUT_SECTION_PERIODS: ReadonlyArray<{
+  startSection: number
+  endSection: number
+  /** 当日起始分钟（如 08:10 → 490） */
+  startMin: number
+  /** 当日结束分钟（如 09:45 → 585） */
+  endMin: number
+}> = [
+  { startSection: 1, endSection: 2, startMin: 8 * 60 + 10, endMin: 9 * 60 + 45 }, // 08:10-09:45
+  { startSection: 3, endSection: 4, startMin: 10 * 60 + 15, endMin: 11 * 60 + 50 }, // 10:15-11:50
+  { startSection: 5, endSection: 6, startMin: 14 * 60 + 30, endMin: 16 * 60 + 5 }, // 14:30-16:05
+  { startSection: 7, endSection: 8, startMin: 16 * 60 + 25, endMin: 18 * 60 }, // 16:25-18:00
+  { startSection: 9, endSection: 10, startMin: 19 * 60 + 10, endMin: 20 * 60 + 45 }, // 19:10-20:45
+  { startSection: 11, endSection: 11, startMin: 20 * 60 + 50, endMin: 21 * 60 + 35 }, // 20:50-21:35
+]
+
+/**
+ * 估算当前教学周次：以「秋学期 9 月首个周一 / 春学期 3 月首个周一」为第 1 周起点，
+ * 周次夹取至 [1, 25]。纯启发式（不与任何特定学期日期硬编码耦合），足够支撑默认选中周与雷达周次判定。
+ */
+export function computeCurrentWeek(now: Date = new Date()): number {
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1 // 1-12
+  const isAutumn = month >= 7 || month <= 1
+  const startYear = month <= 1 ? year - 1 : year
+  // 秋学期起点 9 月（0-indexed 8），春学期起点 3 月（0-indexed 2）
+  const firstDay = new Date(startYear, isAutumn ? 8 : 2, 1)
+  // 该月 1 日所在周的周一
+  const monday = new Date(firstDay)
+  monday.setDate(firstDay.getDate() - ((firstDay.getDay() === 0 ? 7 : firstDay.getDay()) - 1))
+  const week = Math.floor((now.getTime() - monday.getTime()) / (7 * 86400000)) + 1
+  return Math.max(1, Math.min(25, week))
+}
+
+/**
+ * 实时课程雷达（24 小时精准窗口版）：结合当前实时时间标记 isOngoing / isNext。
+ *   - isOngoing：当前周次、今天、且课程节次区间与当前时刻相交（正在上课）；
+ *   - isNext：未来 24 小时内最早开课且尚未开课的一门课（周日夜间自动衔接下周次与下周周单）；
+ *     严格限定 courseStartMs - nowMs <= 24h，未来 24 小时无课程时不标记任何「下节课」。
+ * 纯函数：直接原地修改传入数组，并返回同引用。
+ */
+export function markOngoingAndNext<T extends ScheduleCourse>(courses: T[], now: Date = new Date()): T[] {
+  const nowMs = now.getTime()
+  const today = now.getDay() === 0 ? 7 : now.getDay()
+  const minutes = now.getHours() * 60 + now.getMinutes()
+  const currentWeek = computeCurrentWeek(now)
+  const DAY_MS = 86400000
+  const WINDOW_MS = 24 * 3600 * 1000
+
+  /** 课程是否在指定教学周排课（weekList 为空视为全学期排课） */
+  const scheduledInWeek = (course: T, week: number): boolean =>
+    course.weekList.length === 0 || course.weekList.includes(week)
+
+  /** 课程节次映射到当日分钟区间（跨大节取最早开始与最晚结束） */
+  const rangeFor = (course: T): { start: number; end: number } | null => {
+    let start = Number.MAX_SAFE_INTEGER
+    let end = -1
+    for (const p of CDUT_SECTION_PERIODS) {
+      if (course.startSection <= p.endSection && course.endSection >= p.startSection) {
+        start = Math.min(start, p.startMin)
+        end = Math.max(end, p.endMin)
+      }
+    }
+    return end >= 0 ? { start, end } : null
+  }
+
+  // 正在上课判定：本周次 + 今天 + 时刻落在课程时段内
+  for (const course of courses) {
+    if (course.dayOfWeek !== today || !scheduledInWeek(course, currentWeek)) continue
+    const range = rangeFor(course)
+    if (range && minutes >= range.start && minutes <= range.end) course.isOngoing = true
+  }
+  if (courses.some((c) => c.isOngoing)) return courses
+
+  // 下节课判定：未来 24 小时内最早开课的一门（跨周自动衔接下周周单）
+  const midnight = new Date(now)
+  midnight.setHours(0, 0, 0, 0)
+  const baseMs = midnight.getTime()
+  let best: { course: T; startMs: number } | null = null
+  for (const course of courses) {
+    const range = rangeFor(course)
+    if (!range) continue
+    const dist = (course.dayOfWeek - today + 7) % 7 // 0 = 今天，1-6 = 本周后续 / 下周同日
+    const weekOffset = Math.floor((today - 1 + dist) / 7) // 周日夜间跨周时周次 +1
+    if (!scheduledInWeek(course, currentWeek + weekOffset)) continue
+    const startMs = baseMs + dist * DAY_MS + range.start * 60000
+    const delta = startMs - nowMs
+    // 必须严格在未来且不超过 24 小时；今天已开课/已结束的时段顺延下周后自然超出窗口被排除
+    if (delta <= 0 || delta > WINDOW_MS) continue
+    if (!best || startMs < best.startMs) best = { course, startMs }
+  }
+  if (best) best.course.isNext = true
+  return courses
+}
+
+/**
+ * 青果课表表头汉字节次映射字典（强健归一化，杜绝 `-1节--1节` 运算错误）。
+ * CDUT 教务系统节次表头为汉字（第一二节 / 第三四节 / … / 九十节 / 十一节），
+ * 纯 `\d+` 匹配会得到 undefined 并退化到行号回退公式，行号 0 时产出 `0*2-1 = -1` 的严重错误。
+ */
+const CN_SECTION_MAP: Readonly<Record<string, { start: number; end: number }>> = {
+  一: { start: 1, end: 1 },
+  二: { start: 2, end: 2 },
+  三: { start: 3, end: 3 },
+  四: { start: 4, end: 4 },
+  五: { start: 5, end: 5 },
+  六: { start: 6, end: 6 },
+  七: { start: 7, end: 7 },
+  八: { start: 8, end: 8 },
+  九: { start: 9, end: 9 },
+  十: { start: 10, end: 10 },
+  十一: { start: 11, end: 11 },
+  一二: { start: 1, end: 2 },
+  三四: { start: 3, end: 4 },
+  五六: { start: 5, end: 6 },
+  七八: { start: 7, end: 8 },
+  九十: { start: 9, end: 10 },
+  九十十一: { start: 9, end: 11 },
+  '九十、十一': { start: 9, end: 11 },
+}
+
+/** 解析「第1-2节 / 1-2节 / 3节 / 第一二节 / 三四节」等节次标签（汉字与阿拉伯数字双兼容） */
 function parseSectionRange(label: string): { start: number; end: number } | undefined {
+  // 1) 阿拉伯数字区间 / 单节
   const rangeMatch = label.match(/(\d+)\s*[-~－]\s*(\d+)/)
   if (rangeMatch && rangeMatch[1] && rangeMatch[2]) {
     return { start: Number(rangeMatch[1]), end: Number(rangeMatch[2]) }
   }
   const single = label.match(/(\d+)/)
   if (single && single[1]) return { start: Number(single[1]), end: Number(single[1]) }
+
+  // 2) 汉字节次：剥离「第/节」后整串查表（先长键后短键，保证「九十十一」优先于「九十」）
+  const normalized = label.replace(/第|节/g, '').replace(/\s+/g, '')
+  if (!normalized) return undefined
+  if (CN_SECTION_MAP[normalized]) return { ...CN_SECTION_MAP[normalized]! }
+  for (const key of ['九十、十一', '九十十一', '一二', '三四', '五六', '七八', '九十', '十一']) {
+    if (normalized.includes(key)) return { ...CN_SECTION_MAP[key]! }
+  }
   return undefined
 }
 
-/** 从课表 HTML 解析结构化课程列表（节次×星期网格 → 扁平课程数组） */
-function parseScheduleCourses(html: string): ScheduleCourse[] {
+/** 从「周次(节次)」文本的方括号中提取节次规格（如 "[01-02-03-04节]" → {start:1,end:4}） */
+function parseSectionSpecFromWeeks(weeksText: string): { start: number; end: number } | undefined {
+  const bracket = weeksText.match(/\[([^\[\]]*)\]/)
+  if (!bracket?.[1]) return undefined
+  const nums = [...bracket[1].matchAll(/(\d+)/g)].map((m) => Number(m[1])).filter((n) => n > 0 && n <= 15)
+  if (nums.length === 0) return undefined
+  return { start: Math.min(...nums), end: Math.max(...nums) }
+}
+
+interface RawCourseEntry {
+  name: string
+  teacher: string
+  weeksText: string
+  location: string
+  className: string
+  startSection?: number
+  endSection?: number
+}
+
+/** 单元格内多门课程的分隔线（青果以长横线切分同一网格中的多门课） */
+const COURSE_CHUNK_SEPARATOR = /-{5,}/
+
+/** 青果课表内嵌的噪声字段（name 属性）：通知单编号 / 网课信息 / 备注 / 考试标记 / 教学楼 */
+const NOISE_FONT_NAMES = new Set(['tzdbh', 'wkxx', 'bzstr', 'xsks', 'jxlmc'])
+
+/**
+ * 从单个 kbcontent / kbcontent1 片段 HTML 中抽取课程条目。
+ * 优先读取 <font title="教师/周次(节次)/教室"> 与 name="ktmcstr"（班级）语义字段，
+ * 缺失时回退文本启发式匹配，兼容无 title 注记的精简版式。
+ */
+function extractCourseEntriesFromChunk(chunkHtml: string): RawCourseEntry[] {
+  const $chunk = load(chunkHtml)
+  const entries: RawCourseEntry[] = []
+  $chunk('font').each((_, font) => {
+    const $font = $chunk(font)
+    const fontName = $font.attr('name') ?? ''
+    if (NOISE_FONT_NAMES.has(fontName)) return
+    const title = cleanText($font.attr('title') ?? '')
+    const text = stripTags($font.html() ?? '')
+    if (!text) return
+    if (/^(通知单编号|备注)/.test(text) || /^[（(](理论|实践|实验)/.test(text)) return
+    if (fontName === 'ktmcstr') {
+      const last = entries[entries.length - 1]
+      if (last) last.className = text.replace(/^班级[:：]\s*/, '')
+      return
+    }
+    if (title === '教师' || title === '老师') {
+      const last = entries[entries.length - 1]
+      if (last && !last.teacher) last.teacher = text
+      else entries.push({ name: '', teacher: text, weeksText: '', location: '', className: '' })
+      return
+    }
+    if (title === '周次(节次)' || title.includes('周次')) {
+      entries.push({ name: '', teacher: '', weeksText: text, location: '', className: '' })
+      return
+    }
+    if (title === '教室' || title === '教学地点') {
+      const last = entries[entries.length - 1]
+      if (last && !last.location) last.location = text
+      else entries.push({ name: '', teacher: '', weeksText: '', location: text, className: '' })
+      return
+    }
+    if (title === '教学楼') return // 教学楼与教室重复，忽略
+    // 无 title 注记的普通文本 font：视为课程名（新条目开始）
+    entries.push({ name: text, teacher: '', weeksText: '', location: '', className: '' })
+  })
+
+  // 语义字段缺失时的文本启发式兜底（kbcontent1 精简版式）
+  for (const entry of entries) {
+    if (!entry.weeksText) {
+      const m = entry.name.match(/\S*周\S*/)
+      if (m?.[0] && /\d/.test(m[0])) {
+        entry.weeksText = m[0]
+        entry.name = entry.name.replace(m[0], '').trim()
+      }
+    }
+    if (!entry.location) {
+      const m = entry.name.match(/[（(]?[A-Za-z\d甲乙丙丁综基]-?\w*\d{3,4}[A-Za-z]?[）)]?/)
+      if (m?.[0]) {
+        entry.location = m[0]
+        entry.name = entry.name.replace(m[0], '').trim()
+      }
+    }
+  }
+
+  // 合并碎片：同一门课的名称 / 教师 / 周次 / 教室可能被拆为多个 font 节点
+  const merged: RawCourseEntry[] = []
+  for (const entry of entries) {
+    if (!entry.name && !entry.weeksText && !entry.teacher && !entry.location) continue
+    const last = merged[merged.length - 1]
+    const isFragment = !entry.name && (entry.weeksText || entry.teacher || entry.location)
+    if (last && isFragment) {
+      if (entry.weeksText && !last.weeksText) last.weeksText = entry.weeksText
+      if (entry.teacher && !last.teacher) last.teacher = entry.teacher
+      if (entry.location && !last.location) last.location = entry.location
+      continue
+    }
+    merged.push(entry)
+  }
+  return merged.filter((e) => e.name && /\S/.test(e.name))
+}
+
+/**
+ * 从课表 HTML 解析结构化课程列表（节次×星期网格 → 扁平课程数组）。
+ *
+ * 关键健壮性设计：
+ *   1. 同一单元格可能同时渲染 kbcontent1（精简）与 kbcontent（完整）两套隐藏副本，
+ *      解析后按「课程名+星期+周次+教室」去重，教师信息择优保留；
+ *   2. 单元格内多门课程以长横线（-----）分隔，逐段拆分解析；
+ *   3. 周次一律经 parseWeekSpecification 通用展开，不依赖服务端过滤。
+ */
+export function parseScheduleCourses(html: string): ScheduleCourse[] {
   const $ = load(html)
   const courses: ScheduleCourse[] = []
   const $tables = $('table')
@@ -785,11 +1085,24 @@ function parseScheduleCourses(html: string): ScheduleCourse[] {
     }
   })
 
+  const dedupe = new Map<string, ScheduleCourse>()
+  let bodyRowIdx = 0 // 有效课表行计数（跳过表头行），用于「第一二节」类无数字标签的节次回退
+  // 行号 → 标准大节兜底映射（0→1-2, 1→3-4, 2→5-6, 3→7-8, 4→9-11），绝不产出 <= 0 的节次
+  const ROW_FALLBACK_SECTIONS: ReadonlyArray<{ start: number; end: number }> = [
+    { start: 1, end: 2 },
+    { start: 3, end: 4 },
+    { start: 5, end: 6 },
+    { start: 7, end: 8 },
+    { start: 9, end: 11 },
+  ]
   $target.find('tr').each((rowIdx, tr) => {
     const $cells = $(tr).children('td, th')
     if ($cells.length < 2) return
     const sectionLabelRaw = cleanText($cells.first().text())
     const range = parseSectionRange(sectionLabelRaw)
+    // 有效课表行：含课程块，或节次标签形如「第一二节 / 3-4节」（表头行标签为空，不计入）
+    const isBodyRow = $(tr).find('.kbcontent, .kbcontent1').length > 0 || /节|\d/.test(sectionLabelRaw)
+    const rowBase = isBodyRow ? bodyRowIdx++ : rowIdx
     $cells.each((colIdx, cell) => {
       if (colIdx === 0 || colIdx > 7) return
       const day = colIdx
@@ -797,39 +1110,44 @@ function parseScheduleCourses(html: string): ScheduleCourse[] {
         .find('.kbcontent, .kbcontent1')
         .each((_, content) => {
           const inner = $(content).html() ?? ''
-          const lines = inner
-            .split(/<br\s*\/?>/i)
-            .map(stripTags)
-            .filter((line) => line !== '')
-          const name = lines[0] ?? ''
-          if (!name || name.includes('&nbsp')) return
-          let weeks = ''
-          let teacher = ''
-          let location = ''
-          for (const line of lines.slice(1)) {
-            if (!weeks && /周/.test(line)) {
-              weeks = line
-              continue
-            }
-            if (!teacher && /(老师|教师|教授|讲师|助教)/.test(line)) {
-              teacher = line
-              continue
-            }
-            if (!location && /\d+[A-Za-z]?[-－]\d+/.test(line)) {
-              location = line
-              continue
+          if (!inner || !/\S/.test(inner.replace(/&nbsp;/g, ' '))) return
+          // 多门课程以长横线分隔，逐段解析
+          const chunks = inner.split(COURSE_CHUNK_SEPARATOR)
+          for (const chunk of chunks) {
+            if (!/\S/.test(chunk.replace(/&nbsp;/g, ' '))) continue
+            for (const entry of extractCourseEntriesFromChunk(chunk)) {
+              const name = entry.name.trim()
+              if (!name || name.includes('&nbsp')) continue
+              const weekList = parseWeekSpecification(entry.weeksText)
+              const spec = parseSectionSpecFromWeeks(entry.weeksText) ?? range
+              const fallback = ROW_FALLBACK_SECTIONS[Math.min(Math.max(rowBase, 0), ROW_FALLBACK_SECTIONS.length - 1)] ?? { start: 1, end: 2 }
+              const start = Math.max(1, spec?.start ?? range?.start ?? fallback.start)
+              const end = Math.max(start, spec?.end ?? range?.end ?? fallback.end)
+              const key = `${name}|${day}|${weekList.join(',')}|${entry.location}`
+              const existing = dedupe.get(key)
+              if (existing) {
+                // 同一门课的重复渲染副本：教师/班级/节次信息择优合并
+                if (!existing.teacher && entry.teacher) existing.teacher = entry.teacher
+                if (!existing.className && entry.className) existing.className = entry.className
+                continue
+              }
+              dedupe.set(key, {
+                name,
+                dayOfWeek: day,
+                startSection: start,
+                endSection: end,
+                location: entry.location,
+                teacher: entry.teacher,
+                weeks: entry.weeksText,
+                weekList,
+                className: entry.className || undefined,
+              })
             }
           }
-          const rest = lines.slice(1).filter((l) => l !== weeks && l !== teacher && l !== location)
-          if (!teacher && rest[0]) teacher = rest[0]
-          if (!location && rest[1]) location = rest[1]
-          const start = range?.start ?? rowIdx + 1
-          const end = range?.end ?? start
-          courses.push({ name, dayOfWeek: day, startSection: start, endSection: end, location, teacher, weeks })
         })
     })
   })
-  return courses
+  return [...dedupe.values()]
 }
 
 /** 构造课表 Markdown 网格 */
@@ -862,14 +1180,117 @@ function buildScheduleMarkdown(courses: ScheduleCourse[], semester: string, week
   return `### ${title}（${semester || '当前学期'}）\n\n${table}`
 }
 
-/** 将课程数组转为精简 JSON 载荷 */
+/** 将课程数组转为精简 JSON 载荷（currentWeek 供抽屉默认选中当前教学周） */
 function scheduleJson(courses: ScheduleCourse[], semester: string, week?: number): unknown {
   return {
     semester: semester || '当前学期',
     week: week ?? null,
+    currentWeek: computeCurrentWeek(),
     courseCount: courses.length,
     courses,
   }
+}
+
+/**
+ * Chrome view-source: 快照还原器。
+ * 用户保存的 view-source 页面把每行原始 HTML 包进 <td class="line-content"> 并转义，
+ * 真实抓取时不存在该包装；检测到包装后逐行取 text()（实体自动反转义）还原原始 HTML。
+ */
+export function decodeViewSourceSnapshot(html: string): string {
+  if (!html.includes('line-content')) return html
+  const $ = load(html)
+  const $lines = $('.line-content')
+  if ($lines.length === 0) return html
+  const out: string[] = []
+  $lines.each((_, el) => {
+    out.push($(el).text())
+  })
+  return out.join('\n')
+}
+
+/** 其他班级课表明细条目（viewtable.do 的 td.detail 结构，无固定节次网格） */
+export interface OtherClassCourse {
+  name: string
+  code: string
+  credit: string
+  teachers: string[]
+  rooms: string[]
+  classNames: string[]
+  campus: string
+  remark: string
+  segments: string[]
+}
+
+/**
+ * 解析全校班级课表（viewtable.do）：抽取全部 <td class="detail"> 课程明细，
+ * 提取课程名/代码/学分与「师[…] 室[…] 班级 (校区) 备注」分段信息。
+ * 归一化为通用课程对象数组，严禁与任何特定班级/专业字面量耦合。
+ */
+export function parseOtherClassSchedule(html: string): OtherClassCourse[] {
+  const $ = load(decodeViewSourceSnapshot(html))
+  const courses: OtherClassCourse[] = []
+  $('td.detail').each((_, td) => {
+    const $td = $(td)
+    const bold = cleanText($td.find('b.fontcourse').first().text())
+    const nameMatch = bold.match(/^(.*?)\[(.+?)\]\s*学分\[([^\]]*)\]\s*$/)
+    const name = nameMatch ? cleanText(nameMatch[1]) : bold.replace(/学分\[.*$/, '').trim()
+    if (!name) return
+    const code = nameMatch?.[2] ?? ''
+    const credit = nameMatch?.[3] ?? ''
+    // 明细分段：<b>标题</b>L1[理] 时[40] 师[x] 室[y] 班级 (校区) 备注:… <br>...
+    const bodyHtml = $td.html() ?? ''
+    const segments = bodyHtml
+      .split(/<br\s*\/?>/i)
+      .map((seg) => stripTags(seg))
+      .map((seg) => seg.replace(/^-----------------*/, '').trim())
+      .filter((seg) => seg !== '')
+    const course: OtherClassCourse = { name, code, credit, teachers: [], rooms: [], classNames: [], campus: '', remark: '', segments: [] }
+    for (const seg of segments) {
+      if (/^(L|R|X|S|T|W|Q)\d*\[/.test(seg) || /时\[/.test(seg) || /师\[/.test(seg) || /室\[/.test(seg)) {
+        course.segments.push(seg)
+        const teacherAll = [...seg.matchAll(/师\[([^\]]*)\]/g)].map((m) => m[1]?.trim() ?? '').filter(Boolean)
+        course.teachers.push(...teacherAll)
+        const roomAll = [...seg.matchAll(/室\[([^\]]*)\]/g)].map((m) => m[1]?.trim() ?? '').filter(Boolean)
+        course.rooms.push(...roomAll)
+        // 校区：段内任意位置的「(X校区)」括注（开闭括号可能半/全角混用）
+        const campusMatch = seg.match(/[（(]([^）)]*校区)[）)]/)
+        if (campusMatch?.[1]) course.campus = campusMatch[1].trim()
+        // 教学班：剔除 师/室/时/学分 括注、校区括注与备注后的剩余 token（形如「年级代码-序号」的班级号串、"xx班"）
+        const classNamesPart = seg
+          .replace(/[A-Za-z]\d*\[[^\]]*\]/g, ' ')
+          .replace(/[时师室]\[[^\]]*\]/g, ' ')
+          .replace(/学分\[[^\]]*\]/g, ' ')
+          .replace(/[（(][^）)]*校区[）)]/g, ' ')
+          .replace(/备注[:：][\s\S]*$/, ' ')
+        for (const token of classNamesPart.split(/[\s,，、]+/)) {
+          const t = token.trim().replace(/班$/, '')
+          if (/^\d{6,}(?:[-\d]+)?$/.test(t) && !course.classNames.includes(t)) course.classNames.push(t)
+        }
+        const remarkMatch = seg.match(/备注[:：]\s*([\s\S]+)$/)
+        if (remarkMatch?.[1] && !course.remark) {
+          course.remark = remarkMatch[1].trim().replace(/^备注[:：]\s*/, '')
+        }
+      }
+    }
+    courses.push(course)
+  })
+  return courses
+}
+
+/** 构造其他班级课表 Markdown */
+function buildOtherClassMarkdown(courses: OtherClassCourse[], semester: string, classQuery: string): string {
+  const rows = courses.map((c) => [
+    `**${c.name}**`,
+    c.code || '—',
+    c.credit || '—',
+    c.teachers.length ? c.teachers.join('、') : '—',
+    c.rooms.length ? c.rooms.join('；') : '—',
+    c.classNames.length ? c.classNames.join('、') : '—',
+  ])
+  const table = rows.length
+    ? mdTable(['课程名称', '课程代码', '学分', '授课教师', '上课地点', '教学班'], rows)
+    : `> 未检索到与「${classQuery}」匹配的班级课表，请确认班级名称或班号后重试`
+  return `### 🗓️ 全校班级课表（${classQuery} · ${semester || '当前学期'}）\n\n${table}`
 }
 
 /** Tool 2 分发入口 */
@@ -879,27 +1300,136 @@ export async function executeScheduleDomain(
 ): Promise<CdutDomainToolResult> {
   try {
     if (params.action === 'query_other_schedule') {
-      const res = await fetchJwPage(ses, '/xskb/xsqtkb.do', {
+      // 产品红线：仅暴露「全校其他班级课表查询」，坚决屏蔽教师课表与教室课表查询入口
+      const classQuery = params.classId || params.className || ''
+      if (!classQuery) return errorResult('缺少目标班级：请提供 className（班级名称/班号）或 classId')
+      const semester = params.semester ?? ''
+
+      // 1) 先取查询页：拿「默认节次」模板 ID（kbjcmsid）与页面选中的默认学期
+      let kbjcmsid = '7E5976C91D9A4146930951FD11516BCC'
+      let defaultSemester = ''
+      const queryPage = await fetchJwPage(ses, '/xskb/xsqtkb.do')
+      if (queryPage.ok && !queryPage.expired) {
+        const $ = load(queryPage.html)
+        const templateVal = cleanText($('select[name="kbjcmsid"] option[selected]').first().attr('value') ?? '')
+        if (templateVal) kbjcmsid = templateVal
+        defaultSemester = cleanText($('select[name="xnxq01id"] option[selected]').first().attr('value') ?? '')
+      }
+      const effectiveSemester = semester || defaultSemester
+
+      // 2) 班名/班号 → 完整定位参数组（xx04id + xx0301id + jx01ndid + rxnf + bjmc）。
+      //    viewtable.do 的 URL 契约要求这一整组参数；仅传班名（非 UUID 的班号/班名）必然查询落空。
+      //    教务 cxbj 自动补全接口：POST bjmc=<关键词>&maxRow=10 → { list: [{ bjmc, xx04id, ... }] }
+      interface ClassHit {
+        xx04id: string
+        bjmc: string
+        xx0301id?: string
+        jx01ndid?: string
+        rxnf?: string
+        xx0301mc?: string
+        zyfxmc?: string
+      }
+      let hit: ClassHit | null = /^[0-9A-F]{32}$/i.test(classQuery.trim())
+        ? { xx04id: classQuery.trim(), bjmc: '' }
+        : null
+      if (!hit) {
+        const lookup = await fetchJwPage(ses, '/xskb/cxbj', {
+          method: 'POST',
+          form: { bjmc: classQuery, maxRow: '10' },
+          referer: `${JW_ROOT}/xskb/xsqtkb.do`,
+        })
+        if (lookup.ok && !lookup.expired) {
+          const body = lookup.html.trim()
+          // 2a) JSON 版式：{ list: [{ bjmc, xx04id, xx0301id, jx01ndid, ... }] }
+          if (body.startsWith('{') || body.startsWith('[')) {
+            try {
+              const parsed = JSON.parse(body) as { list?: Array<Record<string, unknown>> }
+              const list = Array.isArray(parsed.list) ? parsed.list : []
+              const str = (v: unknown): string => (typeof v === 'string' ? cleanText(v) : '')
+              const normalized = list
+                .map((item) => ({
+                  xx04id: str(item.xx04id),
+                  bjmc: str(item.bjmc),
+                  xx0301id: str(item.xx0301id) || undefined,
+                  jx01ndid: str(item.jx01ndid) || undefined,
+                  rxnf: str(item.rxnf) || undefined,
+                  xx0301mc: str(item.xx0301mc) || undefined,
+                  zyfxmc: str(item.zyfxmc) || undefined,
+                }))
+                .filter((item) => item.xx04id)
+              // 优先精确班名，其次互相包含，最后取首条（教务已按关键词模糊返回）
+              hit =
+                normalized.find((item) => item.bjmc === classQuery) ??
+                normalized.find((item) => item.bjmc.includes(classQuery) || classQuery.includes(item.bjmc)) ??
+                normalized[0] ??
+                null
+            } catch {
+              // 非 JSON，继续 HTML 兜底
+            }
+          }
+          // 2b) HTML option 版式兜底：<option value="32位UUID">班级名称</option>
+          if (!hit) {
+            const $lookup = load(lookup.html)
+            const candidates: Array<{ value: string; label: string }> = []
+            $lookup('option').each((_, opt) => {
+              const value = cleanText($lookup(opt).attr('value') ?? '')
+              const label = cleanText($lookup(opt).text())
+              if (/^[0-9A-F]{32}$/i.test(value)) candidates.push({ value, label })
+            })
+            const matched =
+              candidates.find((c) => c.label === classQuery) ??
+              candidates.find((c) => c.label.includes(classQuery) || classQuery.includes(c.label)) ??
+              candidates[0]
+            if (matched) hit = { xx04id: matched.value, bjmc: matched.label }
+          }
+        }
+      }
+
+      // 3) 以完整参数组直查班级课表（缺失的定位参数留空，由教务端按 xx04id 自行补全）
+      const res = await fetchJwPage(ses, '/xskb/viewtable.do', {
         query: {
-          type: params.queryType ?? 'class',
-          keyword: params.queryKeyword,
-          xnxq01id: params.semester,
-          zcd: params.week,
+          xnxq01id: effectiveSemester,
+          lx: 'xx04id',
+          kbjcmsid,
+          xx04id: hit?.xx04id ?? classQuery,
+          xx0301id: hit?.xx0301id ?? '',
+          rxnf: hit?.rxnf ?? '',
+          jx01ndid: hit?.jx01ndid ?? '',
+          bjmc: hit?.bjmc ?? classQuery,
         },
       })
       if (res.expired) return expiredResult()
-      if (!res.ok) return errorResult(`其他课表查询接口返回 HTTP ${res.status}`)
-      const courses = parseScheduleCourses(res.html)
-      const markdown = buildScheduleMarkdown(courses, params.semester ?? '', params.week)
-      return buildResult(markdown, scheduleJson(courses, params.semester ?? '', params.week))
+      if (!res.ok) return errorResult(`其他班级课表接口返回 HTTP ${res.status}`)
+
+      const courses = parseOtherClassSchedule(res.html)
+      const matchedClassName = hit?.bjmc || classQuery
+      const markdown = buildOtherClassMarkdown(courses, effectiveSemester, matchedClassName)
+      return buildResult(markdown, {
+        classQuery,
+        matchedClassName,
+        resolvedClassId: hit?.xx04id ?? '',
+        semester: effectiveSemester || '当前学期',
+        courseCount: courses.length,
+        courses,
+      })
     }
 
+    // 个人课表：xskb_list.do（周次经通用解析器展开后严格客户端过滤，杜绝串课）
     const res = await fetchJwPage(ses, '/xskb/xskb_list.do', {
       query: { xnxq01id: params.semester, zcd: params.week },
     })
     if (res.expired) return expiredResult()
     if (!res.ok) return errorResult(`个人课表接口返回 HTTP ${res.status}`)
-    const courses = parseScheduleCourses(res.html)
+
+    let courses = parseScheduleCourses(res.html)
+    if (params.week) {
+      // 严格周次过滤：未在目标周开课的记录坚决丢弃
+      courses = courses.filter((c) => c.weekList.length === 0 || c.weekList.includes(params.week as number))
+    }
+    if (params.isCurrentWeek) {
+      // 实时雷达：仅在查询周即当前周时标记「正在上课 / 下节课程预告」
+      markOngoingAndNext(courses)
+    }
     const markdown = buildScheduleMarkdown(courses, params.semester ?? '', params.week)
     return buildResult(markdown, scheduleJson(courses, params.semester ?? '', params.week))
   } catch (err) {
@@ -925,7 +1455,7 @@ interface GradeCourse {
   gp: string
 }
 
-/** 解析成绩表为结构化课程数组 */
+/** 解析成绩表为结构化课程数组（旧版式兜底路径） */
 function parseGradeCourses(html: string): GradeCourse[] {
   const { headers, rows } = parseLargestTable(html)
   const objects = rowsToObjects(headers, rows)
@@ -946,54 +1476,215 @@ function parseGradeCourses(html: string): GradeCourse[] {
   return courses
 }
 
-/** 汇总学分、加权平均分与 GPA */
-function summarizeGrades(courses: GradeCourse[]): {
-  totalCredits: number
-  weightedAverage: number
-  gpa: number
-} {
-  let creditSum = 0
-  let weightedScoreSum = 0
-  let weightedGpSum = 0
-  for (const c of courses) {
-    const score = parseNumber(c.score)
-    const credit = c.credit
-    if (credit <= 0 || score === undefined) continue
-    creditSum += credit
-    weightedScoreSum += score * credit
-    const gp = parseNumber(c.gp) ?? scoreToGp(score)
-    weightedGpSum += gp * credit
-  }
-  const round1 = (n: number) => Math.round(n * 10) / 10
-  return {
-    totalCredits: round1(creditSum),
-    weightedAverage: creditSum ? round1(weightedScoreSum / creditSum) : 0,
-    gpa: creditSum ? Math.round((weightedGpSum / creditSum) * 100) / 100 : 0,
-  }
+// ===== 历年成绩通用解析（#dataList 专用，支持表头重复列） =====
+
+/** 历年成绩单条记录（cjcx_list / #dataList 结构） */
+export interface GradeRecord {
+  /** 开课学期（如 "2025-2026-2"） */
+  semester: string
+  courseCode: string
+  courseName: string
+  /** 综合成绩原始文本（可能为 "71"、"优"、"良" 等） */
+  score: string
+  /** 可数值化时的成绩（优→95 / 良→85 / 中→75 / 及格→65 / 不及格→50 通用映射） */
+  scoreNumber?: number
+  scoreLabel: string
+  credit: number
+  /** 绩点（教务返回值；缺失时由 scoreNumber 推导） */
+  gp?: number
+  /** 补重学期（补考/重修记录标注，空为首次修读） */
+  makeupSemester: string
+  assessMode: string
+  examNature: string
+  /** 课程属性（必修/选修） */
+  courseAttr: string
+  /** 课程性质（如 通识必修课程） */
+  courseNature: string
+  electiveCategory: string
 }
 
-/** 构造成绩 Markdown */
-function buildGradesMarkdown(courses: GradeCourse[], semester: string): string {
-  const summary = summarizeGrades(courses)
-  const rows = courses.map((c) => [
-    `**${c.name}**`,
-    c.category || '—',
-    c.credit ? String(c.credit) : '—',
-    c.usualScore || '—',
-    c.examScore || '—',
-    c.score ? `**${c.score}**` : '—',
-    c.gp || '—',
-  ])
-  const table = rows.length
-    ? mdTable(['课程名称', '课程性质', '学分', '平时分', '卷面分', '综合分', '绩点'], rows)
-    : '> 未查询到成绩记录'
+/** 五级制成绩通用映射（任意学生通用，无个人耦合） */
+const GRADE_WORD_SCORE: Readonly<Record<string, number>> = {
+  优: 95,
+  良: 85,
+  中: 75,
+  及格: 65,
+  不及格: 50,
+}
+
+/** 解析历年成绩 #dataList 表为结构化记录数组（表头含重复列时按列序消歧） */
+export function parseGradeRecords(html: string): GradeRecord[] {
+  const $ = load(decodeViewSourceSnapshot(html))
+  const $table = $('#dataList').length > 0 ? $('#dataList').first() : null
+  if (!$table || $table.length === 0) return []
+
+  // 表头：按出现顺序登记，重复列名追加序号消歧（如两个「课程性质」）
+  const headers: string[] = []
+  const headerIndexByName = new Map<string, number>()
+  $table.find('tr').first().find('th, td').each((idx, th) => {
+    const raw = cleanText($(th).text())
+    const key = raw || `col${idx}`
+    headers.push(key)
+    if (!headerIndexByName.has(key)) headerIndexByName.set(key, idx)
+  })
+  const col = (name: string): number => headerIndexByName.get(name) ?? -1
+
+  const records: GradeRecord[] = []
+  $table.find('tr').each((rowIdx, tr) => {
+    if (rowIdx === 0) return
+    const cells = $(tr).find('td').toArray()
+    if (cells.length < 4) return
+    const cellText = (idx: number): string => (idx >= 0 && idx < cells.length ? cleanText($(cells[idx]).text()) : '')
+    const name = cellText(col('课程名称'))
+    if (!name) return
+    const scoreText = cellText(col('成绩'))
+    const wordScore = GRADE_WORD_SCORE[scoreText]
+    const numericScore = parseNumber(scoreText)
+    const gpText = cellText(col('绩点'))
+    const scoreNumber = numericScore ?? wordScore
+    const gp = parseNumber(gpText) ?? (scoreNumber !== undefined ? scoreToGp(scoreNumber) : undefined)
+    records.push({
+      semester: cellText(col('开课学期')),
+      courseCode: cellText(col('课程编号')),
+      courseName: name,
+      score: scoreText,
+      scoreNumber,
+      scoreLabel: cellText(col('成绩标识')),
+      credit: parseNumber(cellText(col('学分'))) ?? 0,
+      gp,
+      makeupSemester: cellText(col('补重学期')),
+      assessMode: cellText(col('考核方式')),
+      examNature: cellText(col('考试性质')),
+      courseAttr: cellText(col('课程属性')),
+      courseNature: cellText(col('课程性质')) !== cellText(col('课程属性')) ? cellText(col('课程性质')) : '',
+      electiveCategory: cellText(col('通选课类别')),
+    })
+  })
+  return records
+}
+
+/** 单轨 GPA 统计摘要 */
+export interface GpaTrackSummary {
+  /** 取分策略：latest（同门课取最新） / highest（同门课取最高） */
+  strategy: 'latest' | 'highest'
+  courseCount: number
+  totalCredits: number
+  /** 必修课学分（课程属性含「必修」） */
+  requiredCredits: number
+  weightedAverage: number
+  weightedGpa: number
+  /** 不及格科目警示清单 */
+  failed: Array<{ courseCode: string; courseName: string; semester: string; score: string }>
+  /** 本轨采纳的课程记录 */
+  records: GradeRecord[]
+}
+
+const round2 = (n: number): number => Math.round(n * 100) / 100
+
+/**
+ * 补考/重修双轨加权 GPA 统计：
+ *   1. 按课程代码（缺失时退化课程名）分组；
+ *   2. 最新成绩轨（默认展示）：同门课程取开课学期最新（同学期取靠后记录）的一条；
+ *   3. 最高成绩轨（可选切换）：同门课程取绩点/成绩最高的一条（同分取最新）；
+ *   4. 分别计算总学分 / 必修学分 / 加权平均分 / 加权平均绩点与不及格警示。
+ */
+export function buildGpaTracks(records: GradeRecord[]): { latest: GpaTrackSummary; highest: GpaTrackSummary } {
+  const groups = new Map<string, GradeRecord[]>()
+  for (const record of records) {
+    const key = record.courseCode || record.courseName
+    if (!key) continue
+    const list = groups.get(key) ?? []
+    list.push(record)
+    groups.set(key, list)
+  }
+
+  const buildTrack = (strategy: 'latest' | 'highest'): GpaTrackSummary => {
+    const picked: GradeRecord[] = []
+    for (const list of groups.values()) {
+      const chosen = [...list].sort((a, b) => {
+        if (strategy === 'latest') {
+          // 开课学期字典序即时间序（"2025-2026-2" > "2025-2026-1"）；补重学期靠后视为更晚
+          const sa = `${a.makeupSemester || a.semester}`
+          const sb = `${b.makeupSemester || b.semester}`
+          return sa === sb ? 0 : sa > sb ? 1 : -1
+        }
+        const ga = a.gp ?? a.scoreNumber ?? -Infinity
+        const gb = b.gp ?? b.scoreNumber ?? -Infinity
+        return ga === gb ? 0 : ga > gb ? 1 : -1
+      }).at(-1)
+      if (chosen) picked.push(chosen)
+    }
+
+    let creditSum = 0
+    let weightedScoreSum = 0
+    let weightedGpSum = 0
+    let requiredCredits = 0
+    const failed: GpaTrackSummary['failed'] = []
+    for (const r of picked) {
+      if (r.credit > 0 && r.scoreNumber !== undefined) {
+        creditSum += r.credit
+        weightedScoreSum += r.credit * r.scoreNumber
+        weightedGpSum += r.credit * (r.gp ?? scoreToGp(r.scoreNumber))
+        if (r.courseAttr.includes('必修')) requiredCredits += r.credit
+      }
+      if (r.scoreNumber !== undefined && r.scoreNumber < 60) {
+        failed.push({ courseCode: r.courseCode, courseName: r.courseName, semester: r.semester, score: r.score })
+      }
+    }
+    return {
+      strategy,
+      courseCount: picked.length,
+      totalCredits: round2(creditSum),
+      requiredCredits: round2(requiredCredits),
+      weightedAverage: creditSum ? round2(weightedScoreSum / creditSum) : 0,
+      weightedGpa: creditSum ? round2(weightedGpSum / creditSum) : 0,
+      failed,
+      records: picked,
+    }
+  }
+
+  return { latest: buildTrack('latest'), highest: buildTrack('highest') }
+}
+
+/** 构造双轨 GPA 统计 Markdown（最新成绩轨 / 最高成绩轨） */
+function buildGpaTracksMarkdown(tracks: { latest: GpaTrackSummary; highest: GpaTrackSummary }, semester: string): string {
+  const describe = (t: GpaTrackSummary, label: string): string =>
+    [
+      `**${label}**：修读 ${t.courseCount} 门 | 总学分 ${t.totalCredits}（必修 ${t.requiredCredits}） | 加权平均分 ${t.weightedAverage} | 加权绩点 **${t.weightedGpa}**`,
+    ].join('')
+  const failedRows = tracks.latest.failed.map((f) => [f.courseName, f.semester || '—', f.score])
+  const failedTable = failedRows.length
+    ? mdTable(['不及格科目', '学期', '成绩'], failedRows)
+    : '> 🟢 当前无不及格科目记录'
   return [
-    `### 📊 ${semester || '全部学期'}成绩单`,
+    `### 📊 ${semester || '全部学期'}成绩单（补考/重修双轨加权）`,
     '',
-    `- **修读门数**：${courses.length} 门 | **总学分**：${summary.totalCredits} | **加权平均分**：${summary.weightedAverage} | **GPA**：${summary.gpa}`,
+    describe(tracks.latest, '最新成绩轨（默认）'),
+    describe(tracks.highest, '最高成绩轨'),
     '',
-    table,
+    '**不及格科目警示**',
+    '',
+    failedTable,
+    '',
+    '**详细课程清单**',
+    '',
   ].join('\n')
+}
+
+/** 构造成绩明细表（双轨记录复用） */
+function buildGradeRecordsTable(records: GradeRecord[]): string {
+  const rows = records.map((r) => [
+    `**${r.courseName}**`,
+    r.semester || '—',
+    r.courseAttr || r.courseNature || '—',
+    r.credit ? String(r.credit) : '—',
+    r.score ? `**${r.score}**` : '—',
+    r.gp !== undefined ? String(r.gp) : '—',
+    r.makeupSemester ? `补重 ${r.makeupSemester}` : '—',
+  ])
+  return rows.length
+    ? mdTable(['课程名称', '开课学期', '课程属性', '学分', '综合分', '绩点', '补重标记'], rows)
+    : '> 未查询到成绩记录'
 }
 
 /** Tool 3 分发入口 */
@@ -1004,37 +1695,74 @@ export async function executeGradesDomain(
   try {
     switch (params.action) {
       case 'query_grades': {
-        // 双轨查询：优先标准成绩查询端点 /kscj/cjcx_list，未命中则回退旧端点 /kscj/cj.do。
-        // 表单参数补齐 kksj（开课时间/学期）与 xsfs=all（显示方式），对齐青果实际入参。
+        // 青果 cjcx_list 请求负载契约：仅允许 kksj（开课学期）变化，其余字段锁定；
+        // kksj 传空字符串 "" 表示查询全部历史成绩。
         const form = {
-          xnxq01id: params.semester,
-          kcxz: params.courseType,
           kksj: params.semester ?? '',
+          kcxz: '',
+          kcsx: '',
+          kcmc: '',
           xsfs: 'all',
+          sfxsbcxq1: '',
+          mold: '',
         }
-        let res = await fetchJwPage(ses, '/kscj/cjcx_list', { method: 'POST', form })
+        const res = await fetchJwPage(ses, '/kscj/cjcx_list', { method: 'POST', form })
         if (res.expired) return expiredResult()
-        let courses = res.ok ? parseGradeCourses(res.html) : []
-        if (courses.length === 0) {
+        if (!res.ok) return errorResult(`成绩单接口返回 HTTP ${res.status}`)
+
+        let records = parseGradeRecords(res.html)
+        if (records.length === 0) {
+          // 旧版式兜底：/kscj/cj.do 宽表解析
           const fallback = await fetchJwPage(ses, '/kscj/cj.do', { method: 'POST', form })
           if (fallback.expired) return expiredResult()
           if (fallback.ok) {
-            res = fallback
-            courses = parseGradeCourses(fallback.html)
+            const legacy = parseGradeCourses(fallback.html).map(
+              (c): GradeRecord => ({
+                semester: params.semester ?? '',
+                courseCode: '',
+                courseName: c.name,
+                score: c.score,
+                scoreNumber: parseNumber(c.score),
+                scoreLabel: '',
+                credit: c.credit,
+                gp: parseNumber(c.gp),
+                makeupSemester: '',
+                assessMode: '',
+                examNature: '',
+                courseAttr: c.category,
+                courseNature: '',
+                electiveCategory: '',
+              }),
+            )
+            if (legacy.length > 0) records = legacy
           }
         }
-        if (!res.ok && courses.length === 0) return errorResult(`成绩单接口返回 HTTP ${res.status}`)
-        const summary = summarizeGrades(courses)
-        return buildResult(buildGradesMarkdown(courses, params.semester ?? ''), {
+        if (!res.ok && records.length === 0) return errorResult(`成绩单接口返回 HTTP ${res.status}`)
+
+        const tracks = buildGpaTracks(records)
+        const markdown = [
+          buildGpaTracksMarkdown(tracks, params.semester ?? ''),
+          buildGradeRecordsTable(records),
+        ].join('\n')
+        return buildResult(markdown, {
           semester: params.semester ?? '全部学期',
-          ...summary,
-          courses: courses.map((c) => ({
-            name: c.name,
-            category: c.category,
-            credit: c.credit,
-            score: c.score,
-            gp: c.gp,
-          })),
+          latest: {
+            courseCount: tracks.latest.courseCount,
+            totalCredits: tracks.latest.totalCredits,
+            requiredCredits: tracks.latest.requiredCredits,
+            weightedAverage: tracks.latest.weightedAverage,
+            weightedGpa: tracks.latest.weightedGpa,
+            failed: tracks.latest.failed,
+          },
+          highest: {
+            courseCount: tracks.highest.courseCount,
+            totalCredits: tracks.highest.totalCredits,
+            requiredCredits: tracks.highest.requiredCredits,
+            weightedAverage: tracks.highest.weightedAverage,
+            weightedGpa: tracks.highest.weightedGpa,
+            failed: tracks.highest.failed,
+          },
+          records,
         })
       }
       case 'query_level_exams': {
@@ -1113,6 +1841,72 @@ export async function executeGradesDomain(
 
 // ===== Tool 4：考务安排与报名 =====
 
+/** 期末考场日程单条记录 */
+export interface ExamScheduleItem {
+  campus: string
+  session: string
+  courseCode: string
+  courseName: string
+  teacher: string
+  time: string
+  room: string
+  seat: string
+  ticket: string
+  remark: string
+  form: string
+}
+
+/**
+ * 解析期末考场日程（xsksap_query / #dataList）：
+ * 提取考试场次、课程名称、考试时间、校区、考场（教学楼与教室）、座位号、准考证号。
+ * 空数据（未排考）返回空数组，由上层输出友好提示。
+ */
+export function parseExamSchedule(html: string): ExamScheduleItem[] {
+  const $ = load(decodeViewSourceSnapshot(html))
+  const $table = $('#dataList').length > 0 ? $('#dataList').first() : null
+  if (!$table || $table.length === 0) return []
+
+  const headerIndexByName = new Map<string, number>()
+  $table.find('tr').first().find('th, td').each((idx, th) => {
+    const raw = cleanText($(th).text())
+    const key = raw || `col${idx}`
+    if (!headerIndexByName.has(key)) headerIndexByName.set(key, idx)
+  })
+  const col = (name: string, candidates: string[] = []): number => {
+    const direct = headerIndexByName.get(name)
+    if (direct !== undefined) return direct
+    for (const cand of candidates) {
+      const hit = headerIndexByName.get(cand)
+      if (hit !== undefined) return hit
+    }
+    return -1
+  }
+
+  const items: ExamScheduleItem[] = []
+  $table.find('tr').each((rowIdx, tr) => {
+    if (rowIdx === 0) return
+    const cells = $(tr).find('td').toArray()
+    if (cells.length < 4) return
+    const cellText = (idx: number): string => (idx >= 0 && idx < cells.length ? cleanText($(cells[idx]).text()) : '')
+    const courseName = cellText(col('课程名称', ['考试科目', '课程']))
+    if (!courseName) return
+    items.push({
+      campus: cellText(col('考试校区', ['校区'])),
+      session: cellText(col('考试场次', ['场次'])),
+      courseCode: cellText(col('课程编号', ['课程代码'])),
+      courseName,
+      teacher: cellText(col('授课教师', ['教师'])),
+      time: cellText(col('考试时间', ['时间', '日期'])),
+      room: cellText(col('考场', ['考试地点', '地点'])),
+      seat: cellText(col('座位号', ['座位'])),
+      ticket: cellText(col('准考证号', ['准考证'])),
+      remark: cellText(col('备注')),
+      form: cellText(col('考试形式', ['形式'])) || '期末统考',
+    })
+  })
+  return items
+}
+
 /** Tool 4 分发入口 */
 export async function executeExamDomain(
   ses: Session,
@@ -1121,24 +1915,16 @@ export async function executeExamDomain(
   try {
     switch (params.action) {
       case 'query_exam_schedule': {
-        const res = await fetchJwPage(ses, '/xsks/xsksap_query', { query: { xnxq01id: params.semester } })
+        // 参数契约：仅允许修改 xnxqid（学期），其余入参锁定
+        const res = await fetchJwPage(ses, '/xsks/xsksap_query', { query: { xnxqid: params.semester } })
         if (res.expired) return expiredResult()
         if (!res.ok) return errorResult(`考试日程接口返回 HTTP ${res.status}`)
-        const { headers, rows } = parseLargestTable(res.html)
-        const objects = rowsToObjects(headers, rows)
-        const exams = objects.map((o) => ({
-          courseName: pickField(o, ['课程名称', '科目', '考试科目', '课程']),
-          time: pickField(o, ['考试时间', '时间', '日期']),
-          room: pickField(o, ['考场', '考试地点', '地点']),
-          seat: pickField(o, ['座位', '座位号']),
-          ticket: pickField(o, ['准考证', '准考证号']),
-          form: pickField(o, ['考试形式', '形式']),
-        }))
+        const exams = parseExamSchedule(res.html)
         const table = exams.length
           ? mdTable(
               ['考试科目', '考试时间', '考场位置', '座位号', '准考证号', '考试形式'],
               exams.map((e) => [
-                `**${e.courseName || '—'}**`,
+                `**${e.courseName}**`,
                 e.time || '—',
                 e.room ? `📍 **${e.room}**` : '—',
                 e.seat ? `**${e.seat}**` : '—',
@@ -1242,70 +2028,272 @@ export async function executeExamDomain(
 
 // ===== Tool 5：教室资源与自习雷达 =====
 
-interface EmptyRoom {
+/** 空教室节次占用矩阵中的一列（节次区间） */
+export interface ClassroomPeriodColumn {
+  /** 表头显示文本（如 "01 02"） */
+  label: string
+  /** 青果 tdvalue 节次编码（如 "0102" / "12" / "091011"） */
+  tdvalue: string
+  /** 展开的节次编号列表 */
+  sections: number[]
+  /** 归属星期（1-7；教室周期 jszq 全周矩阵按表头分组，单日版式为 undefined） */
+  day?: number
+  /** 作息起止（如 "08:10" / "09:45"，可能为空） */
+  startTime: string
+  endTime: string
+  /** 午休空档列（tdKssj=12:00 / tdvalue=12）：12:00-13:55 中午时段，严禁计作「第 12 节课」 */
+  isNoonBreak: boolean
+}
+
+/** 空教室行：教室 + 各节次区间占用状态 */
+export interface ClassroomFreeRoom {
   roomName: string
   capacity: number
-  availableSections: number[]
-  hasAirConditioner: boolean
+  /** 与列一一对应的占用标记（true=占用：红 J 借用或黑 ◆ 排课） */
+  occupied: boolean[]
+  /** 按天归组的空闲节次（day 缺省归组为 0） */
+  freeSectionsByDay: Record<string, number[]>
+}
+
+const DAY_NAME_TO_INDEX: Readonly<Record<string, number>> = {
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  日: 7,
+  天: 7,
+}
+
+/**
+ * 解析空教室节次矩阵（jsjy_query2 结果页）：
+ *   - 教室周期（jszq）版式：表头三层 = 教室名 / 星期（colspan 分组）/ 节次区间 th[tdvalue]，
+ *     7 天 × 6 时段 = 42 列；
+ *   - 单日版式：仅一组节次区间列（无星期分组）；
+ *   - 单元格出现红字 J（借用占用）或黑 ◆（排课占用）→ 占用；空单元格 → 自习空闲状态。
+ */
+export function parseClassroomFreeRooms(html: string): { periodColumns: ClassroomPeriodColumn[]; rooms: ClassroomFreeRoom[] } {
+  const $ = load(decodeViewSourceSnapshot(html))
+  // 定位含节次表头的数据表
+  const $pre = $('#dataList').first()
+  const $table =
+    $pre.length > 0 && $('th[tdvalue]', $pre).length > 0 ? $pre : ($('th[tdvalue]').first().closest('table') as ReturnType<CheerioAPI>)
+  if ($table.length === 0) return { periodColumns: [], rooms: [] }
+
+  // 1) 节次区间列（th[tdvalue] 按 DOM 顺序）
+  const periodColumns: ClassroomPeriodColumn[] = []
+  $('th[tdvalue]', $table).each((_, th) => {
+    const $th = $(th)
+    const tdvalue = cleanText($th.attr('tdvalue') ?? '')
+    if (!tdvalue) return
+    const startTime = cleanText($th.attr('tdKssj') ?? '')
+    const endTime = cleanText($th.attr('tdJssj') ?? '')
+    // 中午 12:00-13:55 空档列：严禁解析为「第 12 节课」，仅作为午休标记
+    const isNoonBreak = tdvalue === '12' || startTime === '12:00'
+    const sections: number[] = []
+    // tdvalue 以两位一组编码节次："0102" → [1,2]，"091011" → [9,10,11]，"12" → [12]
+    for (let i = 0; i < tdvalue.length; i += 2) {
+      const n = Number(tdvalue.slice(i, i + 2))
+      if (Number.isFinite(n) && n > 0) sections.push(n)
+    }
+    periodColumns.push({
+      label: cleanText($th.text()),
+      tdvalue,
+      sections,
+      startTime,
+      endTime,
+      isNoonBreak,
+    })
+  })
+
+  // 2) 星期分组：找「星期X」表头行（带 colspan），按 colspan 展开为每列归属日
+  const columnDays: number[] = []
+  $('tr', $table).each((_, tr) => {
+    if (columnDays.length > 0) return
+    const dayThs = $(tr)
+      .find('th')
+      .toArray()
+      .filter((th) => /星期[一二三四五六日天]/.test(cleanText($(th).text())))
+    if (dayThs.length < 2) return
+    const expanded: number[] = []
+    for (const th of dayThs) {
+      const $th = $(th)
+      const span = parseInt($th.attr('colspan') ?? '1', 10) || 1
+      const dayText = cleanText($th.text())
+      const dayIdx = Object.entries(DAY_NAME_TO_INDEX).find(([name]) => dayText.includes(`星期${name}`))?.[1] ?? 1
+      for (let i = 0; i < span; i++) expanded.push(dayIdx)
+    }
+    if (expanded.length === periodColumns.length) columnDays.push(...expanded)
+  })
+  if (columnDays.length === periodColumns.length) {
+    periodColumns.forEach((col, idx) => {
+      col.day = columnDays[idx]
+    })
+  }
+
+  // 3) 行：首列为教室名（含容量括注），后续占用列与表头一一对应
+  const rooms: ClassroomFreeRoom[] = []
+  $('tr', $table).each((_, tr) => {
+    const $tr = $(tr)
+    const $cells = $tr.find('td')
+    if ($cells.length !== periodColumns.length + 1) return
+    const label = cleanText($cells.first().text())
+    if (!label || !/[A-Za-z\d]/.test(label)) return
+    const capMatch = label.match(/[（(]\s*(\d{2,4})\s*[/／]\s*\d{2,4}\s*[）)]\s*$/)
+    const roomName = cleanText(label.replace(/[（(]\s*\d{2,4}\s*[/／]\s*\d{2,4}\s*[）)]\s*$/, ''))
+    if (!roomName) return
+    const occupied: boolean[] = []
+    const freeSectionsByDay: Record<string, number[]> = {}
+    $cells.slice(1).each((cellIdx, cell) => {
+      const text = cleanText($(cell).text())
+      // 红 Ｊ/J（借用占用）或黑 ◆（排课占用）→ 占用；空单元格 → 空闲
+      const isOccupied = /◆|[ＪJ]/.test(text)
+      occupied.push(isOccupied)
+      const column = periodColumns[cellIdx]
+      // 午休列（12:00-13:55）空闲与否不纳入常规教学节次计数
+      if (!isOccupied && column && !column.isNoonBreak) {
+        const dayKey = String(column.day ?? 0)
+        freeSectionsByDay[dayKey] = freeSectionsByDay[dayKey] ?? []
+        freeSectionsByDay[dayKey].push(...column.sections)
+      }
+    })
+    rooms.push({
+      roomName,
+      capacity: capMatch?.[1] ? Number(capMatch[1]) : 0,
+      occupied,
+      freeSectionsByDay,
+    })
+  })
+
+  return { periodColumns, rooms }
+}
+
+/** 依据日期构造 jsjy_query2 所需的 yyyy-mm-dd 查询日期（默认当天） */
+function buildJsjyDate(dayOfWeek?: number): string {
+  const now = new Date()
+  if (dayOfWeek && dayOfWeek >= 1 && dayOfWeek <= 7) {
+    // 按目标星期顺延：本周第 N 天（周一为 1）
+    const current = now.getDay() === 0 ? 7 : now.getDay()
+    now.setDate(now.getDate() + (dayOfWeek - current))
+  }
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
+/** 教学楼条目（jsjy_processAjax 动态发现结果） */
+export interface ClassroomBuilding {
+  /** 楼宇名称（如「东区1教」「甲教A座」） */
+  name: string
+  /** 楼宇代码（jxlbh，jsjy_query2 POST 请求体必传） */
+  code: string
+}
+
+/**
+ * 动态拉取指定校区全部真实教学楼清单及其 jxlbh 代码。
+ * GET /jsxsd/kbxx/jsjy_processAjax?xqid={xqbh}&requestType=jxl&queryType=
+ * 兼容 JSON 数组与 HTML option 两种返回版式；失败返回空数组（由调用方兜底）。
+ */
+export async function fetchCampusBuildings(ses: Session, xqbh: string): Promise<ClassroomBuilding[]> {
+  if (!xqbh) return []
+  try {
+    const res = await fetchJwPage(ses, '/kbxx/jsjy_processAjax', {
+      query: { xqid: xqbh, requestType: 'jxl', queryType: '' },
+      referer: `${JW_ROOT}/kbxx/jsjy_query`,
+    })
+    if (!res.ok) return []
+    const body = res.html.trim()
+    const pick = (name: unknown, code: unknown): ClassroomBuilding | null => {
+      const n = cleanText(typeof name === 'string' ? name : '')
+      const c = cleanText(typeof code === 'string' ? code : '')
+      return n && c ? { name: n, code: c } : null
+    }
+    // 教务真实返回版式：JSON 数组 [{ dm: "楼宇代码", dmmc: "楼宇名称" }]（AddOptions 消费口径）
+    if (body.startsWith('[') || body.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(body) as unknown
+        const list = Array.isArray(parsed) ? parsed : ((parsed as { list?: unknown[] }).list ?? [])
+        const buildings: ClassroomBuilding[] = []
+        for (const item of list) {
+          if (!item || typeof item !== 'object') continue
+          const o = item as Record<string, unknown>
+          const hit = pick(
+            o.dmmc ?? o.jxlmc ?? o.mc ?? o.buildingName ?? o.name,
+            o.dm ?? o.jxlbh ?? o.bh ?? o.buildingCode ?? o.code ?? o.id,
+          )
+          if (hit) buildings.push(hit)
+        }
+        if (buildings.length > 0) return buildings
+      } catch {
+        // 非 JSON，继续 HTML 兜底
+      }
+    }
+    // HTML option 版式兜底：<option value="jxlbh">楼名</option>
+    const $ = load(res.html)
+    const buildings: ClassroomBuilding[] = []
+    $('option').each((_, opt) => {
+      const code = cleanText($(opt).attr('value') ?? '')
+      const name = cleanText($(opt).text())
+      if (code && name) buildings.push({ name, code })
+    })
+    return buildings
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 楼宇名与教室名的宽松匹配（仅在教务服务端 jxlbh 筛选不可用时的客户端兜底）。
+ *
+ * 教务返回的教室名与前端楼宇名口径并不一致（如楼宇「甲教A座」对应教室「(宜）甲A101」），
+ * 朴素子串匹配必然落空。此处剥离「教/楼/座/栋/馆」等公共字后取显著前缀作为楼宇指纹
+ * （甲教A座→甲A、东区9教→东区、乙教→乙、6教→6），再判断教室名是否包含该指纹。
+ */
+export function buildingMatchesRoom(building: string, roomName: string): boolean {
+  const target = cleanText(building)
+  const room = cleanText(roomName)
+  if (!target || !room) return false
+  if (room.includes(target) || target.includes(room)) return true
+  const core = target.replace(/[（()）\s]/g, '').replace(/教学|实验楼|大楼|楼|教|座|栋|馆/g, '')
+  if (!core) return false
+  // 显著字符 ≥2 取前 2 位（东区/甲A/综合）；仅 1 位时直接用该字符（乙/6）
+  const key = core.length >= 2 ? core.slice(0, 2) : core
+  return room.includes(key)
+}
+
+/** 启发式推导当前学期代码（秋学期 7 月-次年 1 月；春学期 2-6 月） */
+function guessCurrentSemester(now: Date = new Date()): string {
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1
+  if (month >= 7 || month <= 1) {
+    const startYear = month <= 1 ? year - 1 : year
+    return `${startYear}-${startYear + 1}-1`
+  }
+  return `${year - 1}-${year}-2`
 }
 
 /** 校区入参：成都校区 / 宜宾校区 */
 type CdutCampus = 'chengdu' | 'yibin'
-
-/** 校区代号映射（01 成都校区、02 宜宾校区） */
-function campusCode(campus: CdutCampus): string {
-  return campus === 'yibin' ? '02' : '01'
-}
 
 /** 校区中文名 */
 function campusLabel(campus: CdutCampus): string {
   return campus === 'yibin' ? '宜宾校区' : '成都校区'
 }
 
-/** 解析空闲教室网格表：行=教室，列=节次，空单元格视为空闲 */
-function parseClassrooms(html: string): EmptyRoom[] {
-  const { headers, rows } = parseLargestTable(html)
-  const capacityCol = headers.findIndex((h) => /座位|容量|人数/.test(h))
-  const sectionCols: { idx: number; section: number }[] = []
-  headers.forEach((h, idx) => {
-    if (idx === 0 || idx === capacityCol) return
-    if (!/节|第/.test(h) && !/^\d+$/.test(h.trim())) return
-    const m = h.match(/(\d+)/)
-    if (m && m[1]) sectionCols.push({ idx, section: Number(m[1]) })
-  })
-
-  const rooms: EmptyRoom[] = []
-  for (const cells of rows) {
-    const roomName = cleanText(cells[0] ?? '')
-    if (!roomName) continue
-    let capacity = capacityCol >= 0 ? (parseNumber(cells[capacityCol]) ?? 0) : 0
-    if (!capacity) {
-      const capMatch = roomName.match(/[（(]?\s*(\d{2,4})\s*(?:座|人)/)
-      if (capMatch && capMatch[1]) capacity = Number(capMatch[1])
-    }
-    const availableSections: number[] = []
-    for (const col of sectionCols) {
-      const text = cleanText(cells[col.idx] ?? '')
-      if (text === '' || text === '-' || text === '—' || /空闲|无课/.test(text)) {
-        availableSections.push(col.section)
-      }
-    }
-    rooms.push({
-      roomName,
-      capacity,
-      availableSections,
-      hasAirConditioner: /空调/.test(roomName),
-    })
-  }
-  return rooms
+/** 空教室结果归一化（供 Markdown 与 JSON 双模输出） */
+interface NormalizedRoom {
+  roomName: string
+  capacity: number
+  availableSections: number[]
+  hasAirConditioner: boolean
 }
 
-/** 按节次区间过滤：要求请求节次全部空闲 */
-function filterByTimeSlots(rooms: EmptyRoom[], timeSlots?: number[]): EmptyRoom[] {
-  if (!timeSlots || timeSlots.length === 0) {
-    return rooms.filter((r) => r.availableSections.length > 0)
-  }
-  return rooms.filter((r) => timeSlots.every((slot) => r.availableSections.includes(slot)))
+/** 判断教室是否满足请求节次：存在任意一天，其空闲节次覆盖全部请求时段 */
+function roomSatisfiesSlots(freeSectionsByDay: Record<string, number[]>, slots: number[]): boolean {
+  return Object.values(freeSectionsByDay).some((free) => {
+    const unique = new Set(free)
+    return slots.every((slot) => unique.has(slot))
+  })
 }
 
 /** Tool 5 分发入口 */
@@ -1314,42 +2302,105 @@ export async function executeClassroomDomain(
   params: CdutClassroomParams,
 ): Promise<CdutDomainToolResult> {
   try {
-    const res = await fetchJwPage(ses, '/kbxx/jsjy_query', {
-      query: {
-        xq: campusCode(params.campus),
-        jxl: params.building,
-        zcd: params.week,
-        xqj: params.dayOfWeek,
-        jc: params.timeSlots?.join(','),
+    // 1) 查询页：拿校区 GUID（xqbh）与当前学期（xnxqh）
+    let xqbh = ''
+    let semester = ''
+    const queryPage = await fetchJwPage(ses, '/kbxx/jsjy_query')
+    if (queryPage.ok && !queryPage.expired) {
+      const $ = load(queryPage.html)
+      const campusLabelKeyword = params.campus === 'yibin' ? '宜宾' : '主校区'
+      $('select[name="xqbh"] option').each((_, opt) => {
+        if (xqbh) return
+        const label = cleanText($(opt).text())
+        const value = cleanText($(opt).attr('value') ?? '')
+        if (value && label.includes(campusLabelKeyword)) xqbh = value
+      })
+      semester = cleanText($('input[name="xnxqh"]').first().attr('value') ?? '')
+    }
+    if (!xqbh) {
+      // 查询页解析失败的兜底：按校区关键字使用系统级校区代码（非个人数据）
+      xqbh = params.campus === 'yibin' ? '1AB638C5248B4502B1B07E9A29FCB535' : 'EB5F3F57ED784EC1B4A2CB43499787D7'
+    }
+    if (!semester) semester = guessCurrentSemester()
+
+    // 2) 楼宇动态发现：取得当前校区全部真实楼宇名与 jxlbh 代码（供服务端权威筛选与前台动态楼宇 chips）
+    const buildings = await fetchCampusBuildings(ses, xqbh)
+    let jxlbh = ''
+    if (params.building) {
+      const target = params.building
+      const hit =
+        buildings.find((b) => b.name === target) ??
+        buildings.find((b) => b.name.includes(target) || target.includes(b.name))
+      jxlbh = hit?.code ?? ''
+    }
+
+    // 3) POST jsjy_query2：底层参数映射（typewhere=教室周期 / xqbh 校区 / xnxqh 学期 / 起止日期 / jxlbh 楼宇代码）。
+    //    楼宇筛选由教务服务端按 jxlbh 权威完成——此前漏传 jxlbh 且前台子串匹配
+    //    '甲教A座' vs '(宜）甲A101' 完全落空，是「仅全部教学楼可用」的根因。
+    const dateStr = buildJsjyDate(params.dayOfWeek)
+    const res = await fetchJwPage(ses, '/kbxx/jsjy_query2', {
+      method: 'POST',
+      form: {
+        typewhere: 'jszq',
+        xnxqh: semester,
+        xqbh,
+        jxlbh,
+        qsrq: dateStr,
+        jsrq: dateStr,
+        gnq_mh: '',
+        jsmc_mh: '',
+        syjs0601id: '',
+        queryType: '',
       },
     })
     if (res.expired) return expiredResult()
     if (!res.ok) return errorResult(`空闲教室接口返回 HTTP ${res.status}`)
 
-    let rooms = parseClassrooms(res.html)
+    const { periodColumns, rooms } = parseClassroomFreeRooms(res.html)
 
+    // 4) 归一化 + 节次/容量过滤。
+    //    楼宇筛选已由教务服务端按 jxlbh 权威完成；仅当 jxlbh 解析失败时退回客户端子串匹配（尽力而为）。
+    let normalized: NormalizedRoom[] = rooms.map((r) => ({
+      roomName: r.roomName,
+      capacity: r.capacity,
+      availableSections: [...new Set(Object.values(r.freeSectionsByDay).flat())].sort((a, b) => a - b),
+      hasAirConditioner: /空调/.test(r.roomName),
+    }))
+    if (params.building && !jxlbh) {
+      // jxlbh 解析失败（或演示态）时的客户端兜底：使用宽松楼宇指纹匹配，杜绝朴素子串必然落空
+      normalized = normalized.filter((r) => buildingMatchesRoom(params.building ?? '', r.roomName))
+    }
     if (params.action === 'query_room_occupancy' && params.building) {
-      rooms = rooms.filter((r) => r.roomName.includes(params.building ?? ''))
-      const table = rooms.length
-        ? mdTable(
-            ['教室', '座位容量', '空闲节次'],
-            rooms.map((r) => [
-              `📍 **${r.roomName}**`,
-              r.capacity ? `${r.capacity} 座` : '—',
-              r.availableSections.length ? `第 ${r.availableSections.join(', ')} 节` : '全时段占用',
-            ]),
-          )
+      const rows = normalized.map((r) => [
+        `📍 **${r.roomName}**`,
+        r.capacity ? `${r.capacity} 座` : '—',
+        r.availableSections.length ? `第 ${r.availableSections.join(', ')} 节空闲` : '全时段占用',
+      ])
+      const table = rows.length
+        ? mdTable(['教室', '座位容量', '空闲节次'], rows)
         : '> 未查询到指定教室占用信息'
-      const markdown = `### 🚪 ${campusLabel(params.campus)}【${params.building}】教室占用明细\n\n${table}`
-      return buildResult(markdown, { campus: params.campus, building: params.building, rooms })
+      const markdown = `### 🚪 ${campusLabel(params.campus)}【${params.building}】教室占用明细（${dateStr}）\n\n${table}`
+      return buildResult(markdown, { campus: params.campus, building: params.building, date: dateStr, semester, buildings, rooms: normalized })
     }
 
-    rooms = filterByTimeSlots(rooms, params.timeSlots)
+    if (params.timeSlots && params.timeSlots.length > 0) {
+      // 存在任意一天其空闲节次覆盖全部请求时段即命中（按原始 freeSectionsByDay 判定）
+      const byName = new Map(rooms.map((r) => [r.roomName, r]))
+      normalized = normalized.filter((r) => {
+        const source = byName.get(r.roomName)
+        return source ? roomSatisfiesSlots(source.freeSectionsByDay, params.timeSlots!) : r.availableSections.length > 0
+      })
+    }
     if (params.minSeats && params.minSeats > 0) {
-      rooms = rooms.filter((r) => r.capacity >= (params.minSeats ?? 0))
+      normalized = normalized.filter((r) => r.capacity >= (params.minSeats ?? 0))
     }
 
-    const rows = rooms.map((r) => [
+    // 节次区间文案：午休列明确标注为中午时段，严禁称「第 12 节课」
+    const periodText = periodColumns
+      .map((p) => (p.isNoonBreak ? '中午(12:00-13:55)' : p.label.replace(/\s+/g, '-')))
+      .filter(Boolean)
+      .join(' / ')
+    const rows = normalized.map((r) => [
       `📍 **${r.roomName}**`,
       r.capacity ? `${r.capacity} 座` : '—',
       r.hasAirConditioner ? '空调' : '—',
@@ -1360,22 +2411,23 @@ export async function executeClassroomDomain(
       : '> 当前条件下未找到空闲教室，请调整教学楼、周次或节次'
     const scope = params.building ? `【${params.building}】` : ''
     const markdown = [
-      `### 🏫 ${campusLabel(params.campus)}${scope}空闲自习室`,
+      `### 🏫 ${campusLabel(params.campus)}${scope}空闲自习室（${dateStr}）`,
       '',
-      `- **匹配空闲教室**：**${rooms.length} 间可用**`,
+      `- **匹配空闲教室**：**${normalized.length} 间可用**`,
+      periodText ? `- **节次区间**：${periodText}` : '',
       '',
       table,
-    ].join('\n')
+    ]
+      .filter((line) => line !== '')
+      .join('\n')
 
     return buildResult(markdown, {
       campus: params.campus,
       building: params.building ?? '',
-      emptyRooms: rooms.map((r) => ({
-        roomName: r.roomName,
-        capacity: r.capacity,
-        availableSections: r.availableSections,
-        hasAirConditioner: r.hasAirConditioner,
-      })),
+      date: dateStr,
+      semester,
+      buildings,
+      emptyRooms: normalized,
     })
   } catch (err) {
     return errorResult(`空闲教室查询失败：${networkError(err)}`)
@@ -1383,6 +2435,163 @@ export async function executeClassroomDomain(
 }
 
 // ===== Tool 6：培养方案与毕业学分 =====
+
+/** 培养方案课程条目 */
+export interface CurriculumPlanCourse {
+  module: string
+  courseCode: string
+  courseName: string
+  credit: number
+  /** 完成状态：completed（已修，含成绩）/ pending（未修） */
+  status: 'completed' | 'pending'
+  /** 已修成绩（未修时为空） */
+  score?: string
+  /** 建议修读学期（开设学期） */
+  semester: string
+  /** 课程性质（如 专业核心课程） */
+  nature: string
+  /** 课程属性（必修/选修） */
+  attr: string
+}
+
+/** 培养方案模块（通识必修 / 学科基础 / 专业核心 / 实践环节 等） */
+export interface CurriculumPlanModule {
+  name: string
+  /** 模块应修学分（来自「应修 X / 已修 Y」注记） */
+  requiredCredits?: number
+  /** 模块已修学分注记 */
+  completedCredits?: number
+  courses: CurriculumPlanCourse[]
+}
+
+/**
+ * 解析培养方案与完成情况（topyfamx / 嵌套 #mxh 表）：
+ *   - 第一列 rowspan 合并的课程体系单元格携带模块名与「(应修 X / 已修 Y)」注记；
+ *   - 完成情况列：出现「已修(成绩)」→ completed，空 → pending；
+ *   - 通用模块归类，严禁与任何特定专业/模块名硬编码耦合。
+ */
+export function parseCurriculumPlan(html: string): { title: string; modules: CurriculumPlanModule[] } {
+  const $ = load(decodeViewSourceSnapshot(html))
+  const title = cleanText($('table#dataList caption').first().text()) || cleanText($('caption').first().text())
+
+  // 定位嵌套明细表：#mxh 优先，兜底为包含「课程编号」表头的表格
+  let $target = $('table#mxh').first()
+  if ($target.length === 0) {
+    $('table').each((_, table) => {
+      if ($target.length > 0) return
+      if (cleanText($(table).find('th').first().text()).includes('课程体系')) $target = $(table)
+    })
+  }
+  if ($target.length === 0) return { title, modules: [] }
+
+  const grid = parseTableToGrid($target, $)
+  if (grid.length === 0) return { title, modules: [] }
+
+  // 表头行 = 含「课程编号」的行；列索引按表头名定位
+  const headerRowIdx = grid.findIndex((row) => row.some((c) => c === '课程编号' || c.includes('课程编号')))
+  if (headerRowIdx < 0) return { title, modules: [] }
+  const header = grid[headerRowIdx] ?? []
+  const colIdx = (name: string): number => header.findIndex((h) => h === name || h.includes(name))
+
+  const moduleCol = 0 // rowspan 填充后的课程体系列恒为首列
+  const codeCol = colIdx('课程编号')
+  const nameCol = colIdx('课程名称')
+  const statusCol = colIdx('完成情况')
+  const natureCol = colIdx('课程性质')
+  const attrCol = colIdx('课程属性')
+  const creditCol = colIdx('学分')
+  const semesterCol = colIdx('开设学期')
+
+  const modules: CurriculumPlanModule[] = []
+  const moduleByText = new Map<string, CurriculumPlanModule>()
+
+  // 表头可能占两行（首行 rowspan=2 + 次行 colspan 分组），虚拟网格填充后第二行会
+  // 重复携带「课程体系 / 课程编号 / 课程名称」等表头文案，必须整体剔除，
+  // 否则会凭空解析出一个名为「课程体系」、课程名为「课程名称」的幽灵模块。
+  const HEADER_ROW_LABELS = /^(课程体系|选课组|课程编号|课程名称|完成情况|课程性质|课程属性|学分|学时|学时分类|开设学期|考核方式|备注)$/
+  const isHeaderRow = (row: string[]): boolean => {
+    const cells = row.filter((c) => c && c.trim() !== '')
+    if (cells.length === 0) return true
+    const labelCount = cells.filter((c) => HEADER_ROW_LABELS.test(cleanText(c))).length
+    // 过半单元格都是表头文案 → 判定为表头行
+    return labelCount >= Math.max(2, Math.ceil(cells.length / 2))
+  }
+
+  for (let r = headerRowIdx + 1; r < grid.length; r++) {
+    const row = grid[r] ?? []
+    if (isHeaderRow(row)) continue
+    const moduleText = cleanText(row[moduleCol] ?? '')
+    const code = codeCol >= 0 ? cleanText(row[codeCol] ?? '') : ''
+    const courseName = nameCol >= 0 ? cleanText(row[nameCol] ?? '') : ''
+    // 结构行过滤：表格底部的统计汇总结算行（课程体系/小计/合计/总计/最低修读/备注）
+    // 不是真实课程条目，严禁误解析进课程清单
+    if (!courseName || /^(课程体系|小计|合计|总计|最低修读|备注)/.test(courseName)) continue
+
+    // 模块归属：rowspan 填充使模块文本在每行重复出现，按文本分组即可
+    let module: CurriculumPlanModule | undefined
+    if (moduleText) {
+      const nameOnly = cleanText(moduleText.replace(/[（(]应修[\s\S]*$/, ''))
+      module = moduleByText.get(nameOnly)
+      if (!module) {
+        const req = moduleText.match(/应修\s*(\d+(?:\.\d+)?)/)
+        const done = moduleText.match(/已修\s*(\d+(?:\.\d+)?)/)
+        module = {
+          name: nameOnly,
+          requiredCredits: req?.[1] ? Number(req[1]) : undefined,
+          completedCredits: done?.[1] ? Number(done[1]) : undefined,
+          courses: [],
+        }
+        moduleByText.set(nameOnly, module)
+        modules.push(module)
+      }
+    }
+
+    const statusText = statusCol >= 0 ? cleanText(row[statusCol] ?? '') : ''
+    const completed = /已修/.test(statusText)
+    const scoreMatch = statusText.match(/已修\s*[（(]\s*(\d+(?:\.\d+)?)\s*[）)]?/)
+    const course: CurriculumPlanCourse = {
+      module: module?.name ?? '',
+      courseCode: code,
+      courseName,
+      credit: creditCol >= 0 ? (parseNumber(row[creditCol] ?? '') ?? 0) : 0,
+      status: completed ? 'completed' : 'pending',
+      score: completed ? (scoreMatch?.[1] ?? statusText.replace(/[^0-9.]/g, '')) : undefined,
+      semester: semesterCol >= 0 ? cleanText(row[semesterCol] ?? '') : '',
+      nature: natureCol >= 0 ? cleanText(row[natureCol] ?? '') : '',
+      attr: attrCol >= 0 ? cleanText(row[attrCol] ?? '') : '',
+    }
+    if (module) module.courses.push(course)
+  }
+
+  // 剔除无任何课程条目的空模块（表头残留、结构行等噪声产生的幽灵模块）
+  return { title, modules: modules.filter((m) => m.courses.length > 0) }
+}
+
+/** 构造培养方案 Markdown（模块化呈现 + 已修/未修全景） */
+function buildCurriculumPlanMarkdown(plan: { title: string; modules: CurriculumPlanModule[] }): string {
+  const lines: string[] = [`### 📘 培养方案与教学计划${plan.title ? `\n\n> ${plan.title}` : ''}`, '']
+  for (const module of plan.modules) {
+    const progress =
+      module.requiredCredits !== undefined
+        ? `（应修 ${module.requiredCredits} / 已修 ${module.completedCredits ?? 0}）`
+        : ''
+    lines.push(`**${module.name}**${progress}`)
+    const rows = module.courses.map((c) => [
+      c.courseCode || '—',
+      `**${c.courseName}**`,
+      c.credit ? String(c.credit) : '—',
+      c.status === 'completed' ? `✅ 已修${c.score ? `(${c.score})` : ''}` : '⏳ 未修',
+      c.semester || '—',
+    ])
+    lines.push(
+      rows.length
+        ? mdTable(['课程代码', '课程名称', '学分', '完成状态', '开设学期'], rows)
+        : '> 该模块暂无课程明细',
+    )
+    lines.push('')
+  }
+  return lines.join('\n').trimEnd()
+}
 
 /** Tool 6 分发入口 */
 export async function executeCurriculumDomain(
@@ -1395,10 +2604,12 @@ export async function executeCurriculumDomain(
         const res = await fetchJwPage(ses, '/pyfa/topyfamx')
         if (res.expired) return expiredResult()
         if (!res.ok) return errorResult(`培养方案接口返回 HTTP ${res.status}`)
-        const { headers, rows } = parseLargestTable(res.html)
-        const table = rows.length ? mdTable(headers, rows) : '> 暂无指导性培养方案数据'
-        const markdown = `### 📘 主修专业指导性培养方案${params.moduleName ? `（模块：${params.moduleName}）` : ''}\n\n${table}`
-        return buildResult(markdown, { plan: rowsToObjects(headers, rows) })
+        const plan = parseCurriculumPlan(res.html)
+        const markdown = buildCurriculumPlanMarkdown(plan)
+        const filtered = params.moduleName
+          ? plan.modules.filter((m) => m.name.includes(params.moduleName ?? ''))
+          : plan.modules
+        return buildResult(markdown, { title: plan.title, modules: filtered })
       }
       case 'check_graduation_requirements': {
         const res = await fetchJwPage(ses, '/xxwcqk/xxwcqkOnkcxz.do')

@@ -282,6 +282,20 @@ export const liveMessagesAtomFamily = atomFamily((sessionId: string) =>
 export const agentPendingPromptAtom = atom<AgentPendingPrompt | null>(null)
 
 /**
+ * 外部一次性注入输入框文本的请求（新手引导/演示用）。
+ * 由 CoachTour 等外部组件写入，当前会话的 AgentView 消费后立即置空——
+ * 复用 setInputContent 写草稿，确保「有内容」标记同步刷新，发送按钮即时可用。
+ * nonce 保证重复注入同一段文本也能各触发一次。
+ */
+export interface AgentComposerInjection {
+  sessionId: string
+  text: string
+  nonce: number
+}
+
+export const agentComposerInjectionAtom = atom<AgentComposerInjection | null>(null)
+
+/**
  * Agent 待发送文件列表 Map — 以 sessionId 为 key
  * 切换会话时保留各 session 自己的 pending files，与文字草稿语义一致
  */

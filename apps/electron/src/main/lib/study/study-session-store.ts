@@ -32,6 +32,7 @@ import {
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
 import { scheduleFsrs } from './fsrs-scheduler'
 import { estimateTheta, itemParamsForDifficulty } from './fim-estimator'
+import { shuffleQuiz } from './quiz-options'
 
 /** 存储结构版本（后续迁移用） */
 export const STUDY_SESSION_STORE_VERSION = 1
@@ -278,6 +279,35 @@ export function submitQuizAnswer(input: {
     answered.map((q) => ({ item: itemParamsForDifficulty(quiz.difficulty), correct: q.isCorrect === true })),
   )
 
+  ensureSessionDataDir(input.sessionId)
+  writeJsonFileAtomic(getStudyQuizzesPath(input.sessionId), {
+    version: STUDY_SESSION_STORE_VERSION,
+    quizzes: list,
+  } satisfies QuizzesFile)
+  return quiz
+}
+
+/**
+ * 重置测验：清空全部作答记录与判分状态（userSelection / isCorrect / score /
+ * estimatedTheta / completed），并**重新打乱题序与选项序**，支持同一套题反复练习。
+ *
+ * 每次重做都重新洗牌的两点理由：
+ *   1. 避免学生靠位置记忆作答（题序与选项序每轮都不同）；
+ *   2. 模型可能给出「正确答案集中在 A」的原始分布，重排可保证位置均匀。
+ * @returns 重置后的测验会话（未找到返回 null）。
+ */
+export function resetQuiz(input: { sessionId: string; quizId: string }): QuizSession | null {
+  const list = readQuizzes(input.sessionId)
+  const quiz = list.find((q) => q.id === input.quizId)
+  if (!quiz) return null
+  for (const question of quiz.questions) {
+    delete question.userSelection
+    delete question.isCorrect
+  }
+  quiz.questions = shuffleQuiz(quiz.questions)
+  quiz.score = 0
+  quiz.estimatedTheta = 0
+  quiz.completed = false
   ensureSessionDataDir(input.sessionId)
   writeJsonFileAtomic(getStudyQuizzesPath(input.sessionId), {
     version: STUDY_SESSION_STORE_VERSION,
