@@ -12,6 +12,7 @@ import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
 import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
 import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
+import { CSLAB_IPC_CHANNELS, type CsLabVerificationResult, type CsLabTelemetry, type CsLabNode, type CsLabLogEntry } from '@profer/shared'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -1584,6 +1585,15 @@ export interface ElectronAPI {
     readDomainCache: (name: CdutDomainCacheName) => Promise<unknown>
     /** 写入业务域离线缓存（网络成功后原子落盘） */
     writeDomainCache: (input: { name: CdutDomainCacheName; payload: unknown }) => Promise<{ success: boolean }>
+  }
+
+  // ===== CDUT Science (CSLab) 专区 =====
+  cslab: {
+    verifyKey: (key: string) => Promise<CsLabVerificationResult>
+    getTelemetry: () => Promise<CsLabTelemetry>
+    getNodes: () => Promise<CsLabNode[]>
+    getLogs: () => Promise<CsLabLogEntry[]>
+    ping: () => Promise<{ timestamp: number; latencyMs: number }>
   }
 
   // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
@@ -3753,6 +3763,15 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.READ_DOMAIN_CACHE, name),
     writeDomainCache: (input: { name: CdutDomainCacheName; payload: unknown }) =>
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.WRITE_DOMAIN_CACHE, input),
+  },
+
+  // ===== CDUT Science (CSLab) 专区 =====
+  cslab: {
+    verifyKey: (key: string) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VERIFY_KEY, key),
+    getTelemetry: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_TELEMETRY),
+    getNodes: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_NODES),
+    getLogs: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LOGS),
+    ping: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.PING),
   },
 
   // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
