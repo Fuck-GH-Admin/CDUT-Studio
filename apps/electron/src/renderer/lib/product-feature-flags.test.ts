@@ -13,12 +13,17 @@ import {
 
 const personal = { id: 'p1', name: 'profer', type: 'personal' as const }
 const personalArchived = { id: 'p2', name: 'blog管理', type: 'personal' as const, archived: true }
+const defaultWs = { id: 'default-ws', name: '默认工作区', slug: 'default', type: 'personal' as const }
 const team = { id: 't1', name: '持矢大队', type: 'team' as const }
 const teamArchived = { id: 't2', name: '已收纳团队', type: 'team' as const, archived: true }
 
 describe('工作区可见性', () => {
   test('活跃的个人工作区可见', () => {
     expect(isAgentWorkspaceVisible(personal)).toBe(true)
+  })
+
+  test('默认工作区（slug: default）在 UI 入口中不可见', () => {
+    expect(isAgentWorkspaceVisible(defaultWs)).toBe(false)
   })
 
   test('已收纳的工作区不可见', () => {
@@ -38,7 +43,7 @@ describe('工作区可见性', () => {
   })
 
   test('过滤后只保留活跃个人工作区，且保持原顺序', () => {
-    const visible = getVisibleAgentWorkspaces([personal, personalArchived, team, teamArchived])
+    const visible = getVisibleAgentWorkspaces([personal, defaultWs, personalArchived, team, teamArchived])
     expect(visible.map((w) => w.id)).toEqual(['p1'])
   })
 
@@ -72,6 +77,11 @@ describe('isAgentWorkspaceIdVisible', () => {
 
   test('团队工作区 id 不可见', () => {
     expect(isAgentWorkspaceIdVisible('t1', workspaces)).toBe(false)
+  })
+
+  test('默认工作区 id 视为可见（允许打开独立会话）', () => {
+    const listWithDefault = [...workspaces, defaultWs]
+    expect(isAgentWorkspaceIdVisible('default-ws', listWithDefault)).toBe(true)
   })
 
   test('列表中不存在的 id 视为可见，避免历史数据被误判', () => {

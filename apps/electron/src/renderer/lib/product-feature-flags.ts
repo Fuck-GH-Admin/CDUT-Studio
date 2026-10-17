@@ -16,23 +16,25 @@ export const TEAM_WORKSPACE_UI_ENABLED = false
  * - 团队工作区：被 `TEAM_WORKSPACE_UI_ENABLED` 统一隐藏
  */
 export function isAgentWorkspaceVisible(
-  workspace: Pick<AgentWorkspace, 'type'> & { archived?: boolean },
+  workspace: Pick<AgentWorkspace, 'type'> & { slug?: string; archived?: boolean },
 ): boolean {
   if (workspace.archived) return false
+  if (workspace.slug === 'default') return false
   return TEAM_WORKSPACE_UI_ENABLED || workspace.type !== 'team'
 }
 
 export function getVisibleAgentWorkspaces<
-  T extends Pick<AgentWorkspace, 'type'> & { archived?: boolean },
+  T extends Pick<AgentWorkspace, 'type'> & { slug?: string; archived?: boolean },
 >(workspaces: readonly T[]): T[] {
   return workspaces.filter((workspace) => isAgentWorkspaceVisible(workspace))
 }
 
 export function isAgentWorkspaceIdVisible(
   workspaceId: string | null | undefined,
-  workspaces: readonly (Pick<AgentWorkspace, 'id' | 'type'> & { archived?: boolean })[],
+  workspaces: readonly (Pick<AgentWorkspace, 'id' | 'type'> & { slug?: string; archived?: boolean })[],
 ): boolean {
   if (!workspaceId) return true
   const workspace = workspaces.find((item) => item.id === workspaceId)
+  if (workspace?.slug === 'default') return true
   return !workspace || isAgentWorkspaceVisible(workspace)
 }

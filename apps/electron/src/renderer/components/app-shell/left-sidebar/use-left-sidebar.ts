@@ -530,6 +530,10 @@ export function useLeftSidebar() {
       .catch(console.error)
   }, [currentWorkspaceSlug, mode, activeView, capabilitiesVersion])
 
+  const defaultWorkspaceId = React.useMemo(() => {
+    return workspaces.find((w) => w.slug === 'default')?.id
+  }, [workspaces])
+
   /** 置顶对话列表（仅活跃模式显示，排除 draft） */
   const pinnedConversations = React.useMemo(
     () => viewMode === 'active' ? conversations.filter((c) => c.pinned && !draftSessionIds.has(c.id)) : [],
@@ -544,12 +548,12 @@ export function useLeftSidebar() {
         s.pinned
         && !s.draft
         && !draftSessionIds.has(s.id)
-        && (!s.workspaceId || visibleWorkspaceIds.has(s.workspaceId))
+        && (!s.workspaceId || s.workspaceId === defaultWorkspaceId || visibleWorkspaceIds.has(s.workspaceId))
         && !hasPinnedVisibleParent(s, agentSessions)
       )
       return sortAgentSessionsByUpdatedAtDesc(filtered)
     },
-    [agentSessions, viewMode, draftSessionIds, visibleWorkspaceIds]
+    [agentSessions, viewMode, draftSessionIds, defaultWorkspaceId, visibleWorkspaceIds]
   )
 
   const pinnedAgentSessionTrees = React.useMemo<AgentSessionTreeItem[]>(
@@ -559,10 +563,10 @@ export function useLeftSidebar() {
         !child.archived
         && !child.draft
         && !draftSessionIds.has(child.id)
-        && (!child.workspaceId || visibleWorkspaceIds.has(child.workspaceId))
+        && (!child.workspaceId || child.workspaceId === defaultWorkspaceId || visibleWorkspaceIds.has(child.workspaceId))
       )),
     })),
-    [agentSessions, draftSessionIds, pinnedAgentSessions, visibleWorkspaceIds],
+    [agentSessions, draftSessionIds, pinnedAgentSessions, defaultWorkspaceId, visibleWorkspaceIds],
   )
 
   /** 对话按日期分组（根据 viewMode 过滤归档状态，排除 draft） */
@@ -1675,14 +1679,14 @@ export function useLeftSidebar() {
     return visibleWorkspaces
   }, [visibleWorkspaces, workspaceSortMode, agentSessions])
 
-  /** 全局独立会话（不指定工作区的会话，按置顶优先 + updatedAt 倒序） */
+  /** 全局独立会话（不指定工作区或属于默认沙箱工作区的会话，按置顶优先 + updatedAt 倒序） */
   const agentGlobalSessionTrees = React.useMemo<AgentSessionTreeItem[]>(
     () => {
       const globalSessions = agentSessions.filter((session) =>
         !session.archived
         && !session.draft
         && !draftSessionIds.has(session.id)
-        && !session.workspaceId
+        && (!session.workspaceId || session.workspaceId === defaultWorkspaceId)
         && !hasPinnedVisibleParent(session, agentSessions)
       )
 
@@ -1694,7 +1698,7 @@ export function useLeftSidebar() {
         return b.session.updatedAt - a.session.updatedAt
       })
     },
-    [agentSessions, draftSessionIds],
+    [agentSessions, draftSessionIds, defaultWorkspaceId],
   )
 
   /** Agent 项目分组（仅收纳属于各工作区的会话，置顶项在项目内部排在最前） */
@@ -1747,10 +1751,10 @@ export function useLeftSidebar() {
         session.archived
         && !session.draft
         && !draftSessionIds.has(session.id)
-        && (!session.workspaceId || visibleWorkspaceIds.has(session.workspaceId))
+        && (!session.workspaceId || session.workspaceId === defaultWorkspaceId || visibleWorkspaceIds.has(session.workspaceId))
       ))
     )),
-    [agentSessions, draftSessionIds, visibleWorkspaceIds]
+    [agentSessions, draftSessionIds, defaultWorkspaceId, visibleWorkspaceIds]
   )
 
   /** 归档 Agent 会话渐进切片：先渲染可见数量，空闲补全 */
