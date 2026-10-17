@@ -32,6 +32,11 @@ const FULLSCREEN_VIEWS: Array<{ path: string; minHosts: number; why: string }> =
     minHosts: 1,
     why: 'CDUT 专区全屏视图（含子页面宿主声明）',
   },
+  {
+    path: '../components/cdut-science/CdutScienceView.tsx',
+    minHosts: 1,
+    why: 'CDUT Science 全屏视图（自声明宿主隔离顶栏）',
+  },
 ]
 
 function readSource(relativePath: string): string {

@@ -145,6 +145,7 @@ import { isReadOnlyPreviewPathAllowed } from './lib/preview-path-policy'
 import { CHANGELOG_IPC_CHANNELS, type ChangelogEntry } from '@profer/shared'
 import { getChangelog } from './lib/changelog-service'
 import { registerReviewIpc } from './lib/review/review-ipc'
+import { registerCsLabIpc } from './lib/cslab'
 import { cdutAuthManager, CDUT_AUTH_PARTITION } from './lib/cdut/cdut-auth-manager'
 import { executeDomainTool } from './lib/cdut/cdut-jw-client'
 import { cdutDemoService } from './lib/cdut/cdut-demo/demo-service'
@@ -6094,6 +6095,9 @@ export function registerIpcHandlers(): void {
 
   // 注册内容审核专区 IPC 处理器
   registerReviewIpc()
+
+  // 注册 CDUT Science (CSLab) IPC 处理器
+  registerCsLabIpc()
 
   // ===== CDUT 专区特区账户 =====
   // 特区账户与通用账户物理隔离，独立持久化于 ~/.cdutai/cdut-account.json
