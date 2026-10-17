@@ -338,6 +338,25 @@ export type MessageGroup =
   | AssistantTurn
 
 /**
+ * 把游离的 result 回填给最近的 assistant turn。
+ *
+ * 压缩流程（尤其空闲态自动压缩）会在终态 result 之前插入 compacting / compact_boundary，
+ * 分组时上一轮 turn 已被 flush，result 无人认领，extractTurnUsage 取不到 usage，
+ * 该轮耗时与 token 用量徽章就消失了。这里仅跨越 system 分隔组，遇到用户输入即停止，
+ * 避免把手动 /compact 自身的 result 误挂到上一轮。
+ */
+function attachOrphanResult(groups: MessageGroup[], result: SDKMessage): void {
+  for (let i = groups.length - 1; i >= 0; i -= 1) {
+    const group = groups[i]!
+    if (group.type === 'user') return
+    if (group.type === 'assistant-turn') {
+      group.turnMessages.push(result)
+      return
+    }
+  }
+}
+
+/**
  * 将 SDKMessage 列表分组为可渲染的 Turn
  *
  * 规则：
@@ -425,11 +444,17 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
     } else {
       // result, tool_progress 等 → 归入当前 turn
       // prompt_suggestion 不属于对话转录，不入 turn，避免被当作文本附加到助手消息末尾
-      if ((msg as { type: string }).type === 'prompt_suggestion') {
+      const msgType = (msg as { type: string }).type
+      if (msgType === 'prompt_suggestion') {
         continue
       }
       if (currentTurn) {
         currentTurn.turnMessages.push(msg)
+      } else if (msgType === 'result') {
+        // 空闲态自动压缩会在终态 result 之前插入 compact_boundary，
+        // 使上一轮的 result 变成「无主」消息，导致该轮耗时/token 用量徽章消失。
+        // 这里把 result 回填给压缩分界之前的 assistant turn（遇到用户输入即放弃）。
+        attachOrphanResult(groups, msg)
       }
     }
   }
@@ -981,7 +1006,7 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
         const lastUuid = mainlineAssistants.length > 0
           ? mainlineAssistants[mainlineAssistants.length - 1]?.uuid
           : undefined
-        const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
+        const hasActions = !!(textContent || (onFork && lastUuid))
         const hasDuration = durationMs != null
         if (!hasDuration && !hasActions && !showStoppedBadge) return null
         return (
@@ -1010,11 +1035,6 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
                   </div>
                 )}
               </div>
-            )}
-            {onRewind && lastUuid && (
-              <MessageAction tooltip="回退到此处" onClick={() => onRewind(lastUuid)}>
-                <Undo2 className="size-3.5" />
-              </MessageAction>
             )}
             {showStoppedBadge && (
               <Tooltip>
@@ -1314,7 +1334,17 @@ function ScheduledRunBadge(): React.ReactElement {
   )
 }
 
-function UserInputMessage({ message, basePath, basePaths }: { message: SDKUserMessage; basePath?: string; basePaths?: string[] }): React.ReactElement {
+function UserInputMessage({
+  message,
+  basePath,
+  basePaths,
+  onRewind,
+}: {
+  message: SDKUserMessage
+  basePath?: string
+  basePaths?: string[]
+  onRewind?: (targetMessageUuid: string) => void
+}): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
   const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
@@ -1371,6 +1401,11 @@ function UserInputMessage({ message, basePath, basePaths }: { message: SDKUserMe
       {text && (
         <MessageActions className="pl-[46px] mt-0.5">
           <CopyButton content={text} copyAsPlainText />
+          {onRewind && message.uuid && (
+            <MessageAction tooltip="撤销本轮及之后对话并重新编辑" onClick={() => onRewind(message.uuid!)}>
+              <Undo2 className="size-3.5" />
+            </MessageAction>
+          )}
         </MessageActions>
       )}
     </Message>
@@ -1712,7 +1747,12 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
     }
     return (
       <div data-message-id={groupId} data-message-role="user">
-        <UserInputMessage message={group.message} basePath={basePath} basePaths={basePaths} />
+        <UserInputMessage
+          message={group.message}
+          basePath={basePath}
+          basePaths={basePaths}
+          onRewind={onRewind}
+        />
       </div>
     )
   }

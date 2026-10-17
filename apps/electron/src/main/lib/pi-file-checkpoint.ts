@@ -12,8 +12,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, normalize, parse, relative, resolve } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join, normalize, parse, relative, resolve, sep } from 'node:path'
+import { resolveConfigDir } from './config-paths'
 import {
   checkpointRef,
   commitTree,
@@ -752,22 +753,48 @@ function createCopyCheckpoint(params: {
   return { path, engine: 'copy', files, skipped, partial: params.walked.partial, limits: { ...params.limits } }
 }
 
+/**
+ * 校验目标路径是否为受保护的合法 Agent 会话沙箱目录。
+ * 绝对拒止：用户主目录、驱动器盘符根目录、应用项目源码目录（process.cwd() 及其父子路径）。
+ * 生产环境严格限制在 ~/.cdutai[-dev]/agent-workspaces/ 下；测试环境允许系统临时目录。
+ */
+export function isAgentWorkspaceSandbox(dir?: string): boolean {
+  if (!dir || typeof dir !== 'string') return false
+  const norm = normalize(resolve(dir))
+  const home = normalize(resolve(homedir()))
+  const root = normalize(resolve(parse(norm).root))
+  const appDir = normalize(resolve(process.cwd()))
+
+  // 1. 绝对拒止：用户主目录、系统盘符根目录、应用进程启动目录
+  if (norm === home || norm === root || norm === appDir) return false
+  if (norm.startsWith(appDir + sep)) return false // 禁止进入项目源码目录
+
+  // 2. 正常运行时校验：必须严格位于 agent-workspaces 之下
+  const sandboxRoot = normalize(resolve(resolveConfigDir(), 'agent-workspaces'))
+  if (norm === sandboxRoot || norm.startsWith(sandboxRoot + sep)) return true
+
+  // 3. 测试环境容错：仅当测试执行且路径位于操作系统临时目录时允许
+  if (process.env.NODE_ENV === 'test' || process.env.BUN_TEST === '1') {
+    const tmp = normalize(resolve(tmpdir()))
+    if (norm === tmp || norm.startsWith(tmp + sep)) return true
+  }
+
+  return false
+}
+
 export function createPiFileCheckpoint(
   sessionId: string,
   cwd: string,
   rootDir: string,
   options: PiCheckpointOptions = {},
 ): PiFileCheckpoint {
-  const normCwd = normalize(resolve(cwd))
-  const normHome = normalize(resolve(homedir()))
-  const isRoot = normCwd === normalize(resolve(parse(normCwd).root))
-  if (normCwd === normHome || isRoot) {
-    console.warn(`[Pi 检查点] 目标路径为系统根目录或用户主目录 (${cwd})，安全跳过快照`)
+  if (!isAgentWorkspaceSandbox(cwd)) {
+    console.warn(`[Pi 检查点] 目标路径不是合法沙箱目录 (${cwd})，安全跳过快照`)
     return {
       path: '',
       engine: 'copy',
       files: [],
-      skipped: [{ path: '.', kind: 'dir', reason: '系统敏感目录拒绝快照' }],
+      skipped: [{ path: '.', kind: 'dir', reason: '非沙箱目录拒绝快照' }],
       partial: true,
       limits: limitsFrom(options),
     }
@@ -822,6 +849,9 @@ export function loadPiFileCheckpoint(path: string): PiFileCheckpoint {
 
 export function restorePiFileCheckpoint(checkpoint: PiFileCheckpoint, cwd: string): PiRestoreResult {
   if (!existsSync(checkpoint.path)) throw new Error('Pi 文件检查点不存在，无法恢复')
+  if (!isAgentWorkspaceSandbox(cwd)) {
+    throw new Error(`[安全拦截] 目标目录 (${cwd}) 不是合法的会话沙箱目录，拒绝执行文件恢复以防破坏宿主系统`)
+  }
   return checkpoint.engine === 'git' && checkpoint.git
     ? restoreGitCheckpoint(checkpoint, cwd)
     : restoreCopyCheckpoint(checkpoint, cwd)
@@ -872,7 +902,10 @@ function restoreGitCheckpoint(checkpoint: PiFileCheckpoint, cwd: string): PiRest
   const existedAtBaseline = (path: string): boolean => protection.previous.has(path) || protection.isProtected(path)
   const diff = diffResult.diff
 
-  if (!checkpoint.partial) {
+  // 关键防线：基线必须完整、当前工作区扫描必须完整且未发生截断/跳过，才允许清理新增文件；
+  // 一旦当前遍历因上限被截断（current.partial），绝对禁止删除新增文件，防止将未被遍历到的文件误判为新增！
+  const canSafelyDelete = !checkpoint.partial && !current.partial && current.skipped.length === 0
+  if (canSafelyDelete) {
     for (const path of diff.added) {
       if (existedAtBaseline(path)) {
         skipped.push({ path, kind: 'file', reason: '基线中已存在但未能快照，保留不删' })
@@ -885,6 +918,8 @@ function restoreGitCheckpoint(checkpoint: PiFileCheckpoint, cwd: string): PiRest
         skipped.push({ path, kind: 'file', reason: describeError(error) })
       }
     }
+  } else if (diff.added.length > 0) {
+    console.warn(`[Pi 检查点] 工作区扫描不完整或存在截断 (current.partial=${current.partial}, skipped=${current.skipped.length})，已安全跳过 ${diff.added.length} 项新增文件清理，防止误删`)
   }
 
   const restoreTargets = [...new Set([...diff.modified, ...diff.deleted])]
@@ -933,7 +968,9 @@ function restoreCopyCheckpoint(checkpoint: PiFileCheckpoint, cwd: string): PiRes
 
   const changed: string[] = []
   const skipped = mergeSkipped(checkpoint.skipped, current.skipped)
-  if (!checkpoint.partial) {
+  // 复制引擎同样严格执行截断熔断保护
+  const canSafelyDelete = !checkpoint.partial && !current.partial && current.skipped.length === 0
+  if (canSafelyDelete) {
     for (const file of current.files) {
       if (isProtected(file)) continue
       try {
@@ -943,6 +980,8 @@ function restoreCopyCheckpoint(checkpoint: PiFileCheckpoint, cwd: string): PiRes
         skipped.push({ path: file, kind: 'file', reason: describeError(error) })
       }
     }
+  } else if (current.files.length > 0) {
+    console.warn(`[Pi 检查点] 复制引擎工作区扫描不完整或存在截断 (current.partial=${current.partial})，已安全跳过新增文件清理`)
   }
 
   for (const file of checkpoint.files) {

@@ -1533,18 +1533,22 @@ export interface ForkSessionInput {
   explorationSourceLabel?: string
 }
 
-/** 快照回退输入（同一会话内回退到指定点） */
+/** 快照回退/撤销输入（同一会话内撤销本轮及之后所有轮次） */
 export interface RewindSessionInput {
   /** Profer 会话 ID */
   sessionId: string
-  /** 回退到哪条 assistant message（inclusive，截断该消息之后的一切） */
-  assistantMessageUuid: string
+  /** 目标消息 UUID（优先传入当前轮次的 userMessageUuid，亦兼容 assistantMessageUuid） */
+  targetMessageUuid?: string
+  /** 兼容历史入参名 */
+  assistantMessageUuid?: string
 }
 
-/** 快照回退结果 */
+/** 快照回退/撤销结果 */
 export interface RewindSessionResult {
   /** 截断后剩余的消息数 */
   remainingMessages: number
+  /** 被撤销的用户提问文本（供前端回填到输入框供编辑重试） */
+  undoneUserText?: string
   /** 文件恢复结果（enableFileCheckpointing 启用时可用） */
   fileRewind?: {
     canRewind: boolean

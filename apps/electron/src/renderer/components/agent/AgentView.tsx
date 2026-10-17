@@ -2959,8 +2959,8 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
   const [graphDialogOpen, setGraphDialogOpen] = React.useState(false)
   const [graphRefreshVersion, setGraphRefreshVersion] = React.useState(0)
 
-  const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
-    setRewindTargetUuid(assistantMessageUuid)
+  const handleRewindRequest = React.useCallback((targetMessageUuid: string): void => {
+    setRewindTargetUuid(targetMessageUuid)
   }, [])
 
   const handleRewindConfirm = React.useCallback(async (): Promise<void> => {
@@ -2971,6 +2971,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     try {
       const result = await window.electronAPI.rewindSession({
         sessionId,
+        targetMessageUuid: targetUuid,
         assistantMessageUuid: targetUuid,
       })
 
@@ -2986,40 +2987,51 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
         const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
       })
 
+      // 自动回填撤销的用户提问文本并聚焦
+      if (result.undoneUserText !== undefined) {
+        setInputContent(result.undoneUserText)
+        setInputHtmlContent('')
+        setTimeout(() => {
+          const conversation = document.querySelector<HTMLElement>(`[data-agent-session-id="${sessionId}"]`)
+          conversation?.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus()
+        }, 50)
+      }
+
       if (result.fileRewind?.canRewind) {
         const fileCount = result.fileRewind.filesChanged?.length ?? 0
-        // 被浏览器/数据库等进程占用的文件无法进入快照，回退时必须明确告知，
-        // 否则用户会误以为工作区已完全回到该时刻
         const skippedCount = result.fileRewind.skippedFiles?.length ?? 0
         const incomplete = result.fileRewind.incomplete === true
         if (skippedCount > 0 || incomplete) {
           const details = [
-            `${fileCount} 个文件已恢复`,
-            ...(skippedCount > 0 ? [`${skippedCount} 个文件被占用或过大而未回退`] : []),
+            `${fileCount} 个文件已恢复到提问前`,
+            ...(skippedCount > 0 ? [`${skippedCount} 个文件被占用或过大而未恢复`] : []),
             ...(incomplete ? ['基线不完整，未确认的新增文件已保留'] : []),
+            ...(result.undoneUserText ? ['提问已回填到输入框'] : []),
           ]
-          toast.warning('已回退到此处', {
+          toast.warning('已撤销本轮对话', {
             description: details.join('；'),
           })
         } else {
-          toast.success('已回退到此处', {
-            description: fileCount > 0 ? `${fileCount} 个文件已恢复` : '文件无变化',
+          toast.success('已撤销本轮对话', {
+            description: fileCount > 0 ? `${fileCount} 个文件已恢复至提问前，内容已回填至输入框` : '已恢复至提问前，内容已回填至输入框',
           })
         }
       } else if (result.fileRewind?.error) {
-        toast.warning('已回退对话', {
-          description: `文件恢复不可用：${result.fileRewind.error}`,
+        toast.warning('已撤销本轮对话', {
+          description: `文件恢复不可用：${result.fileRewind.error}。提问已回填至输入框。`,
         })
       } else {
-        toast.success('已回退到此处')
+        toast.success('已撤销本轮对话', {
+          description: '提问已回填至输入框',
+        })
       }
     } catch (error) {
-      console.error('[AgentView] 回退失败:', error)
-      toast.error('回退失败', {
+      console.error('[AgentView] 撤销失败:', error)
+      toast.error('撤销失败', {
         description: error instanceof Error ? error.message : '未知错误',
       })
     }
-  }, [rewindTargetUuid, sessionId, store])
+  }, [rewindTargetUuid, sessionId, store, setInputContent, setInputHtmlContent])
 
   // 父会话与右侧探索分支会同时挂载；快捷键只归当前可见工作面，避免一次停止两个并行 run。
   React.useEffect(() => {
@@ -3513,18 +3525,16 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       </DialogContent>
     </Dialog>
 
-    {/* 回退确认弹窗 */}
+    {/* 撤销本轮确认弹窗 */}
     <AlertDialog
       open={rewindTargetUuid !== null}
       onOpenChange={(v) => { if (!v) setRewindTargetUuid(null) }}
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>确认回退</AlertDialogTitle>
+          <AlertDialogTitle>确认撤销本轮对话</AlertDialogTitle>
           <AlertDialogDescription>
-            {sessionAgentRuntime === 'pi'
-              ? '回退将截断该消息之后的所有对话（Pi 会话不支持文件恢复，工作区文件不会被改动）。此操作不可撤销，确定要回退吗？'
-              : '回退将截断该消息之后的所有对话，并恢复文件到该时刻的状态。此操作不可撤销，确定要回退吗？'}
+            撤销将删除本轮提问及其之后的所有对话，并恢复工作区文件至本轮发起前的状态。被撤销的提问内容将自动回填至输入框。此操作不可逆，确定要撤销吗？
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -3533,7 +3543,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
             onClick={handleRewindConfirm}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            回退
+            撤销本轮
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

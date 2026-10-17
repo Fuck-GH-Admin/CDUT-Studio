@@ -34,11 +34,11 @@ export function CdutSubViewContainer({ title, onClose, actions, leftAction, chil
         className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-card/80 px-5 py-3 titlebar-no-drag backdrop-blur-sm"
         style={isWindows ? { paddingRight: resolveWindowControlsRightInset(isWindows) + 12 } : undefined}
       >
-        {/* 最左侧：微缩版成都理工大学 Logo */}
+        {/* 最左侧：成都理工大学 Logo（保持清晰可辨的尺寸） */}
         <img
           src={cdutCeLogo}
           alt="成都理工大学"
-          className="h-6 w-auto shrink-0 object-contain dark:brightness-125"
+          className="h-10 w-auto shrink-0 object-contain dark:brightness-125"
         />
         {/* 校徽右侧操作插槽（保持 titlebar-no-drag 安全） */}
         {leftAction ? <div className="flex shrink-0 items-center">{leftAction}</div> : null}

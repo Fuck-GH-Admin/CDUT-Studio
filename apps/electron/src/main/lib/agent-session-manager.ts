@@ -25,7 +25,7 @@ import {
   getStudyMaterialsRootDir,
   getStudySessionsRootDir,
 } from './config-paths'
-import { getAgentWorkspace } from './agent-workspace-manager'
+import { getAgentWorkspace, ensureDefaultWorkspace } from './agent-workspace-manager'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
 import { copyForkFile, buildForkProjectKey, renameForkFile, removeForkPath } from './fork-file-ops'
@@ -73,7 +73,7 @@ import {
   readSessionBlobRefs,
 } from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
-import { isUserInputMessage } from '@profer/session-core'
+import { isUserInputMessage, extractUserText } from '@profer/session-core'
 
 const activeForkSessionIds = new Set<string>()
 let agentSessionActiveChecker: ((sessionId: string) => boolean) | undefined
@@ -436,8 +436,10 @@ export function createAgentSession(
   const index = readIndex()
   const now = Date.now()
 
-  // 预设工作区化：按会话工作区解析（未指定/不存在时仅内置预设可用）
-  const presetWorkspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
+  // 预设与沙箱工作区化：未指定工作区时自动绑定默认沙箱工作区（杜绝无工作区漂移）
+  const effectiveWorkspace = workspaceId ? getAgentWorkspace(workspaceId) : ensureDefaultWorkspace()
+  const effectiveWorkspaceId = effectiveWorkspace?.id ?? workspaceId
+  const presetWorkspaceSlug = effectiveWorkspace?.slug
 
   // 先统一计算规范化后的 ID，再用同一个 ID 构建稳定引用。
   // 不能把原始 presetId 传给 presetReferenceForId：旧会话/快捷入口未传
@@ -453,7 +455,7 @@ export function createAgentSession(
     title: title || '新 Agent 会话',
     channelId,
     modelId,
-    workspaceId,
+    workspaceId: effectiveWorkspaceId,
     agentRuntime: normalizeAgentRuntime(agentRuntime),
     ...(effectivePresetId ? { presetId: effectivePresetId, presetReference: presetReferenceForId(presetWorkspaceSlug, effectivePresetId) } : {}),
     ...(draft ? { draft: true } : {}),
@@ -1919,78 +1921,130 @@ function extractTextFromSDKMessage(message: SDKMessage): string {
  * 不能只改内存 leaf，必须**物理截断 JSONL**：保留 header + root→目标 entry
  * 的主路径（getBranch），丢弃其余 entry（含未激活分支与目标之后的 turn）。
  * 截断后下一次 resume 用同一个 piSessionFile/sdkSessionId，SDK 从目标处继续。
+ */
+function cleanUserRequestText(raw: string): string {
+  const match = raw.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/)
+  if (match && typeof match[1] === 'string') return match[1].trim()
+  return raw
+}
+
+/**
+ * 撤销本轮及以后的所有对话（及其附属的文件更改）
  *
- * Pi 没有 Claude SDK 的 file-history-snapshot，无法恢复文件，返回 canRewind=false。
+ * 目标定义：
+ * 从指定的目标消息所在轮次（以用户提问为起点）开始，彻底撤销本轮及之后的所有轮次。
+ * 1. 恢复文件至本轮发起前的干净检查点；
+ * 2. 物理截断 Pi session，丢弃本轮及后续 entries；
+ * 3. 截断展示 JSONL（使用 truncateSDKMessagesBefore 排除本轮提问及其后所有消息）；
+ * 4. 提取被撤销的用户提问文本（undoneUserText），以便前端自动回填输入框。
  */
 export async function rewindPiSession(
   sessionId: string,
-  assistantMessageUuid: string,
+  targetMessageUuid: string,
   sessionMeta: AgentSessionMeta,
 ): Promise<RewindSessionResult> {
   const piSessionFile = sessionMeta.piSessionFile
   if (!piSessionFile || !existsSync(piSessionFile)) {
-    throw new Error('未找到 Pi session artifact，无法回退')
+    throw new Error('未找到 Pi session artifact，无法撤销')
   }
 
   const bindings = sessionMeta.piEntryBindings ?? {}
+  const messages = getAgentSessionSDKMessages(sessionId)
+  const targetIndex = messages.findIndex((message) => getStoredMessageUuid(message) === targetMessageUuid)
+  if (targetIndex < 0) {
+    throw new Error(`撤销失败：未找到目标消息 ${targetMessageUuid}`)
+  }
 
-  // 1. 定位目标 entry：优先直接命中；未命中（子代理执行过程/已被清理/未完成消息）时
-  //    向前找最近一条有 Pi entry 映射的 assistant 消息作为截断点，与分叉逻辑保持一致。
-  let cutMessageUuid = assistantMessageUuid
-  let entryId = bindings[assistantMessageUuid]
-  if (!entryId) {
-    const messages = getAgentSessionSDKMessages(sessionId)
-    const targetIndex = messages.findIndex((message) => getStoredMessageUuid(message) === assistantMessageUuid)
-    if (targetIndex < 0) {
-      throw new Error('回退失败：未找到目标消息')
-    }
-    for (let index = targetIndex; index >= 0; index -= 1) {
-      const message = messages[index]
-      const uuid = message ? getStoredMessageUuid(message) : undefined
-      const mappedEntryId = uuid ? bindings[uuid] : undefined
-      if (mappedEntryId) {
-        entryId = mappedEntryId
-        cutMessageUuid = uuid!
+  // 1. 定位本轮对话的用户提问消息（User Message）
+  let userMessageIndex = targetIndex
+  const targetMsg = messages[targetIndex]
+  if (targetMsg && isUserInputMessage(targetMsg as SDKUserMessage)) {
+    userMessageIndex = targetIndex
+  } else {
+    // 若传入的是 assistant 或 system 消息，向前回溯找到该 turn 发起的 user 消息
+    for (let i = targetIndex - 1; i >= 0; i--) {
+      const prevMsg = messages[i]
+      if (prevMsg && isUserInputMessage(prevMsg as SDKUserMessage)) {
+        userMessageIndex = i
         break
       }
     }
   }
-  if (!entryId) {
-    throw new Error('该 Pi 历史消息尚无可用的 entry ID 映射，无法安全回退；请在当前版本中继续一次 Pi 对话后再试')
+
+  const userMessage = messages[userMessageIndex]
+  const userMessageUuid = (userMessage ? getStoredMessageUuid(userMessage) : undefined) || targetMessageUuid
+
+  // 2. 提取被撤销的用户输入文本
+  let undoneUserText: string | undefined
+  if (userMessage && isUserInputMessage(userMessage as SDKUserMessage)) {
+    const raw = extractUserText(userMessage as SDKUserMessage) ?? ''
+    undoneUserText = cleanUserRequestText(raw)
   }
 
-  // 2. 先验证目标 Pi entry，并生成准备原子替换的 transcript 内容。
-  // 文件恢复必须等到这里成功之后再开始，避免 transcript 已损坏时只改了工作区。
-  let fileRewind: RewindSessionResult['fileRewind']
-  const checkpointPath = sessionMeta.piFileCheckpoints?.[entryId]
+  // 3. 寻找发起本轮提问前的文件检查点
+  // 在本轮对话中（从 userMessageIndex 往后直到下一个用户提问或会话结束），
+  // 产生的 assistant 消息绑定的 checkpoint 就是在提问发出瞬间创建的快照（piTurnCheckpoint）。
+  let checkpointPath: string | undefined
+  for (let i = userMessageIndex; i < messages.length; i++) {
+    const msg = messages[i]
+    if (!msg) continue
+    const uuid = getStoredMessageUuid(msg)
+    const entryId = uuid ? bindings[uuid] : undefined
+    if (entryId && sessionMeta.piFileCheckpoints?.[entryId]) {
+      checkpointPath = sessionMeta.piFileCheckpoints[entryId]
+      break
+    }
+  }
 
-  // 3. 物理截断 Pi session 文件：header + root→目标 entry 的主路径
+  // 4. 定位 Pi session 中需要保留的最后一条 entry（即本轮提问之前的最后一条有效 entry）
+  let lastKeptEntryId: string | undefined
+  for (let i = userMessageIndex - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (!msg) continue
+    const uuid = getStoredMessageUuid(msg)
+    const mappedEntryId = uuid ? bindings[uuid] : undefined
+    if (mappedEntryId) {
+      lastKeptEntryId = mappedEntryId
+      break
+    }
+  }
+
+  // 5. 物理截断 Pi session 文件：保留 header + root→lastKeptEntryId 的主路径；
+  // 若 lastKeptEntryId 不存在（撤销的是会话第一轮），则保留 entries 为空，只保留 header
   const sdk = await import('@earendil-works/pi-coding-agent')
   const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
   const workspace = sessionMeta.workspaceId ? getAgentWorkspace(sessionMeta.workspaceId) : undefined
   const sourceDir = workspace ? getAgentSessionWorkspacePath(workspace.slug, sessionMeta.id) : undefined
   const manager = sdk.SessionManager.open(piSessionFile, sessionDir, sourceDir)
-  if (!manager.getEntry(entryId)) {
-    throw new Error('Pi session 中找不到该 entry，无法回退')
+
+  let keptEntries: ReturnType<typeof manager.getBranch> = []
+  if (lastKeptEntryId) {
+    if (!manager.getEntry(lastKeptEntryId)) {
+      throw new Error(`Pi session 中找不到前序 entry (${lastKeptEntryId})，无法安全撤销`)
+    }
+    keptEntries = manager.getBranch(lastKeptEntryId)
   }
+
   const header = manager.getHeader()
-  const keptEntries = manager.getBranch(entryId)
   const newContent =
     [header, ...keptEntries]
       .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .map((entry) => JSON.stringify(entry))
       .join('\n') + '\n'
 
-  // 先恢复文件。旧会话没有 checkpoint 时仍允许对话回退并给出明确降级；
-  // 只有当前状态/tree 无法安全比较时才必须取消整个 rewind，避免对话已截断而文件未知。
+  // 6. 执行工作区文件快照回滚
+  let fileRewind: RewindSessionResult['fileRewind']
   if (!checkpointPath) {
-    fileRewind = { canRewind: false, error: '该 Pi turn 没有文件检查点（旧会话或检查点创建失败）' }
+    fileRewind = { canRewind: false, error: '该轮对话没有文件检查点（可能未发生文件修改或为早期会话）' }
   } else {
     let restored: ReturnType<typeof restorePiFileCheckpoint> | undefined
     try {
-      const workspace = sessionMeta.workspaceId ? getAgentWorkspace(sessionMeta.workspaceId) : undefined
-      const cwd = workspace ? getAgentSessionWorkspacePath(workspace.slug, sessionId) : process.cwd()
-      restored = restorePiFileCheckpoint(loadPiFileCheckpoint(checkpointPath), cwd)
+      if (!workspace) {
+        fileRewind = { canRewind: false, error: '该会话没有工作区，已拒绝文件回退' }
+      } else {
+        const cwd = getAgentSessionWorkspacePath(workspace.slug, sessionId)
+        restored = restorePiFileCheckpoint(loadPiFileCheckpoint(checkpointPath), cwd)
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(`[Agent 会话] Pi 文件恢复不可用，将只回退对话: ${message}`)
@@ -2000,7 +2054,7 @@ export async function rewindPiSession(
       if (restored.failed) {
         const message = restored.skipped.map((item) => `${item.path}: ${item.reason}`).join('；') || '无法安全恢复文件检查点'
         console.warn(`[Agent 会话] Pi 文件恢复不安全，已保留对话历史: ${message}`)
-        throw new Error(`文件恢复不可用，已取消对话回退: ${message}`)
+        throw new Error(`文件恢复不可用，已取消撤销操作: ${message}`)
       }
       fileRewind = {
         canRewind: true,
@@ -2011,7 +2065,7 @@ export async function rewindPiSession(
     }
   }
 
-  // 先写临时文件再原子替换，避免回退过程中进程退出留下半截 Pi transcript。
+  // 7. 先写临时文件再原子替换，避免回退过程中进程退出留下半截 Pi transcript。
   const tempSessionFile = `${piSessionFile}.rewind-${process.pid}-${Date.now()}.tmp`
   try {
     writeFileSync(tempSessionFile, newContent, 'utf-8')
@@ -2019,13 +2073,12 @@ export async function rewindPiSession(
   } finally {
     if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile)
   }
-  console.log(`[Agent 会话] Pi session 已截断: sessionId=${sessionId}, 保留 ${keptEntries.length} 条 entry (entry=${entryId})`)
+  console.log(`[Agent 会话] Pi session 已截断: sessionId=${sessionId}, 保留 ${keptEntries.length} 条 entry`)
 
-  // 4. 截断 Profer 展示 JSONL（与 Pi 文件保持一致）
-  const kept = truncateSDKMessages(sessionId, cutMessageUuid)
+  // 8. 截断展示 JSONL 消息（严格排除目标 User 消息及其后的所有内容）
+  const kept = truncateSDKMessagesBefore(sessionId, userMessageUuid)
 
-  // 4. 清理 piEntryBindings：删除已截断 entry 的映射，避免残留脏映射；
-  //    Pi 不消费 resumeAtMessageUuid，清掉历史遗留以防切回 Claude 时误分支。
+  // 9. 清理 piEntryBindings 和 piFileCheckpoints
   const keptEntryIds = new Set(keptEntries.map((entry) => entry.id))
   const keptBindings = Object.fromEntries(
     Object.entries(bindings).filter(([, mappedEntryId]) => keptEntryIds.has(mappedEntryId)),
@@ -2033,8 +2086,7 @@ export async function rewindPiSession(
   const keptCheckpoints = Object.fromEntries(
     Object.entries(sessionMeta.piFileCheckpoints ?? {}).filter(([mappedEntryId]) => keptEntryIds.has(mappedEntryId)),
   )
-  // 被截断 turn 的检查点已无人引用，立即回收（每轮一份基线，不回收会持续占盘）。
-  // 分叉会话可能仍在引用本会话的检查点，必须把它们视为“已绑定”，否则分叉侧的回退点会失效。
+
   try {
     const keepPaths = new Set(Object.values(keptCheckpoints))
     for (const foreign of collectForeignCheckpointPaths(sessionId)) keepPaths.add(foreign)
@@ -2042,6 +2094,7 @@ export async function rewindPiSession(
   } catch (error) {
     console.warn('[Agent 会话] 回收 Pi 文件检查点失败:', error)
   }
+
   updateAgentSessionMeta(sessionId, {
     piEntryBindings: keptBindings,
     piFileCheckpoints: keptCheckpoints,
@@ -2050,6 +2103,7 @@ export async function rewindPiSession(
 
   return {
     remainingMessages: kept.length,
+    undoneUserText,
     fileRewind,
   }
 }
@@ -2312,6 +2366,32 @@ function rewritePathsInSDKMessage(msg: SDKMessage, sourceDir: string, destDir: s
     console.warn(`[Agent 会话] 改写 SDKMessage 路径失败，使用原消息:`, err)
     return msg
   }
+}
+
+/**
+ * 截断展示 JSONL 消息（排除目标消息及其之后的所有消息）。
+ * 适用于「撤销本轮」操作：将目标用户提问及之后的所有回复全部从消息流中移除。
+ *
+ * @param id 会话 ID
+ * @param beforeUuid 截断起点消息 UUID（不包含此条消息）
+ * @returns 截断后保留的消息列表
+ */
+export function truncateSDKMessagesBefore(id: string, beforeUuid: string): SDKMessage[] {
+  const messages = getAgentSessionSDKMessages(id)
+  const cutIndex = messages.findIndex(
+    (m) => 'uuid' in m && (m as { uuid?: string }).uuid === beforeUuid,
+  )
+  if (cutIndex < 0) {
+    throw new Error(`[Agent 会话] 截断失败: 未找到 uuid=${beforeUuid}, sessionId=${id}`)
+  }
+  const kept = messages.slice(0, cutIndex)
+
+  const filePath = getAgentSessionMessagesPath(id)
+  const content = kept.map((m) => JSON.stringify(m)).join('\n') + (kept.length > 0 ? '\n' : '')
+  writeFileSync(filePath, content, 'utf-8')
+
+  console.log(`[Agent 会话] 消息已截断（排除本轮及之后）: sessionId=${id}, 保留 ${kept.length}/${messages.length} 条`)
+  return kept
 }
 
 /**
