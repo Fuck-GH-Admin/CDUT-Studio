@@ -8,7 +8,7 @@
  * 照搬 conversation-manager.ts 的模式。
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, createWriteStream, statSync, type WriteStream } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, createWriteStream, statSync, type WriteStream, type Dirent } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
@@ -1941,8 +1941,12 @@ function cleanUserRequestText(raw: string): string {
 export async function rewindPiSession(
   sessionId: string,
   targetMessageUuid: string,
-  sessionMeta: AgentSessionMeta,
+  meta?: AgentSessionMeta,
 ): Promise<RewindSessionResult> {
+  const sessionMeta = meta ?? getAgentSessionMeta(sessionId)
+  if (!sessionMeta) {
+    throw new Error(`未找到会话元数据: ${sessionId}`)
+  }
   const piSessionFile = sessionMeta.piSessionFile
   if (!piSessionFile || !existsSync(piSessionFile)) {
     throw new Error('未找到 Pi session artifact，无法撤销')
@@ -1998,39 +2002,128 @@ export async function rewindPiSession(
 
   // 4. 定位 Pi session 中需要保留的最后一条 entry（即本轮提问之前的最后一条有效 entry）
   let lastKeptEntryId: string | undefined
+  // 收集本轮提问之前所有 assistant/user 消息绑定的候选 entryId（按倒序排，优先最近一条）
+  const candidateEntryIds: string[] = []
   for (let i = userMessageIndex - 1; i >= 0; i--) {
     const msg = messages[i]
     if (!msg) continue
     const uuid = getStoredMessageUuid(msg)
     const mappedEntryId = uuid ? bindings[uuid] : undefined
-    if (mappedEntryId) {
-      lastKeptEntryId = mappedEntryId
-      break
+    if (mappedEntryId && !candidateEntryIds.includes(mappedEntryId)) {
+      candidateEntryIds.push(mappedEntryId)
     }
+  }
+  if (candidateEntryIds.length > 0) {
+    lastKeptEntryId = candidateEntryIds[0]
   }
 
   // 5. 物理截断 Pi session 文件：保留 header + root→lastKeptEntryId 的主路径；
   // 若 lastKeptEntryId 不存在（撤销的是会话第一轮），则保留 entries 为空，只保留 header
   const sdk = await import('@earendil-works/pi-coding-agent')
+  type PiSessionManagerInstance = ReturnType<typeof sdk.SessionManager.open>
   const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
   const workspace = sessionMeta.workspaceId ? getAgentWorkspace(sessionMeta.workspaceId) : undefined
   const sourceDir = workspace ? getAgentSessionWorkspacePath(workspace.slug, sessionMeta.id) : undefined
-  const manager = sdk.SessionManager.open(piSessionFile, sessionDir, sourceDir)
 
-  let keptEntries: ReturnType<typeof manager.getBranch> = []
-  if (lastKeptEntryId) {
-    if (!manager.getEntry(lastKeptEntryId)) {
-      throw new Error(`Pi session 中找不到前序 entry (${lastKeptEntryId})，无法安全撤销`)
+  // 查找包含指定 entry 的 Pi 会话文件
+  const findSessionFileContainingEntry = (entryId: string): { file: string; manager: PiSessionManagerInstance } | null => {
+    // 优先尝试当前绑定的主文件
+    try {
+      if (existsSync(piSessionFile)) {
+        const mgr = sdk.SessionManager.open(piSessionFile, sessionDir, sourceDir)
+        if (mgr.getEntry(entryId)) {
+          return { file: piSessionFile, manager: mgr }
+        }
+      }
+    } catch {
+      // 忽略打开失败
     }
-    keptEntries = manager.getBranch(lastKeptEntryId)
+
+    // 若主文件没有该 entry（如因 focus turn 写入了其他 session 文件），扫描 sessions/pi 目录下的相关文件
+    if (existsSync(sessionDir)) {
+      try {
+        const files = readdirSync(sessionDir)
+        for (const f of files) {
+          if (!f.endsWith('.jsonl')) continue
+          const fullPath = join(sessionDir, f)
+          if (fullPath === piSessionFile) continue
+          try {
+            const content = readFileSync(fullPath, 'utf-8')
+            if (content.includes(`"id":"${entryId}"`)) {
+              const mgr = sdk.SessionManager.open(fullPath, sessionDir, sourceDir)
+              if (mgr.getEntry(entryId)) {
+                return { file: fullPath, manager: mgr }
+              }
+            }
+          } catch {
+            // 忽略读取单个文件失败
+          }
+        }
+      } catch (err) {
+        console.warn(`[Agent 会话] 扫描候选 Pi session 文件异常:`, err)
+      }
+    }
+    return null
   }
 
-  const header = manager.getHeader()
-  const newContent =
-    [header, ...keptEntries]
-      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-      .map((entry) => JSON.stringify(entry))
-      .join('\n') + '\n'
+  let activePiSessionFile = piSessionFile
+  let manager: PiSessionManagerInstance | undefined
+  let validKeptEntryId: string | undefined
+
+  if (lastKeptEntryId) {
+    // 先检查首选 entry
+    const match = findSessionFileContainingEntry(lastKeptEntryId)
+    if (match) {
+      activePiSessionFile = match.file
+      manager = match.manager
+      validKeptEntryId = lastKeptEntryId
+    } else {
+      // 若首选 entry 丢失（例如被聚焦执行分支隔离），向前回溯寻找最近一条仍存在的 entry
+      for (let i = 1; i < candidateEntryIds.length; i++) {
+        const fallbackId = candidateEntryIds[i]
+        if (!fallbackId) continue
+        const fallbackMatch = findSessionFileContainingEntry(fallbackId)
+        if (fallbackMatch) {
+          activePiSessionFile = fallbackMatch.file
+          manager = fallbackMatch.manager
+          validKeptEntryId = fallbackId
+          console.warn(`[Agent 会话] 目标 entry (${lastKeptEntryId}) 未找到，向前降级至前序有效 entry (${fallbackId})`)
+          break
+        }
+      }
+    }
+  }
+
+  // 若仍未获取到 manager，打开默认 piSessionFile
+  if (!manager) {
+    try {
+      if (existsSync(activePiSessionFile)) {
+        manager = sdk.SessionManager.open(activePiSessionFile, sessionDir, sourceDir)
+      }
+    } catch (err) {
+      console.warn(`[Agent 会话] 打开主 Pi session 文件异常:`, err)
+    }
+  }
+
+  let keptEntries: ReturnType<PiSessionManagerInstance['getBranch']> = []
+  if (manager && validKeptEntryId) {
+    try {
+      keptEntries = manager.getBranch(validKeptEntryId)
+    } catch (err) {
+      console.warn(`[Agent 会话] 获取 Pi entry branch 失败 (${validKeptEntryId}):`, err)
+      keptEntries = []
+    }
+  } else if (lastKeptEntryId && !validKeptEntryId) {
+    console.warn(`[Agent 会话] Pi session 中所有候选 entry 均未在记录中找到，将重置为初始状态并正常截断消息历史: sessionId=${sessionId}`)
+  }
+
+  const header = manager?.getHeader()
+  const newContent = manager && header
+    ? [header, ...keptEntries]
+        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+        .map((entry) => JSON.stringify(entry))
+        .join('\n') + '\n'
+    : undefined
 
   // 6. 执行工作区文件快照回滚
   let fileRewind: RewindSessionResult['fileRewind']
@@ -2066,14 +2159,16 @@ export async function rewindPiSession(
   }
 
   // 7. 先写临时文件再原子替换，避免回退过程中进程退出留下半截 Pi transcript。
-  const tempSessionFile = `${piSessionFile}.rewind-${process.pid}-${Date.now()}.tmp`
-  try {
-    writeFileSync(tempSessionFile, newContent, 'utf-8')
-    renameSync(tempSessionFile, piSessionFile)
-  } finally {
-    if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile)
+  if (newContent) {
+    const tempSessionFile = `${activePiSessionFile}.rewind-${process.pid}-${Date.now()}.tmp`
+    try {
+      writeFileSync(tempSessionFile, newContent, 'utf-8')
+      renameSync(tempSessionFile, activePiSessionFile)
+    } finally {
+      if (existsSync(tempSessionFile)) unlinkSync(tempSessionFile)
+    }
+    console.log(`[Agent 会话] Pi session 已截断: sessionId=${sessionId}, file=${activePiSessionFile}, 保留 ${keptEntries.length} 条 entry`)
   }
-  console.log(`[Agent 会话] Pi session 已截断: sessionId=${sessionId}, 保留 ${keptEntries.length} 条 entry`)
 
   // 8. 截断展示 JSONL 消息（严格排除目标 User 消息及其后的所有内容）
   const kept = truncateSDKMessagesBefore(sessionId, userMessageUuid)
@@ -2095,10 +2190,13 @@ export async function rewindPiSession(
     console.warn('[Agent 会话] 回收 Pi 文件检查点失败:', error)
   }
 
+  const newSdkSessionId = manager?.getSessionId?.()
   updateAgentSessionMeta(sessionId, {
     piEntryBindings: keptBindings,
     piFileCheckpoints: keptCheckpoints,
     resumeAtMessageUuid: undefined,
+    piSessionFile: activePiSessionFile,
+    ...(newSdkSessionId ? { sdkSessionId: newSdkSessionId } : {}),
   })
 
   return {

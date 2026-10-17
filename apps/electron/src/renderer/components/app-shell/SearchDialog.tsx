@@ -239,13 +239,25 @@ export function SearchDialog(): React.ReactElement {
     return workspaceNameMap.get(session.workspaceId)
   }, [agentSessions, workspaceNameMap])
 
+  const defaultWorkspaceId = React.useMemo(
+    () => agentWorkspaces.find((w) => w.slug === 'default')?.id,
+    [agentWorkspaces],
+  )
+
   const hiddenAgentSessionIds = React.useMemo(() => {
     const ids = new Set(draftSessionIds)
     for (const session of agentSessions) {
-      if (session.draft || (session.workspaceId && !visibleWorkspaceIds.has(session.workspaceId))) ids.add(session.id)
+      if (
+        session.draft ||
+        (session.workspaceId &&
+          session.workspaceId !== defaultWorkspaceId &&
+          !visibleWorkspaceIds.has(session.workspaceId))
+      ) {
+        ids.add(session.id)
+      }
     }
     return ids
-  }, [agentSessions, draftSessionIds, visibleWorkspaceIds])
+  }, [agentSessions, draftSessionIds, defaultWorkspaceId, visibleWorkspaceIds])
 
   // query：输入框当前值（实时跟随用户）
   // committedQuery：用户已确认提交的搜索词（点击/回车后才更新），用于结果展示与高亮

@@ -821,9 +821,15 @@ function TabStatePersistenceInitializer(): null {
       const visibleWorkspaceIds = new Set(
         getVisibleAgentWorkspaces(agentWorkspaces).map((workspace) => workspace.id),
       )
+      const defaultWorkspaceId = agentWorkspaces.find((workspace) => workspace.slug === 'default')?.id
       const visibleAgentSessionIds = new Set(
         agentSessions
-          .filter((session) => !session.workspaceId || visibleWorkspaceIds.has(session.workspaceId))
+          .filter(
+            (session) =>
+              !session.workspaceId ||
+              session.workspaceId === defaultWorkspaceId ||
+              visibleWorkspaceIds.has(session.workspaceId),
+          )
           .map((session) => session.id),
       )
       const validSessionIds = new Set(
