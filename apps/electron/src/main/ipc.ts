@@ -3401,13 +3401,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 快照回退（同一会话内回退到指定点）
+  // 快照回退（同一会话内撤销本轮及之后所有对话与文件更改）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.REWIND_SESSION,
     async (_, input: RewindSessionInput): Promise<RewindSessionResult> => {
+      const targetUuid = input.targetMessageUuid || input.assistantMessageUuid
+      if (!targetUuid) {
+        throw new Error('撤销失败：未指定目标消息 UUID')
+      }
       return rewindAgentSession(
         input.sessionId,
-        input.assistantMessageUuid,
+        targetUuid,
       )
     }
   )

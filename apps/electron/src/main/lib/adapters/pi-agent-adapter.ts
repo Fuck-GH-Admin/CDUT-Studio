@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { PREINGEST_DOCUMENT_EXTENSIONS, redirectBinaryDocumentRead } from '../document-parse-tools'
+import { isAgentWorkspaceSandbox } from '../pi-file-checkpoint'
 import type {
   AgentThinkingLevel,
   AgentRuntime,
@@ -2446,7 +2447,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       if (active.abortRequested) throw createAbortError()
 
       if (!existsSync(input.piSessionDir)) mkdirSync(input.piSessionDir, { recursive: true })
-      const cwd = input.cwd ?? process.cwd()
+      const cwd = input.cwd?.trim()
+      // 安全红线：缺少会话工作目录或非沙箱目录时必须中止，严禁回退到进程启动目录
+      if (!cwd || !isAgentWorkspaceSandbox(cwd)) {
+        throw new Error(`[Pi 安全拦截] 目标目录 (${cwd}) 不是合法的会话沙箱目录，拒绝启动 Pi Agent`)
+      }
       const sessionFile = input.resumeSessionId ? findSessionFile(input.piSessionDir, input.resumeSessionId) : undefined
       if (input.resumeSessionId && !sessionFile) {
         throw new Error(`No conversation found with session ID ${input.resumeSessionId}`)
