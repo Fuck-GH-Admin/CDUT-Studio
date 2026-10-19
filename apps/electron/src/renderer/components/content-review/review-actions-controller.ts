@@ -801,14 +801,24 @@ export function createReviewActionsController(
 
     /** Human source-anchored declaration; never a model-confirmed fact/decision. */
     async createNativeReviewItem(input: Omit<import('@profer/shared').CreateNativeReviewItemV3Request,
-      'caseId' | 'requestId' | 'expectedRevision'>): Promise<boolean> {
+      'caseId' | 'requestId' | 'expectedRevision'>, expectedCaseId?: string): Promise<boolean> {
       const caseId = currentCaseId()
+      if (expectedCaseId && expectedCaseId !== caseId) {
+        setError('添加人工事项失败：案卷已切换，请重新打开事项登记', { ...(caseId ? { caseId } : {}) })
+        return false
+      }
       if (!caseId || !api.createNativeReviewItemV3 || !api.getAggregateV2) {
         setError('添加人工事项失败：请先选择原生案卷并升级客户端')
         return false
       }
       try {
         const aggregate = await api.getAggregateV2(caseId)
+        // The OS read can await. Do not retarget a captured form after
+        // a user switches the selected Case during that interval.
+        if (currentCaseId() !== caseId) {
+          setError('添加人工事项失败：案卷已切换，请重新打开事项登记', { caseId })
+          return false
+        }
         if (!aggregate || aggregate.caseV2.id !== caseId ||
             aggregate.receiptLog[0]?.type !== 'CreateNativeWorkspaceCaseV3') {
           setError('添加人工事项失败：所选案卷不是受信的原生案卷', { caseId })
