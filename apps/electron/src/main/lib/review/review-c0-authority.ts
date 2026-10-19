@@ -69,7 +69,7 @@ export function bindC0LocalCaseCommand<T>(
   const requestId = intent.requestId
   const revision = intent.expectedRevision
   if (typeof requestId !== 'string' || !requestId.trim() ||
-    !Number.isSafeInteger(revision) || Number(revision) < 0 || intent.payload === undefined) {
+    (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) || intent.payload === undefined) {
     throw new C0ContractError('CONTRACT_INVALID', 'Missing request/revision/payload')
   }
   const hash = createHash('sha256')

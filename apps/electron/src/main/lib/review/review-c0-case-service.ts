@@ -4,7 +4,6 @@
 import {
   assertC0CaseAuthorization, type AuthorizedCaseCommand,
   type Principal, type Actor,
-  REVIEW_C0_SCHEMA_VERSION,
 } from '@profer/shared'
 import { payloadHash, readAggregate, CommandValidationError } from './case-store-v2'
 import {
