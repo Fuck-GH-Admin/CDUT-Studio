@@ -871,7 +871,8 @@ export function registerReviewIpc(): void {
   })
 
   /** 删除案卷 */
-  ipcMain.handle(REVIEW_IPC_CHANNELS.DELETE_CASE, (_event, caseId: string): void => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.DELETE_CASE, (event, caseId: string): void => {
+    assertC0ReviewMainSender(event)
     deleteCase(caseId)
   })
 
