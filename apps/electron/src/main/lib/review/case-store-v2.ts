@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import type { Actor, Appeal, BusinessDecision, CaseAggregateV2, CommandErrorCode, CommandReceipt, ReviewCommandResult, EvidenceLink, Observation, ReviewCaseV2, SupplementRequest, WorkflowTask } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
 import { assertSafeReviewStorageId } from './review-storage-id'
+import { withC2CaseDiskTransaction, withC2CaseDiskWriteSync, writeC2CaseStateDurably } from './review-v3-case-disk-tx'
 
 // ===== 聚合形态（07 §3.3） =====
 
@@ -90,18 +91,18 @@ export function listAggregatesV2(): AggregateSummary[] {
 /** 原子落盘：唯一临时名 + rename（避免并发覆盖固定 .tmp） */
 export function writeAggregate(aggregate: CaseAggregateV2): void {
   assertSafeReviewStorageId(aggregate?.caseV2?.id, 'caseId')
-  const dir = join(getConfigDir(), 'review-cases', aggregate.caseV2.id)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  const filePath = aggregatePath(aggregate.caseV2.id)
-  const tmp = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`
-  writeFileSync(tmp, JSON.stringify(aggregate, null, 2), 'utf-8')
-  renameSync(tmp, filePath)
+  // Direct fixture/migration writers must obtain the SAME OS lock; inside
+  // submitCommand/createAggregate, AsyncLocalStorage carries the held token.
+  withC2CaseDiskWriteSync(aggregate.caseV2.id, () => {
+    writeC2CaseStateDurably(aggregate.caseV2.id, JSON.stringify(aggregate, null, 2))
+  })
 }
 
 /** 逐案串行队列：同案命令严格串行（跨案并发） */
 function enqueueCase<T>(caseId: string, task: () => Promise<T>): Promise<T> {
   const previous = writeQueues.get(caseId) ?? Promise.resolve()
-  const next = previous.then(task, task)
+  const next = previous.then(() => withC2CaseDiskTransaction(caseId, task),
+    () => withC2CaseDiskTransaction(caseId, task))
   writeQueues.set(caseId, next.catch(() => undefined))
   return next
 }
