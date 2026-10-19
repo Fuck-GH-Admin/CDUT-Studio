@@ -74,15 +74,10 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
     setSubmitting(false)
   }, [open])
 
-  React.useEffect(() => {
-    if (open && !templateKey && templates.length === 1) {
-      const first = templates[0]!
-      setTemplateKey(`${first.templateId}@${first.version}`)
-    }
-  }, [open, templateKey, templates])
-
+  // An unbound draft is an intentional native-first state. Do not force
+  // the sole published template back onto an explicitly blank selection.
   const selectedPack = resolveDomainPack(domainPackId)
-  const canSubmit = title.trim().length > 0 && applicant.trim().length > 0 && !!selectedTemplate && !submitting
+  const canSubmit = title.trim().length > 0 && applicant.trim().length > 0 && !submitting
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
@@ -99,7 +94,9 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
       })
       if (!created) return
       toast.success(`已创建审核项目：${created.title}`, {
-        description: '接下来可在左栏导入审核依据、待审文件与证明材料。',
+        description: selectedTemplate
+          ? '已选择模板版本；仍需独立核验来源和确认正式审核计划。'
+          : '已创建未绑定正式政策的草稿；可先导入材料、人工登记待审事项。',
       })
       onOpenChange(false)
     } finally {
@@ -113,7 +110,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
         <DialogHeader>
           <DialogTitle>新建审核项目</DialogTitle>
           <DialogDescription>
-            先建立项目并选择已发布模板；创建后进入三栏工作台，按审核依据、申报材料和证明材料拖入文件。
+            可先建立未绑定正式政策的原生草稿，或选择已经发布的模板版本。建案不会自动发布学校政策或批准审核。
           </DialogDescription>
         </DialogHeader>
 
@@ -130,7 +127,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="review-case-template">审核模板</Label>
+            <Label htmlFor="review-case-template">审核模板（可暂不选择）</Label>
             <select
               id="review-case-template"
               aria-label="新建项目使用的审核模板"
@@ -139,7 +136,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
               disabled={templates.length === 0}
             >
-              <option value="">选择已发布模板…</option>
+              <option value="">先创建原生草稿（暂不绑定正式模板）</option>
               {templates.map((template) => (
                 <option key={`${template.templateId}@${template.version}`} value={`${template.templateId}@${template.version}`}>
                   {template.name} · v{template.version}
@@ -148,7 +145,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
             </select>
             {selectedTemplate
               ? <p className="text-xs text-muted-foreground">{selectedTemplate.description || '项目创建后将按此模板加载审核标准、分项和材料要求。'}</p>
-              : <p className="text-xs text-amber-600 dark:text-amber-400">{templates.length === 0 ? '目前没有已发布模板，请先到“审核模板”创建并发布。' : '创建项目必须选择一个已发布模板。'}</p>}
+              : <p className="text-xs text-muted-foreground">此草稿暂不安装正式 CanonicalPlan；材料与人工事项可先记录，自动审核须等已核验的计划和执行授权。</p>}
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -233,7 +230,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
             </Button>
           </DialogFooter>
           {!canSubmit && !submitting && (
-            <p className="text-right text-xs text-muted-foreground">项目标题、申请人与已发布模板为必填项</p>
+            <p className="text-right text-xs text-muted-foreground">项目标题与申请人为必填项；未选模板将创建原生草稿。</p>
           )}
         </form>
       </DialogContent>
