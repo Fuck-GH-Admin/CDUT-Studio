@@ -3,14 +3,14 @@
  * but never supplies authority to overwrite a native V2 Case or frozen Plan.
  */
 import { afterAll, describe, expect, test } from 'bun:test'
-import { rmSync, writeFileSync } from 'node:fs'
+import { rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { REVIEW_IPC_CHANNELS } from '@profer/shared'
 import { setMainWindow } from '../main-window-state'
 import { registerReviewIpc } from './review-ipc'
 import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
-import { getCase, getReviewCasesDir, saveCase, updateCase } from './case-store'
-import { createAggregate, readAggregate, writeAggregate } from './case-store-v2'
+import { getCase, getReviewCasesDir, listCases, saveCase, updateCase } from './case-store'
+import { createAggregate, listAggregatesV2, readAggregate, writeAggregate } from './case-store-v2'
 import { ensureWorkspaceAggregateV2 } from './workspace-service-v2'
 
 const root = join(import.meta.dir, '../../../../../../work/tmp', `v3-c1-legacy-guard-${Date.now()}`)
@@ -64,20 +64,26 @@ describe('C1 legacy Main command isolation and compatibility', () => {
       payloadHash: 'a'.repeat(64), revision: 0, at: new Date().toISOString(),
       summary: 'Native origin', actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
     })
-    const beforeV1 = JSON.stringify(getCase(nativeId))
+    const shadowPath = join(getReviewCasesDir(), nativeId, 'case.json')
+    const beforeV1 = readFileSync(shadowPath, 'utf8')
     const beforeV2 = JSON.stringify(readAggregate(nativeId))
+    // Legacy list/read paths must not surface the stale same-ID shadow as a
+    // separate current Case; native V2 list still exposes the actual Case.
+    expect(getCase(nativeId)).toBeUndefined()
+    expect(listCases().some(c => c.id === nativeId)).toBe(false)
+    expect(listAggregatesV2().some(c => c.caseId === nativeId)).toBe(true)
     expect(() => saveCase({ ...legacy(nativeId), title: 'Direct V1 shadow overwrite' }))
       .toThrow('原生审核案卷禁止')
-    expect(JSON.stringify(getCase(nativeId))).toBe(beforeV1)
+    expect(readFileSync(shadowPath, 'utf8')).toBe(beforeV1)
     await expect(updateCase(nativeId, current => ({ ...current, title: 'Attempted rewrite' })))
       .rejects.toThrow('原生审核案卷禁止')
-    expect(JSON.stringify(getCase(nativeId))).toBe(beforeV1)
+    expect(readFileSync(shadowPath, 'utf8')).toBe(beforeV1)
     expect(JSON.stringify(readAggregate(nativeId))).toBe(beforeV2)
 
     await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPDATE_CASE_SETTINGS, {
       caseId: nativeId, title: 'IPC bypass attempt',
     }))).rejects.toThrow('原生审核案卷禁止')
-    expect(JSON.stringify(getCase(nativeId))).toBe(beforeV1)
+    expect(readFileSync(shadowPath, 'utf8')).toBe(beforeV1)
     expect(JSON.stringify(readAggregate(nativeId))).toBe(beforeV2)
   })
 
@@ -87,12 +93,15 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     const { mkdirSync } = await import('node:fs')
     mkdirSync(join(getReviewCasesDir(), id), { recursive: true })
     writeFileSync(join(getReviewCasesDir(), id, 'state.v2.json'), '{invalid-json', 'utf8')
-    const before = JSON.stringify(getCase(id))
+    const shadowPath = join(getReviewCasesDir(), id, 'case.json')
+    const before = readFileSync(shadowPath, 'utf8')
+    expect(getCase(id)).toBeUndefined()
+    expect(listCases().some(c => c.id === id)).toBe(false)
     expect(() => saveCase({ ...legacy(id), title: 'corrupt state overwritten' }))
       .toThrow('原生审核案卷禁止')
     await expect(updateCase(id, original => ({ ...original, title: 'silent downgrade' })))
       .rejects.toThrow('原生审核案卷禁止')
-    expect(JSON.stringify(getCase(id))).toBe(before)
+    expect(readFileSync(shadowPath, 'utf8')).toBe(before)
   })
 
   test('frozen CanonicalPlan forbids legacy settings upgrade before either file changes', async () => {
