@@ -129,12 +129,20 @@ export function assertV3TechnicalJournalIntegrity(aggregate: CaseAggregateV2): N
   return journal
 }
 
-/** Hash of the exact validated technical proposals, in persisted order. */
-export function digestV3TechnicalEventChain(aggregate: CaseAggregateV2): string {
-  const journal = assertV3TechnicalJournalIntegrity(aggregate)
+/** Historical chain digest is stable after unrelated later Case decisions.
+ * This pure helper DOES NOT attest current source/Owner authority by itself.
+ */
+export function rawV3TechnicalEventChainDigest(
+  journal: NonNullable<CaseAggregateV2['v3TechnicalExecution']>,
+): string {
   return createHash('sha256').update(canonical(journal.events.map(item => ({
     sequence: item.sequence, eventId: item.eventId, proposal: item.proposal,
   })))).digest('hex')
+}
+
+/** Hash of the exact currently validated technical proposals, in persisted order. */
+export function digestV3TechnicalEventChain(aggregate: CaseAggregateV2): string {
+  return rawV3TechnicalEventChainDigest(assertV3TechnicalJournalIntegrity(aggregate))
 }
 
 function assertPreparedPlan(aggregate: CaseAggregateV2, run: RunEvidenceIdentity): CanonicalPlan {
