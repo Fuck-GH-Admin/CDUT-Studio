@@ -416,6 +416,15 @@ describe('C1 legacy Main command isolation and compatibility', () => {
       { sender, senderFrame: { id: 999 } }))).rejects.toThrow('SENDER_UNTRUSTED')
     expect(JSON.stringify(readAggregate(created.id))).toBe(JSON.stringify(starting))
 
+    // V2 legacy drag-drop path strings are not OS-minted physical capability.
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
+      caseId: created.id, sourcePath: sourceA, role: 'evidence',
+    }))).rejects.toThrow('SOURCE_CAPABILITY_REQUIRED')
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
+      caseId: created.id, sourcePath: sourceA, role: 'evidence',
+    }, { sender, senderFrame: { id: 55 } }))).rejects.toThrow('SENDER_UNTRUSTED')
+    expect(JSON.stringify(readAggregate(created.id))).toBe(JSON.stringify(starting))
+
     const a = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT_FROM_PATH, inputA)) as {
       id: string; fileName: string; parseStatus: string
     }
