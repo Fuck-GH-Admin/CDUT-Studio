@@ -3981,6 +3981,8 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPDATE_RULE_OUTLINE, input) as Promise<import('@profer/shared').ReviewCase>,
   updateReviewItem: (input: import('@profer/shared').UpdateReviewItemRequest) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPDATE_REVIEW_ITEM, input) as Promise<import('@profer/shared').ReviewCase>,
+  createNativeReviewItemV3: (input: import('@profer/shared').CreateNativeReviewItemV3Request) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.CREATE_NATIVE_REVIEW_ITEM_V3, input) as Promise<import('@profer/shared').ReviewCase>,
   getImagePreviewPath: (input: { caseId: string; documentId: string; blockId: string }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.GET_IMAGE_PREVIEW_PATH, input) as Promise<string | null>,
   getWorkspaceDocumentPreviewPath: (input: { caseId: string; documentVersionId: string }) =>
