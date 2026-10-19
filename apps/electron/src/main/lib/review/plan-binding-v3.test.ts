@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { rmSync } from 'node:fs'
 import type { Actor, CanonicalPlan, ReviewCaseV2 } from '@profer/shared'
-import { createAggregate, readAggregate } from './case-store-v2'
+import { createAggregate, readAggregate, writeAggregate } from './case-store-v2'
 import { bindCanonicalPlanV3, upgradeCanonicalPlanV3 } from './plan-binding-v3'
 
 const CONFIG_DIR = join(import.meta.dir, '../../../../../../work/tmp', `review-v3-plan-c1-${Date.now()}`)
@@ -112,4 +112,49 @@ describe('Dev-C C1 immutable Plan binding', () => {
     expect(after.receiptLog).toHaveLength(2)
     expect(after.caseV2.revision).toBe(2)
   })
+  test('unpublished native drafts and stale/uncovered source selection cannot silently install a Plan', async () => {
+    const draftId = 'plan-native-unadopted-draft'
+    await seed(draftId)
+    const unresolved = readAggregate(draftId)!
+    unresolved.caseV2.nativeWorkspaceDraft = {
+      manualRules: [{ id: 'draft-rule', title: 'Author note', requirement: 'Human confirmation required' }],
+    }
+    writeAggregate(unresolved)
+    const rejectedRule = await bindCanonicalPlanV3(draftId, {
+      requestId: 'draft-bind', actor, expectedRevision: 0, payload: plan(1),
+    }, verifiedFixtureOnly)
+    expect(rejectedRule.ok).toBe(false)
+    if (!rejectedRule.ok) expect(rejectedRule.code).toBe('DEPENDENCY_UNRESOLVED')
+    expect(readAggregate(draftId)?.canonicalPlan).toBeUndefined()
+
+    const scopeId = 'plan-native-version-pinned-scope'
+    await seed(scopeId)
+    const scoped = readAggregate(scopeId)!
+    scoped.caseV2.nativeWorkspaceDraft = {
+      manualRules: [], subjectDocumentVersionIds: ['stale-version'],
+    }
+    writeAggregate(scoped)
+    const stale = await bindCanonicalPlanV3(scopeId, {
+      requestId: 'stale-bind', actor, expectedRevision: 0, payload: plan(1),
+    }, verifiedFixtureOnly)
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.code).toBe('STALE_INPUT')
+
+    scoped.caseV2.nativeWorkspaceDraft.subjectDocumentVersionIds = ['doc-v1']
+    writeAggregate(scoped)
+    const noCoverage = plan(2)
+    noCoverage.bindings[0]!.sourceVersionIds = []
+    const omitted = await bindCanonicalPlanV3(scopeId, {
+      requestId: 'omitted-bind', actor, expectedRevision: 0, payload: noCoverage,
+    }, verifiedFixtureOnly)
+    expect(omitted.ok).toBe(false)
+    if (!omitted.ok) expect(omitted.code).toBe('DEPENDENCY_UNRESOLVED')
+
+    const accepted = await bindCanonicalPlanV3(scopeId, {
+      requestId: 'fully-covered', actor, expectedRevision: 0, payload: plan(3),
+    }, verifiedFixtureOnly)
+    expect(accepted.ok).toBe(true)
+    expect(readAggregate(scopeId)?.caseV2.revision).toBe(1)
+  })
+
 })
