@@ -870,9 +870,27 @@ export function registerReviewIpc(): void {
     return submitCaseV2(caseId)
   })
 
-  /** 删除案卷 */
-  ipcMain.handle(REVIEW_IPC_CHANNELS.DELETE_CASE, (event, caseId: string): void => {
+  /** Legacy UI "remove": never destroy a Case that already owns V2 receipts. */
+  ipcMain.handle(REVIEW_IPC_CHANNELS.DELETE_CASE, async (event, caseId: string): Promise<void> => {
     assertC0ReviewMainSender(event)
+    assertSafeReviewStorageId(caseId, 'caseId')
+    const existing = readAggregate(caseId)
+    if (existing) {
+      const { archiveReviewCaseV3 } = require('./case-lifecycle-v3') as typeof import('./case-lifecycle-v3')
+      const { createHash } = require('node:crypto') as typeof import('node:crypto')
+      // No renderer-provided Actor or requestId. A repeated UI request is
+      // idempotent and obtains the earlier durable Receipt.
+      const result = await archiveReviewCaseV3(caseId, {
+        requestId: 'legacy-remove-' + createHash('sha256').update(caseId).digest('hex'),
+        expectedRevision: existing.caseV2.revision,
+        actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
+        payload: { reason: '用户在原工作台将案卷移入归档' },
+      })
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`)
+      return
+    }
+    // V1-only folders may still be removed; an unreadable state.v2.json is
+    // independently fenced by deleteCase() and can never be deleted as V1.
     deleteCase(caseId)
   })
 
