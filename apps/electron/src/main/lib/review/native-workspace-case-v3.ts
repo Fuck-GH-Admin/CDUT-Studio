@@ -63,7 +63,7 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
     sizeBytes: doc.sizeBytes,
     parseStatus: doc.parseStatus === 'pending' ? 'partial' : doc.parseStatus,
     ...(doc.parseError ? { parseError: doc.parseError } : {}),
-    blocks: doc.blocks.map((block, index) => ({
+    blocks: doc.blocks.map(block => ({
       id: block.blockId,
       text: block.text,
       kind: block.kind === 'image' ? 'image' : block.kind === 'table' ? 'table-cell'
