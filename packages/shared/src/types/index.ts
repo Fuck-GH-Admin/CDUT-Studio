@@ -99,3 +99,6 @@ export * from './pdf'
 
 // Review V3 C0 frozen cross-track contracts (no second Case store).
 export * from './review-v3-c0'
+
+// Review V3 signed CR-A-001 proposal-only event transport; C0/1 stays frozen.
+export * from './review-v3-execution'
