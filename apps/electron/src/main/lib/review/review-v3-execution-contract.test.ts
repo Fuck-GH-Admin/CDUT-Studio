@@ -37,7 +37,7 @@ const check = {
   checkKey: 'R01', targetKey: 'target-1', objectKey: 'object-1', subjectId: 'subject-1',
   status: 'accepted' as const,
 }
-function checkEvent(input = check): V3ExecutionProposal {
+function checkEvent(input: Extract<V3ExecutionProposal, {kind:'check'}>['check'] = check): V3ExecutionProposal {
   const payload = {
     schemaVersion: REVIEW_V3_EXECUTION_SCHEMA, run, sequence: 1, permissionGrantId: 'grant-1',
     kind: 'check' as const, hostReceiptId: 'receipt-1', check: input,
