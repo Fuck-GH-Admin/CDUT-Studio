@@ -322,6 +322,10 @@ export interface CaseArchiveRecordV3 {
   archivedAt: string
   archivedBy: string
   reason: string
+  /** Restoring never silently reactivates old Run/Decision status. */
+  restoredAt?: string
+  restoredBy?: string
+  restoreReason?: string
 }
 
 export interface CaseAggregateV2 {
