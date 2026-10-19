@@ -81,7 +81,7 @@ export class C2MainPublishedPlanProvenance {
         !goodId(record.issuerAuthorityId) ||
         !/^[a-f0-9]{40}$/.test(record.publishedSourceCommit) ||
         record.fingerprint !== plan.fingerprint || !sha(record.artifactSha256)) {
-      deny('Published Plan current source record is missing, untrusted or revoked')
+      return deny('Published Plan current source record is missing, untrusted or revoked')
     }
     // This callback must independently attest the issuer from a C/Main trust
     // root. It MUST NOT be implemented as a test-style no-op in production.
@@ -141,7 +141,7 @@ export class C2MainPublishedPlanProvenance {
         plan.templateVersion !== run.templateVersion ||
         plan.templateId !== aggregate.caseV2.templateId ||
         run.sourceVersionIds.length === 0) {
-      deny('Run and current Case published Plan are not exactly bound')
+      return deny('Run and current Case published Plan are not exactly bound')
     }
     this.assertPublishedPlanForCase(plan, aggregate)
     const bindings = plan.bindings
