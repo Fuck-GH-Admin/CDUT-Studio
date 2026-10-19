@@ -506,6 +506,8 @@ export const REVIEW_IPC_CHANNELS = {
   REORDER_DOCUMENTS: 'review:reorder-documents',
   /** 删除案卷 */
   DELETE_CASE: 'review:delete-case',
+  /** Restore a native archived Case through a Main-trusted, CAS-backed command. */
+  RESTORE_CASE_V3: 'review-v3:restore-case',
   /** 更新案卷设置（领域包 / 标题 / 类型 / 待审主体文档） */
   UPDATE_CASE_SETTINGS: 'review:update-case-settings',
   /** 手动修改从依据文件生成的单条规则摘要。 */
