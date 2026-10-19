@@ -13,7 +13,7 @@ import {
   type RunEvidenceIdentity, type V3ExecutionProposal, type ReviewCommandResult,
 } from '@profer/shared'
 import { CommandValidationError, payloadHash, submitCommand } from './case-store-v2'
-import { validateV3ExecutionProposal } from './review-v3-execution-contract'
+import { executionProposalId, validateV3ExecutionProposal } from './review-v3-execution-contract'
 import type { V3TrustedConsumptionContext, V3VerifiedHostReceipt } from './review-v3-execution-contract'
 
 // V3TrustedConsumptionContext and receipt types are defined in C Main,
@@ -221,8 +221,10 @@ export function recordV3TechnicalProposal(
       throw new CommandValidationError('VALIDATION_FAILED',
         '技术事件 requestId 必须是完整事件 eventId，禁止绕过精确幂等回执')
     const journal = assertV3TechnicalJournalIntegrity(aggregate)
+    const plan = aggregate.canonicalPlan
+    if (!plan) throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '绑定的 CanonicalPlan 不存在')
     if (!sameRun(event.run, journal.run) ||
-        aggregate.canonicalPlan.fingerprint !== journal.run.planFingerprint)
+        plan.fingerprint !== journal.run.planFingerprint)
       throw new CommandValidationError('STALE_INPUT', '事件试图越过原始 Run/Plan 身份')
     // Case revision may grow due to this very journal's CAS receipts; no
     // unrelated business write (material, Subject, Plan, archive, etc.) may
@@ -250,7 +252,7 @@ export function recordV3TechnicalProposal(
         '没有仍有效的 Main/Host 原件与工具回执')
     const ctx: V3TrustedConsumptionContext = {
       run: journal.run,
-      plan: aggregate.canonicalPlan,
+      plan,
       permissionGrantId: proof.permissionGrantId,
       grantActive: proof.grantActive,
       currentCaseRevision: journal.run.caseRevision,
