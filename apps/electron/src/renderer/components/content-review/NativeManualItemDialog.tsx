@@ -69,6 +69,9 @@ export function NativeManualItemDialog({
   const [activityDate, setActivityDate] = React.useState('')
   const [organizer, setOrganizer] = React.useState('')
   const [submitting, setSubmitting] = React.useState(false)
+  // When Main commits but the reply is lost, retry unchanged intent using
+  // the same requestId so the original durable receipt is replayed.
+  const retryIntent = React.useRef<{ signature: string; requestId: string } | null>(null)
 
   React.useEffect(() => {
     if (!open || !caseId) return
@@ -84,6 +87,7 @@ export function NativeManualItemDialog({
     setLevel('')
     setActivityDate('')
     setOrganizer('')
+    retryIntent.current = null
     void window.reviewAPI.getAggregateV2(caseId).then(aggregate => {
       if (!active) return
       const selection = nativeManualSourcesFromAggregate(aggregate, caseId)
@@ -114,17 +118,25 @@ export function NativeManualItemDialog({
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     if (!canSubmit || !caseId || !selectedSource) return
+    const intent = {
+      documentVersionId: selectedSource.versionId,
+      ...(blockId ? { sourceBlockId: blockId } : {}),
+      title: title.trim(), category: category.trim(), declaredScore: numericScore,
+      ...(level.trim() ? { level: level.trim() } : {}),
+      ...(activityDate.trim() ? { activityDate: activityDate.trim() } : {}),
+      ...(organizer.trim() ? { organizer: organizer.trim() } : {}),
+    }
+    const signature = JSON.stringify([caseId, intent])
+    if (retryIntent.current?.signature !== signature) {
+      retryIntent.current = {
+        signature, requestId: `ui-native-item-${globalThis.crypto.randomUUID()}`,
+      }
+    }
     setSubmitting(true)
     try {
-      const ok = await actions.createNativeReviewItem({
-        documentVersionId: selectedSource.versionId,
-        ...(blockId ? { sourceBlockId: blockId } : {}),
-        title: title.trim(), category: category.trim(), declaredScore: numericScore,
-        ...(level.trim() ? { level: level.trim() } : {}),
-        ...(activityDate.trim() ? { activityDate: activityDate.trim() } : {}),
-        ...(organizer.trim() ? { organizer: organizer.trim() } : {}),
-      }, caseId)
+      const ok = await actions.createNativeReviewItem(intent, caseId, retryIntent.current.requestId)
       if (ok) {
+        retryIntent.current = null
         toast.success('人工申报事项已登记', {
           description: '事项保留真实材料版本与来源位置；分数是人工申报值，不代表已审核认定。',
         })
