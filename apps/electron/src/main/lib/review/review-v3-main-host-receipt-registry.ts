@@ -89,7 +89,7 @@ export class C2MainPhysicalHostReceiptRegistry {
     if (this.closed || !validId(receiptId)) refuse('Main Host registry closed or invalid ID')
     const observed = this.observer.getObservedPhysicalReceipt(receiptId)
     if (!observed || observed.hostReceiptId !== receiptId) {
-      refuse('No independently observed physical Host result for this ID')
+      return refuse('No independently observed physical Host result for this ID')
     }
     live(this.observer, observed)
     const previous = this.receipts.get(receiptId)
