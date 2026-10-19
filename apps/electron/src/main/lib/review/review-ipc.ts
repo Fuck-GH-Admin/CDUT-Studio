@@ -57,7 +57,7 @@ import { getReviewModelGatewayStatus } from './review-model-gateway'
 import {
   createNativeWorkspaceCaseV3, isNativeWorkspaceCaseV3, updateNativeWorkspaceSettingsV3,
   registerNativeWorkspaceMaterialV3, removeNativeWorkspaceDocumentsV3, reorderNativeWorkspaceDocumentsV3,
-  updateNativeWorkspaceReviewItemV3,
+  updateNativeWorkspaceReviewItemV3, createNativeReviewItemV3,
 } from './native-workspace-case-v3'
 import { importDocumentFromPath, importDocumentsIntoCase, removeDocumentsFromCase, reorderDocumentsInCase } from './case-import'
 import { invalidateDerivedReviewInputs } from './input-invalidation'
@@ -333,6 +333,27 @@ export function registerReviewIpc(): void {
     await syncWorkspaceProjectionV2(caseId)
     return updated
   })
+
+  /**
+   * Only C's Main grants actor and serialized source-authentication. The
+   * Renderer supplies an opaque requestId (idempotency only), never a
+   * trusted SourceIdentity, Case writer, SchoolPort authority or Actor.
+   */
+  ipcMain.handle(
+    REVIEW_IPC_CHANNELS.CREATE_NATIVE_REVIEW_ITEM_V3,
+    async (event, input: import('@profer/shared').CreateNativeReviewItemV3Request): Promise<ReviewCase> => {
+      assertC0ReviewMainSender(event)
+      if (!input || typeof input !== 'object' || Array.isArray(input))
+        throw new Error('原生人工事项输入非法')
+      if (Object.prototype.hasOwnProperty.call(input, 'actor') ||
+          Object.prototype.hasOwnProperty.call(input, 'principal') ||
+          Object.prototype.hasOwnProperty.call(input, 'sourceIdentity'))
+        throw new Error('ACTOR_UNTRUSTED: Renderer 不得指定 Main 身份或来源证书')
+      requireString(input.caseId, 'caseId')
+      return createNativeReviewItemV3(input, undefined,
+        () => assertC0ReviewMainSender(event))
+    },
+  )
 
   ipcMain.handle(REVIEW_IPC_CHANNELS.CONFIRM_RULE_PACK, async (_event, input: { caseId: string; rulePackId: string }): Promise<ReviewCase> => {
     const caseId = requireString(input?.caseId, 'caseId')
