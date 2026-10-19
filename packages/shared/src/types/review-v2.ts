@@ -338,6 +338,16 @@ export interface ReviewCaseV2 {
   objectType: TemplateVersion['objectType']
   /** 案卷级字段（申请人/周期等，按模板） */
   caseFields: Record<string, FieldValue>
+  /**
+   * C1 native three-column compatibility DRAFT state (never a published
+   * PolicyVersion, CanonicalPlan, or signed BusinessDecision).
+   * Current source scope is version-pinned so replaced documents are not
+   * silently re-admitted through an old stable documentId.
+   */
+  nativeWorkspaceDraft?: {
+    manualRules: Array<{ id: string; title: string; requirement: string }>
+    subjectDocumentVersionIds?: string[]
+  }
   subjects: ReviewSubject[]
   documents: DocumentVersion[]
   /** 从当前工作台审核依据生成的可追溯规则快照（迁移期与模板政策并行）。 */
