@@ -280,4 +280,57 @@ describe('Dev-C C2-R01 Case-authoritative immutable technical Run seal',()=>{
     expect(refused.ok).toBe(false)
     expect(readAggregate(id)?.v3ReviewRun).toBeUndefined()
   })
+  test('read-only historical Run remains visible after an authorized later Case change',async()=>{
+    const id='c2-seal-readable-history-10'
+    const identity=await seed(id)
+    await record(id,identity,1,'read')
+    await record(id,identity,2,'check')
+    const terminal=await record(id,identity,3,'terminal')
+    expect((await seal(id,terminal.eventId,4)).ok).toBe(true)
+    expect(getV3ReviewRunRecord(id)?.state).toBe('requires-human-review')
+    const changed=await submitCommand(id,{
+      requestId:'human-note-after-seal',expectedRevision:5,actor,
+      type:'AfterRunHumanBusinessUpdate',payload:{title:'Updated'},
+    },()=>({summary:'Later edit, historical Run still immutable',mutate:aggregate=>{
+      aggregate.caseV2.title='Updated'
+    }}))
+    expect(changed.ok).toBe(true)
+    expect(getV3ReviewRunRecord(id)?.run.runId).toBe(identity.runId)
+    expect(readAggregate(id)?.caseV2.revision).toBe(6)
+    expect(readAggregate(id)?.decisions).toEqual([])
+  })
+
+  test('read side rejects forged persisted technical Check status or missing Run seal Receipt',async()=>{
+    const id='c2-seal-read-side-tamper-11'
+    const identity=await seed(id)
+    await record(id,identity,1,'read')
+    await record(id,identity,2,'check')
+    const terminal=await record(id,identity,3,'terminal')
+    expect((await seal(id,terminal.eventId,4)).ok).toBe(true)
+    const genuine=getV3ReviewRunRecord(id)!
+    expect(genuine.boundChecks[0]?.technicalStatus).toBe('accepted')
+    const changed=readAggregate(id)!
+    changed.v3ReviewRun!.boundChecks[0]!.technicalStatus='rejected'
+    writeAggregate(changed)
+    expect(getV3ReviewRunRecord(id)).toBeUndefined()
+    changed.v3ReviewRun!.boundChecks[0]!.technicalStatus='accepted'
+    changed.receiptLog=changed.receiptLog.filter(r=>r.type!=='SealV3ReviewRun')
+    writeAggregate(changed)
+    expect(getV3ReviewRunRecord(id)).toBeUndefined()
+    expect(readAggregate(id)?.decisions).toEqual([])
+  })
+
+  test('read side rejects a counterfeit historical Plan and cannot forge published authority',async()=>{
+    const id='c2-seal-historic-plan-12'
+    const identity=await seed(id)
+    const terminal=await record(id,identity,1,'terminal')
+    expect((await seal(id,terminal.eventId,2)).ok).toBe(true)
+    expect(getV3ReviewRunRecord(id)?.plan.planId).toBe(plan.planId)
+    const changed=readAggregate(id)!
+    changed.v3ReviewRun!.plan.bindings[0]!.applicability='not-applicable'
+    writeAggregate(changed)
+    expect(getV3ReviewRunRecord(id)).toBeUndefined()
+    expect(readAggregate(id)?.decisions).toHaveLength(0)
+  })
+
 })
