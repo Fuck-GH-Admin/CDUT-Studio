@@ -499,4 +499,55 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
   })
 
+  test('trusted Main manual item IPC consumes real V2 source; forged identity/frame fail without a new receipt', async () => {
+    const localPath = join(root, 'manual-subject-source.txt')
+    writeFileSync(localPath, 'Submitted physical material, human declared review claim', 'utf8')
+    const created = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_CASE, {
+      title: 'Human source-bound case', type: '综合测评',
+      applicant: 'Applicant', academicYear: '2026',
+    })) as { id: string }
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT_FROM_PATH, {
+      caseId: created.id, sourcePath: localPath, role: 'application',
+    }))
+    const aggregate = readAggregate(created.id)!
+    const doc = aggregate.caseV2.documents[0]!
+    const request = {
+      caseId: created.id, requestId: 'human-main-provenance-01',
+      expectedRevision: aggregate.caseV2.revision, documentVersionId: doc.versionId,
+      sourceBlockId: doc.blocks[0]?.blockId, title: 'Human declared claim',
+      category: '科研', declaredScore: 2,
+    }
+    const before = JSON.stringify(aggregate)
+    await expect(Promise.resolve().then(() => invoke(REVIEW_IPC_CHANNELS.CREATE_NATIVE_REVIEW_ITEM_V3, {
+      ...request, actor: { actorId: 'school-teacher', actorSource: 'school', role: 'teacher' },
+    }))).rejects.toThrow('ACTOR_UNTRUSTED')
+    await expect(Promise.resolve().then(() => invoke(REVIEW_IPC_CHANNELS.CREATE_NATIVE_REVIEW_ITEM_V3,
+      request, { sender, senderFrame: { id: 123 } }))).rejects.toThrow('SENDER_UNTRUSTED')
+    await expect(Promise.resolve().then(() => invoke(REVIEW_IPC_CHANNELS.CREATE_NATIVE_REVIEW_ITEM_V3, {
+      ...request, sourceIdentity: { caseId: created.id, trusted: true },
+    }))).rejects.toThrow('ACTOR_UNTRUSTED')
+    expect(JSON.stringify(readAggregate(created.id))).toBe(before)
+
+    const first = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_NATIVE_REVIEW_ITEM_V3, request)) as {
+      items: Array<{ id: string; title: string; anchor: { documentId: string } }>
+    }
+    expect(first.items).toHaveLength(1)
+    expect(first.items[0]).toMatchObject({
+      title: 'Human declared claim', anchor: { documentId: doc.documentId },
+    })
+    const after = readAggregate(created.id)!
+    expect(after.receiptLog.at(-1)).toMatchObject({
+      type: 'CreateNativeReviewItemV3',
+      actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
+    })
+    const twice = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_NATIVE_REVIEW_ITEM_V3, request)) as {
+      items: Array<{ id: string }>
+    }
+    expect(twice.items.map(item => item.id)).toEqual(first.items.map(item => item.id))
+    expect(readAggregate(created.id)?.caseV2.revision).toBe(after.caseV2.revision)
+    expect(readAggregate(created.id)?.receiptLog).toHaveLength(after.receiptLog.length)
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
+  })
+
 })
