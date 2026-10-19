@@ -9,25 +9,11 @@
 import { createHash } from 'node:crypto'
 import {
   assertC0CanonicalPlan, assertC0RunEvidenceIdentity, assertC0SourceIdentity,
-  C0ContractError, type CanonicalPlan, type RunEvidenceIdentity, type SourceIdentity,
+  C0ContractError, REVIEW_V3_EXECUTION_SCHEMA,
+  type CanonicalPlan, type RunEvidenceIdentity, type SourceIdentity,
+  type V3ExecutionProposal, type V3CheckStatus, type V3TechnicalTerminal,
 } from '@profer/shared'
 
-export const REVIEW_V3_EXECUTION_SCHEMA = 'review-v3-execution/1' as const
-
-export type V3CheckStatus = 'accepted' | 'rejected' | 'missing' | 'unknown'
-export type V3TechnicalTerminal = 'completed-technical' | 'partial' | 'cancelled' | 'timed-out' | 'needs-resume' | 'failed'
-export type V3ExecutionProposal =
-  | { schemaVersion: typeof REVIEW_V3_EXECUTION_SCHEMA; eventId: string; run: RunEvidenceIdentity;
-      sequence: number; permissionGrantId: string; kind: 'read'; hostReceiptId: string;
-      read: { source: SourceIdentity; extent: 'block' | 'full-document' } }
-  | { schemaVersion: typeof REVIEW_V3_EXECUTION_SCHEMA; eventId: string; run: RunEvidenceIdentity;
-      sequence: number; permissionGrantId: string; kind: 'check'; hostReceiptId: string;
-      check: { checkKey: string; targetKey: string; objectKey: string; subjectId: string; status: V3CheckStatus } }
-  | { schemaVersion: typeof REVIEW_V3_EXECUTION_SCHEMA; eventId: string; run: RunEvidenceIdentity;
-      sequence: number; permissionGrantId: string; kind: 'terminal'; hostReceiptId: string;
-      terminal: { status: V3TechnicalTerminal; reason?: string } }
-
-/** Narrow receipt alias: the Host, not the model, must attest the exact tuple. */
 export interface V3VerifiedHostReceipt {
   permissionGrantId: string
   kind: 'read' | 'check' | 'terminal'
