@@ -6,7 +6,7 @@ import {
   type Actor, type CanonicalPlan, type ReviewCaseV2,
   type RunEvidenceIdentity, type SourceIdentity, type V3ExecutionProposal,
 } from '@profer/shared'
-import { createAggregate, readAggregate, submitCommand } from './case-store-v2'
+import { createAggregate, readAggregate, submitCommand, writeAggregate } from './case-store-v2'
 import { executionProposalId } from './review-v3-execution-contract'
 import { admitV3TechnicalRun, recordV3TechnicalProposal } from './review-v3-technical-ledger'
 import type { V3VerifiedHostReceipt } from './review-v3-execution-contract'
@@ -204,4 +204,28 @@ describe('C2 Main-only technical journal: durable evidence, never a BusinessDeci
     expect(stale.ok).toBe(false)
     expect(readAggregate(id)?.v3TechnicalExecution?.events).toHaveLength(0)
   })
+  test('unreceipted business mutations and forged source versions cannot bypass frozen input digest', async () => {
+    const id = 'c2-ledger-tamper-4'
+    await seed(id)
+    const run = evidence(id, 1)
+    expect((await admitV3TechnicalRun(id, {
+      requestId:'admit-tamper-01',expectedRevision:0,actor,payload:run,
+    },()=>{})).ok).toBe(true)
+    const before = readAggregate(id)!
+    expect(before.v3TechnicalExecution?.frozenInputDigest).toMatch(/^[a-f0-9]{64}$/)
+    // An out-of-band writer tampers with policy-sensitive business data, but
+    // does not bump revision or append a Receipt. Pure receipt scanning would
+    // incorrectly accept this Host proposal; the frozen digest must detect it.
+    before.caseV2.documents[0]!.contentHash = 'b'.repeat(64)
+    writeAggregate(before)
+    const attempt = checkEvent(run, 1)
+    const denied = await recordV3TechnicalProposal(id, {
+      requestId:attempt.eventId,expectedRevision:1,actor,payload:attempt,
+    },()=>host())
+    expect(denied.ok).toBe(false)
+    expect(readAggregate(id)?.v3TechnicalExecution?.events).toHaveLength(0)
+    expect(readAggregate(id)?.caseV2.revision).toBe(1)
+    expect(readAggregate(id)?.decisions).toHaveLength(0)
+  })
+
 })
