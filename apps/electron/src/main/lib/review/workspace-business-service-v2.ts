@@ -6,6 +6,7 @@ import type { Actor, BusinessDecision, CaseAggregateV2, FieldValue, ReviewComman
 import { CommandValidationError, submitCommand } from './case-store-v2'
 import { getRunV2, readArtifact } from './run-store-v2'
 import { computeRunInputHash } from './run-service-v2'
+import { currentSourceValidityBlockers } from './source-current-validity-v3'
 
 type WorkspaceDisposition = 'confirmed-issue' | 'human-confirmed-compliant' | 'false-positive' | 'supplement-requested' | 'waived' | 'escalated'
 type WorkspaceDecision = BusinessDecision['result']
@@ -83,6 +84,8 @@ export function recordWorkspaceSubjectAdjudicationV2(
 }
 
 function assertCurrentRun(aggregate: CaseAggregateV2, runId: string, inputHash: string) {
+  const sourceBlockers = currentSourceValidityBlockers(aggregate)
+  if (sourceBlockers.length) throw new CommandValidationError('STALE_INPUT', '存在已撤效或来源无法核验的当前事实/关联，需重新确认并审核')
   const run = getRunV2(aggregate.caseV2.id, runId)
   if (!run || run.inputManifest.hash !== inputHash) throw new CommandValidationError('STALE_INPUT', '审核运行已过期，请重新运行后再处理')
   const currentHash = computeRunInputHash(aggregate.caseV2, aggregate.observations as unknown as Array<Record<string, unknown>>, aggregate.evidenceLinks as unknown as Array<Record<string, unknown>>)
