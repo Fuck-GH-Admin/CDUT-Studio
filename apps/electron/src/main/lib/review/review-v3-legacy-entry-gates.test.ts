@@ -9,7 +9,7 @@ import { REVIEW_IPC_CHANNELS } from '@profer/shared'
 import { setMainWindow } from '../main-window-state'
 import { registerReviewIpc } from './review-ipc'
 import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
-import { getCase, getReviewCasesDir, listCases, saveCase, updateCase } from './case-store'
+import { deleteCase, getCase, getReviewCasesDir, listCases, saveCase, updateCase } from './case-store'
 import { createAggregate, listAggregatesV2, readAggregate, writeAggregate } from './case-store-v2'
 import { ensureWorkspaceAggregateV2 } from './workspace-service-v2'
 
@@ -102,6 +102,42 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     await expect(updateCase(id, original => ({ ...original, title: 'silent downgrade' })))
       .rejects.toThrow('原生审核案卷禁止')
     expect(readFileSync(shadowPath, 'utf8')).toBe(before)
+  })
+
+  test('old DELETE_CASE cannot erase a native Case, its Receipts or a migrated V2 history', async () => {
+    const nativeId = 'v3-c1-native-delete-denied'
+    const seedId = 'v3-c1-seed-for-delete'
+    saveCase(legacy(seedId))
+    const initial = await ensureWorkspaceAggregateV2(seedId)
+    await createAggregate(nativeId, {
+      ...initial.caseV2, id: nativeId, title: 'Native protected from legacy delete', revision: 0,
+    }, {
+      requestId: `create-${nativeId}`, type: 'CreateCaseFromTemplate',
+      payloadHash: 'a'.repeat(64), revision: 0, at: new Date().toISOString(),
+      summary: 'Durable native receipt', actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
+    })
+    const nativeBefore = JSON.stringify(readAggregate(nativeId))
+    expect(() => invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, nativeId)).toThrow('禁止通过旧版删除入口')
+    expect(JSON.stringify(readAggregate(nativeId))).toBe(nativeBefore)
+
+    const migratedBefore = JSON.stringify(readAggregate(seedId))
+    expect(() => deleteCase(seedId)).toThrow('禁止通过旧版删除入口')
+    expect(JSON.stringify(readAggregate(seedId))).toBe(migratedBefore)
+    expect(getCase(seedId)).toBeDefined()
+
+    expect(() => invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, nativeId,
+      { sender, senderFrame: { id: 9 } })).toThrow('SENDER_UNTRUSTED')
+    expect(JSON.stringify(readAggregate(nativeId))).toBe(nativeBefore)
+  })
+
+  test('pure V1-only draft can still be deleted through its existing UI command', () => {
+    const id = 'v3-c1-pure-v1-removable'
+    saveCase(legacy(id))
+    expect(getCase(id)).toBeDefined()
+    expect(readAggregate(id)).toBeUndefined()
+    expect(() => invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id)).not.toThrow()
+    expect(getCase(id)).toBeUndefined()
+    expect(readAggregate(id)).toBeUndefined()
   })
 
   test('frozen CanonicalPlan forbids legacy settings upgrade before either file changes', async () => {
