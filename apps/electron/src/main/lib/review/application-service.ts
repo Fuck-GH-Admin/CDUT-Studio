@@ -261,6 +261,13 @@ export function correctObservation(
 ): Promise<ReviewCommandResult<Observation>> {
   return submitCommand<CorrectObservationPayload, Observation>(caseId, { ...command, type: 'CorrectObservation' }, (aggregate, payload) => {
     if (!payload.reason.trim()) throw new CommandValidationError('VALIDATION_FAILED', '更正必须附理由（保留更正历史）')
+    const currentVersions = new Set(aggregate.caseV2.documents.filter((document) => document.active !== false).map((document) => document.versionId))
+    if (payload.sourceRefs.some((ref) => ref.caseId !== caseId || !currentVersions.has(ref.documentVersionId))) {
+      throw new CommandValidationError('STALE_INPUT', '更正引用了不存在、跨案或已归档的材料版本')
+    }
+    if (aggregate.sourceValidityRevocations?.length && payload.sourceRefs.length === 0) {
+      throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '材料换版后重新确认事实必须指向当前原件')
+    }
     return {
       summary: `更正事实 ${payload.subjectId}.${payload.fieldKey}`,
       mutate: (draft) => {
@@ -294,7 +301,12 @@ export function setEvidenceLink(caseId: string, command: { requestId: string; ac
   return submitCommand<SetEvidenceLinkPayload, EvidenceLink[]>(caseId, { ...command, type: 'SetEvidenceLink' }, (aggregate, payload) => {
     if (payload.evidenceLinkId) {
       if (!payload.status) throw new CommandValidationError('VALIDATION_FAILED', '证明关联状态缺失')
-      if (!aggregate.evidenceLinks.some((link) => link.id === payload.evidenceLinkId)) throw new CommandValidationError('NOT_FOUND', '证明关联不存在')
+      const existingLink = aggregate.evidenceLinks.find((link) => link.id === payload.evidenceLinkId)
+      if (!existingLink) throw new CommandValidationError('NOT_FOUND', '证明关联不存在')
+      if (payload.status === 'confirmed' && !aggregate.caseV2.documents.some((document) =>
+        document.versionId === existingLink.documentVersionId && document.active !== false)) {
+        throw new CommandValidationError('STALE_INPUT', '已归档的证据不得重新确认为当前证据')
+      }
       return {
         summary: `审核员${payload.status === 'confirmed' ? '确认' : '取消'}证明关联 ${payload.evidenceLinkId}`,
         mutate: (draft) => {
@@ -304,6 +316,13 @@ export function setEvidenceLink(caseId: string, command: { requestId: string; ac
       }
     }
     if (!payload.supportsFact.trim()) throw new CommandValidationError('VALIDATION_FAILED', '绑定必须说明支持的事实')
+    if (!aggregate.caseV2.documents.some((document) =>
+      document.versionId === payload.documentVersionId && document.active !== false)) {
+      throw new CommandValidationError('STALE_INPUT', '证据版本不存在或已归档')
+    }
+    if (!payload.subjectIds.length || payload.subjectIds.some((id) => !aggregate.caseV2.subjects.some((subject) => subject.id === id))) {
+      throw new CommandValidationError('VALIDATION_FAILED', '证据关联目标不存在或为空')
+    }
     return {
       summary: `绑定证据 ${payload.documentVersionId} → ${payload.subjectIds.length} 个事项`,
       mutate: (draft) => {
