@@ -165,9 +165,10 @@ export async function ensureWorkspaceAggregateV2(caseId: string): Promise<CaseAg
 export async function syncWorkspaceProjectionV2(caseId: string): Promise<CaseAggregateV2> {
   ensureBuiltinTemplateDrafts({ getTemplate, saveDraft })
   let current = readAggregate(caseId) ?? await initializeAggregate(caseId)
-  // A native aggregate never takes incoming V1 projections, even if a stale
-  // legacy case.json happens to share its ID. Only legacy-migrated cases sync.
-  if (!current.receiptLog.some((receipt) => receipt.type === 'EnsureReviewWorkspaceAggregate')) return current
+  // A native aggregate never takes incoming V1 projections; archived cases
+  // also never reopen just because a legacy UI reads an old case.json.
+  if (current.caseV2.stage === 'archived' ||
+      !current.receiptLog.some((receipt) => receipt.type === 'EnsureReviewWorkspaceAggregate')) return current
   if (!current.d2RuntimePlan && !current.canonicalPlan) {
     await upgradeLegacyComprehensiveTemplateAssignment(caseId)
   }
