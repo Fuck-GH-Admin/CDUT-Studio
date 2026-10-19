@@ -355,6 +355,22 @@ export interface CaseAggregateV2 {
   supplements: SupplementRequest[]
   appeals: Appeal[]
   receiptLog: CommandReceipt[]
+  /**
+   * C2's Main-only technical proposal journal. These records are NOT
+   * ReviewRunV2, formal CheckResult, ReadReceipt, or BusinessDecision.
+   * Authoritative execution remains gated on physical Host/source admission.
+   */
+  v3TechnicalExecution?: {
+    run: import('./review-v3-c0').RunEvidenceIdentity
+    admittedAtRevision: number
+    events: Array<{
+      sequence: number
+      eventId: string
+      proposal: import('./review-v3-execution').V3ExecutionProposal
+      committedAt: string
+    }>
+    terminalStatus?: import('./review-v3-execution').V3TechnicalTerminal
+  }
   /** 事项最终认定（可选，兼容既有 state.v2.json）。 */
   adjudications?: SubjectAdjudication[]
   /** Bound immutable Dev-B CanonicalPlan; upgrades preserve earlier plans. */
