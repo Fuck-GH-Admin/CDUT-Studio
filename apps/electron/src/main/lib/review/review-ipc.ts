@@ -1,6 +1,7 @@
 import { bindLocalReviewerCommand } from './review-ipc-actor-guard'
 import { bindC0LocalCaseCommand, bindC0LocalCreateIntent, assertC0ReviewMainSender } from './review-c0-authority'
 import { assertSafeReviewStorageId } from './review-storage-id'
+import { registerCMainV3AuthorPlanIpc } from './review-v3-main-author-plan-ipc'
 /**
  * 内容审核专区 - IPC 处理器注册
  *
@@ -85,6 +86,10 @@ function requireString(value: unknown, name: string): string {
  * 由 registerIpcHandlers() 在应用启动时调用一次（幂等由外层守卫保证）。
  */
 export function registerReviewIpc(): void {
+  // Dev-C C-MAIN-WIRE: real Main channels, fail closed without independent
+  // B1 current author grant and an authorized published school Plan issuer.
+  registerCMainV3AuthorPlanIpc()
+
   // 启动恢复：上次进程遗留的 queued/running 运行标 interrupted（08 设计 §5）
   try {
     const { markStaleRunsInterrupted } = require('./run-store-v2') as typeof import('./run-store-v2')
