@@ -57,6 +57,13 @@ export function getV3ReviewRunRecord(caseId: string): ReviewRunRecordV3 | undefi
       record.terminalEventId !== journal.events[journal.events.length - 1]?.eventId ||
       record.terminal !== journal.terminalStatus) return undefined
 
+  const publishedPlanSnapshot = [
+    aggregate.canonicalPlan, ...(aggregate.canonicalPlanHistory ?? []),
+  ].find(candidate => candidate?.planId === record.plan.planId &&
+    candidate.fingerprint === record.plan.fingerprint)
+  if (!publishedPlanSnapshot ||
+      JSON.stringify(publishedPlanSnapshot) !== JSON.stringify(record.plan)) return undefined
+
   const sealed = aggregate.receiptLog.filter(receipt =>
     receipt.type === 'SealV3ReviewRun' &&
     receipt.payloadHash === payloadHash('SealV3ReviewRun', {
