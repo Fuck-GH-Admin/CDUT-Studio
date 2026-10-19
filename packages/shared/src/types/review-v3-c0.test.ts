@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { REVIEW_C0_SCHEMA_VERSION as v, assertC0CanonicalPlan, assertC0SourceIdentity,
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { REVIEW_C0_SCHEMA_VERSION as v, assertC0CaseAuthorization, assertC0CanonicalPlan, assertC0SourceIdentity,
   assertC0RunEvidenceIdentity, assertC0ExecutionEvent, assertC0BatchBinding,
   assertC0ImportBatch, assertC0ReviewBatchAttempt, assertC0OutboxReceipt } from '@profer/shared'
 const h = 'a'.repeat(64)
@@ -54,5 +56,60 @@ describe('C0 schema runtime validation: no silent downgrade', () => {
     expect(() => assertC0OutboxReceipt(r)).not.toThrow()
     expect(() => assertC0OutboxReceipt({ ...r, trustTier: 'externally-acknowledged' })).toThrow()
     expect(() => assertC0OutboxReceipt({ ...r, trustTier: 'externally-acknowledged', externalReference: 'ack' })).not.toThrow()
+  })
+})
+
+const fixtures = join(import.meta.dir, '../../../../docs/design/review-agent/acceptance/v3-dev-c0-r01/C0-SCHEMA-FIXTURES')
+function fixture(file: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(join(fixtures, file), 'utf8')) as Record<string, unknown>
+}
+describe('C0 committed schema fixtures are executable test inputs', () => {
+  test('Main-synthetic local reviewer fixture is not a school credential; role and scope checked again', () => {
+    const f = fixture('local-reviewer.json')
+    const command = {
+      schemaVersion: v, caseId: 'c1', requestId: 'r1', expectedRevision: 0,
+      payloadHash: 'a'.repeat(64), payload: { caseFieldValues: {} },
+      principal: f.principal,
+    }
+    expect(() => assertC0CaseAuthorization(command as never, 'UPDATE_FIELDS_V2')).not.toThrow()
+    expect(() => assertC0CaseAuthorization({ ...command, principal: {
+      ...(f.principal as object), role: 'teacher',
+    } } as never, 'UPDATE_FIELDS_V2')).toThrow('ROLE_FORBIDDEN')
+    expect(() => assertC0CaseAuthorization({ ...command, caseId: 'another-case' } as never, 'UPDATE_FIELDS_V2'))
+      .toThrow('CASE_SCOPE_FORBIDDEN')
+    expect(() => assertC0CaseAuthorization({ ...command, principal: {
+      ...(f.principal as object), source: 'school', role: 'teacher', assurance: 'local-device',
+    } } as never, 'UPDATE_FIELDS_V2')).toThrow('BLOCKED_AUTH')
+  })
+  test('four-channel L1-02 actor spoof fixture is explicitly untrusted', () => {
+    const f = fixture('school-spoof.json')
+    expect(f.expected).toBe('ACTOR_UNTRUSTED')
+    const actor = f.actor as Record<string, unknown>
+    expect(actor.actorSource).toBe('school')
+    expect(actor.role).toBe('teacher')
+    const mapping = fixture('L1-02-old-red-to-C0-rejection.json')
+    expect((mapping.channels as string[])).toHaveLength(4)
+    expect(mapping.oldProbeType).toBe('Main-handler-harness')
+    expect(mapping.liveElectronRendererAttackProven).toBe(false)
+  })
+  test('multi-target unknown and incompatible versions load from committed JSON', () => {
+    const plan = fixture('multi-target-unknown.json')
+    expect(() => assertC0CanonicalPlan(plan)).not.toThrow()
+    expect((plan.bindings as Array<{ applicability: string }>).every(x => x.applicability === 'unknown')).toBe(true)
+    const bad = fixture('wrong-schema-version.json')
+    expect(() => assertC0CanonicalPlan({ ...plan, schemaVersion: bad.schemaVersion })).toThrow()
+  })
+  test('review attempt without a precise Run remains structurally invalid', () => {
+    const bad = fixture('review-batch-missing-or-wrong-run.json')
+    expect(() => assertC0ReviewBatchAttempt(bad)).toThrow('BATCH_ATTEMPT_MISMATCH')
+  })
+  test('all four external receipt tiers are fixture-driven; mock cannot claim external ack', () => {
+    const f = fixture('outbox-tiers.json')
+    const cases = f.cases as Array<{ expected: string; receipt: unknown }>
+    expect(cases).toHaveLength(5)
+    for (const item of cases) {
+      if (item.expected === 'valid') expect(() => assertC0OutboxReceipt(item.receipt)).not.toThrow()
+      else expect(() => assertC0OutboxReceipt(item.receipt)).toThrow('CONTRACT_INVALID')
+    }
   })
 })

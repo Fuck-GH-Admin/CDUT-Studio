@@ -53,6 +53,10 @@ describe('C0 four actual Main IPC handler boundaries (synthetic harness)', () =>
       }, spoof) }],
     ] as const
     for (const [channel, input] of inputs) expect(() => invoke(channel, input)).toThrow('ACTOR_UNTRUSTED')
+    expect(() => invoke(REVIEW_IPC_CHANNELS.UPDATE_FIELDS_V2, {
+      caseId, command: command('local-role-spoof', 0, { caseFieldValues: {} },
+        { actorId: 'someone', actorSource: 'local', role: 'teacher' }),
+    })).toThrow('ACTOR_UNTRUSTED')
     expect(JSON.stringify(readAggregate(caseId))).toBe(before)
   })
 
