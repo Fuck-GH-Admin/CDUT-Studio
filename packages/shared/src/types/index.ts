@@ -102,3 +102,6 @@ export * from './review-v3-c0'
 
 // Review V3 signed CR-A-001 proposal-only event transport; C0/1 stays frozen.
 export * from './review-v3-execution'
+
+// Review V3 C-owned durable Run evidence snapshot; not a Decision/Gold ACK.
+export * from './review-v3-run'
