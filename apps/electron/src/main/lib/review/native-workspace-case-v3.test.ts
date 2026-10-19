@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { Actor } from '@profer/shared'
 import { createNativeWorkspaceCaseV3, updateNativeWorkspaceSettingsV3,
   registerNativeWorkspaceMaterialV3, removeNativeWorkspaceDocumentsV3,
-  nativeWorkspaceProjectionV3, updateNativeWorkspaceReviewItemV3 } from './native-workspace-case-v3'
+  nativeWorkspaceProjectionV3, updateNativeWorkspaceReviewItemV3, createNativeReviewItemV3 } from './native-workspace-case-v3'
 import { listAggregatesV2, readAggregate, writeAggregate } from './case-store-v2'
 import { getCase, getReviewCasesDir, listCases, saveCase } from './case-store'
 import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
@@ -196,6 +196,99 @@ describe('C1 native-first single Case writer and V1 read-only compatibility', ()
     await expect(createNativeWorkspaceCaseV3({ ...input, domainPackId: 'unknown-campus-authority' }, actor))
       .rejects.toThrow('未知审核领域')
     expect(listAggregatesV2().map(item => item.caseId)).toEqual(before)
+  })
+
+  test('manual Subject writes exact source block and receipt, idempotently replays and rejects spoof/stale source', async () => {
+    const created = await createNativeWorkspaceCaseV3(input, actor)
+    const id = created.view.id
+    const originalPath = join(root, `manual-declaration-${id}.txt`)
+    writeFileSync(originalPath, 'Physical original paragraph and human-declared review claim', 'utf8')
+    const document = await registerNativeWorkspaceMaterialV3(id, originalPath, 'application', actor)
+    const before = readAggregate(id)!
+    const version = before.caseV2.documents.find(doc => doc.documentId === document.id)!
+    const blockId = version.blocks[0]?.blockId
+    expect(typeof blockId).toBe('string')
+    const command = {
+      caseId: id, requestId: 'manual-item-idempotent-01',
+      expectedRevision: before.caseV2.revision,
+      documentVersionId: version.versionId, sourceBlockId: blockId,
+      title: 'Human declared project', category: '科研', declaredScore: 2.5,
+    }
+    const createdView = await createNativeReviewItemV3(command, actor)
+    expect(createdView.items).toHaveLength(1)
+    const item = createdView.items[0]!
+    expect(item).toMatchObject({
+      title: 'Human declared project', declaredScore: 2.5,
+      identifiedBy: 'manual', status: 'identified',
+      anchor: { documentId: version.documentId, blockId, precision: 'block' },
+    })
+    const after = readAggregate(id)!
+    expect(after.receiptLog.at(-1)?.type).toBe('CreateNativeReviewItemV3')
+    expect(after.caseV2.subjects[0]?.sourceRefs).toEqual([{
+      caseId: id, documentVersionId: version.versionId,
+      parseRevision: version.parseRevision, location: version.blocks[0]!.location,
+    }])
+    expect(after.caseV2.subjects[0]?.status).toBe('identified')
+    expect(after.observations).toHaveLength(0)
+    expect(after.decisions).toHaveLength(0)
+    const replay = await createNativeReviewItemV3(command, actor)
+    expect(replay.items.map(value => value.id)).toEqual([item.id])
+    expect(readAggregate(id)?.caseV2.revision).toBe(after.caseV2.revision)
+    expect(readAggregate(id)?.receiptLog).toHaveLength(after.receiptLog.length)
+
+    await expect(createNativeReviewItemV3({ ...command, declaredScore: 99 }, actor))
+      .rejects.toThrow('已被不同载荷使用')
+    await expect(createNativeReviewItemV3({
+      ...command, requestId: 'manual-item-conflict-02',
+      documentVersionId: 'cross-case-version',
+      expectedRevision: after.caseV2.revision,
+    }, actor)).rejects.toThrow('本案当前有效')
+    await expect(createNativeReviewItemV3({
+      ...command, requestId: 'manual-item-fakeblock-03',
+      sourceBlockId: 'renderer-forged-block',
+      expectedRevision: after.caseV2.revision,
+    }, actor)).rejects.toThrow('解析块不属于')
+    await expect(createNativeReviewItemV3({
+      ...command, requestId: 'manual-item-stalerev-04',
+    }, actor)).rejects.toThrow('案卷已被其他操作更新')
+    await expect(createNativeReviewItemV3({
+      ...command, requestId: 'manual-item-revoke-05',
+      expectedRevision: after.caseV2.revision,
+    }, actor, () => { throw new Error('MAIN_SESSION_REVOKED') }))
+      .rejects.toThrow('MAIN_SESSION_REVOKED')
+    expect(JSON.stringify(readAggregate(id))).toBe(JSON.stringify(after))
+    expect(existsSync(join(getReviewCasesDir(), id, 'case.json'))).toBe(false)
+
+    await removeNativeWorkspaceDocumentsV3(id, 'application', [version.documentId], actor)
+    const retired = readAggregate(id)!
+    expect(retired.caseV2.subjects[0]!.sourceRefs[0]?.documentVersionId).toBe(version.versionId)
+    expect(getCase(id)?.items).toHaveLength(0) // no current source, not false approval
+    await expect(createNativeReviewItemV3({
+      ...command, requestId: 'manual-item-retired-06',
+      expectedRevision: retired.caseV2.revision,
+    }, actor)).rejects.toThrow('本案当前有效')
+  })
+
+  test('file-level manual declaration records honest file precision when no parsed block is selected', async () => {
+    const created = await createNativeWorkspaceCaseV3(input, actor)
+    const id = created.view.id
+    const sourcePath = join(root, `file-level-${id}.txt`)
+    writeFileSync(sourcePath, 'Human checks physical file without a specific parser block', 'utf8')
+    const document = await registerNativeWorkspaceMaterialV3(id, sourcePath, 'application', actor)
+    const aggregate = readAggregate(id)!
+    const version = aggregate.caseV2.documents.find(doc => doc.documentId === document.id)!
+    const view = await createNativeReviewItemV3({
+      caseId: id, requestId: 'manual-file-level-07',
+      expectedRevision: aggregate.caseV2.revision,
+      documentVersionId: version.versionId, title: 'Whole-file claim',
+      category: '待核对', declaredScore: 0,
+    }, actor)
+    expect(view.items[0]?.anchor).toMatchObject({
+      documentId: document.id, precision: 'document',
+    })
+    expect(view.items[0]?.anchor.blockId).toBeUndefined()
+    expect(readAggregate(id)?.caseV2.subjects[0]?.sourceRefs[0]?.location)
+      .toEqual({ kind: 'file' })
   })
 
 })
