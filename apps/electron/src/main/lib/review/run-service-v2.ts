@@ -99,6 +99,9 @@ export async function runReviewCaseV2(
   executors: Record<NodeKind, NodeExecutor>,
   options: StartRunOptions = {},
 ): Promise<ReviewRunV2> {
+  if (caseV2.stage === 'archived') {
+    throw new Error('案卷已经归档，不允许启动或续跑审核')
+  }
   const runId = options.runId ?? options.resumeRunId ?? `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const observationSnapshot = options.observationSnapshot ?? []
   const evidenceSnapshot = options.evidenceSnapshot ?? []
