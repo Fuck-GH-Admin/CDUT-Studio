@@ -191,7 +191,7 @@ describe('C2-R04 single Main-local Plan/Owner/Host/Pi assembly', () => {
     f.assembly.invalidateRun(f.run)
     expect((await f.record()).ok).toBe(false)
     expect(() => f.assembly.rememberObservedHostReceipt(f.event.hostReceiptId))
-      .toThrow('Recycled')
+      .toThrow('Run invalidated')
     f.assembly.close()
     f.assembly.close()
     expect(() => f.assembly.rememberObservedHostReceipt(f.event.hostReceiptId))
