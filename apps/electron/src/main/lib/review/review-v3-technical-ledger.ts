@@ -6,6 +6,7 @@
  * physical Host receipt at commit. Journal status never grants a formal
  * ReviewRun, Check, ReadReceipt, school Decision or external Outbox ACK.
  */
+import { createHash } from 'node:crypto'
 import {
   assertC0RunEvidenceIdentity, C0ContractError,
   type Actor, type CaseAggregateV2, type CanonicalPlan,
@@ -47,6 +48,16 @@ const canonical = (value: unknown): string => {
 }
 const sameRun = (a: RunEvidenceIdentity, b: RunEvidenceIdentity): boolean =>
   canonical(a) === canonical(b)
+
+/** Excludes only C's technical journaling and revision/timestamp churn.
+ * Every real business mutation (including out-of-band data changes) must
+ * invalidate the previously frozen admission before another Host event.
+ */
+function frozenInputDigest(record: CaseAggregateV2): string {
+  const { receiptLog: _receipts, v3TechnicalExecution: _journal, caseV2, ...business } = record
+  const { revision: _revision, updatedAt: _updatedAt, ...caseInputs } = caseV2
+  return createHash('sha256').update(canonical({ caseInputs, business })).digest('hex')
+}
 
 function assertPreparedPlan(aggregate: CaseAggregateV2, run: RunEvidenceIdentity): CanonicalPlan {
   stageGuard(aggregate)
@@ -101,6 +112,7 @@ export function admitV3TechnicalRun(
       mutate: draft => {
         draft.v3TechnicalExecution = {
           run: structuredClone(run),
+          frozenInputDigest: frozenInputDigest(aggregate),
           admittedAtRevision: aggregate.caseV2.revision + 1,
           events: [],
         }
@@ -125,6 +137,9 @@ export function recordV3TechnicalProposal(
     if (!sameRun(event.run, journal.run) ||
         aggregate.canonicalPlan.fingerprint !== journal.run.planFingerprint)
       throw new CommandValidationError('STALE_INPUT', '事件试图越过原始 Run/Plan 身份')
+    if (journal.frozenInputDigest !== frozenInputDigest(aggregate))
+      throw new CommandValidationError('STALE_INPUT',
+        '案卷业务输入或材料证据自 Run 准入后已改变，禁止继续消费旧事件')
     // Case revision may grow due to this very journal's CAS receipts; no
     // unrelated business write (material, Subject, Plan, archive, etc.) may
     // mutate the frozen run input between admission and this Host event.
