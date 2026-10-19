@@ -54,6 +54,9 @@ export async function archiveReviewCaseV3(
     return {
       summary: '案卷软归档（保留原件、历史运行与所有业务回执）',
       mutate: draft => {
+        if (snapshot.caseArchive?.restoredAt) {
+          draft.caseArchiveHistory = [...(snapshot.caseArchiveHistory ?? []), snapshot.caseArchive]
+        }
         draft.caseArchive = {
           previousStage: snapshot.caseV2.stage,
           archivedAt: new Date().toISOString(),
