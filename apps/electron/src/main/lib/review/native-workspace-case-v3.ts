@@ -32,7 +32,7 @@ export type NativeCreateWorkspaceInputV3 = {
   applicant: string
   academicYear: string
   domainPackId?: string
-  reviewTemplate?: { templateId: string; version: number }
+  reviewTemplate?: { templateId: string; version: number } | null
 }
 
 export function isNativeWorkspaceCaseV3(aggregate: CaseAggregateV2 | undefined): boolean {
@@ -217,7 +217,7 @@ export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceIn
   if (!isKnownDomainPack(input.domainPackId))
     throw new CommandValidationError('VALIDATION_FAILED', '未知审核领域不能静默回退综测并创建正式业务案卷')
   const domain = resolveDomainPack(input.domainPackId).id
-  const template = resolvedTemplate(domain, input.reviewTemplate)
+  const template = input.reviewTemplate === null ? undefined : resolvedTemplate(domain, input.reviewTemplate)
   const caseId = `case-${randomUUID().replace(/-/g, '')}`
   const now = new Date().toISOString()
   const state: ReviewCaseV2 = {
