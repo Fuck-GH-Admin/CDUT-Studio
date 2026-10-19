@@ -192,7 +192,9 @@ function isLegacyProjectionAllowed(caseId: string): boolean {
   const statePath = join(getCaseDir(caseId), 'state.v2.json')
   if (!existsSync(statePath)) return true
   const state = readAggregate(caseId)
-  return !!state?.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')
+  // Even a migrated Case is read-only while its native aggregate is archived.
+  return state?.caseV2.stage !== 'archived' &&
+    !!state?.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')
 }
 
 function assertWritableLegacyProjection(caseId: string): void {
