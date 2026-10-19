@@ -373,6 +373,8 @@ export interface CaseAggregateV2 {
     }>
     terminalStatus?: import('./review-v3-execution').V3TechnicalTerminal
   }
+  /** C2 Main-only, sealed immutable Run evidence (not ReviewRunV2 shadow). */
+  v3ReviewRun?: import('./review-v3-run').ReviewRunRecordV3
   /** 事项最终认定（可选，兼容既有 state.v2.json）。 */
   adjudications?: SubjectAdjudication[]
   /** Bound immutable Dev-B CanonicalPlan; upgrades preserve earlier plans. */
