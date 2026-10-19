@@ -70,9 +70,10 @@ export class CMainRemovalConsentGate {
   /** Called synchronously from the authoritative Case CAS removal callback. */
   consumeAtCommit(ctx: CMainRemovalCommitContext): void {
     if (this.closed) denied('GATE_CLOSED')
-    if (!this.source) denied('MAIN_OBSERVER_NOT_INSTALLED')
-    const consent = this.source.getObservedMainHumanConsent(ctx.caseId, ctx.requestId)
-    if (!consent) denied('PHYSICAL_HUMAN_CONFIRMATION_MISSING')
+    const observer = this.source
+    if (!observer) throw new Error('C_MAIN_REMOVAL_CONSENT_MAIN_OBSERVER_NOT_INSTALLED')
+    const consent = observer.getObservedMainHumanConsent(ctx.caseId, ctx.requestId)
+    if (!consent) throw new Error('C_MAIN_REMOVAL_CONSENT_PHYSICAL_HUMAN_CONFIRMATION_MISSING')
     if (!safe(consent.approvalId) || this.consumedIds.has(consent.approvalId)) {
       denied('APPROVAL_ALREADY_USED_OR_INVALID')
     }
