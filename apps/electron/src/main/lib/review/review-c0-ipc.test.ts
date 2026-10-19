@@ -36,7 +36,12 @@ describe('C0 four actual Main IPC handler boundaries (synthetic harness)', () =>
     const c: ReviewCaseV2 = {
       id: caseId, templateId: 't', templateVersion: 1, title: 'synthetic', objectType: 'person',
       caseFields: {}, subjects: [{ id: 's1', type: 'item', title: 'item', fields: {}, sourceRefs: [],
-        correction: 'user-confirmed', status: 'identified' }], documents: [],
+        correction: 'user-confirmed', status: 'identified' }], documents: [{
+        documentId: 'd1', versionId: 'd1', contentHash: 'a'.repeat(64),
+        role: 'evidence', fileName: 'c0-harness-evidence.txt',
+        mimeType: 'text/plain', sizeBytes: 1, assetPath: 'source-docs/d1/c0-harness-evidence.txt',
+        parseRevision: 1, parseStatus: 'parsed', blocks: [], usage: 'registered', active: true,
+      }],
       stage: 'draft', revision: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
     await createAggregate(caseId, c)
