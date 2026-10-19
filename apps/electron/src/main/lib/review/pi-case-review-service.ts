@@ -1078,7 +1078,7 @@ export function cancelPiReviewRunForSession(sessionId: string, assignment: Revie
 
 export function updatePiReviewReadActivity(binding: PiReviewBinding, documents: CaseAggregateV2['caseV2']['documents'], summary: string): void {
   const run = getRunV2(binding.caseId, binding.runId)
-  if (!run || run.status !== 'running') return
+  if (!run || run.status !== 'running' || getCaseV2Aggregate(binding.caseId)?.caseV2.stage === 'archived') return
   const state = readArtifact<PiDocumentReadState>(binding.caseId, binding.runId, 'node-pi-read-state')
   run.coverage.documents = finalizePiDocumentCoverage({
     documents,
