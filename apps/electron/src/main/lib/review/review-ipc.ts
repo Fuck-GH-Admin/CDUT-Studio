@@ -1,4 +1,5 @@
 import { bindLocalReviewerCommand } from './review-ipc-actor-guard'
+import { bindC0LocalCaseCommand, bindC0LocalCreateIntent } from './review-c0-authority'
 import { assertSafeReviewStorageId } from './review-storage-id'
 /**
  * 内容审核专区 - IPC 处理器注册
@@ -512,21 +513,22 @@ export function registerReviewIpc(): void {
     publishComprehensiveFixture({ getTemplate, saveDraft, publish: publishTemplate })
     return true
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, (_e, input: { caseId: string; templateId: string; version: number; payload: unknown; actor: import('@profer/shared').Actor }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, (event, input: { caseId: string; templateId: string; version: number; payload: unknown; actor?: import('@profer/shared').Actor; requestId?: string; expectedRevision?: number }) => {
     if (!input?.templateId) throw new Error('参数非法')
     assertSafeReviewStorageId(input?.caseId, 'caseId')
-    const { createCaseFromTemplate } = require('./application-service') as typeof import('./application-service')
-    return createCaseFromTemplate(input.templateId, input.version, input.payload as never, input.actor, input.caseId)
+    const command = bindC0LocalCreateIntent(event, input)
+    const { createCaseC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')
+    return createCaseC0(command as Parameters<typeof createCaseC0>[0], input.templateId, input.version)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.GET_AGGREGATE_V2, (_e, caseId: string) => {
     assertSafeReviewStorageId(caseId, 'caseId')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
     return getCaseV2Aggregate(caseId)
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.UPDATE_FIELDS_V2, (_e, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
-    const { updateFields } = require('./application-service') as typeof import('./application-service')
-    const command = input.command as unknown as { requestId: string; actor: import('@profer/shared').Actor; expectedRevision: number; payload: unknown }
-    return updateFields(input.caseId, command as unknown as Parameters<typeof updateFields>[1])
+  ipcMain.handle(REVIEW_IPC_CHANNELS.UPDATE_FIELDS_V2, (event, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
+    const command = bindC0LocalCaseCommand(event, input?.caseId, 'UPDATE_FIELDS_V2', input?.command)
+    const { updateFieldsC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')
+    return updateFieldsC0(command as Parameters<typeof updateFieldsC0>[0])
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.EXPORT_REPORT_V2, (_e, caseId: string) => {
     if (typeof caseId !== 'string' || !caseId) throw new Error('参数 caseId 非法')
@@ -583,15 +585,15 @@ export function registerReviewIpc(): void {
     const aggregate = getCaseV2Aggregate(input.caseId)
     return !aggregate || isWorkspaceRunStaleV2(aggregate, input.runId)
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.CORRECT_OBSERVATION_V2, (_e, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
-    const { correctObservation } = require('./application-service') as typeof import('./application-service')
-    const command = input.command as unknown as { requestId: string; actor: import('@profer/shared').Actor; expectedRevision: number; payload: unknown }
-    return correctObservation(input.caseId, command as unknown as Parameters<typeof correctObservation>[1])
+  ipcMain.handle(REVIEW_IPC_CHANNELS.CORRECT_OBSERVATION_V2, (event, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
+    const command = bindC0LocalCaseCommand(event, input?.caseId, 'CORRECT_OBSERVATION_V2', input?.command)
+    const { correctObservationC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')
+    return correctObservationC0(command as Parameters<typeof correctObservationC0>[0])
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.SET_EVIDENCE_LINK_V2, (_e, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
-    const { setEvidenceLink } = require('./application-service') as typeof import('./application-service')
-    const command = input.command as unknown as { requestId: string; actor: import('@profer/shared').Actor; expectedRevision: number; payload: unknown }
-    return setEvidenceLink(input.caseId, command as unknown as Parameters<typeof setEvidenceLink>[1])
+  ipcMain.handle(REVIEW_IPC_CHANNELS.SET_EVIDENCE_LINK_V2, (event, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
+    const command = bindC0LocalCaseCommand(event, input?.caseId, 'SET_EVIDENCE_LINK_V2', input?.command)
+    const { setEvidenceLinkC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')
+    return setEvidenceLinkC0(command as Parameters<typeof setEvidenceLinkC0>[0])
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_DISPOSITION_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { recordWorkspaceDispositionV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')

@@ -96,3 +96,6 @@ export * from './study'
 
 // 下一代高精 PDF 解析引擎（全要素文档 AST 契约）
 export * from './pdf'
+
+// Review V3 C0 frozen cross-track contracts (no second Case store).
+export * from './review-v3-c0'

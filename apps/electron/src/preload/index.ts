@@ -4007,7 +4007,7 @@ const reviewAPI = {
   migrateCaseV2: (caseId: string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.MIGRATE_CASE_V2, caseId) as Promise<{ migrated: boolean; note: string; caseV2?: import('@profer/shared').ReviewCaseV2 }>,
   seedFixtureV2: () => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.SEED_FIXTURE_V2) as Promise<boolean>,
-  createCaseV2: (input: { caseId: string; templateId: string; version: number; payload: unknown; actor: import('@profer/shared').Actor }) =>
+  createCaseV2: (input: { caseId: string; templateId: string; version: number; payload: unknown; /** @deprecated transport-only; Main rebinds Actor */ actor?: import('@profer/shared').Actor; requestId?: string; expectedRevision?: number }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, input) as Promise<import('@profer/shared').ReviewCaseV2 | undefined>,
   getAggregateV2: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.GET_AGGREGATE_V2, caseId) as Promise<import('@profer/shared').CaseAggregateV2 | undefined>,
   updateFieldsV2: (input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) =>
