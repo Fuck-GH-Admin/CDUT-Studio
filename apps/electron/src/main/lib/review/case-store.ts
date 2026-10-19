@@ -192,9 +192,11 @@ function isLegacyProjectionAllowed(caseId: string): boolean {
   const statePath = join(getCaseDir(caseId), 'state.v2.json')
   if (!existsSync(statePath)) return true
   const state = readAggregate(caseId)
+  // Malformed-but-valid JSON also fails closed. Never trust a cast-only store.
+  if (!state || !state.caseV2 || !Array.isArray(state.receiptLog)) return false
   // Even a migrated Case is read-only while its native aggregate is archived.
-  return state?.caseV2.stage !== 'archived' &&
-    !!state?.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')
+  return state.caseV2.stage !== 'archived' &&
+    state.receiptLog.some(receipt => receipt?.type === 'EnsureReviewWorkspaceAggregate')
 }
 
 function assertWritableLegacyProjection(caseId: string): void {
