@@ -273,4 +273,54 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(third.caseArchiveHistory).toHaveLength(2)
   })
 
+
+  test('RESTORE_CASE_V3 derives Main Actor and receipt; stale, forged and cross-cycle requests fail closed', async () => {
+    const id = 'v3-c1-main-trusted-restore'
+    saveCase(legacy(id))
+    const initial = await ensureWorkspaceAggregateV2(id)
+    writeAggregate({ ...initial, caseV2: { ...initial.caseV2, stage: 'decided' } })
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id))
+    const archived = readAggregate(id)!
+    const input = {
+      caseId: id, expectedRevision: archived.caseV2.revision,
+      reason: '用户明确要求恢复案卷并重新审核',
+    }
+    const bytes = JSON.stringify(archived)
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, {
+      ...input, expectedRevision: initial.caseV2.revision,
+    }))).rejects.toThrow('VERSION_CONFLICT')
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, {
+      ...input, actor: { actorId: 'fake-school', actorSource: 'school', role: 'teacher' },
+    }))).rejects.toThrow('ACTOR_UNTRUSTED')
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, {
+      ...input, requestId: 'renderer-controls-replay',
+    }))).rejects.toThrow('ACTOR_UNTRUSTED')
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, input,
+      { sender, senderFrame: { id: 11 } }))).rejects.toThrow('SENDER_UNTRUSTED')
+    expect(JSON.stringify(readAggregate(id))).toBe(bytes)
+
+    const restored = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, input)) as {
+      ok: boolean; receipt: { type: string; requestId: string; actor: { actorId: string } }
+    }
+    expect(restored.ok).toBe(true)
+    expect(restored.receipt.type).toBe('RestoreReviewCaseV3')
+    expect(restored.receipt.actor.actorId).toBe('local-reviewer')
+    const after = readAggregate(id)!
+    expect(after.caseV2.stage).toBe('draft')
+    expect(after.caseArchive?.previousStage).toBe('decided')
+    expect(after.caseV2.revision).toBe(archived.caseV2.revision + 1)
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, input))
+    expect(JSON.stringify(readAggregate(id))).toBe(JSON.stringify(after))
+
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id))
+    const secondArchive = readAggregate(id)!
+    const second = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, {
+      ...input, expectedRevision: secondArchive.caseV2.revision,
+    })) as { ok: boolean; receipt: { requestId: string } }
+    expect(second.ok).toBe(true)
+    expect(second.receipt.requestId).not.toBe(restored.receipt.requestId)
+    expect(readAggregate(id)?.receiptLog.filter(r => r.type === 'RestoreReviewCaseV3')).toHaveLength(2)
+    expect(readAggregate(id)?.caseV2.stage).toBe('draft')
+  })
+
 })
