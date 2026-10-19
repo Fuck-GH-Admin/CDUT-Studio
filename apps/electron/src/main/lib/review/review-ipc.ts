@@ -155,7 +155,7 @@ export function registerReviewIpc(): void {
         academicYear: requireString(input.academicYear, 'academicYear'),
         ...(input.domainPackId ? { domainPackId: input.domainPackId } : {}),
         ...(input.reviewTemplate ? { reviewTemplate: input.reviewTemplate } : {}),
-      })
+      }, undefined, () => assertC0ReviewMainSender(event))
       return created.view
     },
   )
