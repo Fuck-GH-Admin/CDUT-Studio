@@ -338,6 +338,13 @@ export function computeCaseInputHash(reviewCase: ReviewCase): string {
 export function deleteCase(caseId: string): void {
   const dir = getCaseDir(caseId)
   if (!existsSync(dir)) return
+  // The original V1 delete removed the entire shared directory, including
+  // the authoritative V2 aggregate, Receipts and retained evidence. Until a
+  // C-owned archive/tombstone transaction exists, deleting such a Case from
+  // legacy IPC is forbidden, even for a migrated V1 Case or corrupt V2 state.
+  if (existsSync(join(dir, 'state.v2.json'))) {
+    throw new Error('已有 V2 业务案卷禁止通过旧版删除入口清除；请使用正式案卷归档流程')
+  }
   try {
     rmSync(dir, { recursive: true, force: true })
     console.log(`[审核专区] 已删除案卷: ${caseId}`)
