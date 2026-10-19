@@ -323,4 +323,32 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(readAggregate(id)?.caseV2.stage).toBe('draft')
   })
 
+
+  test('one malformed native summary cannot hide valid archived Cases or forge cross-case IDs', async () => {
+    const goodId = 'v3-c1-valid-summary-survives-corrupt'
+    const badId = 'v3-c1-bad-native-summary'
+    const crossedId = 'v3-c1-cross-directory-summary'
+    saveCase(legacy(goodId))
+    const initial = await ensureWorkspaceAggregateV2(goodId)
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, goodId))
+    const archived = readAggregate(goodId)!
+    expect(archived.caseV2.stage).toBe('archived')
+
+    const { mkdirSync } = await import('node:fs')
+    mkdirSync(join(getReviewCasesDir(), badId), { recursive: true })
+    mkdirSync(join(getReviewCasesDir(), crossedId), { recursive: true })
+    writeFileSync(join(getReviewCasesDir(), badId, 'state.v2.json'), '{}', 'utf8')
+    writeFileSync(join(getReviewCasesDir(), crossedId, 'state.v2.json'),
+      JSON.stringify({ ...archived, caseV2: { ...archived.caseV2, title: 'Wrong path owner' } }), 'utf8')
+
+    const summaries = listAggregatesV2()
+    expect(summaries.find(c => c.caseId === goodId)).toMatchObject({
+      stage: 'archived', revision: initial.caseV2.revision + 1,
+    })
+    expect(summaries.some(c => c.caseId === badId || c.caseId === crossedId)).toBe(false)
+    const viaMain = invoke(REVIEW_IPC_CHANNELS.LIST_CASES_V2, undefined) as Array<{ caseId: string }>
+    expect(viaMain.some(c => c.caseId === goodId)).toBe(true)
+    expect(viaMain.some(c => c.caseId === badId || c.caseId === crossedId)).toBe(false)
+  })
+
 })
