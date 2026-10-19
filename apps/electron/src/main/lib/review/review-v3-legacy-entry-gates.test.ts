@@ -160,6 +160,23 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(readAggregate(id)).toBeUndefined()
   })
 
+  test('valid JSON missing V2 shape cannot expose V1 shadow, archive or remove files', async () => {
+    const id = 'v3-c1-malformed-native-json'
+    saveCase(legacy(id))
+    const { mkdirSync } = await import('node:fs')
+    mkdirSync(join(getReviewCasesDir(), id), { recursive: true })
+    const state = join(getReviewCasesDir(), id, 'state.v2.json')
+    const shadow = join(getReviewCasesDir(), id, 'case.json')
+    writeFileSync(state, '{}', 'utf8')
+    const oldShadow = readFileSync(shadow, 'utf8')
+    expect(getCase(id)).toBeUndefined()
+    expect(listCases().some(x => x.id === id)).toBe(false)
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id)))
+      .rejects.toThrow('V2 状态损坏')
+    expect(readFileSync(shadow, 'utf8')).toBe(oldShadow)
+    expect(readFileSync(state, 'utf8')).toBe('{}')
+  })
+
   test('frozen CanonicalPlan forbids legacy settings upgrade before either file changes', async () => {
     const id = 'v3-c1-plan-frozen-legacy'
     saveCase(legacy(id))
