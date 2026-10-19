@@ -4027,8 +4027,8 @@ const reviewAPI = {
         previousFingerprint:string;nextFingerprint:string;
         acknowledgedRemovedIdentities:readonly string[]
       }}
-  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,input)
-    as Promise<import('@profer/shared').ReviewCommandResult<import('@profer/shared').CanonicalPlan>>,
+  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,input) as
+    Promise<import('@profer/shared').ReviewCommandResult<import('@profer/shared').CanonicalPlan>>,
   getAggregateV2: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.GET_AGGREGATE_V2, caseId) as Promise<import('@profer/shared').CaseAggregateV2 | undefined>,
   updateFieldsV2: (input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPDATE_FIELDS_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
