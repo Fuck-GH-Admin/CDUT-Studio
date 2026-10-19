@@ -125,11 +125,15 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
     // paragraph geometry (SourceRef remains explicitly file-level).
     const pinned = subject.fields.nativeSourceBlockId
     const pinnedBlockId = pinned?.kind === 'text' ? pinned.value : undefined
+    // TS cannot preserve narrowing of a mutable SourceRef union through
+    // the .find() callback; capture the verified paragraph locator once.
+    const paragraphIndex = source.location.kind === 'paragraph'
+      ? source.location.index : undefined
     const block = pinnedBlockId
       ? doc.blocks.find(entry => entry.blockId === pinnedBlockId)
-      : source.location.kind === 'paragraph'
+      : paragraphIndex !== undefined
         ? doc.blocks.find(entry => entry.location?.kind === 'paragraph' &&
-          entry.location.index === source.location.index)
+          entry.location.index === paragraphIndex)
         : undefined
     const anchor: ReviewItem['anchor'] = {
       documentId: doc.documentId,
