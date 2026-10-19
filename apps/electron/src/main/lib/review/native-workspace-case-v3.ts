@@ -118,7 +118,9 @@ function resolvedTemplate(domain: string, explicit?: { templateId: string; versi
   const mapped = mapDomainToTemplate(domain).templateId
   // Custom/unmapped domains remain genuinely unbound, not silently assigned
   // the comprehensive-assessment policy. No official Plan is installed.
-  return mapped ? getTemplate(mapped) : undefined
+  const selected = mapped ? getTemplate(mapped) : undefined
+  // A template draft/reference candidate is NOT an installed published Plan.
+  return selected?.status === 'published' ? selected : undefined
 }
 
 /** Main generates its own identity; V2 CAS+creation receipt commits first. */
@@ -216,15 +218,17 @@ export async function updateNativeWorkspaceSettingsV3(
 /** Native material intake uses the existing C-owned physical-byte V2 service. */
 export async function registerNativeWorkspaceMaterialV3(
   caseId: string, sourcePath: string, role: SourceDocument['role'], actor: Actor = MAIN_ACTOR,
+  authorizeAtCommit?: () => void,
 ): Promise<SourceDocument> {
   const current = readAggregate(caseId)
   if (!isNativeWorkspaceCaseV3(current) || !current || current.caseV2.stage === 'archived')
     throw new CommandValidationError('INVALID_TRANSITION', '案卷不存在、已归档或不是原生 V2 案卷')
+  authorizeAtCommit?.()
   const result = await registerMaterial(caseId, {
     requestId: `native-register-${randomUUID().replace(/-/g, '')}`,
     actor, expectedRevision: current.caseV2.revision,
     payload: { sourcePath, role },
-  })
+  }, authorizeAtCommit)
   if (!result.ok) throw new CommandValidationError(result.code, result.message)
   const doc = result.entity
   const view = nativeWorkspaceProjectionV3(result.aggregate)
