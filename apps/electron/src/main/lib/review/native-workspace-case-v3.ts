@@ -36,9 +36,35 @@ export type NativeCreateWorkspaceInputV3 = {
 }
 
 export function isNativeWorkspaceCaseV3(aggregate: CaseAggregateV2 | undefined): boolean {
-  return !!aggregate?.caseV2 && Array.isArray(aggregate.receiptLog) &&
-    aggregate.receiptLog[0]?.type === NATIVE_CREATE_RECEIPT_V3 &&
-    aggregate.receiptLog[0]?.revision === 0
+  const state = aggregate?.caseV2
+  if (!state || !Array.isArray(aggregate?.receiptLog) ||
+      aggregate.receiptLog[0]?.type !== NATIVE_CREATE_RECEIPT_V3 ||
+      aggregate.receiptLog[0]?.revision !== 0 ||
+      typeof state.id !== 'string' || !state.id ||
+      typeof state.title !== 'string' || !Array.isArray(state.documents) ||
+      !Array.isArray(state.subjects) || !state.caseFields ||
+      typeof state.caseFields !== 'object' || Array.isArray(state.caseFields)) return false
+  if (!state.documents.every(document => document && typeof document.documentId === 'string' &&
+      typeof document.versionId === 'string' && typeof document.fileName === 'string' &&
+      ['rule', 'application', 'evidence', 'attachment'].includes(document.role) &&
+      Array.isArray(document.blocks) && document.blocks.every(block =>
+        block && typeof block.blockId === 'string' && typeof block.text === 'string'))) return false
+  if (!state.subjects.every(subject => subject && typeof subject.id === 'string' &&
+      typeof subject.title === 'string' && subject.fields &&
+      typeof subject.fields === 'object' && !Array.isArray(subject.fields) &&
+      Array.isArray(subject.sourceRefs) &&
+      subject.sourceRefs.every(ref => ref && typeof ref.caseId === 'string' &&
+        typeof ref.documentVersionId === 'string' && Number.isSafeInteger(ref.parseRevision) &&
+        ref.location && typeof ref.location.kind === 'string'))) return false
+  const draft = state.nativeWorkspaceDraft
+  if (!draft) return true
+  return !!draft && typeof draft === 'object' && !Array.isArray(draft) &&
+    Array.isArray(draft.manualRules) &&
+    draft.manualRules.every(rule => rule && typeof rule.id === 'string' &&
+      typeof rule.title === 'string' && typeof rule.requirement === 'string') &&
+    (draft.subjectDocumentVersionIds === undefined ||
+      (Array.isArray(draft.subjectDocumentVersionIds) &&
+        draft.subjectDocumentVersionIds.every(id => typeof id === 'string')))
 }
 
 export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefined): ReviewCase | undefined {
