@@ -116,7 +116,7 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
     const ok = await actions.deleteCase(target.id)
     if (ok) {
       setDeleteOpen(false)
-      toast.success(`已删除案卷：${target.title}`)
+      toast.success(`已移出当前案卷：${target.title}`, { description: '包含 V2 业务记录的案卷已归档并保留历史数据。' })
     }
   }
 
@@ -227,13 +227,13 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title="删除案卷"
+        title="移除当前案卷"
         description={
           currentCase
-            ? `确认删除「${currentCase.title}」？该案卷的材料、规则大纲与审核记录会一并移除，且无法恢复。`
-            : '确认删除该案卷？'
+            ? `确认移除「${currentCase.title}」？已有 V2 业务记录的案卷将软归档并保留材料、运行及历史回执；仅未迁移的纯 V1 草稿仍按旧版规则删除。`
+            : '确认移除当前案卷？'
         }
-        confirmLabel="删除"
+        confirmLabel="移除"
         onConfirm={handleDelete}
       />
     </section>
