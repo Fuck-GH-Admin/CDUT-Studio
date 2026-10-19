@@ -90,7 +90,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
         applicant: applicant.trim(),
         academicYear: academicYear.trim() || defaultAcademicYear(),
         domainPackId,
-        reviewTemplate: selectedTemplate ? { templateId: selectedTemplate.templateId, version: selectedTemplate.version } : undefined,
+        reviewTemplate: selectedTemplate ? { templateId: selectedTemplate.templateId, version: selectedTemplate.version } : null,
       })
       if (!created) return
       toast.success(`已创建审核项目：${created.title}`, {
