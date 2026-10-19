@@ -9,13 +9,17 @@ import {
 } from '@profer/shared'
 import { CommandValidationError, submitCommand } from './case-store-v2'
 
-export type VerifyPublishedCanonicalPlan = (plan: CanonicalPlan) => void
+export type VerifyPublishedCanonicalPlan = (
+  plan: CanonicalPlan,
+  /** Same frozen Case snapshot under submitCommand CAS; optional for old mock verifiers. */
+  aggregate: CaseAggregateV2,
+) => void
 
 function checkPlan(caseRecord: CaseAggregateV2, plan: CanonicalPlan, verify: VerifyPublishedCanonicalPlan): void {
   assertC0CanonicalPlan(plan)
   // The external trust adapter MUST verify the published artifact provenance,
   // source module digests and fingerprint; caller-supplied DTOs are insufficient.
-  verify(plan)
+  verify(plan, caseRecord)
   if (plan.templateId !== caseRecord.caseV2.templateId ||
       plan.templateVersion !== String(caseRecord.caseV2.templateVersion)) {
     throw new CommandValidationError('VALIDATION_FAILED', 'Plan template/version is not the bound Case template')
