@@ -62,8 +62,20 @@ export function listAggregatesV2(): AggregateSummary[] {
     try { assertSafeReviewStorageId(entry, 'caseId') } catch { continue }
     const aggregate = readAggregate(entry)
     if (!aggregate) continue
+    // A parseable but malformed native state must not poison the entire Case
+    // selector or expose an unverified cross-directory identity. Do not try
+    // to resurrect a V1 shadow if this guard rejects a record.
+    const state = aggregate.caseV2
+    if (!state || state.id !== entry ||
+        typeof state.title !== 'string' || typeof state.stage !== 'string' ||
+        typeof state.templateId !== 'string' || !Number.isSafeInteger(state.templateVersion) ||
+        !Number.isSafeInteger(state.revision) || state.revision < 0 ||
+        typeof state.updatedAt !== 'string' || !Array.isArray(aggregate.receiptLog)) {
+      console.warn(`[审核V2聚合] 跳过损坏或身份不一致的原生案卷: ${entry}`)
+      continue
+    }
     out.push({
-      caseId: aggregate.caseV2.id,
+      caseId: state.id,
       title: aggregate.caseV2.title,
       stage: aggregate.caseV2.stage,
       revision: aggregate.caseV2.revision,
