@@ -305,9 +305,22 @@ export interface RatingEntryV2 {
   round: number
 }
 
+/** C1 source-current-validity audit entry. Original values/refs/receipts remain durable. */
+export interface SourceValidityRevocation {
+  documentVersionId: string
+  reason: 'archive' | 'replace'
+  at: string
+  observationIds: string[]
+  previouslyConfirmedObservationIds: string[]
+  evidenceLinkIds: string[]
+  previouslyConfirmedEvidenceLinkIds: string[]
+}
+
 export interface CaseAggregateV2 {
   caseV2: ReviewCaseV2
   observations: Observation[]
+  /** Current-applicability revocation ledger; absent in legacy aggregates. */
+  sourceValidityRevocations?: SourceValidityRevocation[]
   evidenceLinks: EvidenceLink[]
   dispositions: Array<{
     findingKey: string
