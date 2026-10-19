@@ -38,8 +38,8 @@ function fixture() {
   let manifest = run.inputManifestHash
   const registry = new C2MainPhysicalHostReceiptRegistry({
     getObservedPhysicalReceipt: id => observed.get(id),
-    getCurrentOwner: identity => active ? {
-      run: identity, permissionGrantId: grant,
+    getCurrentOwner: _identity => active ? {
+      run, permissionGrantId: grant,
       ownerGeneration: 4, inputManifestHash: manifest, active,
     } satisfies C2MainOwnerWitness : undefined,
   })
@@ -94,18 +94,20 @@ describe('C2-R03 Main physical Host receipt registry', () => {
     expect(h.registry.getPhysicalHostReceipt(h.host.hostReceiptId)).toBeUndefined()
   })
 
-  test('cross-Run physical evidence is not attachable to a different owner', () => {
+  test('physical receipt bound to another attempt cannot be registered under current Main Owner', () => {
     const f = fixture()
     f.observe()
     const other = { ...f.host, run: { ...f.run, attemptId: 'different' } }
     f.observed.set(f.host.hostReceiptId, other)
-    // Main sees a different Run from the one the caller would propose;
-    // C2's trusted port compares the exact immutable Run again at commit.
+    // A Main Owner registry returns the real pinned Run, not the candidate
+    // receipt's requested Run. No synthetic echo of an attacker run is valid.
+    expect(() => f.registry.rememberObservedReceipt(f.host.hostReceiptId))
+      .toThrow('Owner')
+    expect(f.registry.getPhysicalHostReceipt(f.host.hostReceiptId)).toBeUndefined()
+    f.observe()
     f.registry.rememberObservedReceipt(f.host.hostReceiptId)
     expect(f.registry.getPhysicalHostReceipt(f.host.hostReceiptId)?.run.attemptId)
-      .toBe('different')
-    f.observed.set(f.host.hostReceiptId, f.host)
-    expect(f.registry.getPhysicalHostReceipt(f.host.hostReceiptId)).toBeUndefined()
+      .toBe('attempt-1')
   })
 
   test('source version mismatch and rebound physical ID are rejected', () => {
