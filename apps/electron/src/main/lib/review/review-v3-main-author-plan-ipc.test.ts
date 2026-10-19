@@ -319,6 +319,9 @@ describe('C-MAIN-WIRE-R02 independently installed candidate read / formal write 
       getCaseGrant:f.authority.getCaseGrant,
       canUpgradeCase:f.authority.canUpgradeCase,
       publishedPlanSource:f.authority.publishedPlanSource,
+      // The Main-only writer needs its independently observed human source.
+      // This is a technical fixture, not a Renderer-supplied consent.
+      removalConsentSource:f.authority.removalConsentSource,
     })
     try{
       await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,
