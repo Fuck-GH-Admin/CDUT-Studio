@@ -9,6 +9,7 @@
 import type { Actor, ReviewCommandResult } from '@profer/shared'
 import { CommandValidationError, submitCommand } from './case-store-v2'
 import { assertSafeReviewStorageId } from './review-storage-id'
+import { listRunsV2 } from './run-store-v2'
 
 interface CaseLifecycleCommand {
   requestId: string
@@ -37,6 +38,13 @@ export async function archiveReviewCaseV3(
 ): Promise<ReviewCommandResult> {
   check(caseId, command)
   return submitCommand(caseId, { ...command, type: 'ArchiveReviewCaseV3' }, (snapshot) => {
+    // Do not hide an in-flight Pi/graph review by making its Case disappear.
+    // I/O and host cancellation need C2/C4's eventual shared durable lease.
+    const active = listRunsV2(caseId).find(run => run.status === 'running' || run.status === 'queued')
+    if (active) {
+      throw new CommandValidationError('INVALID_TRANSITION',
+        `案卷仍有进行中的审核 ${active.id}，请先停止并完成归档，再移除案卷`)
+    }
     if (snapshot.caseV2.stage === 'archived') {
       throw new CommandValidationError('INVALID_TRANSITION', '案卷已经归档')
     }
