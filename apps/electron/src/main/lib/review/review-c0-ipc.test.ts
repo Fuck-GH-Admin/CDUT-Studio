@@ -90,7 +90,7 @@ describe('C0 four actual Main IPC handler boundaries (synthetic harness)', () =>
     const [a, b] = await Promise.all([
       invoke(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, concurrent),
       invoke(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, concurrent),
-    ]) as Array<{ ok: boolean }>
+    ]) as [{ ok: boolean }, { ok: boolean }]
     expect(a.ok && b.ok).toBeTrue()
     expect(readAggregate(concurrent.caseId)!.receiptLog).toHaveLength(1)
   })
