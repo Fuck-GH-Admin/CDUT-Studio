@@ -27,7 +27,7 @@ import {
 } from '@profer/ui/primitives/dropdown-menu'
 import { DEFAULT_DOMAIN_PACK_ID, BUILTIN_DOMAIN_PACKS, resolveDomainPack } from '@profer/shared'
 import type { ReviewCaseSummary } from '@profer/shared'
-import { reviewCaseAtom, reviewCaseListAtom, reviewExecutionAtom, reviewWorkspaceSectionAtom, reviewWorkspaceTemplateAtom } from '@/atoms/review-atoms'
+import { reviewCaseAtom, reviewCaseListAtom, reviewExecutionAtom, reviewWorkspaceAggregateAtom, reviewWorkspaceSectionAtom, reviewWorkspaceTemplateAtom } from '@/atoms/review-atoms'
 import { cn } from '@/lib/utils'
 import { CreateCaseDialog } from './CreateCaseDialog'
 import { NativeManualItemDialog } from './NativeManualItemDialog'
@@ -52,6 +52,7 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
   const caseList = useAtomValue(reviewCaseListAtom)
   const execution = useAtomValue(reviewExecutionAtom)
   const activeTemplate = useAtomValue(reviewWorkspaceTemplateAtom)
+  const nativeAggregate = useAtomValue(reviewWorkspaceAggregateAtom)
   const templateRefresh = useAtomValue(templatesRefreshAtom)
   const setWorkspaceSection = useSetAtom(reviewWorkspaceSectionAtom)
 
@@ -174,6 +175,10 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
   }
 
   const demoUndeletable = currentCase?.isDemo === true
+  const nativeHumanDraft = !!currentCase && nativeAggregate?.caseV2.id === currentCase.id &&
+    nativeAggregate.receiptLog[0]?.type === 'CreateNativeWorkspaceCaseV3' &&
+    nativeAggregate.caseV2.stage === 'draft' &&
+    !nativeAggregate.canonicalPlan && !nativeAggregate.d2RuntimePlan
   const addHumanItem = (): void => {
     if (!currentCase) return
     setManualItemCaseId(currentCase.id)
@@ -219,8 +224,10 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
           <Plus size={13} />新建审核项目
         </Button>
         <Button type="button" size="sm" variant="outline" className="h-7 shrink-0 gap-1.5 px-2 text-xs"
-          disabled={!currentCase || demoUndeletable}
-          title="从本案已登记的真实申报材料中人工建立待审事项"
+          disabled={!nativeHumanDraft || demoUndeletable}
+          title={nativeHumanDraft
+            ? '从本案当前有效的真实申报材料中人工建立待审事项'
+            : '请选择未冻结的原生 V3 草稿案卷，传统案卷不能使用此原生写入口'}
           onClick={addHumanItem}>
           <Plus size={13}/>人工登记事项
         </Button>
