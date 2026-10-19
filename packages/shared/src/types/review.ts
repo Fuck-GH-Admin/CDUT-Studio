@@ -514,6 +514,8 @@ export const REVIEW_IPC_CHANNELS = {
   UPDATE_RULE_OUTLINE: 'review:update-rule-outline',
   /** 人工修正一条 AI 识别的申报事项。 */
   UPDATE_REVIEW_ITEM: 'review:update-review-item',
+  /** Local reviewer declares an item against an already registered exact source version. */
+  CREATE_NATIVE_REVIEW_ITEM_V3: 'review-v3:create-native-review-item',
   /** 安全解析案卷图像块的本地预览路径。 */
   GET_IMAGE_PREVIEW_PATH: 'review:get-image-preview-path',
   /** 获取 V2 案卷已登记原件的只读预览路径。 */
@@ -692,6 +694,25 @@ export interface UpdateRuleOutlineRequest {
 export interface UpdateReviewItemRequest {
   caseId: string
   itemId: string
+  title: string
+  category: string
+  declaredScore: number
+  level?: string
+  activityDate?: string
+  organizer?: string
+}
+
+/**
+ * Source-anchored native HUMAN declaration, not an AI fact or school decision.
+ * requestId is an opaque idempotency key, never an identity credential.
+ */
+export interface CreateNativeReviewItemV3Request {
+  caseId: string
+  requestId: string
+  expectedRevision: number
+  documentVersionId: string
+  /** Existing parsed block identity; when absent, location is explicitly file-level. */
+  sourceBlockId?: string
   title: string
   category: string
   declaredScore: number
