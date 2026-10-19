@@ -66,6 +66,9 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     })
     const beforeV1 = JSON.stringify(getCase(nativeId))
     const beforeV2 = JSON.stringify(readAggregate(nativeId))
+    expect(() => saveCase({ ...legacy(nativeId), title: 'Direct V1 shadow overwrite' }))
+      .toThrow('原生审核案卷禁止')
+    expect(JSON.stringify(getCase(nativeId))).toBe(beforeV1)
     await expect(updateCase(nativeId, current => ({ ...current, title: 'Attempted rewrite' })))
       .rejects.toThrow('原生审核案卷禁止')
     expect(JSON.stringify(getCase(nativeId))).toBe(beforeV1)
@@ -85,6 +88,8 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     mkdirSync(join(getReviewCasesDir(), id), { recursive: true })
     writeFileSync(join(getReviewCasesDir(), id, 'state.v2.json'), '{invalid-json', 'utf8')
     const before = JSON.stringify(getCase(id))
+    expect(() => saveCase({ ...legacy(id), title: 'corrupt state overwritten' }))
+      .toThrow('原生审核案卷禁止')
     await expect(updateCase(id, original => ({ ...original, title: 'silent downgrade' })))
       .rejects.toThrow('原生审核案卷禁止')
     expect(JSON.stringify(getCase(id))).toBe(before)
@@ -114,6 +119,7 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     const id = 'v3-c1-legacy-title-update'
     saveCase(legacy(id))
     const first = await ensureWorkspaceAggregateV2(id)
+    expect(() => saveCase({ ...legacy(id), title: 'Direct legacy edit allowed' })).not.toThrow()
     const updated = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPDATE_CASE_SETTINGS, {
       caseId: id, title: 'User revised title',
     })) as { title: string }
