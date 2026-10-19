@@ -9,12 +9,11 @@
 import {
   assertC0RunEvidenceIdentity, C0ContractError,
   type Actor, type CaseAggregateV2, type CanonicalPlan,
-  type RunEvidenceIdentity, type V3ExecutionProposal,
-  type V3TrustedConsumptionContext, type ReviewCommandResult,
+  type RunEvidenceIdentity, type V3ExecutionProposal, type ReviewCommandResult,
 } from '@profer/shared'
 import { CommandValidationError, submitCommand } from './case-store-v2'
 import { validateV3ExecutionProposal } from './review-v3-execution-contract'
-import type { V3VerifiedHostReceipt } from './review-v3-execution-contract'
+import type { V3TrustedConsumptionContext, V3VerifiedHostReceipt } from './review-v3-execution-contract'
 
 // V3TrustedConsumptionContext and receipt types are defined in C Main,
 // not a Renderer-controllable shared DTO. Only main_service -> this module.
@@ -33,16 +32,21 @@ export type C2VerifyHostAtCommit = (
 ) => C2TrustedHostEvidence
 
 const stageGuard = (aggregate: CaseAggregateV2): void => {
-  if (aggregate.caseV2.stage === 'archived' || aggregate.caseArchive?.restoredAt === undefined &&
-      aggregate.caseV2.stage === 'archived')
+  if (aggregate.caseV2.stage === 'archived')
     throw new CommandValidationError('INVALID_TRANSITION', '已归档案卷不能执行技术审核')
 }
 const currentVersions = (aggregate: CaseAggregateV2): Set<string> =>
   new Set(aggregate.caseV2.documents
     .filter(doc => doc.active !== false).map(doc => doc.versionId))
-const own = (value: unknown): string => JSON.stringify(value)
+const canonical = (value: unknown): string => {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']'
+  const r = value as Record<string, unknown>
+  return '{' + Object.keys(r).filter(k => r[k] !== undefined).sort()
+    .map(k => JSON.stringify(k) + ':' + canonical(r[k])).join(',') + '}'
+}
 const sameRun = (a: RunEvidenceIdentity, b: RunEvidenceIdentity): boolean =>
-  own(a) === own(b)
+  canonical(a) === canonical(b)
 
 function assertPreparedPlan(aggregate: CaseAggregateV2, run: RunEvidenceIdentity): CanonicalPlan {
   stageGuard(aggregate)
@@ -132,7 +136,7 @@ export function recordV3TechnicalProposal(
       throw new CommandValidationError('INVALID_TRANSITION', '技术终态已记录，不接受后续写入')
     const proof = verifyHostAtCommit(aggregate, event)
     if (!proof || !proof.grantActive || !proof.permissionGrantId ||
-        !(proof.receipts instanceof Map))
+        !proof.receipts || typeof proof.receipts.get !== 'function')
       throw new CommandValidationError('DEPENDENCY_UNRESOLVED',
         '没有仍有效的 Main/Host 原件与工具回执')
     const ctx: V3TrustedConsumptionContext = {
