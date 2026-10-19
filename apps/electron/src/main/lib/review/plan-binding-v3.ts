@@ -76,14 +76,85 @@ export function bindCanonicalPlanV3(
   })
 }
 
+/**
+ * Dev-C B-CR-002-B: one removed obligation is the entire
+ * Check × target × object × subject × source-version-set identity.
+ *
+ * Changes of condition/outcome alone do NOT authorize deletion of a Check.
+ * Source-version replacement DOES remove the old obligation and needs ACK.
+ * The identity is deterministic and recomputed from BOTH frozen plans by
+ * Main inside the existing serialized Case transaction, not from UI diff.
+ */
+export interface CMainUpgradeRemovalAck {
+  readonly previousFingerprint:string
+  readonly nextFingerprint:string
+  readonly acknowledgedRemovedIdentities: readonly string[]
+}
+export type CMainAuthorizeRemovedPlanBindings = (
+  aggregate:CaseAggregateV2,
+  actor:Actor,
+  acknowledgement:CMainUpgradeRemovalAck,
+  computedRemoved:readonly string[],
+)=>void
+
+function obligationIdentity(binding:CanonicalPlan['bindings'][number]):string {
+  return JSON.stringify([
+    binding.checkKey,binding.targetKey,binding.objectKey,binding.subjectId,
+    [...binding.sourceVersionIds].sort(),
+  ])
+}
+/** UI may display this pure diff, but Main never trusts UI's claimed removal set. */
+export function describeRemovedPlanBindings(
+  before:CanonicalPlan,after:CanonicalPlan,
+):string[] {
+  assertC0CanonicalPlan(before)
+  assertC0CanonicalPlan(after)
+  const current=new Set(after.bindings.map(obligationIdentity))
+  return [...new Set(before.bindings.map(obligationIdentity))]
+    .filter(identity=>!current.has(identity)).sort()
+}
+function assertRemovalAckAtCommit(
+  aggregate:CaseAggregateV2,actor:Actor,before:CanonicalPlan,after:CanonicalPlan,
+  ack:CMainUpgradeRemovalAck|undefined,reason:string,
+  authorize:CMainAuthorizeRemovedPlanBindings|undefined,
+):number {
+  const removed=describeRemovedPlanBindings(before,after)
+  if(!removed.length) {
+    if(ack!==undefined) throw new CommandValidationError('VALIDATION_FAILED',
+      'Non-removal Plan upgrade must not invent a Check-removal ACK')
+    return 0
+  }
+  if(!ack || ack.previousFingerprint!==before.fingerprint ||
+    ack.nextFingerprint!==after.fingerprint ||
+    !Array.isArray(ack.acknowledgedRemovedIdentities) ||
+    ack.acknowledgedRemovedIdentities.length!==removed.length ||
+    ack.acknowledgedRemovedIdentities.some((id,i)=>
+      typeof id!=='string'||id!==removed[i]) ||
+    !reason.trim()) {
+    throw new CommandValidationError('VALIDATION_FAILED',
+      'Deleted Check×target×object×subject×sources requires exact explicit Main ACK')
+  }
+  if(typeof authorize!=='function') {
+    throw new CommandValidationError('DEPENDENCY_UNRESOLVED',
+      'Independent Main Principal/Owner/Subject removal approval unavailable')
+  }
+  // C/Main injects physical Principal, grant and current Owner validator;
+  // caller Actor/Renderer string is not a capability to authorize removal.
+  authorize(aggregate,actor,ack,removed)
+  return removed.length
+}
+
 /** Explicit operator ACK; no legacy projection / hot reload may call this. */
 export function upgradeCanonicalPlanV3(
   caseId: string,
   command: { requestId: string; actor: Actor; expectedRevision: number;
-    payload: { plan: CanonicalPlan; previousFingerprint: string; acknowledgement: string } },
+    payload: { plan: CanonicalPlan; previousFingerprint: string; acknowledgement: string;
+      removalAck?: CMainUpgradeRemovalAck } },
   verify: VerifyPublishedCanonicalPlan,
+  authorizeRemoved?: CMainAuthorizeRemovedPlanBindings,
 ): Promise<ReviewCommandResult<CanonicalPlan>> {
-  return submitCommand<{ plan: CanonicalPlan; previousFingerprint: string; acknowledgement: string }, CanonicalPlan>(caseId, { ...command, type: 'UpgradeCanonicalPlan' }, (aggregate, payload) => {
+  return submitCommand<{ plan: CanonicalPlan; previousFingerprint: string; acknowledgement: string;
+    removalAck?: CMainUpgradeRemovalAck }, CanonicalPlan>(caseId, { ...command, type: 'UpgradeCanonicalPlan' }, (aggregate, payload) => {
     const previous = aggregate.canonicalPlan
     if (!previous || previous.fingerprint !== payload.previousFingerprint) {
       throw new CommandValidationError('STALE_INPUT', 'Plan upgrade ACK does not identify the installed Plan')
@@ -93,8 +164,15 @@ export function upgradeCanonicalPlanV3(
     if (previous.fingerprint === payload.plan.fingerprint || previous.planId === payload.plan.planId) {
       throw new CommandValidationError('INVALID_TRANSITION', 'A new immutable Plan identity is required')
     }
+    // Removing an obligation is business-critical. Recheck BOTH Plan issuer
+    // sources under the existing durable Case CAS before Main-issued approval.
+    // A revoked historical issuer needs explicit future recovery, never UI ACK.
+    const removed=describeRemovedPlanBindings(previous,payload.plan)
+    if(removed.length) verify(previous,aggregate)
+    const removedCount=assertRemovalAckAtCommit(aggregate,command.actor,previous,
+      payload.plan,payload.removalAck,payload.acknowledgement,authorizeRemoved)
     return {
-      summary: `确认升级 Plan ${previous.planId} → ${payload.plan.planId}：${payload.acknowledgement.trim()}`,
+      summary: `确认升级 Plan ${previous.planId} → ${payload.plan.planId}（删除义务 ${removedCount} 项）：${payload.acknowledgement.trim()}`,
       mutate: (draft) => {
         draft.canonicalPlanHistory = [...(draft.canonicalPlanHistory ?? []), structuredClone(previous)]
         draft.canonicalPlan = structuredClone(payload.plan)
