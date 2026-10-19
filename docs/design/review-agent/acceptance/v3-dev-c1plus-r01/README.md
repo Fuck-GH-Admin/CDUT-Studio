@@ -15,9 +15,10 @@
 4. `run-service-v2.ts`: input hash now includes each material's active flag, so retiring a material invalidates an earlier Run rather than merely altering UI usage.
 5. `application-service.ts`: current evidence creation/reconfirmation refuses unknown/archived documents and unknown Subjects, manual SourceRef must match current case/current version; after archive un-attributed fact cannot be unconditionally reconfirmed.
 6. `workspace-business-service-v2.ts`: high-level current-Run boundary rejects stale source evidence; frozen CanonicalPlan cases are held from legacy-run formal decision until an authenticated C2 Run writer exists.
-7. `plan-binding-v3.ts`: explicit internal-only CanonicalPlan initial bind and version upgrade ACK via V2 CAS, records old immutable Plan and receipt. **The Dev-B publisher/provenance verifier is NOT yet integrated**. Test callbacks are synthetic and cannot authorize production template publication.
+7. `material-lifecycle-v3.ts`: a native aggregate ArchiveMaterialVersion typed CAS command (not yet public IPC) with documented reason, exact request replay, historical manualReadReceipt retention and stale evidence rejection.
+8. `plan-binding-v3.ts`: explicit internal-only CanonicalPlan initial bind and version upgrade ACK via V2 CAS, records old immutable Plan and receipt. **The Dev-B publisher/provenance verifier is NOT yet integrated**. Test callbacks are synthetic and cannot authorize production template publication.
 
-Tests committed: `source-current-validity-v3.test.ts`, `plan-binding-v3.test.ts`, additions to `workspace-service-v2.test.ts`. **Do not count as PASS until executed on the exact commit.** Major non-C1 legacy paths and IPC write matrix remain outside this patch.
+Tests committed: `source-current-validity-v3.test.ts`, `material-lifecycle-v3.test.ts`, `plan-binding-v3.test.ts`, additions to `workspace-service-v2.test.ts`. **Do not count as PASS until executed on the exact commit.** Major non-C1 legacy paths and IPC write matrix remain outside this patch.
 
 ## Trust boundaries / remaining work (in order)
 
@@ -40,7 +41,7 @@ git worktree list --porcelain
 bun install --frozen-lockfile
 bun run typecheck
 bun run check:boundaries
-bun test --isolate apps/electron/src/main/lib/review/source-current-validity-v3.test.ts apps/electron/src/main/lib/review/plan-binding-v3.test.ts apps/electron/src/main/lib/review/workspace-service-v2.test.ts
+bun test --isolate apps/electron/src/main/lib/review/source-current-validity-v3.test.ts apps/electron/src/main/lib/review/material-lifecycle-v3.test.ts apps/electron/src/main/lib/review/plan-binding-v3.test.ts apps/electron/src/main/lib/review/workspace-service-v2.test.ts
 bun test --isolate apps/electron/src/main/lib/review/case-store-v2.test.ts apps/electron/src/main/lib/review/material-service.test.ts apps/electron/src/main/lib/review/review-c0-ipc.test.ts packages/shared/src/types/review-v3-c0.test.ts
 bun test --isolate --timeout 30000
 ```
