@@ -12,6 +12,7 @@ import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
 import { deleteCase, getCase, getReviewCasesDir, listCases, saveCase, updateCase } from './case-store'
 import { createAggregate, listAggregatesV2, readAggregate, writeAggregate } from './case-store-v2'
 import { ensureWorkspaceAggregateV2 } from './workspace-service-v2'
+import { restoreReviewCaseV3 } from './case-lifecycle-v3'
 
 const root = join(import.meta.dir, '../../../../../../work/tmp', `v3-c1-legacy-guard-${Date.now()}`)
 process.env.PROFER_CONFIG_DIR = root
@@ -210,4 +211,66 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(after.caseV2.title).toBe('User revised title')
     expect(after.caseV2.revision).toBeGreaterThan(first.caseV2.revision)
   })
+
+  test('legacy DELETE_CASE replays only within one archive cycle; restore enables a fresh archive', async () => {
+    const id = 'v3-c1-legacy-delete-two-cycles'
+    saveCase(legacy(id))
+    const initial = await ensureWorkspaceAggregateV2(id)
+    const createRevision = initial.caseV2.revision
+
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id))
+    const first = readAggregate(id)!
+    expect(first.caseV2.stage).toBe('archived')
+    const firstReceipt = first.receiptLog.at(-1)!
+    expect(firstReceipt.type).toBe('ArchiveReviewCaseV3')
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id))
+    expect(JSON.stringify(readAggregate(id))).toBe(JSON.stringify(first))
+
+    const trustedActor = { actorId: 'local-reviewer', actorSource: 'local' as const, role: 'reviewer' as const }
+    const restored = await restoreReviewCaseV3(id, {
+      requestId: 'explicit-restore-after-old-remove-1',
+      expectedRevision: first.caseV2.revision,
+      actor: trustedActor,
+      payload: { reason: '用户确认恢复后重新审核' },
+    })
+    expect(restored.ok).toBe(true)
+    expect(readAggregate(id)?.caseV2.stage).toBe('draft')
+
+    // A forged Renderer frame must not consume the new cycle's request or
+    // advance its revision before a legitimate Main-frame removal.
+    const beforeSpoof = JSON.stringify(readAggregate(id))
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id,
+      { sender, senderFrame: { id: 99 } }))).rejects.toThrow('SENDER_UNTRUSTED')
+    expect(JSON.stringify(readAggregate(id))).toBe(beforeSpoof)
+
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id))
+    const second = readAggregate(id)!
+    expect(second.caseV2.stage).toBe('archived')
+    expect(second.caseV2.revision).toBe(createRevision + 3)
+    expect(second.receiptLog.filter(r => r.type === 'ArchiveReviewCaseV3')).toHaveLength(2)
+    const secondReceipt = second.receiptLog.at(-1)!
+    expect(secondReceipt.requestId).not.toBe(firstReceipt.requestId)
+    expect(secondReceipt.revision).toBe(firstReceipt.revision + 2)
+    expect(second.caseArchiveHistory).toHaveLength(1)
+    const afterSecond = JSON.stringify(second)
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id))
+    expect(JSON.stringify(readAggregate(id))).toBe(afterSecond)
+
+    const secondRestore = await restoreReviewCaseV3(id, {
+      requestId: 'explicit-restore-after-old-remove-2',
+      expectedRevision: second.caseV2.revision,
+      actor: trustedActor,
+      payload: { reason: '用户再次确认恢复重审' },
+    })
+    expect(secondRestore.ok).toBe(true)
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id))
+    const third = readAggregate(id)!
+    expect(third.caseV2.stage).toBe('archived')
+    expect(third.caseV2.revision).toBe(createRevision + 5)
+    expect(third.receiptLog.filter(r => r.type === 'ArchiveReviewCaseV3')).toHaveLength(3)
+    expect(new Set(third.receiptLog.filter(r => r.type === 'ArchiveReviewCaseV3')
+      .map(r => r.requestId)).size).toBe(3)
+    expect(third.caseArchiveHistory).toHaveLength(2)
+  })
+
 })
