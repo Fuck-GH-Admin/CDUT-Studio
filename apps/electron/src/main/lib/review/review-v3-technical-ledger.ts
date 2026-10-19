@@ -54,7 +54,8 @@ const sameRun = (a: RunEvidenceIdentity, b: RunEvidenceIdentity): boolean =>
  * invalidate the previously frozen admission before another Host event.
  */
 function frozenInputDigest(record: CaseAggregateV2): string {
-  const { receiptLog: _receipts, v3TechnicalExecution: _journal, caseV2, ...business } = record
+  const { receiptLog: _receipts, v3TechnicalExecution: _journal,
+    v3ReviewRun: _sealedRun, caseV2, ...business } = record
   const { revision: _revision, updatedAt: _updatedAt, ...caseInputs } = caseV2
   return createHash('sha256').update(canonical({ caseInputs, business })).digest('hex')
 }
