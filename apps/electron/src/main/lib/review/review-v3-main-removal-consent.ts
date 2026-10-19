@@ -58,13 +58,25 @@ const denied = (why: string): never => {throw new Error('C_MAIN_REMOVAL_CONSENT_
 const isSame = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((x, i) => x === b[i])
 
+/**
+ * Persist one-use tombstones across uninstall/reinstall of the SAME privileged
+ * Main observer object inside a process. Revocation must not resurrect human
+ * click IDs merely because a new C Main installation wrapper was created.
+ * This does NOT claim crash-durable approval state: a cold Main must not
+ * rehydrate previously used physical human confirmations.
+ */
+const seenPerPhysicalObserver = new WeakMap<CMainRemovalWitnessSource, Set<string>>()
+
 /** Keep this instance for the lifetime of one actual Main authority installation. */
 export class CMainRemovalConsentGate {
-  private readonly consumedIds = new Set<string>()
+  private readonly consumedIds: Set<string>
   private closed = false
   constructor(private readonly source: CMainRemovalWitnessSource | undefined) {
     if (source && typeof source.getObservedMainHumanConsent !== 'function')
       denied('PHYSICAL_HUMAN_OBSERVER_INVALID')
+    const seen = source && seenPerPhysicalObserver.get(source)
+    this.consumedIds = seen || new Set<string>()
+    if (source && !seen) seenPerPhysicalObserver.set(source, this.consumedIds)
   }
 
   /** Called synchronously from the authoritative Case CAS removal callback. */
@@ -124,7 +136,7 @@ export class CMainRemovalConsentGate {
 
   close(): void {
     this.closed = true
-    // Tombstones cannot be rehydrated: closed gate cannot be reused.
-    this.consumedIds.clear()
+    // Do NOT clear tombstones. A newly installed gate with the same Main
+    // physical observer must still reject already consumed IDs.
   }
 }
