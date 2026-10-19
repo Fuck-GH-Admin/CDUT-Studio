@@ -36,7 +36,6 @@ export interface CMainB1CandidateDocument {
   readonly schemaVersion: 'review-b1/1'
   readonly templateId: string
   readonly status: 'candidate-held'
-  readonly [key:string]:unknown
 }
 export interface CMainAuthorReadDependencies<TDocument extends CMainB1CandidateDocument> {
   /** Obtained from Main's real Principal/Owner/senderFrame, never a payload. */
