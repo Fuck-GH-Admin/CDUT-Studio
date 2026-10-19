@@ -56,6 +56,7 @@ import { exportReport } from './report-service'
 import { getReviewModelGatewayStatus } from './review-model-gateway'
 import {
   createNativeWorkspaceCaseV3, isNativeWorkspaceCaseV3, updateNativeWorkspaceSettingsV3,
+  registerNativeWorkspaceMaterialV3, removeNativeWorkspaceDocumentsV3, reorderNativeWorkspaceDocumentsV3,
 } from './native-workspace-case-v3'
 import { importDocumentFromPath, importDocumentsIntoCase, removeDocumentsFromCase, reorderDocumentsInCase } from './case-import'
 import { invalidateDerivedReviewInputs } from './input-invalidation'
@@ -336,9 +337,34 @@ export function registerReviewIpc(): void {
   /** 导入文件到案卷（系统选择框 → 解析为 SourceDocument 并写回案卷） */
   ipcMain.handle(
     REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT,
-    (_event, input: { caseId: string; role: SourceDocument['role']; requestId?: string }): Promise<ImportDocumentsResult> => {
+    async (_event, input: { caseId: string; role: SourceDocument['role']; requestId?: string }): Promise<ImportDocumentsResult> => {
       if (!input || typeof input !== 'object') throw new Error('参数 input 缺失或类型非法')
       if (!SOURCE_ROLES.has(input.role)) throw new Error(`参数 role 非法：${String(input.role)}`)
+      const caseId = requireString(input.caseId, 'caseId')
+      if (isNativeWorkspaceCaseV3(readAggregate(caseId))) {
+        assertC0ReviewMainSender(_event)
+        const { BrowserWindow, dialog } = require('electron') as typeof import('electron')
+        const parent = BrowserWindow.fromWebContents(_event.sender) ?? undefined
+        const options = { properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'> }
+        const picked = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+        assertC0ReviewMainSender(_event) // window/Frame may have changed while picker was open
+        if (picked.canceled) return { documents: [], failures: [], canceled: true }
+        const documents: SourceDocument[] = []
+        const failures: ImportDocumentsResult['failures'] = []
+        for (const sourcePath of picked.filePaths) {
+          try {
+            const document = await registerNativeWorkspaceMaterialV3(caseId, sourcePath, input.role)
+            assertC0ReviewMainSender(_event)
+            documents.push(document)
+          } catch (error) {
+            failures.push({
+              fileName: require('node:path').basename(sourcePath),
+              message: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
+        return { documents, failures, canceled: false }
+      }
       const { BrowserWindow } = require('electron') as typeof import('electron')
       const sender = _event.sender
       return importDocumentsIntoCase({
@@ -361,6 +387,13 @@ export function registerReviewIpc(): void {
       if (!input || typeof input !== 'object') throw new Error('参数 input 缺失或类型非法')
       if (!SOURCE_ROLES.has(input.role)) throw new Error(`参数 role 非法：${String(input.role)}`)
       const sourcePath = requireString(input.sourcePath, 'sourcePath')
+      const caseId = requireString(input.caseId, 'caseId')
+      if (isNativeWorkspaceCaseV3(readAggregate(caseId))) {
+        assertC0ReviewMainSender(_event)
+        const result = await registerNativeWorkspaceMaterialV3(caseId, sourcePath, input.role)
+        assertC0ReviewMainSender(_event)
+        return result
+      }
       const sender = _event.sender
       return importDocumentFromPath({
         caseId: requireString(input.caseId, 'caseId'),
@@ -423,8 +456,13 @@ export function registerReviewIpc(): void {
       if (input.documentIds !== undefined && (!Array.isArray(input.documentIds) || input.documentIds.some((id) => typeof id !== 'string'))) {
         throw new Error('参数 documentIds 类型非法')
       }
+      const caseId = requireString(input.caseId, 'caseId')
+      if (isNativeWorkspaceCaseV3(readAggregate(caseId))) {
+        assertC0ReviewMainSender(_event)
+        return removeNativeWorkspaceDocumentsV3(caseId, input.role, input.documentIds)
+      }
       return removeDocumentsFromCase({
-        caseId: requireString(input.caseId, 'caseId'),
+        caseId,
         role: input.role,
         ...(input.documentIds !== undefined ? { documentIds: input.documentIds.map((id) => requireString(id, 'documentId')) } : {}),
       })
@@ -440,8 +478,13 @@ export function registerReviewIpc(): void {
       if (!Array.isArray(input.documentIds) || input.documentIds.some((id) => typeof id !== 'string')) {
         throw new Error('参数 documentIds 类型非法')
       }
+      const caseId = requireString(input.caseId, 'caseId')
+      if (isNativeWorkspaceCaseV3(readAggregate(caseId))) {
+        assertC0ReviewMainSender(_event)
+        return reorderNativeWorkspaceDocumentsV3(caseId, input.role, input.documentIds)
+      }
       return reorderDocumentsInCase({
-        caseId: requireString(input.caseId, 'caseId'),
+        caseId,
         role: input.role,
         documentIds: input.documentIds.map((id) => requireString(id, 'documentId')),
       })
