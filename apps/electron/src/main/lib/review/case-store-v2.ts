@@ -137,6 +137,12 @@ export async function submitCommand<TPayload, TEntity = TPayload>(
     if (command.expectedRevision !== aggregate.caseV2.revision) {
       return { ok: false, code: 'VERSION_CONFLICT', message: `案卷已被其他操作更新（当前 revision=${aggregate.caseV2.revision}）`, currentRevision: aggregate.caseV2.revision }
     }
+    // Archived means no subsequent material/Run/decision mutator may silently
+    // resurrect current business validity. The only transition out is a
+    // C-owned RestoreReviewCaseV3 with CAS, Actor and durable Receipt.
+    if (aggregate.caseV2.stage === 'archived' && command.type !== 'RestoreReviewCaseV3') {
+      return { ok: false, code: 'INVALID_TRANSITION', message: '案卷已归档，请先通过原生恢复命令重新启用', currentRevision: aggregate.caseV2.revision }
+    }
 
     // 校验 + 纯变更（handler 内抛错即整体拒绝，不写部分数据）
     let applied: { summary: string; mutate: (aggregate: CaseAggregateV2) => TEntity | void }
