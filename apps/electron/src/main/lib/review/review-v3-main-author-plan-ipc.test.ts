@@ -12,6 +12,8 @@ import { bindCanonicalPlanV3, describeRemovedPlanBindings } from './plan-binding
 import { registerReviewIpc } from './review-ipc'
 import {
   installCMainV3AuthorPlanAuthorities,
+  installCMainV3AuthorReadAuthorities,
+  installCMainV3PlanUpgradeAuthorities,
   type CMainV3AuthorPlanAuthorities,
 } from './review-v3-main-author-plan-ipc'
 import type {
@@ -130,7 +132,7 @@ async function fixture() {
         acknowledgedRemovedIdentities:describeRemovedPlanBindings(old,next)}},
   }
   return {
-    id,old,next,payload,install,
+    id,old,next,payload,install,authority,
     changeEpoch:()=>{epoch++},
     revokeGrant:()=>{grantEnabled=false},
     revokeRead:()=>{allowedRead=false},
@@ -250,5 +252,90 @@ describe('C-MAIN-WIRE-R01 real registered Electron Main/Preload contract',()=>{
       expect(onlyUI.ok).toBe(false)
       expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
     }finally{dispose()}
+  })
+})
+
+describe('C-MAIN-WIRE-R02 independently installed candidate read / formal write authorities',()=>{
+  test('live Main candidate reader works without a school publisher or Case writer',async()=>{
+    const f=await fixture()
+    const dispose=installCMainV3AuthorReadAuthorities({
+      getAuthorGrant:f.authority.getAuthorGrant,
+      canReadAuthor:f.authority.canReadAuthor,
+      readLatestB1AuthorRevision:f.authority.readLatestB1AuthorRevision,
+    })
+    try{
+      const snapshot=await invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,
+        {templateId:'template51',expectedRevision:1}) as {state:string;displayOnly:boolean;revision:number}
+      expect(snapshot).toMatchObject({state:'candidate-held',displayOnly:true,revision:1})
+      await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,
+        f.payload))).rejects.toThrow('INDEPENDENT_AUTHORITIES_NOT_INSTALLED')
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
+    }finally{dispose()}
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,
+      {templateId:'template51'}))).rejects.toThrow('INDEPENDENT_AUTHORITIES_NOT_INSTALLED')
+  })
+  test('published Plan writer can be installed independently; absent B1 author grant stays denied',async()=>{
+    const f=await fixture()
+    const dispose=installCMainV3PlanUpgradeAuthorities({
+      getCaseGrant:f.authority.getCaseGrant,
+      canUpgradeCase:f.authority.canUpgradeCase,
+      publishedPlanSource:f.authority.publishedPlanSource,
+    })
+    try{
+      await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,
+        {templateId:'template51'}))).rejects.toThrow('INDEPENDENT_AUTHORITIES_NOT_INSTALLED')
+      const result=await invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,f.payload) as {ok:boolean}
+      expect(result.ok).toBe(true)
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(2)
+    }finally{dispose()}
+  })
+  test('reader remains independent when writer is revoked, without retaining write capability',async()=>{
+    const f=await fixture()
+    const stopRead=installCMainV3AuthorReadAuthorities(f.authority)
+    const stopWrite=installCMainV3PlanUpgradeAuthorities(f.authority)
+    try{
+      const before=await invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,{templateId:'template51'}) as {displayOnly:boolean}
+      expect(before.displayOnly).toBe(true)
+      stopWrite()
+      const after=await invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,{templateId:'template51'}) as {displayOnly:boolean}
+      expect(after.displayOnly).toBe(true)
+      await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,
+        f.payload))).rejects.toThrow('INDEPENDENT_AUTHORITIES_NOT_INSTALLED')
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
+    }finally{stopWrite();stopRead()}
+  })
+  test('uninstall/reinstall SAME reader object during B1 await cannot revive old request',async()=>{
+    const f=await fixture()
+    let stop=installCMainV3AuthorReadAuthorities(f.authority)
+    f.onRead(()=>{stop();stop=installCMainV3AuthorReadAuthorities(f.authority)})
+    try{
+      await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,
+        {templateId:'template51'}))).rejects.toThrow('AUTHORITY_INSTALLATION_REVOKED')
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
+    }finally{stop()}
+  })
+  test('uninstall/reinstall SAME writer object during Case CAS cannot revive old request',async()=>{
+    const f=await fixture()
+    let stop=installCMainV3PlanUpgradeAuthorities(f.authority)
+    f.onPublisher(()=>{stop();stop=installCMainV3PlanUpgradeAuthorities(f.authority)})
+    try{
+      const denied=await invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,
+        f.payload) as {ok:boolean}
+      expect(denied.ok).toBe(false)
+      expect(readAggregate(f.id)?.caseV2.revision).toBe(1)
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
+    }finally{stop()}
+  })
+  test('legacy combined installer cannot seize either independent Main authority slot',async()=>{
+    const f=await fixture()
+    const stop=installCMainV3AuthorReadAuthorities(f.authority)
+    try{
+      expect(()=>installCMainV3AuthorPlanAuthorities(f.authority))
+        .toThrow('AUTHORITIES_ALREADY_INSTALLED')
+      expect(()=>installCMainV3AuthorReadAuthorities(f.authority))
+        .toThrow('AUTHOR_READER_ALREADY_INSTALLED')
+      expect((await invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,
+        {templateId:'template51'}) as {displayOnly:boolean}).displayOnly).toBe(true)
+    }finally{stop()}
   })
 })
