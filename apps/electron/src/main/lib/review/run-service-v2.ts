@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import type { CheckpointRecord, ReviewCaseV2, ReviewRunV2, TemplateVersion } from '@profer/shared'
 import { executeRunGraph, planRunGraph, type NodeArtifact, type NodeExecutor, type NodeKind, type RunEvent } from './review-run-graph'
 import { getRunV2, readArtifact, saveArtifact, saveRunV2 } from './run-store-v2'
+import { readAggregate } from './case-store-v2'
 import { hashEffectiveRuleSet, resolveEffectiveRules } from './effective-rules'
 
 /** 进程内取消注册表（单机桌面应用：跨进程取消无需持久化标记） */
@@ -99,8 +100,14 @@ export async function runReviewCaseV2(
   executors: Record<NodeKind, NodeExecutor>,
   options: StartRunOptions = {},
 ): Promise<ReviewRunV2> {
-  if (caseV2.stage === 'archived') {
+  const persisted = readAggregate(caseV2.id)
+  if (caseV2.stage === 'archived' || persisted?.caseV2.stage === 'archived') {
     throw new Error('案卷已经归档，不允许启动或续跑审核')
+  }
+  // An archived+restored Case has a new revision; an old pre-archive snapshot
+  // must not start a Run based on evidence from its previous life.
+  if (persisted?.caseArchive && persisted.caseV2.revision !== caseV2.revision) {
+    throw new Error('案卷已发生归档/恢复操作，旧快照禁止执行')
   }
   const runId = options.runId ?? options.resumeRunId ?? `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const observationSnapshot = options.observationSnapshot ?? []
@@ -173,7 +180,12 @@ export async function runReviewCaseV2(
     nodes,
     executors,
     {
-      cancelled: options.cancelled ?? (() => isRunCancelled(runId)),
+      cancelled: () => {
+        const current = readAggregate(caseV2.id)
+        return (options.cancelled?.() ?? false) || isRunCancelled(runId) ||
+          current?.caseV2.stage === 'archived' ||
+          (!!current?.caseArchive && current.caseV2.revision !== (persisted?.caseV2.revision ?? caseV2.revision))
+      },
       now: () => new Date().toISOString(),
       runId,
       onEvent: options.onEvent, // N2b：即时事件（不再等整图结束——修正误判 1）
@@ -189,7 +201,11 @@ export async function runReviewCaseV2(
     },
   )
 
-  run.status = outcome.status
+  const currentAtFinish = readAggregate(caseV2.id)
+  const interruptedByArchive = currentAtFinish?.caseV2.stage === 'archived' ||
+    (!!currentAtFinish?.caseArchive && currentAtFinish.caseV2.revision !== (persisted?.caseV2.revision ?? caseV2.revision))
+  run.status = interruptedByArchive ? 'cancelled' : outcome.status
+  if (interruptedByArchive) run.diagnostics.push('案卷曾归档或恢复：旧运行只保留历史，不能成为当前有效审核')
   // checks/opinions/coverage 由节点产物装配（07 §4.2：不从工具内存数组推测——修正误判 1）
   const artifacts = run.checkpoints
     .filter((checkpoint) => checkpoint.outputRef)
@@ -227,7 +243,7 @@ export async function runReviewCaseV2(
     }
     if (!summary.allClearVerdictAllowed) run.diagnostics = [...run.diagnostics, ...summary.blockers.map((blocker) => `coverage: ${blocker}`)]
   }
-  run.completedAt = outcome.status === 'completed' ? new Date().toISOString() : undefined
+  run.completedAt = run.status === 'completed' ? new Date().toISOString() : undefined
   saveRunV2(run)
   cancelledRunIds.delete(runId)
   return run
