@@ -46,7 +46,7 @@ export function computeRunInputHash(
       .sort((left, right) => documentOrder
         ? (documentOrder.indexOf(left.versionId) - documentOrder.indexOf(right.versionId))
         : left.versionId.localeCompare(right.versionId))
-      .map((document) => ({ id: document.versionId, hash: document.contentHash, parseRevision: document.parseRevision, parseStatus: document.parseStatus })),
+      .map((document) => ({ id: document.versionId, hash: document.contentHash, parseRevision: document.parseRevision, parseStatus: document.parseStatus, active: document.active !== false })),
     subjects: caseV2.subjects.map((subject) => ({ id: subject.id, sectionId: subject.sectionId, fields: subject.fields, status: subject.status })),
     observations: observationSnapshot,
     evidenceLinks: evidenceSnapshot,
