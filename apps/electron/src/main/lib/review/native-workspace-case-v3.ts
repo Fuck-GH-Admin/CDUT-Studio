@@ -127,7 +127,7 @@ function resolvedTemplate(domain: string, explicit?: { templateId: string; versi
 export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceInputV3, actor: Actor = MAIN_ACTOR, authorizeAtCommit?: () => void):
   Promise<{ aggregate: CaseAggregateV2; view: ReviewCase }> {
   if (!input || typeof input !== 'object' || !TYPES.has(input.type) ||
-      typeof input.title !== 'string' || !input.title.trim() ||
+      typeof input.title !== 'string' || input.title.length === 0 ||
       typeof input.applicant !== 'string' || !input.applicant.trim() ||
       typeof input.academicYear !== 'string' || !input.academicYear.trim() ||
       (input.domainPackId !== undefined && typeof input.domainPackId !== 'string')) {
@@ -142,7 +142,7 @@ export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceIn
   const state: ReviewCaseV2 = {
     id: caseId, templateId: template?.templateId ?? PENDING_TEMPLATE,
     templateVersion: template?.version ?? 0,
-    title: input.title.trim(), objectType: template?.objectType ?? 'document',
+    title: input.title.trim() || '未命名案卷', objectType: template?.objectType ?? 'document',
     caseFields: {
       applicant: txt(input.applicant.trim()), academicYear: txt(input.academicYear.trim()),
       legacyReviewType: txt(input.type), legacyDomainPackId: txt(domain),
