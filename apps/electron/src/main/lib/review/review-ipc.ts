@@ -907,6 +907,47 @@ export function registerReviewIpc(): void {
     deleteCase(caseId)
   })
 
+  /** Explicit native restore. Renderer may express intent, never Actor or requestId. */
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, async (event, input: {
+    caseId: string; expectedRevision: number; reason: string
+  }): Promise<import('@profer/shared').ReviewCommandResult> => {
+    assertC0ReviewMainSender(event)
+    if (!input || typeof input !== 'object' || Array.isArray(input) ||
+        Object.prototype.hasOwnProperty.call(input, 'actor') ||
+        Object.prototype.hasOwnProperty.call(input, 'requestId')) {
+      throw new Error('ACTOR_UNTRUSTED: 恢复请求只能传递用户意图，不能声明 Actor 或幂等凭据')
+    }
+    assertSafeReviewStorageId(input.caseId, 'caseId')
+    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 ||
+        typeof input.reason !== 'string' || input.reason.trim().length < 2 ||
+        input.reason.length > 1000) {
+      throw new Error('VALIDATION_FAILED: 恢复请求缺少有效修订号或恢复理由')
+    }
+    const existing = readAggregate(input.caseId)
+    if (!existing?.caseV2 || existing.caseV2.id !== input.caseId ||
+        !Number.isSafeInteger(existing.caseV2.revision) ||
+        !Array.isArray(existing.receiptLog) || !existing.caseArchive ||
+        typeof existing.caseArchive.archivedAt !== 'string' ||
+        (existing.caseArchiveHistory !== undefined && !Array.isArray(existing.caseArchiveHistory))) {
+      throw new Error('INVALID_TRANSITION: 案卷不存在可验证的原生归档检查点')
+    }
+    const { createHash } = require('node:crypto') as typeof import('node:crypto')
+    const { restoreReviewCaseV3 } = require('./case-lifecycle-v3') as typeof import('./case-lifecycle-v3')
+    // Stable throughout one restored checkpoint; new archives necessarily
+    // advance history and produce a different Main-derived receipt key.
+    const restoreIdentity = JSON.stringify([
+      input.caseId, existing.caseArchiveHistory?.length ?? 0, existing.caseArchive.archivedAt,
+    ])
+    const outcome = await restoreReviewCaseV3(input.caseId, {
+      requestId: 'native-restore-' + createHash('sha256').update(restoreIdentity).digest('hex'),
+      expectedRevision: input.expectedRevision,
+      actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
+      payload: { reason: input.reason.trim() },
+    })
+    if (!outcome.ok) throw new Error(`${outcome.code}: ${outcome.message}`)
+    return outcome
+  })
+
   // ===== AI 生成（左/中栏）=====
 
   /** 生成规则大纲（左栏；无出口时降级返回 fixture 大纲） */
