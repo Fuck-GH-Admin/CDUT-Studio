@@ -95,9 +95,11 @@ describe('C2 Main-only technical journal: durable evidence, never a BusinessDeci
     const id='c2-ledger-1'
     await seed(id)
     const run=evidence(id,1)
-    await expect(admitV3TechnicalRun(id,{
+    // A missing mandatory Main attestor throws synchronously before a
+    // Promise is returned; assert that actual contract, not .rejects.
+    expect(() => admitV3TechnicalRun(id,{
       requestId:'run-admit-01', expectedRevision:0, actor, payload:run,
-    },undefined as never)).rejects.toThrow('attestation')
+    },undefined as never)).toThrow('attestation')
     const first=await admitV3TechnicalRun(id,{
       requestId:'run-admit-01',expectedRevision:0,actor,payload:run,
     },()=>{})
@@ -121,7 +123,9 @@ describe('C2 Main-only technical journal: durable evidence, never a BusinessDeci
     },()=>host())
     expect(repeat.ok).toBe(true)
     expect(readAggregate(id)?.caseV2.revision).toBe(2)
-    expect(readAggregate(id)?.receiptLog).toHaveLength(initial.receiptLog.length+2)
+    // Same requestId replay is the existing durable receipt, not a new
+    // transaction/revision. Only the first Host event adds one receipt.
+    expect(readAggregate(id)?.receiptLog).toHaveLength(initial.receiptLog.length+1)
     expect(readAggregate(id)?.decisions).toHaveLength(0)
     const end=terminal(run,2)
     const final=await recordV3TechnicalProposal(id,{
