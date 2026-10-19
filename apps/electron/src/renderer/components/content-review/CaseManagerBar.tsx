@@ -149,7 +149,11 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
     }
   }
 
-  const selectedTemplate = currentCase?.reviewTemplate
+  // Native-first unbound draft must not present an inferred default as
+  // formally installed/published Case policy or immutable CanonicalPlan.
+  const nativeUnbound = !!currentCase && nativeAggregate?.caseV2.id === currentCase.id &&
+    nativeAggregate.caseV2.templateId === 'pending-template-v3'
+  const selectedTemplate = nativeUnbound ? '' : currentCase?.reviewTemplate
     ? `${currentCase.reviewTemplate.templateId}@${currentCase.reviewTemplate.version}`
     : activeTemplate ? `${activeTemplate.templateId}@${activeTemplate.version}` : ''
   const activeTemplateIsInLatestList = activeTemplate
@@ -267,7 +271,7 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
             onChange={(event) => void handleTemplateChange(event.target.value)}
             className="min-w-48 flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground"
           >
-            <option value="">按审核类型自动选择（{activeTemplate?.name ?? '默认模板'}）</option>
+            <option value="">{nativeUnbound ? '原生草稿 · 尚未绑定正式模板' : `按审核类型自动选择（${activeTemplate?.name ?? '默认模板'}）`}</option>
             {publishedTemplates.length > 0 && <optgroup label="已发布 · 可载入">{publishedTemplates.map((template) => (
               <option key={`${template.templateId}@${template.version}`} value={`${template.templateId}@${template.version}`}>{template.name} · v{template.version}</option>
             ))}</optgroup>}
@@ -277,7 +281,9 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
         </div>
         <p className="mt-1 text-xs leading-4 text-muted-foreground">
           {currentCase
-            ? `已发布 ${publishedTemplates.length} 套可载入 · ${draftTemplateCount} 套草稿/范本需先配置并发布。模板规则按本案固定版本执行。`
+            ? nativeUnbound
+              ? '本案是未绑定正式政策的原生草稿：可以导入原件、人工登记事项，不能将候选模板/规则当成正式审核计划或自动审批。'
+              : `已发布 ${publishedTemplates.length} 套可载入 · ${draftTemplateCount} 套草稿/范本需先配置并发布。正式审核仍需独立 Plan 来源与权限核验。`
             : '请先选择或新建审核任务；草稿和参考范本需配置并发布后才会出现在这里。'}
         </p>
       </div>
