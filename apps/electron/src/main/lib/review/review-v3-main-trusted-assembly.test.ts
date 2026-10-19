@@ -212,7 +212,7 @@ describe('C2-R04 single Main-local Plan/Owner/Host/Pi assembly', () => {
     await expect(f.assembly.createPi(f.request)).rejects.toThrow()
     expect(f.disposeCount).toBe(1)
     expect(f.createCount).toBe(1)
-    await expect(f.assembly.createPi(f.request)).rejects.toThrow('disposed')
+    expect(() => f.assembly.createPi(f.request)).toThrow('disposed')
     expect(f.createCount).toBe(1)
   })
 
