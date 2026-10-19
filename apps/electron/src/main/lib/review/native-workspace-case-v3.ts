@@ -1,0 +1,212 @@
+/**
+ * Dev-C C1: native-first Case creation and READ-ONLY V1 workbench projection.
+ * state.v2.json is the sole authority; no case.json or case.v2.json is created.
+ * A displayed legacy shape is NEVER a second writer or a published Plan.
+ */
+import { randomUUID } from 'node:crypto'
+import type {
+  Actor, CaseAggregateV2, DocumentVersion, ReviewCase, ReviewCaseType,
+  ReviewCaseV2, ReviewCommandResult, SourceDocument, UpdateCaseSettingsRequest,
+} from '@profer/shared'
+import { createAggregate, payloadHash, readAggregate, submitCommand, CommandValidationError } from './case-store-v2'
+import { mapDomainToTemplate } from './migration'
+import { ensureBuiltinTemplateDrafts } from './builtin-templates'
+import { getTemplate, saveDraft } from './template-store'
+import { resolveDomainPack } from '@profer/shared'
+
+export const NATIVE_CREATE_RECEIPT_V3 = 'CreateNativeWorkspaceCaseV3'
+const PENDING_TEMPLATE = 'pending-template-v3'
+const MAIN_ACTOR: Actor = { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' }
+const TYPES: ReadonlySet<string> = new Set(['综合测评', '活动申请', '自定义审核'])
+const txt = (value: string) => ({ kind: 'text' as const, value })
+const value = (input: ReviewCaseV2, key: string): string | undefined => {
+  const field = input.caseFields[key]
+  return field?.kind === 'text' ? field.value : undefined
+}
+
+export type NativeCreateWorkspaceInputV3 = {
+  title: string
+  type: ReviewCaseType
+  applicant: string
+  academicYear: string
+  domainPackId?: string
+  reviewTemplate?: { templateId: string; version: number }
+}
+
+export function isNativeWorkspaceCaseV3(aggregate: CaseAggregateV2 | undefined): boolean {
+  return !!aggregate?.caseV2 && Array.isArray(aggregate.receiptLog) &&
+    aggregate.receiptLog[0]?.type === NATIVE_CREATE_RECEIPT_V3 &&
+    aggregate.receiptLog[0]?.revision === 0
+}
+
+export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefined): ReviewCase | undefined {
+  if (!isNativeWorkspaceCaseV3(aggregate) || !aggregate) return undefined
+  const state = aggregate.caseV2
+  if (state.stage === 'archived' || !Number.isSafeInteger(state.revision) ||
+      typeof state.title !== 'string' || !Array.isArray(state.documents) ||
+      !Array.isArray(state.subjects)) return undefined
+  const type = value(state, 'legacyReviewType')
+  const applicant = value(state, 'applicant')
+  const academicYear = value(state, 'academicYear')
+  const domainPackId = value(state, 'legacyDomainPackId')
+  if (!type || !TYPES.has(type) || applicant === undefined || academicYear === undefined ||
+      !domainPackId || !state.id) return undefined
+  const current = state.documents.filter(document => document.active !== false)
+  const archived = state.documents.filter(document => document.active === false)
+  const asDocument = (doc: DocumentVersion): SourceDocument => ({
+    id: doc.documentId,
+    fileName: doc.fileName,
+    role: doc.role === 'attachment' ? 'evidence' : doc.role,
+    mimeType: doc.mimeType,
+    sizeBytes: doc.sizeBytes,
+    parseStatus: doc.parseStatus === 'pending' ? 'partial' : doc.parseStatus,
+    ...(doc.parseError ? { parseError: doc.parseError } : {}),
+    blocks: doc.blocks.map((block, index) => ({
+      id: block.blockId,
+      text: block.text,
+      kind: block.kind === 'image' ? 'image' : block.kind === 'table' ? 'table-cell'
+        : block.format === 'heading' ? 'heading' : block.format === 'list-item' ? 'list-item' : 'paragraph',
+      page: block.location?.kind === 'pdf-rect' ? block.location.page : 1,
+      ...(block.table ? { table: block.table } : {}),
+      ...(block.imageAlt ? { imageAlt: block.imageAlt } : {}),
+      ...(block.imageAssetPath ? { imageAssetPath: block.imageAssetPath } : {}),
+    })),
+    origin: 'upload',
+    // DocumentVersion has no creation timestamp; use the durable material
+    // receipt where available instead of inventing a per-block provenance.
+    importedAt: aggregate.receiptLog.find(receipt =>
+      receipt.type === 'RegisterMaterial' && receipt.summary.includes(doc.versionId))?.at ?? state.createdAt,
+  })
+  const documents = current.map(asDocument)
+  const rulePacks = current.filter(doc => doc.role === 'rule').map(doc => ({
+    id: `native-pack-${doc.versionId}`,
+    documentId: doc.documentId,
+    name: doc.fileName.replace(/\.[^.]+$/, ''),
+    publisher: '',
+    academicYear,
+    version: doc.versionId,
+    outline: [],
+    confirmed: false,
+  }))
+  const hasBoundTemplate = state.templateId !== PENDING_TEMPLATE && state.templateVersion > 0
+  return {
+    id: state.id, title: state.title, type: type as ReviewCaseType, applicant, academicYear,
+    createdAt: state.createdAt, updatedAt: state.updatedAt,
+    documents, archivedDocuments: archived.map(asDocument), rulePacks,
+    items: [], evidences: current.filter(doc => doc.role === 'evidence').map(doc => ({
+      documentId: doc.documentId, recognizedFacts: '', parseStatus: 'unrecognized' as const,
+      linkedItemIds: [],
+    })), isDemo: false,
+    domainPackId: domainPackId as ReviewCase['domainPackId'],
+    ...(hasBoundTemplate ? { reviewTemplate: { templateId: state.templateId, version: state.templateVersion } } : {}),
+    revision: state.revision,
+  }
+}
+
+function resolvedTemplate(domain: string, explicit?: { templateId: string; version: number }) {
+  ensureBuiltinTemplateDrafts({ getTemplate, saveDraft })
+  if (explicit) {
+    if (!explicit.templateId || !Number.isSafeInteger(explicit.version) || explicit.version < 1)
+      throw new CommandValidationError('VALIDATION_FAILED', '审核模板版本非法')
+    const selected = getTemplate(explicit.templateId, explicit.version)
+    if (!selected || selected.status !== 'published')
+      throw new CommandValidationError('VALIDATION_FAILED', '只能选择已发布模板；候选与草稿不能作为正式绑定')
+    return selected
+  }
+  const mapped = mapDomainToTemplate(domain).templateId
+  // Custom/unmapped domains remain genuinely unbound, not silently assigned
+  // the comprehensive-assessment policy. No official Plan is installed.
+  return mapped ? getTemplate(mapped) : undefined
+}
+
+/** Main generates its own identity; V2 CAS+creation receipt commits first. */
+export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceInputV3, actor: Actor = MAIN_ACTOR):
+  Promise<{ aggregate: CaseAggregateV2; view: ReviewCase }> {
+  if (!input || typeof input !== 'object' || !TYPES.has(input.type) ||
+      typeof input.title !== 'string' || !input.title.trim() ||
+      typeof input.applicant !== 'string' || !input.applicant.trim() ||
+      typeof input.academicYear !== 'string' || !input.academicYear.trim() ||
+      (input.domainPackId !== undefined && typeof input.domainPackId !== 'string')) {
+    throw new CommandValidationError('VALIDATION_FAILED', '新建案卷缺少标题、类型、申请人或学年')
+  }
+  if (actor.actorSource !== 'local' || actor.role !== 'reviewer')
+    throw new CommandValidationError('VALIDATION_FAILED', '只有受信本地审核人可建案')
+  const domain = resolveDomainPack(input.domainPackId).id
+  const template = resolvedTemplate(domain, input.reviewTemplate)
+  const caseId = `case-${randomUUID().replace(/-/g, '')}`
+  const now = new Date().toISOString()
+  const state: ReviewCaseV2 = {
+    id: caseId, templateId: template?.templateId ?? PENDING_TEMPLATE,
+    templateVersion: template?.version ?? 0,
+    title: input.title.trim(), objectType: template?.objectType ?? 'document',
+    caseFields: {
+      applicant: txt(input.applicant.trim()), academicYear: txt(input.academicYear.trim()),
+      legacyReviewType: txt(input.type), legacyDomainPackId: txt(domain),
+    },
+    subjects: [], documents: [], stage: 'draft', revision: 0, createdAt: now, updatedAt: now,
+  }
+  const receipt = {
+    requestId: `native-create-${caseId}`, type: NATIVE_CREATE_RECEIPT_V3,
+    payloadHash: payloadHash(NATIVE_CREATE_RECEIPT_V3, {
+      title: state.title, type: input.type, applicant: input.applicant.trim(),
+      academicYear: input.academicYear.trim(), domainPackId: domain,
+      templateId: state.templateId, templateVersion: state.templateVersion,
+    }), revision: 0, at: now, summary: 'Main 原生建案，未发布任何校方政策或正式 Plan', actor,
+  }
+  await createAggregate(caseId, state, receipt)
+  const aggregate = readAggregate(caseId)!
+  const view = nativeWorkspaceProjectionV3(aggregate)
+  if (!view) throw new Error('原生案卷已建立但兼容视图未能生成；请从 V2 列表恢复')
+  return { aggregate, view }
+}
+
+/** No V1 updateCase/saveCase; native settings share the existing durable ledger. */
+export async function updateNativeWorkspaceSettingsV3(
+  caseId: string, input: UpdateCaseSettingsRequest, actor: Actor = MAIN_ACTOR,
+): Promise<ReviewCase> {
+  const original = readAggregate(caseId)
+  if (!isNativeWorkspaceCaseV3(original) || !original)
+    throw new CommandValidationError('NOT_FOUND', '案卷不是原生工作台案卷')
+  if (original.canonicalPlan || original.d2RuntimePlan)
+    throw new CommandValidationError('INVALID_TRANSITION', '正式 Plan 已绑定；仅允许显式升版与确认')
+  if (input.manualRules !== undefined || input.subjectDocumentIds !== undefined)
+    throw new CommandValidationError('INVALID_TRANSITION', '规则和材料范围必须通过独立原生命令确认')
+  if (input.title !== undefined && (typeof input.title !== 'string' || !input.title.trim()))
+    throw new CommandValidationError('VALIDATION_FAILED', '标题不能为空')
+  if (input.type !== undefined && !TYPES.has(input.type))
+    throw new CommandValidationError('VALIDATION_FAILED', '案卷类型非法')
+  if (input.domainPackId !== undefined && typeof input.domainPackId !== 'string')
+    throw new CommandValidationError('VALIDATION_FAILED', '审核领域非法')
+  const domain = resolveDomainPack(input.domainPackId ?? value(original.caseV2, 'legacyDomainPackId')).id
+  const template = input.reviewTemplate === undefined && input.domainPackId === undefined
+    ? undefined : resolvedTemplate(domain, input.reviewTemplate ?? undefined)
+  const output = await submitCommand(caseId, {
+    type: 'UpdateNativeWorkspaceSettingsV3',
+    requestId: `native-settings-${randomUUID().replace(/-/g, '')}`,
+    expectedRevision: original.caseV2.revision,
+    actor, payload: {
+      title: input.title, type: input.type, domainPackId: domain,
+      templateChange: input.reviewTemplate !== undefined || input.domainPackId !== undefined,
+      templateId: template?.templateId ?? PENDING_TEMPLATE, templateVersion: template?.version ?? 0,
+      objectType: template?.objectType ?? 'document',
+    },
+  }, snapshot => {
+    if (!isNativeWorkspaceCaseV3(snapshot)) throw new CommandValidationError('INVALID_TRANSITION', '案卷权威已改变')
+    if (snapshot.canonicalPlan || snapshot.d2RuntimePlan)
+      throw new CommandValidationError('INVALID_TRANSITION', '审核计划已冻结')
+    return { summary: '修改原生案卷设置（无 V1 影子写入）', mutate: draft => {
+      if (input.title !== undefined) draft.caseV2.title = input.title.trim()
+      if (input.type !== undefined) draft.caseV2.caseFields.legacyReviewType = txt(input.type)
+      if (input.domainPackId !== undefined) draft.caseV2.caseFields.legacyDomainPackId = txt(domain)
+      if (input.reviewTemplate !== undefined || input.domainPackId !== undefined) {
+        draft.caseV2.templateId = template?.templateId ?? PENDING_TEMPLATE
+        draft.caseV2.templateVersion = template?.version ?? 0
+        draft.caseV2.objectType = template?.objectType ?? 'document'
+      }
+    } }
+  })
+  if (!output.ok) throw new CommandValidationError(output.code, output.message)
+  const projected = nativeWorkspaceProjectionV3(output.aggregate)
+  if (!projected) throw new Error('原生设置已保存但兼容读取失败')
+  return projected
+}
