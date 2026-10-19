@@ -167,7 +167,7 @@ export function recoverC2AbandonedCaseDiskLock(
   catch {return refuse('another recovery process is active')}
   try {
     const owner=readOwner(lock)
-    if(!owner) refuse('missing or invalid lock owner; inspect offline before changing')
+    if(!owner) return refuse('missing or invalid lock owner; inspect offline before changing')
     authorize(structuredClone(owner))
     // PID 0 can address current process group: the contract excludes it.
     let dead=false
