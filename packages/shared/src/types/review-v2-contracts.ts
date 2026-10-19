@@ -341,6 +341,9 @@ export interface CaseAggregateV2 {
   receiptLog: CommandReceipt[]
   /** 事项最终认定（可选，兼容既有 state.v2.json）。 */
   adjudications?: SubjectAdjudication[]
+  /** Bound immutable Dev-B CanonicalPlan; upgrades preserve earlier plans. */
+  canonicalPlan?: import('./review-v3-c0').CanonicalPlan
+  canonicalPlanHistory?: import('./review-v3-c0').CanonicalPlan[]
   /** D2 技术预审任务固定快照；不授予正式学校发布/审批权限。 */
   d2RuntimePlan?: import('./review-d2').D2RuntimePlan
   /** 独立评分（G06：唯一票，事务内查重） */
