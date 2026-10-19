@@ -244,3 +244,23 @@ Use exact C2 final SHA for job/run IDs and collected output; preserve first fail
 **Integrator-I status:** I test-only lease active as previously signed; I Main read-only port lease conditional/inactive; I business writer DENIED. This journal must NOT be transplanted into I1 old C anchor, and must NOT be advertised as a signed C2 Run endpoint before a new exact C SHA has real Gate O and C authorizes a new integration anchor.
 
 **Rollback:** revert C2 code+DTO in a C-isolated Draft branch, but do not delete already persisted `state.v2.json`, material bytes, native Subjects, admission receipts or audit events; preserve a read-only forensic copy. Old valid aggregates without `v3TechnicalExecution` remain readable (optional field).
+
+
+## C1-R10b — Native unbound-draft create-flow repair alongside C2-R00 (2026-10-19)
+
+**Fixed production/test source checkpoint before this docs commit:** `4edd1ddfc899fa7eb622e946412a0ec21c938e06`; Draft PR #144, unmerged, exact Gate O not attested.
+
+**Observed blocking bug:** R09 had a real native manual-item form but `CreateCaseDialog.tsx` required `selectedTemplate` to be non-null, so if the 50 B4 domain templates remained correctly `candidate-held` and no real policy was published, the end user could not even create a new V3 case to reach C1. Silently promoting B candidate templates to satisfy the form would violate B-CR-001/Policy Gate L.
+
+**Actual fix in five C-owned production paths:** `CreateCaseDialog.tsx` allows a title/applicant-only, explicitly unbound native draft and makes the dropdown optional; no force-autoselect of the only published template. A deliberate empty choice is sent as `reviewTemplate: null` through `review-actions-controller.ts`, typed `preload/index.ts`, trusted Main `review-ipc.ts`, then `native-workspace-case-v3.ts`. **Explicit null is distinct from absent value:** C Main *guarantees* `templateId='pending-template-v3', templateVersion=0` and no `CanonicalPlan`; it must not secretly map a published default template into the Case. Explicit published choices still undergo real `getTemplate(id,version).status === 'published'` validation. `CaseManagerBar.tsx` displays the pending status truthfully rather than claiming an inferred default is already installed. No V1 `case.json`, no school policy/Gold, no legitimate Run approval is introduced.
+
+**New real Main-handler regression** in `review-v3-legacy-entry-gates.test.ts` creates a native draft with `reviewTemplate:null`, asserts pending template/version 0, absent Plan/legacy shadow, durable Create Receipt and selector visibility. Previous R06–R09 manual-source Main/UI tests still apply.
+
+**Concentrated Gate O evidence required (same exact final SHA):** all commands in C2-R00/R09 above plus
+```bash
+bun test --isolate apps/electron/src/main/lib/review/review-v3-legacy-entry-gates.test.ts apps/electron/src/renderer/components/content-review/review-actions-controller.test.ts
+bun run --filter='@profer/electron' build:renderer
+```
+After passing Gate O, Gate E should exercise unbound draft with 0 published templates, then real OS picker/import, source-bound human item, archive/restore, duplicate lost-response and case-switch. This sequence is **not yet verified** here. C1 still `PARTIAL`, C2 still technical ledger only, Gate E/L/P `NO_GO`.
+
+**Rollback:** revert C1-R10b UI/preload/Main semantics together rather than leave a mismatched `null` contract; retain persisted pending native Cases/Receipt/history. No I lease changes.
