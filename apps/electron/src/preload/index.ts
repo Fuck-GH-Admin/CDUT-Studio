@@ -3973,6 +3973,8 @@ const reviewAPI = {
   reorderDocuments: (input: { caseId: string; role: import('@profer/shared').SourceDocument['role']; documentIds: string[] }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.REORDER_DOCUMENTS, input) as Promise<import('@profer/shared').ReviewCase>,
   deleteCase: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, caseId) as Promise<void>,
+  restoreCaseV3: (input: { caseId: string; expectedRevision: number; reason: string }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, input) as Promise<import('@profer/shared').ReviewCommandResult>,
   updateCaseSettings: (input: import('@profer/shared').UpdateCaseSettingsRequest) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPDATE_CASE_SETTINGS, input) as Promise<import('@profer/shared').ReviewCase>,
   updateRuleOutline: (input: import('@profer/shared').UpdateRuleOutlineRequest) =>
