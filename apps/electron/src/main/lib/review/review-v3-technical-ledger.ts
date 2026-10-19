@@ -137,6 +137,17 @@ export function recordV3TechnicalProposal(
     if (!sameRun(event.run, journal.run) ||
         aggregate.canonicalPlan.fingerprint !== journal.run.planFingerprint)
       throw new CommandValidationError('STALE_INPUT', '事件试图越过原始 Run/Plan 身份')
+    if (!Array.isArray(journal.events) ||
+        journal.events.some((item, index) => item.sequence !== index + 1 ||
+          item.eventId !== item.proposal?.eventId ||
+          !/^[a-f0-9]{64}$/.test(item.eventId) ||
+          item.proposal?.sequence !== item.sequence ||
+          !sameRun(item.proposal.run, journal.run)) ||
+        aggregate.receiptLog.filter(receipt =>
+          receipt.type === 'RecordV3TechnicalProposal' &&
+          receipt.revision > journal.admittedAtRevision).length !== journal.events.length)
+      throw new CommandValidationError('INVALID_TRANSITION',
+        '技术事件持久账发生缺口、跨 Run 混写或缺少对应 CAS 回执，需审计恢复')
     if (journal.frozenInputDigest !== frozenInputDigest(aggregate))
       throw new CommandValidationError('STALE_INPUT',
         '案卷业务输入或材料证据自 Run 准入后已改变，禁止继续消费旧事件')
