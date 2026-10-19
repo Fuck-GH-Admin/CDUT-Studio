@@ -53,12 +53,14 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
   const domainPackId = value(state, 'legacyDomainPackId')
   if (!type || !TYPES.has(type) || applicant === undefined || academicYear === undefined ||
       !domainPackId || !state.id) return undefined
-  const current = state.documents.filter(document => document.active !== false)
-  const archived = state.documents.filter(document => document.active === false)
+  // V1's three columns have no 'attachment' role. Never mislabel a native
+  // attachment as verified evidence; it remains visible in the V2 ledger.
+  const current = state.documents.filter(document => document.active !== false && document.role !== 'attachment')
+  const archived = state.documents.filter(document => document.active === false && document.role !== 'attachment')
   const asDocument = (doc: DocumentVersion): SourceDocument => ({
     id: doc.documentId,
     fileName: doc.fileName,
-    role: doc.role === 'attachment' ? 'evidence' : doc.role,
+    role: doc.role as SourceDocument['role'],
     mimeType: doc.mimeType,
     sizeBytes: doc.sizeBytes,
     parseStatus: doc.parseStatus === 'pending' ? 'partial' : doc.parseStatus,
