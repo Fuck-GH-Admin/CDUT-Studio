@@ -84,7 +84,7 @@ export interface RegisterMaterialPayload {
 }
 
 /** 登记材料（命令事务）：新 DocumentVersion 进聚合；同名再登记产生新版本 */
-export async function registerMaterial(caseId: string, command: { requestId: string; actor: Actor; expectedRevision: number; payload: RegisterMaterialPayload }): Promise<ReviewCommandResult<DocumentVersion>> {
+export async function registerMaterial(caseId: string, command: { requestId: string; actor: Actor; expectedRevision: number; payload: RegisterMaterialPayload }, authorizeAtCommit?: () => void): Promise<ReviewCommandResult<DocumentVersion>> {
   if (!readAggregate(caseId)) throw new CommandValidationError('NOT_FOUND', `案卷聚合不存在: ${caseId}`)
   if (!command.payload.sourcePath || !existsSync(command.payload.sourcePath)) throw new CommandValidationError('VALIDATION_FAILED', '材料文件不存在')
   const inputSize = statSync(command.payload.sourcePath).size
@@ -139,6 +139,9 @@ export async function registerMaterial(caseId: string, command: { requestId: str
   }
   try {
     return await submitCommand<RegisterMaterialPayload, DocumentVersion>(caseId, { ...command, type: 'RegisterMaterial' }, (aggregate, payload) => {
+    // Re-check the live Main window after parsing/Host awaits and immediately
+    // inside the serialized command, before any physical asset is copied.
+    authorizeAtCommit?.()
     if (aggregate.caseV2.stage === 'archived') throw new CommandValidationError('INVALID_TRANSITION', '已归档案卷不可登记材料')
     const sourcePath = payload.sourcePath
     if (!sourcePath) throw new CommandValidationError('VALIDATION_FAILED', '缺少源文件路径')
