@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import type { ReviewCase, ReviewCaseSummary, ReviewRun } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
 import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
+import { readAggregate } from './case-store-v2'
 
 /** 演示案卷固定 ID（载入/重审/报告锚定同一个 ID） */
 export const DEMO_CASE_ID = 'demo-zhangsan-2026'
@@ -238,6 +239,16 @@ export function updateCase(
 ): Promise<ReviewCase> {
   assertSafeId(caseId)
   return enqueueCaseWrite(caseId, () => {
+    // C1 transition invariant: any native V2 aggregate is the sole current
+    // business authority. A stale case.json with the same ID is NEVER a
+    // writable fallback. Missing/corrupt V2 data also fails closed.
+    const statePath = join(getCaseDir(caseId), 'state.v2.json')
+    if (existsSync(statePath)) {
+      const native = readAggregate(caseId)
+      if (!native || !native.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')) {
+        throw new Error('原生审核案卷禁止通过旧版案卷写入口修改；请使用可信 V2 业务命令')
+      }
+    }
     const latest = getCase(caseId)
     if (!latest) throw new Error(`案卷不存在: ${caseId}`)
     const currentRevision = latest.revision ?? 0
