@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   Actor, CaseAggregateV2, DocumentVersion, ReviewCase, ReviewCaseType,
-  ReviewCaseV2, SourceDocument, UpdateCaseSettingsRequest,
+  ReviewCaseV2, SourceDocument, UpdateCaseSettingsRequest, UpdateReviewItemRequest, ReviewItem,
 } from '@profer/shared'
 import { createAggregate, payloadHash, readAggregate, submitCommand, CommandValidationError } from './case-store-v2'
 import { mapDomainToTemplate } from './migration'
@@ -82,6 +82,40 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
       receipt.type === 'RegisterMaterial' && receipt.summary.includes(doc.versionId))?.at ?? state.createdAt,
   })
   const documents = current.map(asDocument)
+  const items: ReviewItem[] = state.subjects.flatMap(subject => {
+    // A V1 item is only representable when a real V2 source, exact version
+    // and an explicit numeric score/category exist. Never fabricate an anchor
+    // or reinterpret unknown value as zero points.
+    const score = subject.fields.declaredScore
+    const category = subject.fields.category
+    if (subject.type !== 'item' || score?.kind !== 'number' ||
+        category?.kind !== 'text' || !category.value.trim()) return []
+    const source = subject.sourceRefs.find(ref => ref.caseId === state.id &&
+      current.some(doc => doc.versionId === ref.documentVersionId && doc.parseRevision === ref.parseRevision))
+    if (!source) return []
+    const doc = current.find(item => item.versionId === source.documentVersionId)!
+    const block = source.location.kind === 'paragraph' ?
+      doc.blocks.find(entry => entry.location?.kind === 'paragraph' &&
+        entry.location.index === source.location.index) : undefined
+    const anchor: ReviewItem['anchor'] = {
+      documentId: doc.documentId,
+      ...(block ? { blockId: block.blockId } : {}),
+      ...(source.location.kind === 'pdf-rect' ? { page: source.location.page } : {}),
+      precision: block ? 'block' : source.location.kind === 'pdf-rect' ? 'page' : 'document',
+    }
+    const str = (key: string): string | undefined => {
+      const field = subject.fields[key]
+      return field?.kind === 'text' || field?.kind === 'date' ? field.value : undefined
+    }
+    return [{
+      id: subject.id, title: subject.title, category: category.value,
+      declaredScore: score.value, ...(str('level') ? { level: str('level') } : {}),
+      ...(str('activityDate') ? { activityDate: str('activityDate') } : {}),
+      ...(str('organizer') ? { organizer: str('organizer') } : {}),
+      anchor, evidenceDocumentIds: [], status: subject.status,
+      identifiedBy: subject.correction === 'user-confirmed' ? 'manual' : 'ai',
+    } satisfies ReviewItem]
+  })
   // Version-pinned selection prevents an old documentId from automatically
   // selecting its new, as-yet-unreviewed physical bytes.
   const savedSelection = state.nativeWorkspaceDraft?.subjectDocumentVersionIds
@@ -104,7 +138,7 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
     id: state.id, title: state.title, type: type as ReviewCaseType, applicant, academicYear,
     createdAt: state.createdAt, updatedAt: state.updatedAt,
     documents, archivedDocuments: archived.map(asDocument), rulePacks,
-    items: [], evidences: current.filter(doc => doc.role === 'evidence').map(doc => ({
+    items, evidences: current.filter(doc => doc.role === 'evidence').map(doc => ({
       documentId: doc.documentId, recognizedFacts: '', parseStatus: 'unrecognized' as const,
       linkedItemIds: [],
     })), isDemo: false,
@@ -369,5 +403,73 @@ export async function reorderNativeWorkspaceDocumentsV3(
   if (!outcome.ok) throw new CommandValidationError(outcome.code, outcome.message)
   const view = nativeWorkspaceProjectionV3(outcome.aggregate)
   if (!view) throw new Error('材料顺序已写入，兼容投影失败')
+  return view
+}
+
+/** Edit an EXISTING anchored native subject; never invent source provenance. */
+export async function updateNativeWorkspaceReviewItemV3(
+  caseId: string, input: UpdateReviewItemRequest, actor: Actor = MAIN_ACTOR,
+  authorizeAtCommit?: () => void,
+): Promise<ReviewCase> {
+  if (!input || input.caseId !== caseId ||
+      typeof input.itemId !== 'string' || !input.itemId ||
+      typeof input.title !== 'string' || !input.title.trim() || input.title.length > 160 ||
+      typeof input.category !== 'string' || !input.category.trim() || input.category.length > 80 ||
+      typeof input.declaredScore !== 'number' || !Number.isFinite(input.declaredScore) ||
+      input.declaredScore < 0 || input.declaredScore > 1_000_000)
+    throw new CommandValidationError('VALIDATION_FAILED', '审核事项字段或案卷 ID 无效')
+  for (const [key, val, limit] of [
+    ['level', input.level, 100], ['activityDate', input.activityDate, 80],
+    ['organizer', input.organizer, 200],
+  ] as const) {
+    if (val !== undefined && (typeof val !== 'string' || val.length > limit))
+      throw new CommandValidationError('VALIDATION_FAILED', `申报事项 ${key} 字段不合法`)
+  }
+  const existing = readAggregate(caseId)
+  if (!isNativeWorkspaceCaseV3(existing) || !existing)
+    throw new CommandValidationError('NOT_FOUND', '原生工作台案卷不存在')
+  const output = await submitCommand(caseId, {
+    type: 'CorrectNativeWorkspaceReviewItemV3',
+    requestId: `native-item-${randomUUID().replace(/-/g, '')}`,
+    expectedRevision: existing.caseV2.revision, actor,
+    payload: {
+      itemId: input.itemId, title: input.title.trim(), category: input.category.trim(),
+      declaredScore: input.declaredScore, level: input.level?.trim() || null,
+      activityDate: input.activityDate?.trim() || null,
+      organizer: input.organizer?.trim() || null,
+    },
+  }, (snapshot, payload) => {
+    authorizeAtCommit?.()
+    if (!isNativeWorkspaceCaseV3(snapshot) || snapshot.canonicalPlan || snapshot.d2RuntimePlan ||
+        snapshot.caseV2.stage !== 'draft')
+      throw new CommandValidationError('INVALID_TRANSITION', '正式计划已冻结或案卷不在可编辑草稿阶段')
+    if (snapshot.observations.some(entry => entry.subjectId === payload.itemId && entry.confirmed))
+      throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '该事项有已确认事实，需要显式撤销后再修正')
+    const candidate = snapshot.caseV2.subjects.find(item => item.id === payload.itemId)
+    if (!candidate || candidate.type !== 'item')
+      throw new CommandValidationError('NOT_FOUND', '原生申报事项不存在')
+    const projected = nativeWorkspaceProjectionV3(snapshot)
+    if (!projected?.items.some(item => item.id === payload.itemId))
+      throw new CommandValidationError('STALE_INPUT', '申报事项未绑定当前可追溯原件，不能凭空修正')
+    return { summary: `用户修正原生事项 ${payload.itemId}，无任何校方审批或 AI 事实确认`,
+      mutate: draft => {
+        const item = draft.caseV2.subjects.find(subject => subject.id === payload.itemId)!
+        item.title = payload.title
+        item.fields.category = txt(payload.category)
+        item.fields.declaredScore = { kind: 'number', value: payload.declaredScore }
+        if (payload.level) item.fields.level = txt(payload.level)
+        else delete item.fields.level
+        if (payload.activityDate) item.fields.activityDate = { kind: 'date', value: payload.activityDate }
+        else delete item.fields.activityDate
+        if (payload.organizer) item.fields.organizer = txt(payload.organizer)
+        else delete item.fields.organizer
+        item.correction = 'user-confirmed'
+        item.status = 'confirmed'
+      },
+    }
+  })
+  if (!output.ok) throw new CommandValidationError(output.code, output.message)
+  const view = nativeWorkspaceProjectionV3(output.aggregate)
+  if (!view) throw new Error('原生事项更正已写入，但只读兼容视图不可用')
   return view
 }
