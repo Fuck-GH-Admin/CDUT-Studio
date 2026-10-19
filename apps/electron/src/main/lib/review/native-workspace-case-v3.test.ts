@@ -226,7 +226,8 @@ describe('C1 native-first single Case writer and V1 read-only compatibility', ()
     expect(after.receiptLog.at(-1)?.type).toBe('CreateNativeReviewItemV3')
     expect(after.caseV2.subjects[0]?.sourceRefs).toEqual([{
       caseId: id, documentVersionId: version.versionId,
-      parseRevision: version.parseRevision, location: version.blocks[0]!.location,
+      parseRevision: version.parseRevision,
+      location: version.blocks[0]!.location ?? { kind: 'file' },
     }])
     expect(after.caseV2.subjects[0]?.status).toBe('identified')
     expect(after.observations).toHaveLength(0)
@@ -289,6 +290,34 @@ describe('C1 native-first single Case writer and V1 read-only compatibility', ()
     expect(view.items[0]?.anchor.blockId).toBeUndefined()
     expect(readAggregate(id)?.caseV2.subjects[0]?.sourceRefs[0]?.location)
       .toEqual({ kind: 'file' })
+  })
+
+  test('parser-block identity survives in UI without invented paragraph/page locator', async () => {
+    const created = await createNativeWorkspaceCaseV3(input, actor)
+    const id = created.view.id
+    const inputPath = join(root, `sparse-locator-${id}.txt`)
+    writeFileSync(inputPath, 'A real source block without exact page coordinates', 'utf8')
+    const source = await registerNativeWorkspaceMaterialV3(id, inputPath, 'application', actor)
+    const aggregate = readAggregate(id)!
+    const doc = aggregate.caseV2.documents.find(item => item.documentId === source.id)!
+    const actualBlock = doc.blocks[0]!
+    expect(actualBlock.blockId).toBeTruthy()
+    actualBlock.location = undefined // synthetic parser variation; real bytes unchanged
+    writeAggregate(aggregate)
+    const result = await createNativeReviewItemV3({
+      caseId: id, requestId: 'human-no-geometry-01',
+      expectedRevision: aggregate.caseV2.revision,
+      documentVersionId: doc.versionId, sourceBlockId: actualBlock.blockId,
+      title: 'Real parser block', category: '待核验', declaredScore: 1,
+    }, actor)
+    expect(result.items[0]?.anchor).toMatchObject({
+      documentId: doc.documentId, blockId: actualBlock.blockId, precision: 'block',
+    })
+    const persisted = readAggregate(id)!
+    expect(persisted.caseV2.subjects[0]?.sourceRefs[0]?.location).toEqual({ kind: 'file' })
+    expect(persisted.caseV2.subjects[0]?.fields.nativeSourceBlockId)
+      .toEqual({ kind: 'text', value: actualBlock.blockId })
+    expect(persisted.decisions).toHaveLength(0)
   })
 
 })
