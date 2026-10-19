@@ -4013,6 +4013,22 @@ const reviewAPI = {
   seedFixtureV2: () => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.SEED_FIXTURE_V2) as Promise<boolean>,
   createCaseV2: (input: { caseId: string; templateId: string; version: number; payload: unknown; /** @deprecated transport-only; Main rebinds Actor */ actor?: import('@profer/shared').Actor; requestId?: string; expectedRevision?: number }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, input) as Promise<import('@profer/shared').ReviewCaseV2 | undefined>,
+  /** Real Main-framed candidate read; denies until current privileged B1 authority is installed. */
+  readCurrentAuthorRevisionV3: (input: {templateId:string;expectedRevision?:number}) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,input) as Promise<{
+      schemaVersion:'review-v3-author-current-read/1';templateId:string;revision:number;
+      sourceDigest:string;document:unknown;state:'candidate-held';displayOnly:true
+    }>,
+  /** Read/write separation: this requires a real published school-policy issuer in Main. */
+  upgradeCanonicalPlanV3: (input: {
+    caseId:string;requestId:string;expectedRevision:number;
+    payload:{plan:import('@profer/shared').CanonicalPlan;previousFingerprint:string;
+      acknowledgement:string;removalAck?:{
+        previousFingerprint:string;nextFingerprint:string;
+        acknowledgedRemovedIdentities:readonly string[]
+      }}
+  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,input)
+    as Promise<import('@profer/shared').ReviewCommandResult<import('@profer/shared').CanonicalPlan>>,
   getAggregateV2: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.GET_AGGREGATE_V2, caseId) as Promise<import('@profer/shared').CaseAggregateV2 | undefined>,
   updateFieldsV2: (input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPDATE_FIELDS_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
