@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Actor } from '@profer/shared'
+import type { Actor, ReviewRunV2 } from '@profer/shared'
 import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
 import { getCase, listCases, saveCase, deleteCase } from './case-store'
 import { readAggregate, submitCommand, writeAggregate } from './case-store-v2'
@@ -114,13 +114,13 @@ describe('C1 authoritative reversible Case archive', () => {
   test('active queued/running ReviewRun prevents archive until cancellation is durable', async () => {
     const id = 'v3-archive-refuses-running-run'
     const initial = await seed(id)
-    const run = { id: 'case-run-still-running', caseId: id, startedAt: new Date().toISOString(), status: 'running' } as never
+    const run = { id: 'case-run-still-running', caseId: id, startedAt: new Date().toISOString(), status: 'running' } as ReviewRunV2
     saveRunV2(run)
     const before = JSON.stringify(readAggregate(id))
     const blocked = await archiveReviewCaseV3(id, intent('archive-running', initial.caseV2.revision))
     expect(blocked).toMatchObject({ ok: false, code: 'INVALID_TRANSITION' })
     expect(JSON.stringify(readAggregate(id))).toBe(before)
-    saveRunV2({ ...run, status: 'cancelled' } as never)
+    saveRunV2({ ...run, status: 'cancelled' })
     const archived = await archiveReviewCaseV3(id, intent('archive-running', initial.caseV2.revision))
     expect(archived.ok).toBe(true)
     expect(readAggregate(id)?.caseV2.stage).toBe('archived')
