@@ -801,7 +801,8 @@ export function createReviewActionsController(
 
     /** Human source-anchored declaration; never a model-confirmed fact/decision. */
     async createNativeReviewItem(input: Omit<import('@profer/shared').CreateNativeReviewItemV3Request,
-      'caseId' | 'requestId' | 'expectedRevision'>, expectedCaseId?: string): Promise<boolean> {
+      'caseId' | 'requestId' | 'expectedRevision'>, expectedCaseId?: string,
+      retryRequestId?: string): Promise<boolean> {
       const caseId = currentCaseId()
       if (expectedCaseId && expectedCaseId !== caseId) {
         setError('添加人工事项失败：案卷已切换，请重新打开事项登记', { ...(caseId ? { caseId } : {}) })
@@ -826,7 +827,7 @@ export function createReviewActionsController(
         }
         const updated = await api.createNativeReviewItemV3({
           caseId, expectedRevision: aggregate.caseV2.revision,
-          requestId: `ui-native-item-${globalThis.crypto.randomUUID()}`, ...input,
+          requestId: retryRequestId ?? `ui-native-item-${globalThis.crypto.randomUUID()}`, ...input,
         })
         store.set(reviewCasesByIdAtom, { ...store.get(reviewCasesByIdAtom), [caseId]: updated })
         await refreshWorkspaceV2(caseId)
