@@ -124,7 +124,7 @@ function resolvedTemplate(domain: string, explicit?: { templateId: string; versi
 }
 
 /** Main generates its own identity; V2 CAS+creation receipt commits first. */
-export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceInputV3, actor: Actor = MAIN_ACTOR):
+export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceInputV3, actor: Actor = MAIN_ACTOR, authorizeAtCommit?: () => void):
   Promise<{ aggregate: CaseAggregateV2; view: ReviewCase }> {
   if (!input || typeof input !== 'object' || !TYPES.has(input.type) ||
       typeof input.title !== 'string' || !input.title.trim() ||
@@ -157,7 +157,7 @@ export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceIn
       templateId: state.templateId, templateVersion: state.templateVersion,
     }), revision: 0, at: now, summary: 'Main 原生建案，未发布任何校方政策或正式 Plan', actor,
   }
-  await createAggregate(caseId, state, receipt)
+  await createAggregate(caseId, state, receipt, authorizeAtCommit)
   const aggregate = readAggregate(caseId)!
   const view = nativeWorkspaceProjectionV3(aggregate)
   if (!view) throw new Error('原生案卷已建立但兼容视图未能生成；请从 V2 列表恢复')
