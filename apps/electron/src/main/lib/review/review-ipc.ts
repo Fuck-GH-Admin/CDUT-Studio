@@ -173,7 +173,7 @@ export function registerReviewIpc(): void {
       const aggregate = readAggregate(caseId)
       if (isNativeWorkspaceCaseV3(aggregate)) {
         // Native-only business settings never write a V1 shadow.
-        return updateNativeWorkspaceSettingsV3(caseId, input)
+        return updateNativeWorkspaceSettingsV3(caseId, input, undefined, () => assertC0ReviewMainSender(event))
       }
       if (aggregate && !aggregate.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')) {
         throw new Error('原生审核案卷禁止通过旧版案卷写入口修改；请使用可信 V2 业务命令')
@@ -459,7 +459,7 @@ export function registerReviewIpc(): void {
       const caseId = requireString(input.caseId, 'caseId')
       if (isNativeWorkspaceCaseV3(readAggregate(caseId))) {
         assertC0ReviewMainSender(_event)
-        return removeNativeWorkspaceDocumentsV3(caseId, input.role, input.documentIds)
+        return removeNativeWorkspaceDocumentsV3(caseId, input.role, input.documentIds, undefined, () => assertC0ReviewMainSender(_event))
       }
       return removeDocumentsFromCase({
         caseId,
@@ -481,7 +481,7 @@ export function registerReviewIpc(): void {
       const caseId = requireString(input.caseId, 'caseId')
       if (isNativeWorkspaceCaseV3(readAggregate(caseId))) {
         assertC0ReviewMainSender(_event)
-        return reorderNativeWorkspaceDocumentsV3(caseId, input.role, input.documentIds)
+        return reorderNativeWorkspaceDocumentsV3(caseId, input.role, input.documentIds, undefined, () => assertC0ReviewMainSender(_event))
       }
       return reorderDocumentsInCase({
         caseId,
