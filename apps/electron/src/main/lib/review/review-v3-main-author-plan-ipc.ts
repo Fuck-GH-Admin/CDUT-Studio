@@ -300,8 +300,9 @@ export async function handleCMainUpgradeCanonicalPlan(
     if(actor.actorId!==atStart.principalId)refuse('ACTOR_CHANGED_AT_COMMIT')
     const now=liveFrame(event)
     const grant=checkGrant(authority.getCaseGrant(data.caseId))
-    if(!installed.removalGate)refuse('HUMAN_REMOVAL_OBSERVER_NOT_INSTALLED')
-    installed.removalGate.consumeAtCommit({
+    const removalGate=installed.removalGate
+    if(!removalGate)throw new Error('C_MAIN_V3_IPC_HUMAN_REMOVAL_OBSERVER_NOT_INSTALLED')
+    removalGate.consumeAtCommit({
       caseId:data.caseId,requestId:data.requestId,
       currentCaseRevision:aggregate.caseV2.revision,
       identity:{...now,ownerId:grant.ownerId,ownerGeneration:grant.generation,
