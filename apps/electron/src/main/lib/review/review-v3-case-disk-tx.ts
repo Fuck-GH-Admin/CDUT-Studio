@@ -14,7 +14,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import {
   closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync,
-  renameSync, rmdirSync, unlinkSync, writeSync,
+  renameSync, rmdirSync, unlinkSync, writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { getConfigDir } from '../config-paths'
@@ -57,7 +57,7 @@ function holdOne(caseId: string): { lock:string; token:string } {
   }
   try {
     const fd=openSync(ownerPath(lock),'wx',0o600)
-    try { writeSync(fd,JSON.stringify(owner)+'\n'); fsyncSync(fd) }
+    try { writeFileSync(fd,JSON.stringify(owner)+'\n'); fsyncSync(fd) }
     finally { closeSync(fd) }
   } catch (e) {
     // Do not leave an orphan lock from a failed owner metadata write.
@@ -107,7 +107,7 @@ export function withC2CaseDiskWriteSync<T>(caseId:string, write:()=>T):T {
   let held:ReturnType<typeof holdOne>
   try { held=holdOne(caseId) }
   catch(e) { if(isExists(e)) return refuse('unleased direct writer blocked by another PID'); throw e }
-  try { return write() }
+  try { return context.run(new Map([[held.lock,held.token]]),write) }
   finally { releaseOne(held.lock,held.token) }
 }
 
@@ -125,7 +125,7 @@ export function writeC2CaseStateDurably(caseId:string,text:string):void {
   try {
     const fd=openSync(tmp,'wx',0o600)
     created=true
-    try{writeSync(fd,text);fsyncSync(fd)}
+    try{writeFileSync(fd,text);fsyncSync(fd)}
     finally{closeSync(fd)}
     assertOwned(lock,token)
     renameSync(tmp,state)
