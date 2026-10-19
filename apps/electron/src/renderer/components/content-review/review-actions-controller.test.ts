@@ -876,3 +876,44 @@ describe('Main 后台审核前台接线', () => {
     expect(store.get(reviewErrorAtom)).toBe('审核未完成：审核渠道或模型未配置')
   })
 })
+
+
+describe('C1 native archive discovery and explicit workbench restore', () => {
+  test('only archived V2 summaries appear; native restore uses revision and does not invent a V1 shadow', async () => {
+    const { api } = makeApi()
+    let received: unknown
+    api.listCasesV2 = async () => [
+      { caseId: 'native-only', title: 'Native original', stage: 'archived', revision: 7 },
+      { caseId: 'migrated', title: 'Migrated original', stage: 'archived', revision: 4 },
+      { caseId: 'active', title: 'Still active', stage: 'draft', revision: 2 },
+    ]
+    api.getCase = async id => id === 'migrated' ? makeCase('migrated') : undefined
+    api.restoreCaseV3 = async input => { received = input; return { ok: true } }
+    const store = createStore()
+    const actions = createReviewActionsController(store, api)
+    expect(await actions.listArchivedCases()).toEqual([
+      { caseId: 'native-only', title: 'Native original', revision: 7 },
+      { caseId: 'migrated', title: 'Migrated original', revision: 4 },
+    ])
+    expect(await actions.restoreArchivedCase('native-only', 7)).toBe(true)
+    expect(received).toEqual({
+      caseId: 'native-only', expectedRevision: 7,
+      reason: '用户在工作台明确确认恢复案卷并重新审核',
+    })
+    // Native-only cases need a native V2 -> three-column read projection.
+    // Restoring must not fabricate a legacy case.json or select a V1 ghost.
+    expect(store.get(selectedCaseIdAtom)).toBeNull()
+    expect(await actions.restoreArchivedCase('migrated', 4)).toBe(true)
+    expect(store.get(selectedCaseIdAtom)).toBe('migrated')
+  })
+
+  test('failed native restore cannot report success or change selected case', async () => {
+    const { api } = makeApi()
+    api.restoreCaseV3 = async () => { throw new Error('VERSION_CONFLICT: case changed') }
+    const store = createStore()
+    const actions = createReviewActionsController(store, api)
+    expect(await actions.restoreArchivedCase('stale-case', 1)).toBe(false)
+    expect(store.get(selectedCaseIdAtom)).toBeNull()
+    expect(store.get(reviewErrorAtom)).toContain('VERSION_CONFLICT')
+  })
+})
