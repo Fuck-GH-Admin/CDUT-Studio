@@ -40,7 +40,7 @@ export async function archiveReviewCaseV3(
     if (snapshot.caseV2.stage === 'archived') {
       throw new CommandValidationError('INVALID_TRANSITION', '案卷已经归档')
     }
-    if (snapshot.caseArchive) {
+    if (snapshot.caseArchive && !snapshot.caseArchive.restoredAt) {
       throw new CommandValidationError('INVALID_TRANSITION', '案卷归档账与业务状态矛盾，禁止覆盖')
     }
     return {
@@ -65,14 +65,21 @@ export async function restoreReviewCaseV3(
   check(caseId, command)
   return submitCommand(caseId, { ...command, type: 'RestoreReviewCaseV3' }, (snapshot) => {
     if (snapshot.caseV2.stage !== 'archived' || !snapshot.caseArchive ||
-      snapshot.caseArchive.previousStage === 'archived') {
+      snapshot.caseArchive.restoredAt || snapshot.caseArchive.previousStage === 'archived') {
       throw new CommandValidationError('INVALID_TRANSITION', '案卷没有可恢复的有效归档检查点')
     }
     return {
-      summary: '案卷恢复为归档前阶段（保留归档回执及历史）',
+      summary: '案卷恢复为草稿阶段（历史运行及决定需要重新核验）',
       mutate: draft => {
-        draft.caseV2.stage = snapshot.caseArchive!.previousStage
-        delete draft.caseArchive
+        // A restore is never a re-approval. Old Runs and Decisions stay
+        // historical; revision bumps invalidate their previous input binding.
+        draft.caseV2.stage = 'draft'
+        draft.caseArchive = {
+          ...snapshot.caseArchive!,
+          restoredAt: new Date().toISOString(),
+          restoredBy: command.actor.actorId,
+          restoreReason: command.payload.reason.trim(),
+        }
       },
     }
   })
