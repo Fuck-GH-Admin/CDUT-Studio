@@ -87,6 +87,7 @@ async function fixture() {
   let epoch=1,grantEnabled=true,allowedRead=true,validPublisher=true
   let readerCalls=0
   let onRead:()=>void=()=>{}
+  let onPublisher:()=>void=()=>{}
   const issued={
     artifactRoot:artifacts,
     getCurrentPublication:(p:CanonicalPlan)=>{
@@ -99,6 +100,7 @@ async function fixture() {
       }:undefined
     },
     assertAuthorizedPublication:()=>{
+      onPublisher()
       if(!validPublisher)throw Error('SCHOOL_PUBLISHER_REVOKED')
     },
   }
@@ -134,7 +136,9 @@ async function fixture() {
     revokeRead:()=>{allowedRead=false},
     revokePublisher:()=>{validPublisher=false},
     revokeOld:()=>{const e=pubs.get(old.fingerprint)!;pubs.set(old.fingerprint,{...e,status:'revoked'})},
-    onRead:(fn:()=>void)=>{onRead=fn},reads:()=>readerCalls,
+    onRead:(fn:()=>void)=>{onRead=fn},
+    onPublisher:(fn:()=>void)=>{onPublisher=fn},
+    reads:()=>readerCalls,
   }
 }
 describe('C-MAIN-WIRE-R01 real registered Electron Main/Preload contract',()=>{
@@ -217,6 +221,25 @@ describe('C-MAIN-WIRE-R01 real registered Electron Main/Preload contract',()=>{
       expect(denied.ok).toBe(false)
       expect(readAggregate(g.id)?.receiptLog).toHaveLength(1)
     }finally{other()}
+  })
+  test('uninstalling Main authority during async B1 read invalidates captured old grant',async()=>{
+    const f=await fixture(),dispose=f.install()
+    try{
+      f.onRead(()=>dispose())
+      await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,{
+        templateId:'template51',
+      }))).rejects.toThrow('AUTHORITY_INSTALLATION_REVOKED')
+    }finally{dispose()}
+  })
+  test('uninstalling Main policy authority during CAS publisher check never commits Receipt',async()=>{
+    const f=await fixture(),dispose=f.install()
+    try{
+      f.onPublisher(()=>dispose())
+      const denied=await invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,f.payload) as {ok:boolean}
+      expect(denied.ok).toBe(false)
+      expect(readAggregate(f.id)?.caseV2.revision).toBe(1)
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
+    }finally{dispose()}
   })
   test('removed Check not acknowledged cannot convert candidate UI confirm into formal Case write',async()=>{
     const f=await fixture(),dispose=f.install()
