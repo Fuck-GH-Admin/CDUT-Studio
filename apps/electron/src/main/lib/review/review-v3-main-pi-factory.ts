@@ -79,6 +79,7 @@ function assertCurrent(
       aggregate.canonicalPlan.templateVersion !== run.templateVersion ||
       aggregate.d2RuntimePlan ||
       !aggregate.v3TechnicalExecution ||
+      aggregate.v3TechnicalExecution.terminalStatus || aggregate.v3ReviewRun ||
       !isSame(aggregate.v3TechnicalExecution.run, run)) {
     return deny('Current admitted C Case/Plan/Run identity is not available')
   }
@@ -150,18 +151,19 @@ export class C2MainPiAgentSessionFactory {
         typeof session.subscribe !== 'function' ||
         typeof session.dispose !== 'function' ||
         typeof agent.streamFunction !== 'function' ||
-        agent.state?.isStreaming || !valid(spec.prompt)) {
+        agent.state?.isStreaming || typeof spec.prompt !== 'string' ||
+        !spec.prompt.trim() || spec.prompt.length > 524288) {
       return rejectSession('Fresh inert Pi SDK session and trusted prompt required')
     }
-    try {
-      const after = assertCurrent(this.deps, input.run)
-      if (input.signal?.aborted || before.permissionGrantId !== after.permissionGrantId ||
-          !isSame(before, after)) {
-        return rejectSession('Main Owner changed or request aborted while creating Pi session')
-      }
-    } catch (error) {
+    let after: C2MainOwnerWitness
+    try { after = assertCurrent(this.deps, input.run) }
+    catch (error) {
       session.dispose()
       throw error
+    }
+    if (input.signal?.aborted || before.permissionGrantId !== after.permissionGrantId ||
+        !isSame(before, after)) {
+      return rejectSession('Main Owner changed or request aborted while creating Pi session')
     }
     return { session, prompt: spec.prompt, trustedOrigin: this.origin }
   }
