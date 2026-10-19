@@ -9,6 +9,7 @@ import {
 import { createAggregate, readAggregate, submitCommand } from './case-store-v2'
 import { executionProposalId } from './review-v3-execution-contract'
 import { admitV3TechnicalRun, recordV3TechnicalProposal } from './review-v3-technical-ledger'
+import type { V3VerifiedHostReceipt } from './review-v3-execution-contract'
 
 const root = join(import.meta.dir, '../../../../../../work/tmp', `review-v3-c2-ledger-${Date.now()}`)
 process.env.PROFER_CONFIG_DIR = root
@@ -81,17 +82,20 @@ function terminal(run: RunEvidenceIdentity, sequence: number): V3ExecutionPropos
   }
   return {...body,eventId:executionProposalId(body)}
 }
-const host = () => ({
-  permissionGrantId:'main-grant-1', grantActive:true,
-  receipts:new Map([
-    ['host-check-1',{kind:'check' as const,permissionGrantId:'main-grant-1',check:{
-      checkKey:'R01',targetKey:'target-1',objectKey:'object-1',
-      subjectId:'subject-1',status:'accepted' as const,
-    }}],
-    ['host-end-1',{kind:'terminal' as const,permissionGrantId:'main-grant-1',
-      terminalStatus:'completed-technical' as const}],
-  ]),
-})
+const host = () => {
+  const receipts = new Map<string, V3VerifiedHostReceipt>()
+  receipts.set('host-check-1', {
+    kind: 'check', permissionGrantId: 'main-grant-1',
+    check: { checkKey: 'R01', targetKey: 'target-1', objectKey: 'object-1',
+      subjectId: 'subject-1', status: 'accepted' },
+  })
+  receipts.set('host-end-1', {
+    kind: 'terminal', permissionGrantId: 'main-grant-1',
+    terminalStatus: 'completed-technical',
+  })
+  return { permissionGrantId: 'main-grant-1', grantActive: true, receipts }
+}
+
 describe('C2 Main-only technical journal: durable evidence, never a BusinessDecision',()=>{
   test('Main attestation required, CAS admission and idempotent replay',async()=>{
     const id='c2-ledger-1'
