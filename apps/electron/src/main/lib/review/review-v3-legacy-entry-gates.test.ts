@@ -550,4 +550,27 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
   })
 
+  test('new native draft can be created without any published template; explicit null never auto-installs a mapped policy', async () => {
+    const created = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_CASE, {
+      title: 'Unbound native draft',
+      type: '综合测评',
+      applicant: 'Human applicant',
+      academicYear: '2026-2027',
+      reviewTemplate: null,
+    })) as { id: string; reviewTemplate?: unknown }
+    const aggregate = readAggregate(created.id)!
+    expect(aggregate.caseV2.templateId).toBe('pending-template-v3')
+    expect(aggregate.caseV2.templateVersion).toBe(0)
+    expect(aggregate.canonicalPlan).toBeUndefined()
+    expect(aggregate.d2RuntimePlan).toBeUndefined()
+    expect(created.reviewTemplate).toBeUndefined()
+    expect(aggregate.receiptLog.map(receipt => receipt.type)).toEqual([
+      'CreateNativeWorkspaceCaseV3',
+    ])
+    expect(getCase(created.id)?.title).toBe('Unbound native draft')
+    expect(listCases().some(item => item.id === created.id)).toBe(true)
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
+  })
+
 })
