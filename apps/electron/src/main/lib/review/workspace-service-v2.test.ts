@@ -228,11 +228,16 @@ describe('单一工作台案卷映射到 V2 聚合', () => {
       ...seed.caseV2, id: nativeId, title: 'Native authoritative title',
       subjects: [], documents: [], reviewRules: [], stage: 'draft' as const, revision: 0,
     }
+    // A real collision starts with an old V1 shadow. A native Case written
+    // afterwards must neither project it into current business state nor let
+    // legacy writers change that shadow any further.
+    saveCase({ ...legacy, id: nativeId, title: 'Stale V1 title' })
     await createAggregate(nativeId, native, {
       requestId: `create-${nativeId}`, type: 'CreateCaseFromTemplate', payloadHash: 'native-hash',
       revision: 0, at: new Date().toISOString(), summary: 'native', actor: reviewer,
     })
-    saveCase({ ...legacy, id: nativeId, title: 'Stale V1 title' })
+    expect(() => saveCase({ ...legacy, id: nativeId, title: 'Invalid late shadow' }))
+      .toThrow('原生审核案卷禁止')
     const first = await ensureWorkspaceAggregateV2(nativeId)
     const second = await syncWorkspaceProjectionV2(nativeId)
     expect(first.caseV2.title).toBe('Native authoritative title')
