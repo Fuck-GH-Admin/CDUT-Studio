@@ -62,3 +62,34 @@ Rollback before deployment: revert the Dev-C PR commits on this dependent branch
 - `07-journey-status.csv`: A–G, B/G PARTIAL and rest NOT_STARTED.
 
 **Gate verdict**: C0 contract `FROZEN_GO` for offline local development ONLY. Dev-C C1 `PARTIAL / NOT_FULLY_VERIFIED`. Integrated Gate O `NOT_RUN` (three-track SHA not assembled). Target Gate E `NOT_RUN`, authorized Gate L `BLOCKED_NO_AUTH`, original product Gate P `NOT_RUN`, Release `NO-GO`.
+
+
+## C1-R06 native-first workbench engineering checkpoint (2026-10-19)
+
+**Exact production checkpoint before this docs update:** `21f4927e93eed9c39e8e15c75ff67415ecbe1d11`. **C1_PARTIAL / Gate O NOT_ATTESTED / Release NO-GO**. This is real C-owned code and tests on Draft #144, not a specification-only phase. No C0 `review-c0/1` semantic change, no I/A/B file delegation, no second Case writer.
+
+### Real modified entry chain
+
+1. New `native-workspace-case-v3.ts` is C's native-first `CREATE_CASE` implementation. Main-generated random case ID + original local Actor → exactly one `state.v2.json` with `CreateNativeWorkspaceCaseV3` Receipt at revision 0; **no `case.json` and no `case.v2.json`**. Main sender/frame revalidates inside the serialized `createAggregate` commit. The old Renderer `CREATE_CASE` API shape is preserved.
+2. `case-store.ts::getCase/listCases` derive an **in-memory, read-only** V1-shaped view from native `CaseAggregateV2`, without creating or mutating a V1 file. Native identity must match the requested directory; invalid/cross-ID state remains hidden. `MIGRATE_CASE_V2` returns the native aggregate instead of creating a migration shadow. `ensureWorkspaceAggregateV2` returns existing native state without a legacy projection write. Previously migrated genuine V1 cases still use the legacy compatibility branch, and a stale V1 shadow cannot overwrite a native Case.
+3. `UPDATE_CASE_SETTINGS` detects genuine native origin and redirects basic title/type/domain/template intents to one C-owned `submitCommand` CAS+Receipt. Bound `CanonicalPlan`/`D2RuntimePlan` cannot be silently replaced; modifying native manual rules or material scope requires future typed business commands. A **candidate/draft/unmapped template remains pending**, never silently published or installed as an official Plan.
+4. The existing three-column `IMPORT_DOCUMENT` uses the true invoking Main-window OS picker for native cases and C `registerMaterial` (actual file bytes, SHA256, current DocumentVersion, receipt). Developer-only `IMPORT_DOCUMENT_FROM_PATH` is separately gated by `!app.isPackaged`; it is **not** a production file-capability entitlement. Native remove/reorder use dedicated same-aggregate CAS commands; physical files, old versions and source revocation records remain. All native commands perform a **commit-time revalidation** of the actual Main window/frame after dialog/parser awaits. Old V1-only paths retain their old implementation, no mass deletion/auto-migration.
+5. `PICK_REGISTER_MATERIAL_V2` is scoped to the invoking Main window (not `getFocusedWindow`) and rechecks sender after dialog and during `RegisterMaterial`. **Native `REGISTER_MATERIAL_PATH_V2` fails closed with `SOURCE_CAPABILITY_REQUIRED`** because a Renderer-supplied absolute path is not proof of an OS-selected/drop capability. Integrating B2 physical bytes/capability as a trusted Native drop remains unimplemented; don't relabel the rejected legacy text path as authorized. Explicit Main OS picker works, but actual Electron Gate E is still required.
+6. The projection does **not** mislabel V2-only `attachment` materials as evidence or invent AI-extracted subjects/validated policy checks. Current three-column legacy rule generation/AI item edits/export still contain V1 mutator dependencies and are **not declared complete or silently faked**. Native-only restore is again selectable through the read-only view. Full C1 requires converting those remaining commands to typed V2 writers with authorized Plan/Source scope.
+
+### Exact test files and proofs to obtain
+
+- `review-v3-legacy-entry-gates.test.ts`: actual Main handler native create, no V1 shadow, no duplicate migration, native basic settings, archive/restore round-trip, trusted sender/frame negatives; development-only physical text original into V2 material, two-source reordering/retirement, source validity revocation; unsealed Renderer path and spoof negatives; malformed V2 summary isolation.
+- `native-workspace-case-v3.test.ts`: native Case creation/reopen/read-only projection, V1 low-level write rejection, deliberate Main revoke precisely at native create/settings/material/remove commit, authentic physical bytes, custom unbound template does **not** become published policy.
+- `review-actions-controller.test.ts`: native-only restore refreshes selected three-column Case through V2-derived read projection, not a V1 ghost.
+- `case-lifecycle-v3.test.ts` and earlier legacy Main tests: archive/reopen/re-archive idempotency and historical receipt preservation.
+- Required targeted Gate O first: `bun run typecheck`; `bun run check:boundaries`; `bun test --isolate apps/electron/src/main/lib/review/native-workspace-case-v3.test.ts apps/electron/src/main/lib/review/review-v3-legacy-entry-gates.test.ts apps/electron/src/main/lib/review/case-lifecycle-v3.test.ts apps/electron/src/renderer/components/content-review/review-actions-controller.test.ts`; then full `bun test --isolate --timeout 30000`, Main/Preload/Renderer builds and standard workflows. Capture exact checkout SHA, exit code, first failure and rollback; do not claim a PASS from queued CI or old source.
+
+### Explicit still-open hard problems
+
+- C1 native-only three-column **write-complete** RulePack/AI item/evidence/report integration, credible source/subject projection, native trusted drag capability, full material attachment role, explicit Plan publisher/provenance, all old mutator transformations.
+- Native create request/reply lost-response recovery and ImportBatch cross-call durable idempotency; `randomUUID` prevents Case ID collision but does **not** prove same user request dedup after crash.
+- Multi-PID Case/Run/Host/physical-copy atomicity, ENOSPC recoverable intent, durable OS capability after await (C-Tx/C4); physical asset may remain if aggregate write fails. A/B/I technical proposals are not C durable Run/Decision ACK.
+- Full native Electron/picker/parser/Office and user workflow Gate E not run; school/Gold/Provider Gate L blocked without authorization; 71 product gates and 7 journeys not accepted. Separate safe staging/read-only preview from formal InstallPlan/ReviewRun release.
+
+**Rollback:** reverse C1-R06 #144 commits using normal Git revert on an isolated C branch, keep all live state.v2.json/receipts/material assets intact; do not run V1-first replay over cases with a native origin Receipt. Reversion of a code feature is not permission to down-migrate existing native business state.
