@@ -882,10 +882,19 @@ export function registerReviewIpc(): void {
       }
       const { archiveReviewCaseV3 } = require('./case-lifecycle-v3') as typeof import('./case-lifecycle-v3')
       const { createHash } = require('node:crypto') as typeof import('node:crypto')
-      // No renderer-provided Actor or requestId. A repeated UI request is
-      // idempotent and obtains the earlier durable Receipt.
+      // A stable key *per archive cycle*: replay while archived returns the
+      // same durable Receipt, but an explicit restore starts a new cycle.
+      // History grows on the next archive; restoredAt bridges that transition
+      // so the cycle number stays stable before and after the new archive.
+      // Derive this solely from Main-read business state, never Renderer JSON.
+      const completedCycles = existing.caseArchiveHistory?.length ?? 0
+      if (!Number.isSafeInteger(completedCycles) || completedCycles < 0 ||
+          (existing.caseArchiveHistory !== undefined && !Array.isArray(existing.caseArchiveHistory))) {
+        throw new Error('案卷归档历史损坏，已拒绝移除')
+      }
+      const archiveCycle = completedCycles + (existing.caseArchive?.restoredAt ? 1 : 0)
       const result = await archiveReviewCaseV3(caseId, {
-        requestId: 'legacy-remove-' + createHash('sha256').update(caseId).digest('hex'),
+        requestId: 'legacy-remove-' + createHash('sha256').update(JSON.stringify([caseId, archiveCycle])).digest('hex'),
         expectedRevision: existing.caseV2.revision,
         actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
         payload: { reason: '用户在原工作台将案卷移入归档' },
