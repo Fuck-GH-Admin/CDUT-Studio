@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  REVIEW_C0_SCHEMA_VERSION, type CanonicalPlan, type RunEvidenceIdentity, type SourceIdentity,
+  REVIEW_C0_SCHEMA_VERSION, REVIEW_V3_EXECUTION_SCHEMA,
+  type CanonicalPlan, type RunEvidenceIdentity, type SourceIdentity, type V3ExecutionProposal,
 } from '@profer/shared'
 import {
-  REVIEW_V3_EXECUTION_SCHEMA, executionProposalId, validateV3ExecutionProposal,
-  type V3ExecutionProposal, type V3TrustedConsumptionContext, type V3VerifiedHostReceipt,
+  executionProposalId, validateV3ExecutionProposal,
+  type V3TrustedConsumptionContext, type V3VerifiedHostReceipt,
 } from './review-v3-execution-contract'
 
 const hash = 'a'.repeat(64)
