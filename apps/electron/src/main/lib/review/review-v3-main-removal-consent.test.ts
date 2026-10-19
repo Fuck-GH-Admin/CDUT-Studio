@@ -30,10 +30,9 @@ function fixture() {
     acknowledgedRemovedIdentities:[...ctx.computedRemovedIdentities],
     reason:ctx.reason,observedAtMs:Date.now(),
   }
-  const gate=new CMainRemovalConsentGate({
-    getObservedMainHumanConsent:()=>observed,
-  })
-  return {ctx,gate,clear:()=>{observed=undefined},
+  const observer={getObservedMainHumanConsent:()=>observed}
+  const gate=new CMainRemovalConsentGate(observer)
+  return {ctx,gate,observer,clear:()=>{observed=undefined},
     edit:(fn:(v:CMainRemovalObservedConsent)=>CMainRemovalObservedConsent)=>{
       if(!observed)throw Error('observation missing')
       observed=fn(observed)
@@ -49,6 +48,14 @@ describe('C-MAIN-REMOVAL-R01 independent one-use Main human physical witness',()
     // cannot revive that Main human click as an entirely new transaction.
     f.edit(c=>({...c,requestId:'up-2'}))
     expect(()=>f.gate.consumeAtCommit({...f.ctx,requestId:'up-2'}))
+      .toThrow('APPROVAL_ALREADY_USED_OR_INVALID')
+  })
+  test('uninstall/reinstall of the SAME Main observer retains one-use tombstone',()=>{
+    const f=fixture()
+    f.gate.consumeAtCommit(f.ctx)
+    f.gate.close()
+    const reinstalled=new CMainRemovalConsentGate(f.observer)
+    expect(()=>reinstalled.consumeAtCommit(f.ctx))
       .toThrow('APPROVAL_ALREADY_USED_OR_INVALID')
   })
   test('absent observer, invalid source, missing observation or closed registry is always deny',()=>{
