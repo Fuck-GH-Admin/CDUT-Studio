@@ -449,6 +449,7 @@ export function preparePiReviewRunV2(input: { caseId: string; sessionId: string;
   if (!input.sessionId || !input.turnId) throw new Error('普通 Pi 审核必须绑定真实会话与用户消息')
   const aggregate = getCaseV2Aggregate(input.caseId)
   if (!aggregate) throw new Error(`案卷不存在或未初始化：${input.caseId}`)
+  if (aggregate.caseV2.stage === 'archived') throw new Error('案卷已经归档，不允许启动或续跑 Pi 审核')
   const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
   if (!template) throw new Error(`案卷模板不存在：${aggregate.caseV2.templateId}@${aggregate.caseV2.templateVersion}`)
   if (!aggregate.d2RuntimePlan && isAuthoringCandidateDraft(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)) {
