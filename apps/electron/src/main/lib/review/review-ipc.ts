@@ -863,6 +863,7 @@ export function registerReviewIpc(): void {
 
   // ===== G01：材料登记与提交 =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.PICK_REGISTER_MATERIAL_V2, async (_e, input: { caseId: string; role: 'application' | 'evidence' | 'rule' | 'attachment'; materialSlotId?: string }) => {
+    assertC0ReviewMainSender(_e)
     if (!input?.caseId) throw new Error('参数 caseId 非法')
         const { BrowserWindow, dialog } = require('electron') as typeof import('electron')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
@@ -872,8 +873,11 @@ export function registerReviewIpc(): void {
     const actor = { actorId: 'local-user', actorSource: 'local' as const, role: 'reviewer' as const }
     const { registerMaterial } = require('./material-service') as typeof import('./material-service')
     const options = { properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'> }
-    const win = BrowserWindow.getFocusedWindow() ?? undefined
+    // Picker is scoped to the invoking trusted Main window, not an arbitrary
+    // focused window that might belong to another session.
+    const win = BrowserWindow.fromWebContents(_e.sender) ?? undefined
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    assertC0ReviewMainSender(_e)
     if (result.canceled) return []
     const versionIds: string[] = []
     for (const sourcePath of result.filePaths) {
@@ -883,7 +887,7 @@ export function registerReviewIpc(): void {
         actor,
         expectedRevision: fresh.caseV2.revision,
         payload: { sourcePath, role: input.role, materialSlotId: input.materialSlotId },
-      })) as { ok: boolean; message?: string }
+      }, () => assertC0ReviewMainSender(_e))) as { ok: boolean; message?: string }
       if (!outcome.ok) throw new Error(outcome.message ?? '登记失败')
       const updated = getCaseV2Aggregate(input.caseId)!
       versionIds.push(updated.caseV2.documents[updated.caseV2.documents.length - 1]!.versionId)
@@ -892,7 +896,13 @@ export function registerReviewIpc(): void {
   })
   // 拖拽登记：渲染层经 webUtils.getPathForFile 拿到本地路径后逐个登记（同一事务链）
   ipcMain.handle(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, async (_e, input: { caseId: string; sourcePath: string; role: 'application' | 'evidence' | 'rule' | 'attachment'; materialSlotId?: string; fileName?: string; replacesVersionIds?: string[] }) => {
+    assertC0ReviewMainSender(_e)
     if (!input || typeof input.sourcePath !== 'string' || !input.sourcePath) throw new Error('参数 sourcePath 非法')
+    // Main-frame provenance is not proof that arbitrary Renderer path text
+    // came from a physical OS file picker/drop. Native-first Cases must not
+    // accept this legacy unsealed path channel without B2 bytes capability.
+    if (isNativeWorkspaceCaseV3(readAggregate(input.caseId)))
+      throw new Error('SOURCE_CAPABILITY_REQUIRED: 原生案卷请使用受信系统文件选择器；拖拽能力签发待接线')
     if (input.fileName !== undefined) {
       const { basename } = require('node:path') as typeof import('node:path')
       if (typeof input.fileName !== 'string' || !input.fileName || basename(input.fileName) !== input.fileName) throw new Error('参数 fileName 非法')
@@ -914,7 +924,7 @@ export function registerReviewIpc(): void {
         ...(input.fileName ? { fileName: input.fileName } : {}),
         ...(input.replacesVersionIds ? { replacesVersionIds: input.replacesVersionIds } : {}),
       },
-    })
+    }, () => assertC0ReviewMainSender(_e))
     if (!outcome.ok) throw new Error(outcome.message ?? '登记失败')
     return outcome.entity?.versionId ?? outcome.aggregate.caseV2.documents.at(-1)?.versionId
   })
