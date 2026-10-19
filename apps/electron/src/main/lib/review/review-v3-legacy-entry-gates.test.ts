@@ -473,4 +473,30 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
   })
 
+  test('native Main old AI/rule/report hooks do not create a fake V1 success or policy', async () => {
+    const created = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_CASE, {
+      title: 'Native authoritative only', type: '综合测评',
+      applicant: 'Applicant', academicYear: '2026',
+    })) as { id: string }
+    const original = JSON.stringify(readAggregate(created.id))
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.GENERATE_RULE_OUTLINE, {
+      caseId: created.id, rulePackId: 'nonexistent',
+    }))).rejects.toThrow('NATIVE_OUTLINE_STAGING_REQUIRED')
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.EXTRACT_ITEMS, created.id)))
+      .rejects.toThrow('NATIVE_SUBJECT_STAGING_REQUIRED')
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPDATE_RULE_OUTLINE, {
+      caseId: created.id, rulePackId: 'fake', ruleId: 'fake', title: 'Forged rule', summary: '',
+    }))).rejects.toThrow('NATIVE_RULE_OUTLINE_SOURCE_REQUIRED')
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CONFIRM_RULE_PACK, {
+      caseId: created.id, rulePackId: 'fake',
+    }))).rejects.toThrow('NATIVE_RULE_CONFIRMATION_REQUIRED')
+    expect(() => invoke(REVIEW_IPC_CHANNELS.RUN_REVIEW, created.id))
+      .toThrow('NATIVE_C2_RUN_REQUIRED')
+    expect(() => invoke(REVIEW_IPC_CHANNELS.EXPORT_REPORT, created.id))
+      .toThrow('NATIVE_C2_REPORT_REQUIRED')
+    expect(JSON.stringify(readAggregate(created.id))).toBe(original)
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
+  })
+
 })
