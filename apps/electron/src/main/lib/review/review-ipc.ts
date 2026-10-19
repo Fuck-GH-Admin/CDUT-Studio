@@ -353,7 +353,7 @@ export function registerReviewIpc(): void {
         const failures: ImportDocumentsResult['failures'] = []
         for (const sourcePath of picked.filePaths) {
           try {
-            const document = await registerNativeWorkspaceMaterialV3(caseId, sourcePath, input.role)
+            const document = await registerNativeWorkspaceMaterialV3(caseId, sourcePath, input.role, undefined, () => assertC0ReviewMainSender(_event))
             assertC0ReviewMainSender(_event)
             documents.push(document)
           } catch (error) {
