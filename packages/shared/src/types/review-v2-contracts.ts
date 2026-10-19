@@ -316,8 +316,18 @@ export interface SourceValidityRevocation {
   previouslyConfirmedEvidenceLinkIds: string[]
 }
 
+/** C-owned reversible Case archive, separate from destroying historical data. */
+export interface CaseArchiveRecordV3 {
+  previousStage: import('./review-v2').CaseStage
+  archivedAt: string
+  archivedBy: string
+  reason: string
+}
+
 export interface CaseAggregateV2 {
   caseV2: ReviewCaseV2
+  /** Latest reversible archive checkpoint. Every transition retains a Receipt. */
+  caseArchive?: CaseArchiveRecordV3
   observations: Observation[]
   /** Current-applicability revocation ledger; absent in legacy aggregates. */
   sourceValidityRevocations?: SourceValidityRevocation[]
