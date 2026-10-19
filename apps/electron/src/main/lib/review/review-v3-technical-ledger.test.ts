@@ -4,7 +4,7 @@ import { rmSync } from 'node:fs'
 import {
   REVIEW_C0_SCHEMA_VERSION, REVIEW_V3_EXECUTION_SCHEMA,
   type Actor, type CanonicalPlan, type ReviewCaseV2,
-  type RunEvidenceIdentity, type SourceIdentity, type V3ExecutionProposal,
+  type RunEvidenceIdentity, type V3ExecutionProposal,
 } from '@profer/shared'
 import { createAggregate, readAggregate, submitCommand, writeAggregate } from './case-store-v2'
 import { executionProposalId } from './review-v3-execution-contract'
@@ -16,12 +16,6 @@ process.env.PROFER_CONFIG_DIR = root
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 const actor: Actor = { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' }
 const sha = 'a'.repeat(64)
-const source: SourceIdentity = {
-  schemaVersion: REVIEW_C0_SCHEMA_VERSION, caseId: 'c2-ledger-1',
-  materialId: 'd1', documentVersionId: 'doc-v1', rawSha256: sha,
-  parseRevision: 'parse-1', blockId: 'block-1',
-  location: { kind: 'paragraph', locator: 'p1' },
-}
 const plan: CanonicalPlan = {
   schemaVersion: REVIEW_C0_SCHEMA_VERSION, planId: 'prepared-policy',
   fingerprint: sha, templateId: 'template-1', templateVersion: '2', moduleDigests: [sha],
