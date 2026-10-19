@@ -136,7 +136,7 @@ describe('C2-R03 Main physical Host receipt registry', () => {
     f.registry.invalidateRun(f.run)
     expect(f.registry.getPhysicalHostReceipt(f.host.hostReceiptId)).toBeUndefined()
     expect(() => f.registry.rememberObservedReceipt(f.host.hostReceiptId))
-      .toThrow('Recycled')
+      .toThrow('Run invalidated')
     const g = fixture()
     g.observe()
     g.registry.rememberObservedReceipt(g.host.hostReceiptId)
@@ -146,5 +146,85 @@ describe('C2-R03 Main physical Host receipt registry', () => {
       .toThrow('closed')
     const cold = fixture()
     expect(cold.registry.getPhysicalHostReceipt(g.host.hostReceiptId)).toBeUndefined()
+  })
+})
+
+describe('C2-R06 Run-wide physical Host tombstone and late ingress regressions', () => {
+  test('invalidating before first Host callback blocks a newly observed, never-registered physical ID', () => {
+    const f = fixture()
+    f.registry.invalidateRun(f.run)
+    const neverSeen = {...structuredClone(f.host),
+      hostReceiptId:'host-late-'+f.run.caseId}
+    f.observed.set(neverSeen.hostReceiptId,neverSeen)
+    expect(() => f.registry.rememberObservedReceipt(neverSeen.hostReceiptId))
+      .toThrow('Run invalidated')
+    expect(f.registry.getPhysicalHostReceipt(neverSeen.hostReceiptId)).toBeUndefined()
+    // Repeated invalidate must be idempotent: no callback can restore this Run.
+    f.registry.invalidateRun(f.run)
+    expect(() => f.registry.rememberObservedReceipt(neverSeen.hostReceiptId))
+      .toThrow('Run invalidated')
+  })
+
+  test('recycled Run identity remains barred across Owner generation and attempt mutations', () => {
+    const f=fixture()
+    const revivedRun:RunEvidenceIdentity={...structuredClone(f.run),
+      attemptId:'attempt-new',ownerGeneration:f.run.ownerGeneration+1}
+    const revived:C2MainHostWitness={...structuredClone(f.host),run:revivedRun,
+      hostReceiptId:'host-rotated-'+f.run.caseId}
+    const observed=new Map([[revived.hostReceiptId,revived]])
+    const registry=new C2MainPhysicalHostReceiptRegistry({
+      getObservedPhysicalReceipt:id=>observed.get(id),
+      getCurrentOwner:run=>({
+        run,active:true,ownerGeneration:revivedRun.ownerGeneration,
+        inputManifestHash:revivedRun.inputManifestHash,
+        permissionGrantId:revived.permissionGrantId,
+      }),
+    })
+    registry.invalidateRun(f.run)
+    expect(() => registry.rememberObservedReceipt(revived.hostReceiptId))
+      .toThrow('Run invalidated')
+    expect(registry.getPhysicalHostReceipt(revived.hostReceiptId)).toBeUndefined()
+  })
+
+  test('a distinct new Run ID under the same Case may proceed with an independent live Owner', () => {
+    const f=fixture()
+    const nextRun:RunEvidenceIdentity={...structuredClone(f.run),
+      runId:'fresh-'+f.run.runId,attemptId:'fresh-attempt'}
+    const newer:C2MainHostWitness={...structuredClone(f.host),
+      hostReceiptId:'host-fresh-'+f.run.caseId,run:nextRun}
+    const observed=new Map<string,C2MainHostWitness>([
+      [f.host.hostReceiptId,structuredClone(f.host)],
+      [newer.hostReceiptId,newer],
+    ])
+    const registry=new C2MainPhysicalHostReceiptRegistry({
+      getObservedPhysicalReceipt:id=>observed.get(id),
+      getCurrentOwner:run=>({
+        run,active:true,ownerGeneration:run.ownerGeneration,
+        inputManifestHash:run.inputManifestHash,
+        permissionGrantId:newer.permissionGrantId,
+      }),
+    })
+    registry.rememberObservedReceipt(f.host.hostReceiptId)
+    registry.invalidateRun(f.run)
+    expect(registry.getPhysicalHostReceipt(f.host.hostReceiptId)).toBeUndefined()
+    expect(() => registry.rememberObservedReceipt(f.host.hostReceiptId))
+      .toThrow('Run invalidated')
+    registry.rememberObservedReceipt(newer.hostReceiptId)
+    expect(registry.getPhysicalHostReceipt(newer.hostReceiptId)?.run.runId)
+      .toBe(nextRun.runId)
+  })
+
+  test('tombstone capacity never evicts old Runs to permit late receipt resurrection', () => {
+    const f=fixture()
+    f.observe()
+    f.registry.invalidateRun(f.run)
+    for(let i=0;i<8191;i++) f.registry.invalidateRun({
+      ...f.run,runId:'blocked-'+i,
+    })
+    expect(() => f.registry.invalidateRun({...f.run,runId:'capacity-overflow'}))
+      .toThrow('capacity exhausted')
+    expect(f.registry.getPhysicalHostReceipt(f.host.hostReceiptId)).toBeUndefined()
+    expect(() => f.registry.rememberObservedReceipt(f.host.hostReceiptId))
+      .toThrow('closed')
   })
 })
