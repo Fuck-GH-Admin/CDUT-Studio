@@ -45,13 +45,63 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(readdirSync(before).filter(n => n.startsWith('case-'))).toEqual([])
   })
 
-  test('valid legacy CREATE_CASE keeps its UI return contract and migrates under the same id', async () => {
+  test('existing CREATE_CASE UI channel now creates native-only durable Case + receipt before a read-only projection', async () => {
     const input = { title: 'Legal application', type: '综合测评', applicant: 'Applicant', academicYear: '2026' }
     const result = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_CASE, input)) as { id: string; title: string }
     expect(result.title).toBe('Legal application')
     expect(getCase(result.id)?.id).toBe(result.id)
-    expect(readAggregate(result.id)?.caseV2.id).toBe(result.id)
-    expect(readAggregate(result.id)?.receiptLog.some(r => r.type === 'EnsureReviewWorkspaceAggregate')).toBe(true)
+    const state = readAggregate(result.id)!
+    expect(state.caseV2.id).toBe(result.id)
+    expect(state.caseV2.stage).toBe('draft')
+    expect(state.receiptLog).toHaveLength(1)
+    expect(state.receiptLog[0]).toMatchObject({
+      type: 'CreateNativeWorkspaceCaseV3', revision: 0,
+      actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
+    })
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(join(getReviewCasesDir(), result.id, 'case.json'))).toBe(false)
+    expect(existsSync(join(getReviewCasesDir(), result.id, 'case.v2.json'))).toBe(false)
+    expect(listCases().some(c => c.id === result.id && c.applicant === input.applicant)).toBe(true)
+    const migration = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.MIGRATE_CASE_V2, result.id)) as {
+      migrated: boolean; caseV2: { id: string }
+    }
+    expect(migration.migrated).toBe(true)
+    expect(migration.caseV2.id).toBe(result.id)
+    expect(existsSync(join(getReviewCasesDir(), result.id, 'case.v2.json'))).toBe(false)
+    expect((await ensureWorkspaceAggregateV2(result.id)).caseV2.revision).toBe(0)
+    expect(readAggregate(result.id)?.receiptLog).toHaveLength(1)
+  })
+
+  test('native-first workbench title and type updates use one V2 CAS receipt, no V1 writer', async () => {
+    const input = { title: 'Native settings', type: '综合测评', applicant: 'Case author', academicYear: '2026' }
+    const created = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_CASE, input)) as { id: string }
+    const updated = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPDATE_CASE_SETTINGS, {
+      caseId: created.id, title: 'Retitled native', type: '活动申请',
+    })) as { title: string; type: string }
+    expect(updated).toMatchObject({ title: 'Retitled native', type: '活动申请' })
+    const state = readAggregate(created.id)!
+    expect(state.caseV2.revision).toBe(1)
+    expect(state.receiptLog.map(r => r.type)).toEqual([
+      'CreateNativeWorkspaceCaseV3', 'UpdateNativeWorkspaceSettingsV3',
+    ])
+    expect(getCase(created.id)).toMatchObject({ title: 'Retitled native', type: '活动申请' })
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
+    const before = JSON.stringify(state)
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPDATE_CASE_SETTINGS, {
+      caseId: created.id, manualRules: [{ id: 'r', title: 'Hidden', requirement: 'do not install' }],
+    }))).rejects.toThrow('独立原生命令')
+    expect(JSON.stringify(readAggregate(created.id))).toBe(before)
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, created.id))
+    expect(getCase(created.id)).toBeUndefined()
+    const archived = readAggregate(created.id)!
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.RESTORE_CASE_V3, {
+      caseId: created.id, expectedRevision: archived.caseV2.revision,
+      reason: '用户明确恢复原生案卷',
+    }))
+    expect(getCase(created.id)?.title).toBe('Retitled native')
+    expect(listCases().some(c => c.id === created.id)).toBe(true)
+    expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
   })
 
   test('native V2 colliding with a legacy shadow is immutable through low-level V1 updateCase', async () => {
