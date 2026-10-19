@@ -117,6 +117,22 @@ export class C2MainPublishedPlanProvenance {
     assertC0CanonicalPlan(artifact.canonicalPlan)
   }
 
+  /** Use this in C1 bind/upgrade CAS; Plan-only verification is insufficient. */
+  assertPublishedPlanForCase(plan: CanonicalPlan, aggregate: CaseAggregateV2): void {
+    if (plan.templateId !== aggregate.caseV2.templateId ||
+        plan.templateVersion !== String(aggregate.caseV2.templateVersion)) {
+      deny('Published Plan is for a different Case template')
+    }
+    this.assertPublishedCanonicalPlan(plan)
+    const originalVersionIds = new Set(plan.bindings.flatMap(binding => binding.sourceVersionIds))
+    if (originalVersionIds.size === 0) {
+      deny('Published Plan binds no physical Case source')
+    }
+    for (const versionId of originalVersionIds) {
+      assertC2PhysicalOriginalBytes(aggregate, versionId)
+    }
+  }
+
   /** Reverify publisher AND Case-controlled originals at each Run boundary. */
   assertPublishedPlan(aggregate: CaseAggregateV2, run: RunEvidenceIdentity): void {
     const plan = aggregate.canonicalPlan
@@ -127,7 +143,7 @@ export class C2MainPublishedPlanProvenance {
         run.sourceVersionIds.length === 0) {
       deny('Run and current Case published Plan are not exactly bound')
     }
-    this.assertPublishedCanonicalPlan(plan)
+    this.assertPublishedPlanForCase(plan, aggregate)
     const bindings = plan.bindings
     const checkKeys = new Set(bindings.map(binding => binding.checkKey))
     const versions = new Set(bindings.flatMap(binding => binding.sourceVersionIds))
