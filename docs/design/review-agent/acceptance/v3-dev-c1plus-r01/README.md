@@ -165,3 +165,42 @@ Do not mark any command passed without captured stdout/stderr, exit codes, first
 **Next:** after real CI and quality fixes, create the visible manual item-entry component with currently registered document/block selectors and role labels; then C/Main B2 physical capability, parser-verified candidate staging and formal `ApplyMaterial/InstallPlan`. Long-running C2 Run/Check/ReadReceipt/Business ACK and concentrated Electron verification remain separate. No fake Gold, SchoolPort approval or official policy publication.
 
 **Rollback:** revert C-owned R08 code on the Draft C branch only, preserving durable case storage and receipt history; no V1-first replay or deletion of native source versions. Changes to shared DTO must be versioned and verified jointly before any I promotion.
+
+
+## C1-R09 — Visible native manual-item entry in the actual three-column workbench (2026-10-19)
+
+**Source checkpoint before this doc update**: `2b1cca8f1a7720e891d27690e5bbafd34d35ad90` on C's Draft PR #144, unmerged. **C1 is still PARTIAL; exact Gate O not passed; Gate E/L/P not passed; Release NO-GO.**
+
+### Real C-owned product code (not a plan-only deliverable)
+
+1. New `apps/electron/src/renderer/components/content-review/NativeManualItemDialog.tsx` is mounted from the **existing real** `CaseManagerBar.tsx::ReviewContextBar` as the visible **人工登记事项** entry. The button is enabled only for the selected native-first, unfrozen draft Case with a loaded V2 aggregate. No unrelated window/legacy Case can invoke the native writer.
+2. Dialog **read-only** material discovery calls the existing Main `getAggregateV2(caseId)`; it offers only that Case's active **application** `DocumentVersion` and exact registered parser `blockId`. Retired source, evidence-role attachment, unbound/cross-case, legacy-origin or frozen Plan cannot be offered. Users may choose a real parser block, or explicitly choose **file-level** precision (no fabricated page/paragraph position). It displays the physical filename + version and labels the amount as **人工申报分值（未认定）**. Required title, category, score, optional level/activityDate/organizer have size/number constraints.
+3. The form's submission goes exclusively through C's existing `ReviewActions.createNativeReviewItem` → trusted Preload/Main → `createNativeReviewItemV3` (same Case CAS+Receipt). No direct filesystem / policy / formal Run or Plan writer from Renderer. On success the selected case, native aggregate and three-column view refresh. On failure dialog remains open and error is visible, not misreported as approved.
+4. A **selected-case switch** invalidates the old dialog; the action separately checks the captured Case ID **both before and after the awaited aggregate read**, so an old form cannot write into a newly selected Case. An unchanged form reuses a stable `requestId` after a lost Main reply, allowing the C durable receipt to replay without a duplicate Subject; form changes or reopening use a new request identity.
+5. `native-workspace-case-v3.ts` now also persists the **parser-verified exact blockId** as a separate Subject field when the parser has no geometric `SourceLocation`. Projection matches that ID only against the current physical DocumentVersion's registered blocks and can highlight the exact real block, while `SourceRef.location` honestly remains `{kind:'file'}` when no precise locator exists. No invented OCR coordinate, authoritative score or school approval.
+
+### Committed regression code
+
+- `NativeManualItemDialog.test.ts`: source selection excludes retired versions, evidence roles, frozen Plan, migrated legacy and wrong Case; malformed source ledger remains blocked.
+- `review-actions-controller.test.ts`: case switch during source read cannot issue stale cross-case Subject write; stable retry requestId is forwarded after a simulated lost reply, and UI case projection refreshes.
+- `native-workspace-case-v3.test.ts`: selection of an actual parser block with missing geometric location preserves true block identity and retains explicitly file-level SourceRef; existing R08 same-ID receipt/physical source/actor forgery tests stay intact.
+- Exact Gate O commands in isolated checkout:
+
+```bash
+bun install --frozen-lockfile
+bun run typecheck
+bun run check:boundaries
+bun test --isolate apps/electron/src/renderer/components/content-review/NativeManualItemDialog.test.ts apps/electron/src/renderer/components/content-review/review-actions-controller.test.ts apps/electron/src/main/lib/review/native-workspace-case-v3.test.ts apps/electron/src/main/lib/review/review-v3-legacy-entry-gates.test.ts apps/electron/src/main/lib/review/plan-binding-v3.test.ts
+bun test --isolate --timeout 30000
+bun run --filter='@profer/electron' build:main
+bun run --filter='@profer/electron' build:preload
+bun run --filter='@profer/electron' build:renderer
+```
+
+**Evidence limit**: fixed R09 source PR CI run `39267842729` was `QUEUED`, as were Review Baseline `39267842941`, D1 `39267842868`, D2 `39267843075`, Review Batch `39267842971`. Earlier C runs have cancelled jobs; neither queue nor cancelled status yields a test result. No live Electron dialog interaction, keyboard/screen-reader, actual OS picker, multi-window revocation, or Office/ZIP 100-case validation has been witnessed. The added tests are **written, not executed**. Do not claim Gate O/E.
+
+### Scope and remaining work
+
+The new UI is **manual registration only**. Dev-B #142 offers input-only ZIP ledger / candidate metadata, not an authorized `ApplyMaterial` or published Plan; no unverified B input has been imported into C's Case. I #147 has a new I-only correction after a genuine first CI typecheck failure, but Gate O at its new SHA is not yet proven and no I write lease expands. Existing C2 formal ReviewRun, ReadReceipt, verified Check and Decision ACK, B publisher/provenance, signed SourceIdentity, native trusted drop, durable ImportBatch and cross-PID disk recovery all remain open.
+
+**Rollback**: revert only R09 component/controller/typed adapter and corresponding tests on #144 in an isolated worktree, never delete live `state.v2.json`, materials, Subjects or receipts. Users who have already created native Subjects must retain their historical rows; no fallback to legacy `case.json` writers or automatic official policy installation.
