@@ -109,38 +109,53 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(readFileSync(shadowPath, 'utf8')).toBe(before)
   })
 
-  test('old DELETE_CASE cannot erase a native Case, its Receipts or a migrated V2 history', async () => {
-    const nativeId = 'v3-c1-native-delete-denied'
-    const seedId = 'v3-c1-seed-for-delete'
+  test('old DELETE_CASE soft-archives native and migrated V2 without destroying historical receipts', async () => {
+    const nativeId = 'v3-c1-native-archive-from-old-ui'
+    const seedId = 'v3-c1-migrated-archive-from-old-ui'
     saveCase(legacy(seedId))
     const initial = await ensureWorkspaceAggregateV2(seedId)
     await createAggregate(nativeId, {
-      ...initial.caseV2, id: nativeId, title: 'Native protected from legacy delete', revision: 0,
+      ...initial.caseV2, id: nativeId, title: 'Native protected from physical delete', revision: 0,
     }, {
       requestId: `create-${nativeId}`, type: 'CreateCaseFromTemplate',
       payloadHash: 'a'.repeat(64), revision: 0, at: new Date().toISOString(),
       summary: 'Durable native receipt', actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
     })
-    const nativeBefore = JSON.stringify(readAggregate(nativeId))
-    expect(() => invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, nativeId)).toThrow('禁止通过旧版删除入口')
-    expect(JSON.stringify(readAggregate(nativeId))).toBe(nativeBefore)
+    const nativeBefore = readAggregate(nativeId)!
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, nativeId))
+    const nativeAfter = readAggregate(nativeId)!
+    expect(nativeAfter.caseV2.stage).toBe('archived')
+    expect(nativeAfter.caseArchive?.previousStage).toBe(nativeBefore.caseV2.stage)
+    expect(nativeAfter.receiptLog).toHaveLength(nativeBefore.receiptLog.length + 1)
+    expect(nativeAfter.receiptLog.at(-1)?.type).toBe('ArchiveReviewCaseV3')
+    expect(listAggregatesV2().some(c => c.caseId === nativeId && c.stage === 'archived')).toBe(true)
+    expect(getCase(nativeId)).toBeUndefined()
+    // Durable archive replays without incrementing revision or receipt count.
+    const snapshot = JSON.stringify(nativeAfter)
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, nativeId))
+    expect(JSON.stringify(readAggregate(nativeId))).toBe(snapshot)
+    expect(() => deleteCase(nativeId)).toThrow('禁止通过旧版删除入口')
 
-    const migratedBefore = JSON.stringify(readAggregate(seedId))
+    const migratedBefore = readAggregate(seedId)!
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, seedId))
+    const migratedAfter = readAggregate(seedId)!
+    expect(migratedAfter.caseV2.stage).toBe('archived')
+    expect(migratedAfter.receiptLog.length).toBe(migratedBefore.receiptLog.length + 1)
+    expect(getCase(seedId)).toBeUndefined()
+    expect(listCases().some(c => c.id === seedId)).toBe(false)
     expect(() => deleteCase(seedId)).toThrow('禁止通过旧版删除入口')
-    expect(JSON.stringify(readAggregate(seedId))).toBe(migratedBefore)
-    expect(getCase(seedId)).toBeDefined()
 
-    expect(() => invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, nativeId,
-      { sender, senderFrame: { id: 9 } })).toThrow('SENDER_UNTRUSTED')
-    expect(JSON.stringify(readAggregate(nativeId))).toBe(nativeBefore)
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, nativeId,
+      { sender, senderFrame: { id: 9 } }))).rejects.toThrow('SENDER_UNTRUSTED')
+    expect(JSON.stringify(readAggregate(nativeId))).toBe(snapshot)
   })
 
-  test('pure V1-only draft can still be deleted through its existing UI command', () => {
+  test('pure V1-only draft can still be deleted through its existing UI command', async () => {
     const id = 'v3-c1-pure-v1-removable'
     saveCase(legacy(id))
     expect(getCase(id)).toBeDefined()
     expect(readAggregate(id)).toBeUndefined()
-    expect(() => invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id)).not.toThrow()
+    await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, id))
     expect(getCase(id)).toBeUndefined()
     expect(readAggregate(id)).toBeUndefined()
   })
