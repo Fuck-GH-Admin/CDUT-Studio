@@ -1,5 +1,5 @@
 import { bindLocalReviewerCommand } from './review-ipc-actor-guard'
-import { bindC0LocalCaseCommand, bindC0LocalCreateIntent } from './review-c0-authority'
+import { bindC0LocalCaseCommand, bindC0LocalCreateIntent, assertC0ReviewMainSender } from './review-c0-authority'
 import { assertSafeReviewStorageId } from './review-storage-id'
 /**
  * 内容审核专区 - IPC 处理器注册
@@ -58,6 +58,7 @@ import { createEmptyCase } from './case-creation'
 import { importDocumentFromPath, importDocumentsIntoCase, removeDocumentsFromCase, reorderDocumentsInCase } from './case-import'
 import { invalidateDerivedReviewInputs } from './input-invalidation'
 import { ensureWorkspaceAggregateV2, syncWorkspaceProjectionV2 } from './workspace-service-v2'
+import { readAggregate } from './case-store-v2'
 import { resolveCaseDocumentPreviewPath } from './document-preview-path'
 
 /** 来源角色枚举（IMPORT_DOCUMENT 入参白名单） */
@@ -116,7 +117,7 @@ export function registerReviewIpc(): void {
   ipcMain.handle(
     REVIEW_IPC_CHANNELS.CREATE_CASE,
     async (
-      _event,
+      event,
       input: {
         title: string
         type: ReviewCaseType
@@ -126,6 +127,7 @@ export function registerReviewIpc(): void {
         reviewTemplate?: { templateId: string; version: number }
       },
     ): Promise<ReviewCase> => {
+      assertC0ReviewMainSender(event)
       if (!input || typeof input !== 'object') throw new Error('参数 input 缺失或类型非法')
       if (!CASE_TYPES.has(input.type)) throw new Error(`参数 type 非法：${String(input.type)}`)
       // 领域包 ID 只做存在性判断：未知 ID 回落缺省包由 resolveDomainPack 负责，不因拼错而拒绝建卷
@@ -157,9 +159,20 @@ export function registerReviewIpc(): void {
   /** 更新案卷设置（领域包 / 标题 / 类型 / 待审主体文档） */
   ipcMain.handle(
     REVIEW_IPC_CHANNELS.UPDATE_CASE_SETTINGS,
-    async (_event, input: UpdateCaseSettingsRequest): Promise<ReviewCase> => {
+    async (event, input: UpdateCaseSettingsRequest): Promise<ReviewCase> => {
+      assertC0ReviewMainSender(event)
       if (!input || typeof input !== 'object') throw new Error('参数 input 缺失或类型非法')
       const caseId = requireString(input.caseId, 'caseId')
+      // A frozen native Plan may only change through a C-owned versioned ACK
+      // command; mutating legacy settings first would leave two contrary
+      // template/source truths if a later projection rejects the write.
+      const aggregate = readAggregate(caseId)
+      if (aggregate?.canonicalPlan || aggregate?.d2RuntimePlan) {
+        if (input.reviewTemplate !== undefined || input.domainPackId !== undefined ||
+          input.manualRules !== undefined || input.subjectDocumentIds !== undefined) {
+          throw new Error('审核计划已冻结；修改模板、规则或材料范围须使用原生 V2 升版与确认命令')
+        }
+      }
       const reviewCase = getCase(caseId)
       if (!reviewCase) throw new Error(`案卷不存在: ${caseId}`)
       if (input.type !== undefined && !CASE_TYPES.has(input.type)) {
