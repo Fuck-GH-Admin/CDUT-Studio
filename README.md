@@ -143,32 +143,50 @@
 
 <a id="multihop-rag-benchmark"></a>
 
-## 🏗️ 工作台架构流程
+## 🏗️ 工作台架构与 CDUT 专区
+
+> 以 CDUT 专区为产品核心：特区账户统一接入后，串联教务快查、AI 速课堂、智联万站与材料审核；Pi Agent 与本地沙盒构成通用底座。
 
 ```mermaid
-graph TD
-    classDef client fill:#FF6B35,stroke:#fff,stroke-width:2px,color:#fff;
-    classDef brain fill:#8B0000,stroke:#fff,stroke-width:2px,color:#fff;
-    classDef secure fill:#2ECC71,stroke:#fff,stroke-width:2px,color:#fff;
-    classDef target fill:#457B9D,stroke:#fff,stroke-width:2px,color:#fff;
+flowchart TD
+    classDef user fill:#F2F4F7,stroke:#98A2B3,stroke-width:1px,color:#344054
+    classDef client fill:#EAF2FF,stroke:#4A7DFF,stroke-width:2px,color:#17305C
+    classDef core fill:#E5FFF2,stroke:#0F9D58,stroke-width:2px,color:#004D26
+    classDef zone fill:#FFE8C7,stroke:#D97706,stroke-width:2px,color:#5C3A12
+    classDef module fill:#FFF8EE,stroke:#E0A458,stroke-width:1px,color:#4A3218
+    classDef external fill:#F3F4F6,stroke:#98A2B3,stroke-width:1px,color:#344054
 
-    User(["成理师生用户"]) <--> Client["CDUT Studio 桌面交互客户端<br/>(TypeScript / Electron)"]:::client
+    User(["成理师生用户"]):::user
+    Client["CDUT Studio<br/>桌面客户端"]:::client
+    Core["Pi Agent 内核<br/>规划 · 工具<br/>流式输出<br/>记忆 · 智能体<br/>Skills 工具"]:::core
 
-    subgraph CoreEngine ["智能体核心中枢 Agent Core"]
-        Client --> Planner["意图规划器"]:::brain
-        Planner --> RAG["成理专属知识库 RAG<br/>(校史、规章制度等)"]:::brain
-        Planner --> Tutor["自主带教与思维导图拆解引擎"]:::brain
-        Planner --> Audit["三栏材料对比分析器"]:::brain
+    subgraph CDUT["CDUT 专区 · 产品核心"]
+        Zone["特区账户入口<br/>CAS 统一认证<br/>10 分钟静默保活"]:::zone
+        Quick["教务快查<br/>今日课表<br/>成绩 GPA<br/>空教室检索<br/>期末考场"]:::module
+        AIClass["AI 速课堂<br/>资料 · 知识树<br/>脑图 · 抽认卡<br/>测验"]:::module
+        Yanhu["智联万站<br/>多标签浏览器<br/>砚湖易办<br/>AI 自动化"]:::module
+        Review["材料审核<br/>三栏同屏 · 规则<br/>差异批注<br/>报告导出"]:::module
     end
 
-    subgraph Automation ["内网安全执行区"]
-        Planner --> Sandbox["本地安全沙盒 Headless Driver"]:::secure
-        Sandbox -->|"学生身份凭据本地保全"| Yanhu["砚湖易办 / 教务网关"]:::target
-    end
+    CAS["统一身份认证<br/>CAS"]:::external
+    JW["青果教务<br/>课表 · 成绩<br/>考场 · 空教室"]:::external
+    YH["砚湖易办<br/>数字校园"]:::external
 
-    Audit --> Visual["实时渲染差异报告与批注"]
-    Tutor --> Mindmap["动态生成交互脑图"]
+    User <--> Client
+    Client --> Core
+    Core --> Zone
+
+    Zone --> Quick
+    Zone --> AIClass
+    Zone --> Yanhu
+    Zone --> Review
+
+    Zone --> CAS
+    Quick --> JW
+    Yanhu --> YH
 ```
+
+通用底座由 Pi Agent 统一驱动：会话与记忆、多智能体协作、Skills 与工具、定时任务、18 家模型渠道，以及基于文件检查点 / MinGit 的本地沙盒和 `~/.cdutai` 本地存储。
 
 ---
 

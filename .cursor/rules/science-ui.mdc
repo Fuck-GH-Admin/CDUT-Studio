@@ -1,0 +1,22 @@
+---
+description: CDUT Science 专区前端 UI 规范与成理学术界面准则
+globs: apps/electron/src/renderer/components/cdut-science/**/*.{tsx,jsx,css}
+alwaysApply: true
+---
+
+# CDUT Science (CSLab) 前端规范守卫
+
+## 1. 严格遵从 AGENTS.md
+- UI 组件推荐采用 ShadcnUI，在合适的情况下，用优雅卡片和柔和阴影取代粗重边框。
+- 允许使用 `rounded-xl` (12px) 与 `rounded-2xl` (16px) 的圆润卡片设计。
+- 色彩采用符合主题的饱满色彩（成理湖蓝、青绿、石青）。
+- 支持深浅双色主题，为多主题预留空间。
+
+## 2. 真实高校与中国大学生导向
+- 100% 友好全中文文案，杜绝英文冷酷极客黑话。
+- 适配 Windows 快捷键（`Ctrl+K` 检索、`Alt+S` 科学验算、`F3` 悬浮贴图）。
+- 字号清晰舒适（正文 14px，辅助 12px），杜绝微雕不可读字体。
+
+## 3. 90% 静默执行
+- 严禁弹窗让学生填写繁琐参数，拖入即分析，一键出成果。
+- 复杂执行过程折叠为 28px 单行静默摘要条。
