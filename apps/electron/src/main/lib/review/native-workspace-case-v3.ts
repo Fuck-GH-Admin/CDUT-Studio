@@ -14,7 +14,7 @@ import { ensureBuiltinTemplateDrafts } from './builtin-templates'
 import { getTemplate, saveDraft } from './template-store'
 import { registerMaterial } from './material-service'
 import { revokeCurrentSourceValidity } from './source-current-validity-v3'
-import { resolveDomainPack } from '@profer/shared'
+import { isKnownDomainPack, resolveDomainPack } from '@profer/shared'
 
 export const NATIVE_CREATE_RECEIPT_V3 = 'CreateNativeWorkspaceCaseV3'
 const PENDING_TEMPLATE = 'pending-template-v3'
@@ -180,6 +180,8 @@ export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceIn
   }
   if (actor.actorSource !== 'local' || actor.role !== 'reviewer')
     throw new CommandValidationError('VALIDATION_FAILED', '只有受信本地审核人可建案')
+  if (!isKnownDomainPack(input.domainPackId))
+    throw new CommandValidationError('VALIDATION_FAILED', '未知审核领域不能静默回退综测并创建正式业务案卷')
   const domain = resolveDomainPack(input.domainPackId).id
   const template = resolvedTemplate(domain, input.reviewTemplate)
   const caseId = `case-${randomUUID().replace(/-/g, '')}`
@@ -256,6 +258,8 @@ export async function updateNativeWorkspaceSettingsV3(
     throw new CommandValidationError('VALIDATION_FAILED', '案卷类型非法')
   if (input.domainPackId !== undefined && typeof input.domainPackId !== 'string')
     throw new CommandValidationError('VALIDATION_FAILED', '审核领域非法')
+  if (!isKnownDomainPack(input.domainPackId))
+    throw new CommandValidationError('VALIDATION_FAILED', '未知审核领域不能静默回退综测')
   const domain = resolveDomainPack(input.domainPackId ?? value(original.caseV2, 'legacyDomainPackId')).id
   const template = input.reviewTemplate === undefined && input.domainPackId === undefined
     ? undefined : resolvedTemplate(domain, input.reviewTemplate ?? undefined)
