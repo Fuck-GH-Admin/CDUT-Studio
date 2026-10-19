@@ -263,6 +263,9 @@ export function decideWorkspaceCaseV2(
   return submitCommand(caseId, { ...command, type: 'RecordWorkspaceBusinessDecision' }, (aggregate, payload) => {
     // D2 候选为技术预审：普通 Pi 的完成回执不能获取校方行政决定权限。
     if (aggregate.d2RuntimePlan) throw new CommandValidationError('AGENT_DECISION_DISABLED', 'D2 技术预审案卷不能形成正式批准，需另走有权业务流程')
+    // A bound CanonicalPlan must be reviewed by the verified C2 Run writer.
+    // A legacy graph Run or run@rev cannot acquire policy/coverage authority.
+    if (aggregate.canonicalPlan) throw new CommandValidationError('AGENT_DECISION_DISABLED', '冻结 CanonicalPlan 案卷尚无受控真实 Run 定稿服务；不得使用历史运行直接审批')
     const run = assertCurrentRun(aggregate, payload.basedOnRunId, payload.inputHash)
     if (!['completed', 'partially-completed'].includes(run.status)) throw new CommandValidationError('INVALID_TRANSITION', '运行未完成，不能形成最终决定')
     if (!payload.reason.trim()) throw new CommandValidationError('VALIDATION_FAILED', '最终决定必须填写理由')
