@@ -12,7 +12,7 @@ import {
   type Actor, type CaseAggregateV2, type CanonicalPlan,
   type RunEvidenceIdentity, type V3ExecutionProposal, type ReviewCommandResult,
 } from '@profer/shared'
-import { CommandValidationError, submitCommand } from './case-store-v2'
+import { CommandValidationError, payloadHash, submitCommand } from './case-store-v2'
 import { validateV3ExecutionProposal } from './review-v3-execution-contract'
 import type { V3TrustedConsumptionContext, V3VerifiedHostReceipt } from './review-v3-execution-contract'
 
@@ -57,6 +57,83 @@ function frozenInputDigest(record: CaseAggregateV2): string {
   const { receiptLog: _receipts, v3TechnicalExecution: _journal, caseV2, ...business } = record
   const { revision: _revision, updatedAt: _updatedAt, ...caseInputs } = caseV2
   return createHash('sha256').update(canonical({ caseInputs, business })).digest('hex')
+}
+
+/** Re-verify the entire durable event/Receipt chain, not merely a count.
+ * The seal writer calls this inside its own serialized Case CAS handler.
+ * This is integrity/provenance consistency, not a substitute for Main's real
+ * Owner/physical-Host/registered-policy verification.
+ */
+export function assertV3TechnicalJournalIntegrity(aggregate: CaseAggregateV2): NonNullable<CaseAggregateV2['v3TechnicalExecution']> {
+  const journal = aggregate.v3TechnicalExecution
+  if (!journal || !aggregate.canonicalPlan) {
+    throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '没有持久技术运行证据账及绑定 Plan')
+  }
+  assertC0RunEvidenceIdentity(journal.run)
+  if (journal.run.caseId !== aggregate.caseV2.id ||
+      journal.run.planFingerprint !== aggregate.canonicalPlan.fingerprint ||
+      journal.run.templateVersion !== aggregate.canonicalPlan.templateVersion ||
+      journal.frozenInputDigest !== frozenInputDigest(aggregate)) {
+    throw new CommandValidationError('STALE_INPUT', 'Run/Plan/案卷原始输入已失效或被篡改')
+  }
+  const admitted = aggregate.receiptLog.filter(receipt =>
+    receipt.type === 'AdmitV3TechnicalRun' &&
+    receipt.revision === journal.admittedAtRevision &&
+    receipt.payloadHash === payloadHash('AdmitV3TechnicalRun', journal.run))
+  if (admitted.length !== 1 || journal.run.caseRevision !== journal.admittedAtRevision) {
+    throw new CommandValidationError('INVALID_TRANSITION', '缺少与 Run 身份匹配的持久准入 CAS 回执')
+  }
+  if (!Array.isArray(journal.events) || journal.events.length > 4096) {
+    throw new CommandValidationError('INVALID_TRANSITION', '技术事件账损坏或超过安全限额')
+  }
+  const persisted = aggregate.receiptLog.filter(receipt =>
+    receipt.type === 'RecordV3TechnicalProposal' &&
+    receipt.revision > journal.admittedAtRevision)
+  if (persisted.length !== journal.events.length) {
+    throw new CommandValidationError('INVALID_TRANSITION', '技术事件缺少对应 CAS 回执')
+  }
+  const seenReceipts = new Set<string>()
+  let terminalStatus: typeof journal.terminalStatus
+  for (let i = 0; i < journal.events.length; i++) {
+    const item = journal.events[i]!
+    const event = item.proposal
+    const { eventId: _omitted, ...body } = event
+    const receipt = persisted[i]
+    if (item.sequence !== i + 1 || item.eventId !== event.eventId ||
+        event.sequence !== item.sequence || !sameRun(event.run, journal.run) ||
+        event.schemaVersion !== 'review-v3-execution/1' ||
+        event.eventId !== executionProposalId(body as Omit<V3ExecutionProposal, 'eventId'>) ||
+        !receipt || receipt.revision !== journal.admittedAtRevision + i + 1 ||
+        receipt.requestId !== event.eventId ||
+        receipt.payloadHash !== payloadHash('RecordV3TechnicalProposal', event) ||
+        !event.hostReceiptId || seenReceipts.has(event.hostReceiptId) ||
+        terminalStatus !== undefined) {
+      throw new CommandValidationError('INVALID_TRANSITION',
+        '技术事件 Hash、序号、Host 回执或 CAS 回执链不一致，需明确恢复')
+    }
+    seenReceipts.add(event.hostReceiptId)
+    if (event.kind === 'terminal') terminalStatus = event.terminal.status
+    if (event.kind === 'read') {
+      const doc = aggregate.caseV2.documents.find(doc =>
+        doc.versionId === event.read.source.documentVersionId && doc.active !== false)
+      if (!doc || !doc.byteHash || doc.byteHash !== event.read.source.rawSha256) {
+        throw new CommandValidationError('STALE_INPUT', 'Run 来源原件 SHA256 未验证或已改变')
+      }
+    }
+  }
+  if (terminalStatus !== journal.terminalStatus) {
+    throw new CommandValidationError('INVALID_TRANSITION',
+      '技术终态与持久 Host terminal 事件不一致')
+  }
+  return journal
+}
+
+/** Hash of the exact validated technical proposals, in persisted order. */
+export function digestV3TechnicalEventChain(aggregate: CaseAggregateV2): string {
+  const journal = assertV3TechnicalJournalIntegrity(aggregate)
+  return createHash('sha256').update(canonical(journal.events.map(item => ({
+    sequence: item.sequence, eventId: item.eventId, proposal: item.proposal,
+  })))).digest('hex')
 }
 
 function assertPreparedPlan(aggregate: CaseAggregateV2, run: RunEvidenceIdentity): CanonicalPlan {
@@ -131,26 +208,13 @@ export function recordV3TechnicalProposal(
     throw new C0ContractError('BLOCKED_AUTH', 'C Main Host verifier is required')
   return submitCommand(caseId, { ...command, type: 'RecordV3TechnicalProposal' }, (aggregate, event) => {
     stageGuard(aggregate)
-    const journal = aggregate.v3TechnicalExecution
-    if (!journal || !aggregate.canonicalPlan)
-      throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '没有 C 已准入的 Run 或 Plan 证据账')
+    if (command.requestId !== event.eventId)
+      throw new CommandValidationError('VALIDATION_FAILED',
+        '技术事件 requestId 必须是完整事件 eventId，禁止绕过精确幂等回执')
+    const journal = assertV3TechnicalJournalIntegrity(aggregate)
     if (!sameRun(event.run, journal.run) ||
         aggregate.canonicalPlan.fingerprint !== journal.run.planFingerprint)
       throw new CommandValidationError('STALE_INPUT', '事件试图越过原始 Run/Plan 身份')
-    if (!Array.isArray(journal.events) ||
-        journal.events.some((item, index) => item.sequence !== index + 1 ||
-          item.eventId !== item.proposal?.eventId ||
-          !/^[a-f0-9]{64}$/.test(item.eventId) ||
-          item.proposal?.sequence !== item.sequence ||
-          !sameRun(item.proposal.run, journal.run)) ||
-        aggregate.receiptLog.filter(receipt =>
-          receipt.type === 'RecordV3TechnicalProposal' &&
-          receipt.revision > journal.admittedAtRevision).length !== journal.events.length)
-      throw new CommandValidationError('INVALID_TRANSITION',
-        '技术事件持久账发生缺口、跨 Run 混写或缺少对应 CAS 回执，需审计恢复')
-    if (journal.frozenInputDigest !== frozenInputDigest(aggregate))
-      throw new CommandValidationError('STALE_INPUT',
-        '案卷业务输入或材料证据自 Run 准入后已改变，禁止继续消费旧事件')
     // Case revision may grow due to this very journal's CAS receipts; no
     // unrelated business write (material, Subject, Plan, archive, etc.) may
     // mutate the frozen run input between admission and this Host event.
