@@ -30,6 +30,7 @@ import type { ReviewCaseSummary } from '@profer/shared'
 import { reviewCaseAtom, reviewCaseListAtom, reviewExecutionAtom, reviewWorkspaceSectionAtom, reviewWorkspaceTemplateAtom } from '@/atoms/review-atoms'
 import { cn } from '@/lib/utils'
 import { CreateCaseDialog } from './CreateCaseDialog'
+import { NativeManualItemDialog } from './NativeManualItemDialog'
 import { templatesRefreshAtom } from './V2CasePanel'
 import type { ReviewActions } from './use-review-actions'
 
@@ -55,6 +56,8 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
   const setWorkspaceSection = useSetAtom(reviewWorkspaceSectionAtom)
 
   const [createOpen, setCreateOpen] = React.useState(false)
+  const [manualItemOpen, setManualItemOpen] = React.useState(false)
+  const [manualItemCaseId, setManualItemCaseId] = React.useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
   const [restoreOpen, setRestoreOpen] = React.useState(false)
   const [restoreTarget, setRestoreTarget] = React.useState<{ caseId: string; title: string; revision: number } | null>(null)
@@ -171,6 +174,16 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
   }
 
   const demoUndeletable = currentCase?.isDemo === true
+  const addHumanItem = (): void => {
+    if (!currentCase) return
+    setManualItemCaseId(currentCase.id)
+    setManualItemOpen(true)
+  }
+  // A visible case switch closes the previous form instead of retargeting
+  // the prior source selection to a new Case.
+  React.useEffect(() => {
+    if (manualItemOpen && currentCase?.id !== manualItemCaseId) setManualItemOpen(false)
+  }, [currentCase?.id, manualItemCaseId, manualItemOpen])
 
   return (
     <section className="shrink-0 border-b border-border/60 bg-card/40 px-3 py-2">
@@ -204,6 +217,12 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
           onClick={() => setCreateOpen(true)}
         >
           <Plus size={13} />新建审核项目
+        </Button>
+        <Button type="button" size="sm" variant="outline" className="h-7 shrink-0 gap-1.5 px-2 text-xs"
+          disabled={!currentCase || demoUndeletable}
+          title="从本案已登记的真实申报材料中人工建立待审事项"
+          onClick={addHumanItem}>
+          <Plus size={13}/>人工登记事项
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon-sm" aria-label="更多审核操作" title="更多审核操作"><MoreHorizontal size={15} /></Button></DropdownMenuTrigger>
@@ -257,6 +276,8 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
       </div>
       {/* 新建案卷对话框 */}
       <CreateCaseDialog open={createOpen} onOpenChange={setCreateOpen} templates={publishedTemplates} onCreate={actions.createCase} />
+      <NativeManualItemDialog open={manualItemOpen} onOpenChange={setManualItemOpen}
+        caseId={manualItemCaseId} actions={actions} />
 
       {/* 原生恢复必须由用户明确确认；不会复活历史运行或决定。 */}
       <ConfirmDialog
