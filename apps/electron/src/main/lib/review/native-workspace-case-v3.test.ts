@@ -176,4 +176,26 @@ describe('C1 native-first single Case writer and V1 read-only compatibility', ()
     }, actor)).rejects.toThrow('未绑定当前可追溯原件')
   })
 
+  test('malformed parseable native draft is quarantined without V1 fallback or automatic repair', async () => {
+    const created = await createNativeWorkspaceCaseV3(input, actor)
+    const id = created.view.id
+    const damaged = readAggregate(id)!
+    damaged.caseV2.nativeWorkspaceDraft = { manualRules: 'malformed-not-array' } as never
+    writeAggregate(damaged)
+    const raw = JSON.stringify(readAggregate(id))
+    expect(getCase(id)).toBeUndefined()
+    expect(listCases().some(item => item.id === id)).toBe(false)
+    expect(JSON.stringify(readAggregate(id))).toBe(raw)
+    expect(existsSync(join(getReviewCasesDir(), id, 'case.json'))).toBe(false)
+    await expect(updateNativeWorkspaceSettingsV3(id, { caseId: id, title: 'Should not write' }, actor))
+      .rejects.toThrow('不是原生工作台案卷')
+    expect(JSON.stringify(readAggregate(id))).toBe(raw)
+  })
+  test('explicitly unknown native domain fails closed instead of silently selecting comprehensive assessment', async () => {
+    const before = listAggregatesV2().map(item => item.caseId)
+    await expect(createNativeWorkspaceCaseV3({ ...input, domainPackId: 'unknown-campus-authority' }, actor))
+      .rejects.toThrow('未知审核领域')
+    expect(listAggregatesV2().map(item => item.caseId)).toEqual(before)
+  })
+
 })
