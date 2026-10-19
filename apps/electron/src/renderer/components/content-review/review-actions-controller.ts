@@ -107,6 +107,7 @@ export interface ReviewActionsApi {
   updateCaseSettings(input: UpdateCaseSettingsRequest): Promise<ReviewCase>
   updateRuleOutline?(input: UpdateRuleOutlineRequest): Promise<ReviewCase>
   updateReviewItem?(input: UpdateReviewItemRequest): Promise<ReviewCase>
+  createNativeReviewItemV3?(input: import('@profer/shared').CreateNativeReviewItemV3Request): Promise<ReviewCase>
   confirmRulePack?(input: { caseId: string; rulePackId: string }): Promise<ReviewCase>
   generateRuleOutline(request: { caseId: string; rulePackId?: string }): Promise<RuleOutlineItem[]>
   extractItems(caseId: string): Promise<ReviewItem[]>
@@ -794,6 +795,37 @@ export function createReviewActionsController(
         return true
       } catch (error) {
         reportError('修正申报事项失败', error, { caseId })
+        return false
+      }
+    },
+
+    /** Human source-anchored declaration; never a model-confirmed fact/decision. */
+    async createNativeReviewItem(input: Omit<import('@profer/shared').CreateNativeReviewItemV3Request,
+      'caseId' | 'requestId' | 'expectedRevision'>): Promise<boolean> {
+      const caseId = currentCaseId()
+      if (!caseId || !api.createNativeReviewItemV3 || !api.getAggregateV2) {
+        setError('添加人工事项失败：请先选择原生案卷并升级客户端')
+        return false
+      }
+      try {
+        const aggregate = await api.getAggregateV2(caseId)
+        if (!aggregate || aggregate.caseV2.id !== caseId ||
+            aggregate.receiptLog[0]?.type !== 'CreateNativeWorkspaceCaseV3') {
+          setError('添加人工事项失败：所选案卷不是受信的原生案卷', { caseId })
+          return false
+        }
+        const updated = await api.createNativeReviewItemV3({
+          caseId, expectedRevision: aggregate.caseV2.revision,
+          requestId: `ui-native-item-${globalThis.crypto.randomUUID()}`, ...input,
+        })
+        store.set(reviewCasesByIdAtom, { ...store.get(reviewCasesByIdAtom), [caseId]: updated })
+        await refreshWorkspaceV2(caseId)
+        await refreshRunValidity(caseId)
+        await refreshCaseList()
+        setError(null, { caseId })
+        return true
+      } catch (error) {
+        reportError('添加人工事项失败', error, { caseId })
         return false
       }
     },
