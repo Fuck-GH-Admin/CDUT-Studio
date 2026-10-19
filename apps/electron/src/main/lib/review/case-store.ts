@@ -135,6 +135,8 @@ export function listCases(): ReviewCaseSummary[] {
   for (const name of entries) {
     // 跳过非目录与临时文件
     if (name.endsWith('.tmp')) continue
+    // Native-only Cases belong to LIST_CASES_V2, not to an obsolete V1 shadow.
+    try { if (!isLegacyProjectionAllowed(name)) continue } catch { continue }
     const caseFile = join(root, name, 'case.json')
     if (!existsSync(caseFile)) continue
 
@@ -167,6 +169,9 @@ export function listCases(): ReviewCaseSummary[] {
 /** 读取单个案卷；不存在或不可读返回 undefined */
 export function getCase(caseId: string): ReviewCase | undefined {
   assertSafeId(caseId)
+  // Never return stale V1 data as the view of a native-only V2 Case.
+  // The native UI uses GET_AGGREGATE_V2 instead.
+  if (!isLegacyProjectionAllowed(caseId)) return undefined
   const filePath = getCaseFilePath(caseId)
   if (!existsSync(filePath)) return undefined
 
@@ -183,11 +188,15 @@ export function getCase(caseId: string): ReviewCase | undefined {
  * Historical migrated legacy cases retain their compatibility updates.
  * A corrupt or unreadable V2 state always fails closed.
  */
-function assertWritableLegacyProjection(caseId: string): void {
+function isLegacyProjectionAllowed(caseId: string): boolean {
   const statePath = join(getCaseDir(caseId), 'state.v2.json')
-  if (!existsSync(statePath)) return
+  if (!existsSync(statePath)) return true
   const state = readAggregate(caseId)
-  if (!state || !state.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')) {
+  return !!state?.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')
+}
+
+function assertWritableLegacyProjection(caseId: string): void {
+  if (!isLegacyProjectionAllowed(caseId)) {
     throw new Error('原生审核案卷禁止通过旧版案卷写入口修改；请使用可信 V2 业务命令')
   }
 }
