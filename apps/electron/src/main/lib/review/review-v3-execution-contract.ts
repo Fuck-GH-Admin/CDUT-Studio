@@ -55,9 +55,17 @@ export interface V3TrustedConsumptionContext {
 
 const bad = (code: 'CONTRACT_INVALID' | 'RUN_IDENTITY_MISMATCH' | 'SOURCE_STALE' | 'RECOVERY_REQUIRED',
   message: string): never => { throw new C0ContractError(code, message) }
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+/** Canonical JSON for stable SHA identity regardless of object key insertion order. */
+const stable = (value: unknown): string => {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']'
+  const record = value as Record<string, unknown>
+  return '{' + Object.keys(record).filter(key => record[key] !== undefined).sort()
+    .map(key => JSON.stringify(key) + ':' + stable(record[key])).join(',') + '}'
+}
+const same = (a: unknown, b: unknown): boolean => stable(a) === stable(b)
 const nonempty = (x: unknown): x is string => typeof x === 'string' && x.trim().length > 0
-const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+const digest = (value: unknown): string => createHash('sha256').update(stable(value)).digest('hex')
 const tuple = (x: {checkKey:string;targetKey:string;objectKey:string;subjectId:string}) =>
   JSON.stringify([x.checkKey,x.targetKey,x.objectKey,x.subjectId])
 
@@ -85,10 +93,13 @@ export function validateV3ExecutionProposal(
   if (!same(run, trusted.run) || !trusted.grantActive ||
     run.caseRevision !== trusted.currentCaseRevision ||
     run.planFingerprint !== trusted.plan.fingerprint ||
-    run.inputManifestHash !== trusted.run.inputManifestHash ||
+    run.templateVersion !== trusted.plan.templateVersion ||
     run.ownerGeneration !== trusted.run.ownerGeneration ||
     event.permissionGrantId !== trusted.permissionGrantId) {
     bad('RUN_IDENTITY_MISMATCH', 'Current Main grant/Run/Plan/case revision mismatch')
+  }
+  if (run.sourceVersionIds.some(id => !trusted.activeSourceVersionIds.includes(id))) {
+    bad('SOURCE_STALE', 'Run contains archived or unknown source version')
   }
   const { eventId: _ignore, ...payload } = event
   const actualDigest = executionProposalId(payload as Omit<V3ExecutionProposal, 'eventId'>)
@@ -108,6 +119,8 @@ export function validateV3ExecutionProposal(
   } else if (event.kind === 'check') {
     const matching = trusted.plan.bindings.filter(b => tuple(b) === tuple(event.check))
     if (matching.length !== 1 || !run.checkKeys.includes(event.check.checkKey) ||
+      matching[0]?.sourceVersionIds.some(id => !run.sourceVersionIds.includes(id) ||
+        !trusted.activeSourceVersionIds.includes(id)) ||
       !same(event.check, receipt.check) ||
       (event.check.status === 'accepted' && matching[0]?.applicability !== 'applicable') ||
       !['accepted', 'rejected', 'missing', 'unknown'].includes(event.check.status)) {
