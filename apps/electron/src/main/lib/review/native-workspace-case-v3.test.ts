@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import type { Actor } from '@profer/shared'
 import { createNativeWorkspaceCaseV3, updateNativeWorkspaceSettingsV3,
   registerNativeWorkspaceMaterialV3, removeNativeWorkspaceDocumentsV3,
-  nativeWorkspaceProjectionV3 } from './native-workspace-case-v3'
-import { listAggregatesV2, readAggregate } from './case-store-v2'
+  nativeWorkspaceProjectionV3, updateNativeWorkspaceReviewItemV3 } from './native-workspace-case-v3'
+import { listAggregatesV2, readAggregate, writeAggregate } from './case-store-v2'
 import { getCase, getReviewCasesDir, listCases, saveCase } from './case-store'
 import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
 
@@ -84,4 +84,96 @@ describe('C1 native-first single Case writer and V1 read-only compatibility', ()
     expect(created.view.reviewTemplate).toBeUndefined()
     expect(created.view.type).toBe('自定义审核')
   })
+  test('manual rules and subject document IDs remain durable DRAFTS pinned to physical source versions', async () => {
+    const created = await createNativeWorkspaceCaseV3(input, actor)
+    const id = created.view.id
+    const applicationPath = join(root, `application-${id}.txt`)
+    writeFileSync(applicationPath, '申报人自己提交的待审文本，非校方政策', 'utf8')
+    const source = await registerNativeWorkspaceMaterialV3(id, applicationPath, 'application', actor)
+    const rules = [{ id: 'user-draft-01', title: '人工核对提醒', requirement: '比对已提交原件；不是校方已发布制度' }]
+    const edit = await updateNativeWorkspaceSettingsV3(id, {
+      caseId: id, manualRules: rules, subjectDocumentIds: [source.id],
+    }, actor)
+    const stored = readAggregate(id)!
+    expect(edit.manualRules).toEqual(rules)
+    expect(edit.subjectDocumentIds).toEqual([source.id])
+    expect(stored.caseV2.nativeWorkspaceDraft?.manualRules).toEqual(rules)
+    expect(stored.caseV2.nativeWorkspaceDraft?.subjectDocumentVersionIds)
+      .toEqual([stored.caseV2.documents[0]?.versionId])
+    expect(stored.caseV2.reviewRules).toBeUndefined()
+    expect(stored.canonicalPlan).toBeUndefined()
+    expect(stored.receiptLog.map(r => r.type)).toEqual([
+      'CreateNativeWorkspaceCaseV3', 'RegisterMaterial', 'UpdateNativeWorkspaceSettingsV3',
+    ])
+    expect(getCase(id)?.manualRules).toEqual(rules)
+    expect(existsSync(join(getReviewCasesDir(), id, 'case.json'))).toBe(false)
+    await expect(updateNativeWorkspaceSettingsV3(id, {
+      caseId: id, subjectDocumentIds: [source.id, source.id],
+    }, actor)).rejects.toThrow('重复')
+    await expect(updateNativeWorkspaceSettingsV3(id, {
+      caseId: id, manualRules: [...rules, { ...rules[0], requirement: '重复 ID' }],
+    }, actor)).rejects.toThrow('无效')
+    await expect(updateNativeWorkspaceSettingsV3(id, {
+      caseId: id, subjectDocumentIds: ['cross-case-document'],
+    }, actor)).rejects.toThrow('待审主体材料')
+    expect(readAggregate(id)?.caseV2.revision).toBe(2)
+    await removeNativeWorkspaceDocumentsV3(id, 'application', [source.id], actor)
+    // Previously selected version is retired: projection must NOT remap to a
+    // new version with the same logical documentId.
+    expect(getCase(id)?.subjectDocumentIds).toEqual([])
+    expect(readAggregate(id)?.caseV2.nativeWorkspaceDraft?.subjectDocumentVersionIds)
+      .toEqual(stored.caseV2.nativeWorkspaceDraft?.subjectDocumentVersionIds)
+  })
+
+  test('an existing anchored V2 item is corrected by native CAS without forging OCR/score policy', async () => {
+    const created = await createNativeWorkspaceCaseV3(input, actor)
+    const id = created.view.id
+    const sourcePath = join(root, `subject-${id}.txt`)
+    writeFileSync(sourcePath, 'An authentic application paragraph, user-asserted score', 'utf8')
+    const source = await registerNativeWorkspaceMaterialV3(id, sourcePath, 'application', actor)
+    // Synthetic fixture injected into isolated V2 aggregate ONLY for
+    // exercising an existing subject; not evidence that extraction is ready.
+    const aggregate = readAggregate(id)!
+    const document = aggregate.caseV2.documents.find(doc => doc.documentId === source.id)!
+    aggregate.caseV2.subjects = [{
+      id: 'real-source-subject', type: 'item', title: 'Initial claimed item',
+      status: 'identified', correction: 'ai-extracted',
+      fields: { category: { kind: 'text', value: '科研' },
+        declaredScore: { kind: 'number', value: 3 } },
+      sourceRefs: [{ caseId: id, documentVersionId: document.versionId,
+        parseRevision: document.parseRevision,
+        location: { kind: 'paragraph', index: 0 } }],
+    }]
+    writeAggregate(aggregate)
+    expect(getCase(id)?.items.map(item => item.id)).toEqual(['real-source-subject'])
+    const corrected = await updateNativeWorkspaceReviewItemV3(id, {
+      caseId: id, itemId: 'real-source-subject', title: 'Applicant corrected title',
+      category: '科研', declaredScore: 4, level: '省级',
+    }, actor)
+    expect(corrected.items[0]).toMatchObject({
+      title: 'Applicant corrected title', declaredScore: 4,
+      status: 'confirmed', identifiedBy: 'manual',
+    })
+    expect(corrected.items[0]?.anchor.documentId).toBe(document.documentId)
+    expect(readAggregate(id)?.caseV2.subjects[0]?.fields.declaredScore)
+      .toEqual({ kind: 'number', value: 4 })
+    expect(readAggregate(id)?.receiptLog.at(-1)?.type).toBe('CorrectNativeWorkspaceReviewItemV3')
+    const before = JSON.stringify(readAggregate(id))
+    await expect(updateNativeWorkspaceReviewItemV3(id, {
+      caseId: id, itemId: 'real-source-subject', title: 'Invalid',
+      category: '科研', declaredScore: 5,
+    }, actor, () => { throw new Error('MAIN_REVOKED_ON_ITEM') })).rejects.toThrow('MAIN_REVOKED_ON_ITEM')
+    expect(JSON.stringify(readAggregate(id))).toBe(before)
+    const invalid = readAggregate(id)!
+    invalid.caseV2.subjects[0]!.sourceRefs = [{ caseId: 'wrong-case',
+      documentVersionId: document.versionId, parseRevision: document.parseRevision,
+      location: { kind: 'file' } }]
+    writeAggregate(invalid)
+    expect(getCase(id)?.items).toEqual([])
+    await expect(updateNativeWorkspaceReviewItemV3(id, {
+      caseId: id, itemId: 'real-source-subject', title: 'Tampered',
+      category: '科研', declaredScore: 10,
+    }, actor)).rejects.toThrow('未绑定当前可追溯原件')
+  })
+
 })
