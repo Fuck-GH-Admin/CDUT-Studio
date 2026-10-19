@@ -123,7 +123,8 @@ function verifyBase(
       !owner.permissionGrantId || !same(owner.run, run) ||
       owner.ownerGeneration !== run.ownerGeneration ||
       owner.inputManifestHash !== run.inputManifestHash) {
-    reject('Main 当前 Owner/generation/manifest 不再拥有运行许可')
+    throw new CommandValidationError('DEPENDENCY_UNRESOLVED',
+      'Main 当前 Owner/generation/manifest 不再拥有运行许可')
   }
   // Run-scoped mandatory original-byte rehash — no Main caller may authorize
   // a recorded PDF/Office/text read using a stale B staging preview hash.
@@ -151,7 +152,8 @@ function verifyHost(
       !same(stored.run, run) ||
       stored.verified.permissionGrantId !== permissionGrantId ||
       stored.verified.kind !== event.kind) {
-    reject('Main 注册 Host 回执缺失、撤权或跨 Run 复用')
+    throw new CommandValidationError('DEPENDENCY_UNRESOLVED',
+      'Main 注册 Host 回执缺失、撤权或跨 Run 复用')
   }
   // Content equality is checked again by the C-owned proposal validator.
   return stored.verified
