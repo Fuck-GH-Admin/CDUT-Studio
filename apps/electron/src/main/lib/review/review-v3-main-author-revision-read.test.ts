@@ -26,11 +26,12 @@ function fixture() {
   let nextRead:()=>void=()=>{}
   const latest=async ():Promise<CMainB1AuthorRevision<Draft>>=>{
     ++observe
-    nextRead()
     const doc=structuredClone(currentDoc)
+    const atRevision=revision
+    nextRead()
     return {
       schemaVersion:'review-b1-draft/1',templateId:'author-template-51',
-      revision,authorId:'not-a-trusted-Main-Principal',
+      revision:atRevision,authorId:'not-a-trusted-Main-Principal',
       savedAt:'2026-10-20T00:00:00Z',document:doc,digest:digest(doc),
     }
   }
