@@ -92,7 +92,7 @@ export function validateV3ExecutionProposal(
   if (event.eventId !== actualDigest) bad('CONTRACT_INVALID', 'Proposal digest/body mismatch')
   const receipt = trusted.verifiedHostReceipts.get(event.hostReceiptId)
   if (!receipt || receipt.kind !== event.kind || receipt.permissionGrantId !== event.permissionGrantId) {
-    bad('CONTRACT_INVALID', 'No matching trusted Host receipt')
+    throw new C0ContractError('CONTRACT_INVALID', 'No matching trusted Host receipt')
   }
   if (event.kind === 'read') {
     assertC0SourceIdentity(event.read.source)
