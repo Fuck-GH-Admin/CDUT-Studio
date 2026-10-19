@@ -87,10 +87,18 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(getCase(created.id)).toMatchObject({ title: 'Retitled native', type: '活动申请' })
     const { existsSync } = await import('node:fs')
     expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
-    const before = JSON.stringify(state)
+    const rules = [{ id: 'r', title: 'Local review reminder', requirement: '手写核对提醒，不代表正式校方规则' }]
+    const saved = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPDATE_CASE_SETTINGS, {
+      caseId: created.id, manualRules: rules,
+    })) as { manualRules?: typeof rules }
+    expect(saved.manualRules).toEqual(rules)
+    expect(readAggregate(created.id)?.caseV2.nativeWorkspaceDraft?.manualRules).toEqual(rules)
+    expect(readAggregate(created.id)?.canonicalPlan).toBeUndefined()
+    expect(readAggregate(created.id)?.caseV2.revision).toBe(2)
+    const before = JSON.stringify(readAggregate(created.id))
     await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.UPDATE_CASE_SETTINGS, {
-      caseId: created.id, manualRules: [{ id: 'r', title: 'Hidden', requirement: 'do not install' }],
-    }))).rejects.toThrow('独立原生命令')
+      caseId: created.id, manualRules: [{ id: '../invalid', title: 'Rule', requirement: 'Rejected' }],
+    }))).rejects.toThrow('手写规则无效')
     expect(JSON.stringify(readAggregate(created.id))).toBe(before)
     await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.DELETE_CASE, created.id))
     expect(getCase(created.id)).toBeUndefined()
