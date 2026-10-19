@@ -62,6 +62,6 @@ describe('C1 native CaseAggregate material archive / Receipt', () => {
         subjectIds: ['subject-1'], supportsFact: 'score-4', linkedBy: 'user' } })
     expect(badLink.ok).toBe(false)
     if (!badLink.ok) expect(badLink.code).toBe('STALE_INPUT')
-    expect(isWorkspaceRunStaleV2(readAggregate(caseId)!, 'run@rev')).toBe(true)
+    expect(isWorkspaceRunStaleV2(readAggregate(caseId)!, 'legacy-run-rev')).toBe(true)
   })
 })
