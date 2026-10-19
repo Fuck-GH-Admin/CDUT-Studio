@@ -508,6 +508,10 @@ export const REVIEW_IPC_CHANNELS = {
   DELETE_CASE: 'review:delete-case',
   /** Restore a native archived Case through a Main-trusted, CAS-backed command. */
   RESTORE_CASE_V3: 'review-v3:restore-case',
+  /** C Main candidate author latest-revision READ ONLY. No implied publication. */
+  AUTHOR_READ_LATEST_V3: 'review-v3:author-read-latest',
+  /** C Main formal published-Plan upgrade through native Case CAS/Receipt. */
+  UPGRADE_CANONICAL_PLAN_V3: 'review-v3:upgrade-canonical-plan',
   /** 更新案卷设置（领域包 / 标题 / 类型 / 待审主体文档） */
   UPDATE_CASE_SETTINGS: 'review:update-case-settings',
   /** 手动修改从依据文件生成的单条规则摘要。 */
