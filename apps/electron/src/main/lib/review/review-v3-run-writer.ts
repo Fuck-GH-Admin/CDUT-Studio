@@ -16,9 +16,10 @@ import {
   type ReviewRunRecordV3, type RunEvidenceIdentity, type V3RunBoundCheck,
   type V3RunReadEvidence, type V3ExecutionProposal,
 } from '@profer/shared'
-import { CommandValidationError, readAggregate, submitCommand } from './case-store-v2'
+import { CommandValidationError, payloadHash, readAggregate, submitCommand } from './case-store-v2'
 import {
   assertV3TechnicalJournalIntegrity, digestV3TechnicalEventChain,
+  rawV3TechnicalEventChainDigest,
 } from './review-v3-technical-ledger'
 import { currentSourceValidityBlockers } from './source-current-validity-v3'
 
@@ -36,12 +37,86 @@ export interface C2SealRunPayload {
 const bindKey = (entry: {checkKey:string;targetKey:string;objectKey:string;subjectId:string}): string =>
   JSON.stringify([entry.checkKey, entry.targetKey, entry.objectKey, entry.subjectId])
 
-/** Read-only authorized Main projection. Does not infer any V2 school status. */
+/** Historical READ validation does not reapply the CURRENT Case-input freeze:
+ * a subsequent human decision or source replacement must not erase history.
+ * It *does* reject a tampered stored Run, broken Host chain or missing seal ACK.
+ */
 export function getV3ReviewRunRecord(caseId: string): ReviewRunRecordV3 | undefined {
   const aggregate = readAggregate(caseId)
   const record = aggregate?.v3ReviewRun
-  if (!record || record.schemaVersion !== REVIEW_V3_RUN_SCHEMA ||
-      record.run.caseId !== caseId) return undefined
+  const journal = aggregate?.v3TechnicalExecution
+  if (!aggregate || !record || !journal ||
+      record.schemaVersion !== REVIEW_V3_RUN_SCHEMA ||
+      record.run.caseId !== caseId ||
+      record.run.runId !== journal.run.runId ||
+      record.run.caseRevision !== journal.run.caseRevision ||
+      record.run.planFingerprint !== journal.run.planFingerprint ||
+      record.plan.fingerprint !== journal.run.planFingerprint ||
+      record.inputDigest !== journal.frozenInputDigest ||
+      record.eventChainDigest !== rawV3TechnicalEventChainDigest(journal) ||
+      record.terminalEventId !== journal.events[journal.events.length - 1]?.eventId ||
+      record.terminal !== journal.terminalStatus) return undefined
+
+  const sealed = aggregate.receiptLog.filter(receipt =>
+    receipt.type === 'SealV3ReviewRun' &&
+    receipt.payloadHash === payloadHash('SealV3ReviewRun', {
+      runId: record.run.runId, terminalEventId: record.terminalEventId,
+    }))
+  if (sealed.length !== 1 ||
+      sealed[0]!.revision !== journal.admittedAtRevision + journal.events.length + 1 ||
+      sealed[0]!.actor.actorId !== record.sealedByActorId) return undefined
+  const eventReceipts = aggregate.receiptLog.filter(receipt =>
+    receipt.type === 'RecordV3TechnicalProposal' &&
+    receipt.revision > journal.admittedAtRevision)
+  if (eventReceipts.length !== journal.events.length ||
+      journal.events.some((item, index) =>
+        item.sequence !== index + 1 ||
+        item.eventId !== item.proposal.eventId ||
+        eventReceipts[index]?.requestId !== item.eventId ||
+        eventReceipts[index]?.payloadHash !== payloadHash('RecordV3TechnicalProposal', item.proposal))) {
+    return undefined
+  }
+  const expected = new Map<string, V3RunBoundCheck>()
+  for (const binding of record.plan.bindings) {
+    const key = bindKey(binding)
+    if (expected.has(key)) return undefined
+    expected.set(key, {binding, technicalStatus:null, decisionEligible:false})
+  }
+  const reads: V3RunReadEvidence[] = []
+  for (const entry of journal.events) {
+    const event = entry.proposal
+    if (event.kind === 'read') {
+      const historic = aggregate.caseV2.documents.find(doc =>
+        doc.versionId === event.read.source.documentVersionId)
+      if (!historic || historic.byteHash !== event.read.source.rawSha256) return undefined
+      reads.push({
+        eventId:event.eventId,hostReceiptId:event.hostReceiptId,
+        sequence:event.sequence,source:event.read.source,extent:event.read.extent,
+      })
+    } else if (event.kind === 'check') {
+      const target = expected.get(bindKey(event.check))
+      if (!target || target.eventId) return undefined
+      target.technicalStatus = event.check.status
+      target.eventId = event.eventId
+      target.hostReceiptId = event.hostReceiptId
+      target.sequence = event.sequence
+    }
+  }
+  const checks = [...expected.values()]
+  const observed = checks.filter(check => check.eventId).length
+  const expectedState: ReviewRunRecordV3['state'] =
+    record.terminal === 'completed-technical'
+      ? (observed === checks.length ? 'requires-human-review' : 'incomplete')
+      : record.terminal === 'partial' || record.terminal === 'needs-resume'
+        ? 'incomplete' : 'interrupted'
+  if (record.state !== expectedState ||
+      record.coverage.totalBindings !== checks.length ||
+      record.coverage.observedBindings !== observed ||
+      record.coverage.unobservedBindings !== checks.length - observed ||
+      record.coverage.blockedApplicability !== checks.filter(check =>
+        check.binding.applicability !== 'applicable').length ||
+      JSON.stringify(record.boundChecks) !== JSON.stringify(checks) ||
+      JSON.stringify(record.readEvidence) !== JSON.stringify(reads)) return undefined
   return structuredClone(record)
 }
 
