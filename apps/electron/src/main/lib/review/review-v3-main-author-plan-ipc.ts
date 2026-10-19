@@ -30,6 +30,9 @@ import {
   type C2MainPublishedPlanSource,
 } from './review-v3-main-plan-provenance'
 import { assertSafeReviewStorageId } from './review-storage-id'
+import {
+  CMainRemovalConsentGate, type CMainRemovalWitnessSource,
+} from './review-v3-main-removal-consent'
 
 const refuse=(reason:string):never=>{throw new Error('C_MAIN_V3_IPC_'+reason)}
 const safe=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=128
@@ -60,13 +63,18 @@ export interface CMainV3PlanUpgradeAuthorities {
   getCaseGrant(caseId:string):CMainV3Grant|undefined
   canUpgradeCase(principalId:string,caseId:string,grant:CMainV3Grant):boolean
   readonly publishedPlanSource:C2MainPublishedPlanSource
+  /** C/Main observed physical human confirmation; absent means deletion DENIED. */
+  readonly removalConsentSource?:CMainRemovalWitnessSource
 }
 /** Backwards-compatible atomic Main installation for existing privileged callers.
  * Prefer independently installed reader/writer authorities for production. */
 export interface CMainV3AuthorPlanAuthorities<T extends CMainB1CandidateDocument=CMainB1CandidateDocument>
   extends CMainV3AuthorReadAuthorities<T>, CMainV3PlanUpgradeAuthorities {}
 
-type MainInstallation<T>={readonly source:T;readonly token:symbol}
+type MainInstallation<T>={
+  readonly source:T;readonly token:symbol
+  readonly removalGate?:CMainRemovalConsentGate
+}
 let authorReadInstallation:MainInstallation<CMainV3AuthorReadAuthorities>|undefined
 let planUpgradeInstallation:MainInstallation<CMainV3PlanUpgradeAuthorities>|undefined
 
@@ -84,8 +92,8 @@ function validateWriter(next:CMainV3PlanUpgradeAuthorities):void {
   // published Plan provenance checker inside Case CAS can attest a policy.
   new C2MainPublishedPlanProvenance(next.publishedPlanSource)
 }
-function newInstallation<T>(source:T):MainInstallation<T> {
-  return {source,token:Symbol('main-v3-authority-installation')}
+function newInstallation<T>(source:T,removalGate?:CMainRemovalConsentGate):MainInstallation<T> {
+  return {source,token:Symbol('main-v3-authority-installation'),removalGate}
 }
 /** No IPC or renderer route may install either authority. Uninstall/reinstall of
  * the SAME source object is still a new authority generation. */
@@ -103,9 +111,12 @@ export function installCMainV3PlanUpgradeAuthorities(
 ):()=>void {
   if(planUpgradeInstallation) refuse('PLAN_WRITER_ALREADY_INSTALLED')
   validateWriter(next)
-  const installed=newInstallation(next)
+  const installed=newInstallation(next,new CMainRemovalConsentGate(next.removalConsentSource))
   planUpgradeInstallation=installed
-  return ()=>{if(planUpgradeInstallation===installed)planUpgradeInstallation=undefined}
+  return ()=>{
+    if(planUpgradeInstallation===installed)planUpgradeInstallation=undefined
+    installed.removalGate?.close()
+  }
 }
 /** Legacy combined installer is atomic and cannot silently take over an
  * already installed independent reader or writer source. */
@@ -117,12 +128,14 @@ export function installCMainV3AuthorPlanAuthorities(
   validateReader(next)
   validateWriter(next)
   const read=newInstallation<CMainV3AuthorReadAuthorities>(next)
-  const write=newInstallation<CMainV3PlanUpgradeAuthorities>(next)
+  const write=newInstallation<CMainV3PlanUpgradeAuthorities>(
+    next,new CMainRemovalConsentGate(next.removalConsentSource))
   authorReadInstallation=read
   planUpgradeInstallation=write
   return ()=>{
     if(authorReadInstallation===read)authorReadInstallation=undefined
     if(planUpgradeInstallation===write)planUpgradeInstallation=undefined
+    write.removalGate?.close()
   }
 }
 function requireAuthorReader():MainInstallation<CMainV3AuthorReadAuthorities> {
@@ -280,9 +293,23 @@ export async function handleCMainUpgradeCanonicalPlan(
     recheck(aggregate)
     publisher.assertPublishedPlanForCase(plan,aggregate)
     recheck(aggregate)
-  },(aggregate,actor)=>{
+  },(aggregate,actor,ack,removed)=>{
+    // C Case CAS is the ONLY point that may consume Main-observed consent.
+    // The renderer-supplied acknowledgement is a proposed list, not consent.
     recheck(aggregate)
     if(actor.actorId!==atStart.principalId)refuse('ACTOR_CHANGED_AT_COMMIT')
+    const now=liveFrame(event)
+    const grant=checkGrant(authority.getCaseGrant(data.caseId))
+    if(!installed.removalGate)refuse('HUMAN_REMOVAL_OBSERVER_NOT_INSTALLED')
+    installed.removalGate.consumeAtCommit({
+      caseId:data.caseId,requestId:data.requestId,
+      currentCaseRevision:aggregate.caseV2.revision,
+      identity:{...now,ownerId:grant.ownerId,ownerGeneration:grant.generation,
+        authorityEpoch:grant.authorityEpoch},
+      acknowledgement:ack,computedRemovedIdentities:removed,
+      reason:data.payload.acknowledgement,
+    })
+    recheck(aggregate)
   })
 }
 
