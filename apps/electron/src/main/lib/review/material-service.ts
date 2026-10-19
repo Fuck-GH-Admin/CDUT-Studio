@@ -13,6 +13,7 @@ import { basename, extname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Actor, DocumentVersion, ReviewCommandResult, ReviewDocumentBlock, TemplateVersion } from '@profer/shared'
 import { CommandValidationError, readAggregate, submitCommand } from './case-store-v2'
+import { revokeCurrentSourceValidity } from './source-current-validity-v3'
 import { getConfigDir } from '../config-paths'
 import { extractDocxReviewContent, extractSpreadsheetReviewContent, extractTextFromFile, type DocxReviewContent, type XlsxReviewContent } from '../document-parser'
 import { extractReviewableTextFile } from './document-service'
@@ -143,6 +144,10 @@ export async function registerMaterial(caseId: string, command: { requestId: str
     if (!sourcePath) throw new CommandValidationError('VALIDATION_FAILED', '缺少源文件路径')
     // 版本链语义（复查 §5.9）：同槽位 + 同文件名 = 同一逻辑材料的新版本；不同槽位各自独立
     const incomingName = command.payload.fileName ?? (sourcePath.split(/[\\/]/).pop() ?? 'material.bin')
+    const requestedReplacements = new Set(payload.replacesVersionIds ?? [])
+    if ([...requestedReplacements].some((versionId) => !aggregate.caseV2.documents.some((doc) => doc.versionId === versionId && doc.active !== false))) {
+      throw new CommandValidationError('VALIDATION_FAILED', '替换目标不存在或不再是当前材料版本')
+    }
     const sameLogic = aggregate.caseV2.documents.filter((doc) => doc.fileName === incomingName && doc.materialSlotId === payload.materialSlotId)
     const versionSeq = sameLogic.length + 1
     const previousVersion = sameLogic.at(-1)
@@ -243,6 +248,11 @@ export async function registerMaterial(caseId: string, command: { requestId: str
         doc.byteHash = byteHash
         doc.active = true
         draft.caseV2.documents = [...docs, doc]
+        const retiredVersions = new Set(aggregate.caseV2.documents.filter((old) =>
+          old.active !== false && (requestedReplacements.has(old.versionId) ||
+            (old.fileName === incomingName && old.materialSlotId === payload.materialSlotId)))
+          .map((old) => old.versionId))
+        revokeCurrentSourceValidity(draft, retiredVersions, 'replace')
         return doc
       },
     }
