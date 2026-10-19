@@ -81,6 +81,9 @@ function requireAuthority():CMainV3AuthorPlanAuthorities {
   if(!authorities) return refuse('INDEPENDENT_AUTHORITIES_NOT_INSTALLED')
   return authorities
 }
+function assertCurrentAuthority(source:CMainV3AuthorPlanAuthorities):void {
+  if(authorities!==source) refuse('AUTHORITY_INSTALLATION_REVOKED')
+}
 
 /** Actual C0 verified live browser sender and stable per-frame identity. */
 function liveFrame(event:IpcMainInvokeEvent):{
@@ -115,6 +118,7 @@ function liveAuthorIdentity(
   event:IpcMainInvokeEvent,templateId:string,
   authority:CMainV3AuthorPlanAuthorities,
 ):CMainAuthorReadIdentity {
+  assertCurrentAuthority(authority)
   const frame=liveFrame(event)
   const grant=checkGrant(authority.getAuthorGrant(templateId))
   return {
@@ -201,6 +205,7 @@ export async function handleCMainUpgradeCanonicalPlan(
     return refuse('CASE_UPGRADE_UNAUTHORIZED')
   const publisher=new C2MainPublishedPlanProvenance(authority.publishedPlanSource)
   const recheck=(aggregate:CaseAggregateV2):void=>{
+    assertCurrentAuthority(authority)
     const now=liveFrame(event)
     const latest=checkGrant(authority.getCaseGrant(data.caseId))
     if(JSON.stringify(now)!==JSON.stringify(atStart)||
