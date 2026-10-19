@@ -20,7 +20,22 @@ function checkPlan(caseRecord: CaseAggregateV2, plan: CanonicalPlan, verify: Ver
       plan.templateVersion !== String(caseRecord.caseV2.templateVersion)) {
     throw new CommandValidationError('VALIDATION_FAILED', 'Plan template/version is not the bound Case template')
   }
+  // Native three-column draft rules are not published policy. Refuse to
+  // silently install a formal Plan that ignores these still-pending author
+  // intents. A later dedicated C publisher must resolve them explicitly.
+  const nativeDraft = caseRecord.caseV2.nativeWorkspaceDraft
+  if (nativeDraft?.manualRules.length)
+    throw new CommandValidationError('DEPENDENCY_UNRESOLVED',
+      '原生工作台仍有未正式采纳或明确舍弃的手写规则草稿，禁止静默安装 CanonicalPlan')
   const activeVersions = new Set(caseRecord.caseV2.documents.filter((doc) => doc.active !== false).map((doc) => doc.versionId))
+  if (nativeDraft?.subjectDocumentVersionIds !== undefined) {
+    if (nativeDraft.subjectDocumentVersionIds.some(id => !activeVersions.has(id)))
+      throw new CommandValidationError('STALE_INPUT', '待审主体原件版本已失效，必须显式重选')
+    const planVersions = new Set(plan.bindings.flatMap(binding => binding.sourceVersionIds))
+    if (nativeDraft.subjectDocumentVersionIds.some(id => !planVersions.has(id)))
+      throw new CommandValidationError('DEPENDENCY_UNRESOLVED',
+        'CanonicalPlan 未显式覆盖工作台所选择的全部当前待审原件')
+  }
   const keys = new Set<string>()
   for (const binding of plan.bindings) {
     const key = JSON.stringify([binding.checkKey, binding.targetKey, binding.objectKey])
