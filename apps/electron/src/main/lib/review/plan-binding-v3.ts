@@ -64,7 +64,7 @@ export function upgradeCanonicalPlanV3(
     payload: { plan: CanonicalPlan; previousFingerprint: string; acknowledgement: string } },
   verify: VerifyPublishedCanonicalPlan,
 ): Promise<ReviewCommandResult<CanonicalPlan>> {
-  return submitCommand(caseId, { ...command, type: 'UpgradeCanonicalPlan' }, (aggregate, payload) => {
+  return submitCommand<{ plan: CanonicalPlan; previousFingerprint: string; acknowledgement: string }, CanonicalPlan>(caseId, { ...command, type: 'UpgradeCanonicalPlan' }, (aggregate, payload) => {
     const previous = aggregate.canonicalPlan
     if (!previous || previous.fingerprint !== payload.previousFingerprint) {
       throw new CommandValidationError('STALE_INPUT', 'Plan upgrade ACK does not identify the installed Plan')
