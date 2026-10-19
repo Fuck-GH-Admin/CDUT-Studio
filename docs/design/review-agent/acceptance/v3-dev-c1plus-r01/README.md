@@ -125,3 +125,43 @@ Preserve SHA, test exit codes, first real error and repro fixture. No runner log
 **Still open:** true Plan publisher/provenance verification from B, Main-minted B2 drag bytes/capability; source-bound native rule outline staging/confirmation; V2 Subject creation/candidate acceptance from AI; C2 durable ReviewRun and ReadReceipt/Check/Business ACK; native report/export grounded in formal Run; cross-PID/ENOSPC asset durability, native create lost-response idempotency; concentrated UI/Gate E/UAT. Do not present held interfaces as a completed workbench or silently downgrade workflow quality.
 
 **Rollback:** reverting #144 C1-R07 code is allowed on the isolated development branch; preserve current `state.v2.json`, all Receipt logs, source versions and physical bytes. Do not run V1-first rewrite on Cases whose native create Receipt exists. No I technical lease expansion or new C baseline promotion in this checkpoint.
+
+
+## C1-R08 — Main-grounded human Subject command (2026-10-19)
+
+**Code checkpoint before this document commit**: `be7f6f3f70a51230d175cd2f237f0e7d119bea01`, Draft PR #144, not merged. **Engineering work is committed but latest Gate O has no actual runner result.** No source-only B2 inputs have been promoted to CurrentCase, and no new I write authority exists.
+
+### Decision: C can advance manual Subject intake; automated B staging still gated
+
+Dev-B #142 current observed source SHA `9952348d413cac58da3db2b99c14dae2405a6120`, PR CI queued/pending, B-CR-001 remains `APPROVED_SLICED_SPEC / IMPLEMENTATION_PENDING`. Dev-B's ZIP checkpoint, InputLedger and handoff are `input-only-unapplied`, **not** parser-verified current documents, immutable school policies or Main-minted grant tokens. Integrator-I #147 is still on the earlier frozen C source and has no lease to touch C-owned business writers or IPC. Thus automatically converting B candidates into native CurrentCase/CanonicalPlan is **not yet authorized or verified**.
+
+### Genuine C-only R08 production implementation
+
+1. New shared `CreateNativeReviewItemV3Request` and `CREATE_NATIVE_REVIEW_ITEM_V3` channel in `packages/shared/src/types/review.ts`: `caseId`, opaque retry `requestId`, `expectedRevision`, exact `documentVersionId`, optional exact `sourceBlockId`, and a human-claimed title/category/score. Renderer actor/school authority or forged SourceIdentity are not accepted.
+2. `native-workspace-case-v3.ts::createNativeReviewItemV3` uses a **single** `submitCommand` CAS+durable Receipt on the existing C CaseAggregate, with stable subject ID derived from `(caseId, requestId)` for replay. It checks genuine native-origin receipt, editable draft state, absence of bound formal Plan, local actor, actual current application-role `DocumentVersion`, stored parsed block existence, case identity and revision. Exact parser location is used if available; otherwise the reference is explicitly **file-level**. A manually stated score is never an AI observation, Check result, policy score or Decision. Replay reuses the original Receipt and does not create a duplicate Subject; same requestId/different payload, stale revision, retired version, cross-case/fake block and post-await Main revocation all fail closed.
+3. `review-ipc.ts` derives authority from the live Main sender/frame, blocks `actor/principal/sourceIdentity` injected by Renderer and rechecks sender inside the serialized command. `preload/index.ts` exposes the typed API, and `review-actions-controller.ts` has `createNativeReviewItem` which reads current V2 revision, sends an opaque requestId, refreshes native aggregate and three-column in-memory projection. **A dedicated visible manual-entry dialog/button is NOT part of this R08 slice**; do not claim UI UAT completed.
+4. Physical source bytes must already have passed C's existing trusted local OS picker path into the V2 document ledger. File-level human declaration is not pretending to be parser precision, and AI/ZIP automatic Subject acceptance remains gated pending B signed technical evidence and C Main authorization.
+
+### Committed regression source, proof requirements and explicit blockers
+
+- `native-workspace-case-v3.test.ts` extends genuine local text-file material registration with exact parsed block, receipt+stable replay, change collision, cross-case version, forged block, stale revision, simulated Main loss, archived source and fallback file-level SourceRef.
+- `review-v3-legacy-entry-gates.test.ts` tests actual Main handler senderFrame/Actor/SourceIdentity negatives, old V1 `case.json` absence, trusted local actor receipt and idempotent replay.
+- `review-actions-controller.test.ts` checks C1 native-origin gate, current revision binding and refresh; migrated legacy case cannot call native creation path.
+- Gate O command set (isolated exact HEAD required):
+
+```bash
+bun install --frozen-lockfile
+bun run typecheck
+bun run check:boundaries
+bun test --isolate apps/electron/src/main/lib/review/native-workspace-case-v3.test.ts apps/electron/src/main/lib/review/review-v3-legacy-entry-gates.test.ts apps/electron/src/main/lib/review/plan-binding-v3.test.ts apps/electron/src/renderer/components/content-review/review-actions-controller.test.ts
+bun test --isolate --timeout 30000
+bun run --filter='@profer/electron' build:main
+bun run --filter='@profer/electron' build:preload
+bun run --filter='@profer/electron' build:renderer
+```
+
+Do not mark any command passed without captured stdout/stderr, exit codes, first failure and exact SHA. Observed latest source `be7f6f3` PR CI run `39264195233` job `118099389091` was **queued**, with no completed steps; other runs also pending/queued. Treat infrastructure as `GATE_O_BLOCKED_QUEUE`, not a successful test and not a source failure. Gate E/L/P remain unverified.
+
+**Next:** after real CI and quality fixes, create the visible manual item-entry component with currently registered document/block selectors and role labels; then C/Main B2 physical capability, parser-verified candidate staging and formal `ApplyMaterial/InstallPlan`. Long-running C2 Run/Check/ReadReceipt/Business ACK and concentrated Electron verification remain separate. No fake Gold, SchoolPort approval or official policy publication.
+
+**Rollback:** revert C-owned R08 code on the Draft C branch only, preserving durable case storage and receipt history; no V1-first replay or deletion of native source versions. Changes to shared DTO must be versioned and verified jointly before any I promotion.
