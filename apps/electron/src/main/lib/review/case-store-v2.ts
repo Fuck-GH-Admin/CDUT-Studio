@@ -122,6 +122,13 @@ export async function submitCommand<TPayload, TEntity = TPayload>(
   return enqueueCase(caseId, async (): Promise<ReviewCommandResult<TEntity>> => {
     const aggregate = readAggregate(caseId)
     if (!aggregate) return { ok: false, code: 'NOT_FOUND', message: `案卷聚合不存在: ${caseId}` }
+    // Corrupt-but-parseable JSON must never become a writable pseudo-Case.
+    if (!aggregate.caseV2 || aggregate.caseV2.id !== caseId ||
+        !Number.isSafeInteger(aggregate.caseV2.revision) || aggregate.caseV2.revision < 0 ||
+        !Array.isArray(aggregate.receiptLog)) {
+      return { ok: false, code: 'INVALID_TRANSITION',
+        message: '案卷聚合缺少有效身份/修订号/回执账，已拒绝业务写入' }
+    }
 
     // 幂等：同 requestId + 同载荷 → 原回执
     const hash = payloadHash(command.type, command.payload)
