@@ -16,18 +16,22 @@ const COMMAND_TYPE: Record<C0CaseAction, string> = {
   SET_EVIDENCE_LINK_V2: 'SetEvidenceLink',
 }
 
+/** The same trusted Main frame rule covers V3 native and old compatibility IPC. */
+export function assertC0ReviewMainSender(event: IpcMainInvokeEvent): void {
+  try { assertMainWindowSender(event, getMainWindow) }
+  catch { throw new C0ContractError('SENDER_UNTRUSTED', 'Not the live main window') }
+  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) {
+    throw new C0ContractError('SENDER_UNTRUSTED', 'Main frame required')
+  }
+}
+
 export function deriveC0LocalPrincipal(
   event: IpcMainInvokeEvent,
   caseId: string,
   action: C0CaseAction,
 ): Principal {
   assertSafeReviewStorageId(caseId, 'caseId')
-  try { assertMainWindowSender(event, getMainWindow) }
-  catch { throw new C0ContractError('SENDER_UNTRUSTED', 'Not the live main window') }
-  // A same-window subframe is not a trusted command origin.
-  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) {
-    throw new C0ContractError('SENDER_UNTRUSTED', 'Main frame required')
-  }
+  assertC0ReviewMainSender(event)
   return {
     principalId: 'local-reviewer',
     source: 'local',
