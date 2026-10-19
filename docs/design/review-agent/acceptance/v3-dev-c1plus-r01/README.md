@@ -204,3 +204,43 @@ bun run --filter='@profer/electron' build:renderer
 The new UI is **manual registration only**. Dev-B #142 offers input-only ZIP ledger / candidate metadata, not an authorized `ApplyMaterial` or published Plan; no unverified B input has been imported into C's Case. I #147 has a new I-only correction after a genuine first CI typecheck failure, but Gate O at its new SHA is not yet proven and no I write lease expands. Existing C2 formal ReviewRun, ReadReceipt, verified Check and Decision ACK, B publisher/provenance, signed SourceIdentity, native trusted drop, durable ImportBatch and cross-PID disk recovery all remain open.
 
 **Rollback**: revert only R09 component/controller/typed adapter and corresponding tests on #144 in an isolated worktree, never delete live `state.v2.json`, materials, Subjects or receipts. Users who have already created native Subjects must retain their historical rows; no fallback to legacy `case.json` writers or automatic official policy installation.
+
+
+## C2-R00 — C-owned technical Run admission + Host event durability groundwork (2026-10-19)
+
+**Fixed C2 code/test checkpoint before this document update:** `14619201d835f637fe8a88a2ea1919574a09eec5`; engineering Draft PR #144 remains unmerged. **C2 TECHNICAL_JOURNAL_SOURCE_COMMITTED / GATE_O_NOT_ATTESTED; formal Run writer/ACK NOT IMPLEMENTED; release NO-GO.** This is a true code-and-tests slice, deliberately not a second implementation of ReviewRun or a synthetic credential issuer.
+
+### Why this slice was selected after R09
+
+Recent owner-state checks: #143 Dev-A A4-R08 builds physical SDK dispatch-intent/abort fence and real Linux PID-kill test source, but no verified native per-request Pi SDK receipt; #142 Dev-B B1-B4 offers real ZIP/source ledger and 50 candidate templates, but Main physical trust and current Case ApplyMaterial/Gold remain unimplemented. I1 #147 combines earlier locked A/B/C technical slices; an actual earlier PR CI typecheck found two I-owned errors (fixed in `89f7a0188bb396a84386dac77fa59ca67e99d60a`), but current SHA Gate O still pending. C is uniquely responsible for the formal Run/Plan/Case writer. Completing the *internal* admission/journal transaction reduces future A/I interface risk without prematurely accepting unverified Host events.
+
+### New actual C-owned code
+
+- `packages/shared/src/types/review-v2-contracts.ts`: backward-compatible optional `CaseAggregateV2.v3TechnicalExecution`. It retains the C0 `RunEvidenceIdentity`, precise admission revision, **frozen input SHA-256**, serial `V3ExecutionProposal` payloads + exact hashes, timestamps and a technical terminal status. **It does not create/alter `ReviewRunV2`, `CheckResult`, `Observation`, `ReadReceipt`, `BusinessDecision`, `OutboxReceipt`, or school-side acknowledgments.** No C0 version or old schema replaced.
+- `review-v3-technical-ledger.ts::admitV3TechnicalRun`: C Main-only internal function with mandatory synchronous trusted attestation callback, submitted as one `AdmitV3TechnicalRun` CAS/Receipt. Checks archive state; a pre-existing immutable CanonicalPlan, exact bound template/version/fingerprint; real active selected DocumentVersions; unique complete plan check keys; C0 evidence identity and **Run revision after the admission transaction**. A single journal prevents ambiguous second-run reuse until a separate explicit attempt transition is implemented. Does not launch or claim any Provider call.
+- `recordV3TechnicalProposal`: mandatory C Main-only current Host verification callback, with actual trusted `V3VerifiedHostReceipt` registry and Owner grant. Re-validates canonical Run/Plan and active physical source at serialized commit. Calls the already separately verified pure `validateV3ExecutionProposal` for strict eventId, Host kind/body, contiguous sequence and precise Check×target identity. Stores technical proposal and business command Receipt **atomically in the same single aggregate**. Repeated identical requestId returns original Receipt, changed payload/requestId collision rejects. A terminal is only `completed-technical|partial|cancelled|...`, never a Case approval or formal completed Run.
+- **Crash/staleness discipline**: Admission freezes canonical hash of all business inputs and material metadata, excluding only C2 journal contents and transaction revision/time. Any business change, even an off-ledger mutation without version bump, rejects new Host proposals. An explicit Receipt scan disallows unrelated business commands since admission. Recorded event sequence, eventId, Run binding and number of corresponding CAS receipts must remain consistent; malformed/corrupt journals fail closed without auto-repair. A Read event raw SHA-256 must also equal the active V2 DocumentVersion byteHash when present. Journal capped at 4096 technical events pending formal checkpoint design. No automatic recycle of an admitted Run ID.
+- `review-v3-technical-ledger.test.ts`: C2 source tests seed isolated genuine V2 aggregate states; cover missing Main attestation, one-time durable admission, identical lost-response replay, Host check+terminal serial writes, post-terminal rejection, unauthorized forged Host/grant, changed event digest, CAS conflicts, stale input after unrelated business write, off-ledger source material tamper, corrupt receipt chain and physical byteHash mismatch. **All these are committed test cases, not executed results.**
+
+### Important intentionally missing proof
+
+This C2-R00 code is a **technical proposal-only ledger**: no exposed Renderer API or production Main handler. A trusted test callback is deliberately NOT a real Pi SDK/SchoolPort proof. It cannot transform Dev-A synthetic SDK events, Dev-B input-only source declarations, I1 synthetic Host tests or locally injected callback data into accepted official Checks/ReadReceipts/Decisions. The C Main production ingress still needs a real Owner/session/Host physical-receipt registry, source parser relation, independently verified Plan publication, immutable inputManifest computation and actual approved Main registration, followed by C durable **formal ReviewRun** writer/read view and explicit terminal/Business ACK. It also needs cross-PID locking, disk EIO/ENOSPC and data limits/performance evidence (C-Tx), concentrated real Electron Gate E and authorized school Gate L/P.
+
+### Exact-HEAD local/CI verification required
+
+```bash
+bun install --frozen-lockfile
+bun run typecheck
+bun run check:boundaries
+bun test --isolate apps/electron/src/main/lib/review/review-v3-technical-ledger.test.ts apps/electron/src/main/lib/review/review-v3-execution-contract.test.ts apps/electron/src/main/lib/review/native-workspace-case-v3.test.ts apps/electron/src/main/lib/review/review-v3-legacy-entry-gates.test.ts apps/electron/src/renderer/components/content-review/NativeManualItemDialog.test.ts apps/electron/src/renderer/components/content-review/review-actions-controller.test.ts
+bun test --isolate --timeout 30000
+bun run --filter='@profer/electron' build:main
+bun run --filter='@profer/electron' build:preload
+bun run --filter='@profer/electron' build:renderer
+```
+
+Use exact C2 final SHA for job/run IDs and collected output; preserve first failure and exit code. The connected container session has no private full checkout/Bun execution evidence. CI `queued/pending` is neither failure nor success. No claim of Gate O/E/L/P PASS.
+
+**Integrator-I status:** I test-only lease active as previously signed; I Main read-only port lease conditional/inactive; I business writer DENIED. This journal must NOT be transplanted into I1 old C anchor, and must NOT be advertised as a signed C2 Run endpoint before a new exact C SHA has real Gate O and C authorizes a new integration anchor.
+
+**Rollback:** revert C2 code+DTO in a C-isolated Draft branch, but do not delete already persisted `state.v2.json`, material bytes, native Subjects, admission receipts or audit events; preserve a read-only forensic copy. Old valid aggregates without `v3TechnicalExecution` remain readable (optional field).
