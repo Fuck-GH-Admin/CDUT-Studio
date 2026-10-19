@@ -876,6 +876,10 @@ export function registerReviewIpc(): void {
     assertSafeReviewStorageId(caseId, 'caseId')
     const existing = readAggregate(caseId)
     if (existing) {
+      if (!existing.caseV2 || existing.caseV2.id !== caseId ||
+          !Number.isSafeInteger(existing.caseV2.revision) || !Array.isArray(existing.receiptLog)) {
+        throw new Error('案卷 V2 状态损坏，已拒绝移除；请先恢复原生业务账本')
+      }
       const { archiveReviewCaseV3 } = require('./case-lifecycle-v3') as typeof import('./case-lifecycle-v3')
       const { createHash } = require('node:crypto') as typeof import('node:crypto')
       // No renderer-provided Actor or requestId. A repeated UI request is
