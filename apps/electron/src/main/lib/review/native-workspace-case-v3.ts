@@ -3,10 +3,10 @@
  * state.v2.json is the sole authority; no case.json or case.v2.json is created.
  * A displayed legacy shape is NEVER a second writer or a published Plan.
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type {
   Actor, CaseAggregateV2, DocumentVersion, ReviewCase, ReviewCaseType,
-  ReviewCaseV2, SourceDocument, UpdateCaseSettingsRequest, UpdateReviewItemRequest, ReviewItem,
+  ReviewCaseV2, SourceDocument, UpdateCaseSettingsRequest, UpdateReviewItemRequest, ReviewItem, CreateNativeReviewItemV3Request,
 } from '@profer/shared'
 import { createAggregate, payloadHash, readAggregate, submitCommand, CommandValidationError } from './case-store-v2'
 import { mapDomainToTemplate } from './migration'
@@ -501,5 +501,100 @@ export async function updateNativeWorkspaceReviewItemV3(
   if (!output.ok) throw new CommandValidationError(output.code, output.message)
   const view = nativeWorkspaceProjectionV3(output.aggregate)
   if (!view) throw new Error('原生事项更正已写入，但只读兼容视图不可用')
+  return view
+}
+
+/**
+ * Human-created native Subject against parser-registered bytes already owned
+ * by this Case. Renderer inputs select existing source IDs; they never mint
+ * DocumentVersion, block, SourceIdentity, role or authoritative Actor.
+ */
+export async function createNativeReviewItemV3(
+  input: CreateNativeReviewItemV3Request,
+  actor: Actor = MAIN_ACTOR,
+  authorizeAtCommit?: () => void,
+): Promise<ReviewCase> {
+  if (!input || typeof input !== 'object' ||
+      typeof input.caseId !== 'string' ||
+      typeof input.requestId !== 'string' || !/^[a-zA-Z0-9:_-]{8,100}$/.test(input.requestId) ||
+      !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 ||
+      typeof input.documentVersionId !== 'string' || !input.documentVersionId ||
+      (input.sourceBlockId !== undefined &&
+        (typeof input.sourceBlockId !== 'string' || !input.sourceBlockId)) ||
+      typeof input.title !== 'string' || !input.title.trim() || input.title.length > 160 ||
+      typeof input.category !== 'string' || !input.category.trim() || input.category.length > 80 ||
+      typeof input.declaredScore !== 'number' || !Number.isFinite(input.declaredScore) ||
+      input.declaredScore < 0 || input.declaredScore > 1_000_000)
+    throw new CommandValidationError('VALIDATION_FAILED', '原生人工事项的来源/请求/字段无效')
+  for (const [key, val, limit] of [
+    ['level', input.level, 100], ['activityDate', input.activityDate, 80],
+    ['organizer', input.organizer, 200],
+  ] as const) {
+    if (val !== undefined && (typeof val !== 'string' || val.length > limit))
+      throw new CommandValidationError('VALIDATION_FAILED', `人工事项 ${key} 字段无效`)
+  }
+  if (actor.actorSource !== 'local' || actor.role !== 'reviewer')
+    throw new CommandValidationError('VALIDATION_FAILED', '原生事项只允许可信本地审核人登记')
+
+  // Stable ID across a lost reply and an identical retry; its opaque request
+  // ID has no security meaning beyond collision/idempotency enforcement.
+  const subjectId = `manual-${createHash('sha256').update(
+    JSON.stringify([input.caseId, input.requestId])).digest('hex').slice(0, 24)}`
+  const result = await submitCommand(input.caseId, {
+    type: 'CreateNativeReviewItemV3',
+    requestId: input.requestId,
+    expectedRevision: input.expectedRevision, actor,
+    payload: {
+      documentVersionId: input.documentVersionId,
+      sourceBlockId: input.sourceBlockId ?? null,
+      title: input.title.trim(), category: input.category.trim(),
+      declaredScore: input.declaredScore, level: input.level?.trim() || null,
+      activityDate: input.activityDate?.trim() || null,
+      organizer: input.organizer?.trim() || null, subjectId,
+    },
+  }, (aggregate, payload) => {
+    authorizeAtCommit?.()
+    if (!isNativeWorkspaceCaseV3(aggregate) || aggregate.caseV2.stage !== 'draft' ||
+        aggregate.canonicalPlan || aggregate.d2RuntimePlan)
+      throw new CommandValidationError('INVALID_TRANSITION', '案卷不在可编辑草稿阶段，或正式 Plan 已冻结')
+    const source = aggregate.caseV2.documents.find(document =>
+      document.versionId === payload.documentVersionId &&
+      document.role === 'application' && document.active !== false)
+    if (!source || !Number.isSafeInteger(source.parseRevision) || source.parseRevision < 0)
+      throw new CommandValidationError('STALE_INPUT', '只有本案当前有效、角色为申报材料的真实版本可以建立事项')
+    const block = payload.sourceBlockId === null ? undefined :
+      source.blocks.find(entry => entry.blockId === payload.sourceBlockId)
+    if (payload.sourceBlockId !== null && !block)
+      throw new CommandValidationError('STALE_INPUT', '解析块不属于当前原件版本，拒绝凭空创建定位')
+    if (aggregate.caseV2.subjects.some(subject => subject.id === subjectId))
+      throw new CommandValidationError('REQUEST_ID_COLLISION', '人工事项 ID 已被占用')
+    return {
+      summary: `人工登记来源明确的草稿事项 ${subjectId}（不代表系统已核验申报事实）`,
+      mutate: draft => {
+        draft.caseV2.subjects.push({
+          id: subjectId, type: 'item', title: payload.title,
+          fields: {
+            title: txt(payload.title), category: txt(payload.category),
+            declaredScore: { kind: 'number', value: payload.declaredScore },
+            ...(payload.level ? { level: txt(payload.level) } : {}),
+            ...(payload.activityDate ? { activityDate: { kind: 'date', value: payload.activityDate } } : {}),
+            ...(payload.organizer ? { organizer: txt(payload.organizer) } : {}),
+          },
+          sourceRefs: [{
+            caseId: input.caseId, documentVersionId: source.versionId,
+            parseRevision: source.parseRevision,
+            location: block?.location ?? { kind: 'file' },
+          }],
+          correction: 'user-confirmed', status: 'identified',
+        })
+      },
+    }
+  })
+  if (!result.ok) throw new CommandValidationError(result.code, result.message)
+  const view = nativeWorkspaceProjectionV3(result.aggregate)
+  if (!view) throw new Error('人工事项已写入，但原生三栏投影不可读')
+  // A successful replay returns the old durable receipt without a second write.
+  if (!view.items.some(item => item.id === subjectId))
+    throw new Error('持久回执与事项内容不一致，请刷新并按原请求 ID 核验')
   return view
 }
