@@ -160,6 +160,9 @@ export function recordV3TechnicalProposal(
       throw new CommandValidationError('STALE_INPUT', 'Run 准入后发生其他业务变更，技术账不再是当前证据')
     if (journal.terminalStatus)
       throw new CommandValidationError('INVALID_TRANSITION', '技术终态已记录，不接受后续写入')
+    if (journal.events.length >= 4096)
+      throw new CommandValidationError('INVALID_TRANSITION',
+        '技术事件账已达到本批受控上限，必须进行显式检查点/恢复处理')
     if (event.kind === 'read') {
       const doc = aggregate.caseV2.documents.find(item =>
         item.versionId === event.read.source.documentVersionId && item.active !== false)
