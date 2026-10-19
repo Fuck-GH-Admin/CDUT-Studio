@@ -4,7 +4,7 @@ import { rmSync } from 'node:fs'
 import {
   REVIEW_C0_SCHEMA_VERSION, REVIEW_V3_EXECUTION_SCHEMA,
   type Actor, type CanonicalPlan, type ReviewCaseV2,
-  type RunEvidenceIdentity, type V3ExecutionProposal,
+  type RunEvidenceIdentity, type V3ExecutionProposal, type SourceIdentity,
 } from '@profer/shared'
 import { createAggregate, readAggregate, submitCommand, writeAggregate } from './case-store-v2'
 import { executionProposalId } from './review-v3-execution-contract'
@@ -245,6 +245,42 @@ describe('C2 Main-only technical journal: durable evidence, never a BusinessDeci
     if (!denied.ok) expect(denied.message).toContain('缺少对应 CAS 回执')
     expect(readAggregate(id)?.v3TechnicalExecution?.events).toHaveLength(1)
     expect(readAggregate(id)?.caseV2.revision).toBe(1)
+  })
+
+  test('even a matching forged Host receipt cannot override stored physical byteHash', async () => {
+    const id = 'c2-ledger-wrong-physical-6'
+    await seed(id)
+    const run = evidence(id, 1)
+    expect((await admitV3TechnicalRun(id, {
+      requestId:'admit-physical-01',expectedRevision:0,actor,payload:run,
+    },()=>{})).ok).toBe(true)
+    const fakeSource: SourceIdentity = {
+      schemaVersion: REVIEW_C0_SCHEMA_VERSION, caseId: id, materialId: 'd1',
+      documentVersionId: 'doc-v1', rawSha256: 'b'.repeat(64),
+      parseRevision: 'parse-1', blockId: 'block-1',
+      location: {kind:'paragraph',locator:'p1'},
+    }
+    const body = {
+      schemaVersion: REVIEW_V3_EXECUTION_SCHEMA, run, sequence: 1,
+      permissionGrantId:'main-grant-1',kind:'read' as const,
+      hostReceiptId:'host-forged-physical',
+      read:{source:fakeSource,extent:'block' as const},
+    }
+    const event: V3ExecutionProposal = {...body,eventId:executionProposalId(body)}
+    const result = await recordV3TechnicalProposal(id,{
+      requestId:event.eventId,expectedRevision:1,actor,payload:event,
+    },()=>{
+      const receipts = new Map<string,V3VerifiedHostReceipt>([[
+        'host-forged-physical', {
+          kind:'read',permissionGrantId:'main-grant-1',
+          source:fakeSource,extent:'block',
+        },
+      ]])
+      return {permissionGrantId:'main-grant-1',grantActive:true,receipts}
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toContain('SHA256')
+    expect(readAggregate(id)?.v3TechnicalExecution?.events).toHaveLength(0)
   })
 
 })
