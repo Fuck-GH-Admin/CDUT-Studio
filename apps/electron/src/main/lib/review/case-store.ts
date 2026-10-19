@@ -175,7 +175,10 @@ export function getCase(caseId: string): ReviewCase | undefined {
   assertSafeId(caseId)
   // No legacy shadow is ever returned for native-first Case; the returned
   // object is a read-only in-memory compatibility shape from state.v2.json.
-  if (!isLegacyProjectionAllowed(caseId)) return nativeWorkspaceProjectionV3(readAggregate(caseId))
+  if (!isLegacyProjectionAllowed(caseId)) {
+    const projected = nativeWorkspaceProjectionV3(readAggregate(caseId))
+    return projected?.id === caseId ? projected : undefined
+  }
   const filePath = getCaseFilePath(caseId)
   if (!existsSync(filePath)) return undefined
 
