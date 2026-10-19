@@ -128,17 +128,17 @@ export function registerReviewIpc(): void {
         applicant: string
         academicYear: string
         domainPackId?: string
-        reviewTemplate?: { templateId: string; version: number }
+        reviewTemplate?: { templateId: string; version: number } | null
       },
     ): Promise<ReviewCase> => {
       assertC0ReviewMainSender(event)
       if (!input || typeof input !== 'object') throw new Error('参数 input 缺失或类型非法')
       if (!CASE_TYPES.has(input.type)) throw new Error(`参数 type 非法：${String(input.type)}`)
-      // 领域包 ID 只做存在性判断：未知 ID 回落缺省包由 resolveDomainPack 负责，不因拼错而拒绝建卷
+      // 明示未知领域由 C native creator 拒绝；不静默安装缺省审核政策
       if (input.domainPackId !== undefined && typeof input.domainPackId !== 'string') {
         throw new Error('参数 domainPackId 类型非法')
       }
-      if (input.reviewTemplate !== undefined) {
+      if (input.reviewTemplate !== undefined && input.reviewTemplate !== null) {
         const { templateId, version } = input.reviewTemplate
         if (typeof templateId !== 'string' || !templateId || !Number.isInteger(version) || version < 1) {
           throw new Error('参数 reviewTemplate 非法')
@@ -155,7 +155,7 @@ export function registerReviewIpc(): void {
         applicant: requireString(input.applicant, 'applicant'),
         academicYear: requireString(input.academicYear, 'academicYear'),
         ...(input.domainPackId ? { domainPackId: input.domainPackId } : {}),
-        ...(input.reviewTemplate ? { reviewTemplate: input.reviewTemplate } : {}),
+        ...(input.reviewTemplate !== undefined ? { reviewTemplate: input.reviewTemplate } : {}),
       }, undefined, () => assertC0ReviewMainSender(event))
       return created.view
     },
