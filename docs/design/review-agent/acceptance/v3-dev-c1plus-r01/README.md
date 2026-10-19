@@ -93,3 +93,35 @@ Rollback before deployment: revert the Dev-C PR commits on this dependent branch
 - Full native Electron/picker/parser/Office and user workflow Gate E not run; school/Gold/Provider Gate L blocked without authorization; 71 product gates and 7 journeys not accepted. Separate safe staging/read-only preview from formal InstallPlan/ReviewRun release.
 
 **Rollback:** reverse C1-R06 #144 commits using normal Git revert on an isolated C branch, keep all live state.v2.json/receipts/material assets intact; do not run V1-first replay over cases with a native origin Receipt. Reversion of a code feature is not permission to down-migrate existing native business state.
+
+
+## C1-R07 native workbench draft, source-anchored Subject and formal Plan fence (2026-10-19)
+
+**Fixed code HEAD before this document update:** `fb2cbee548d8adc3bd370dcbe1d394a87d33bd78`; Draft PR #144, not merged. **C1 PARTIAL / exact Gate O NOT_ATTESTED / Release NO-GO.** This adds real production code and real regression sources after R06, not merely task planning.
+
+**Single-authority business changes:**
+
+- `packages/shared/src/types/review-v2.ts` adds **optional** `ReviewCaseV2.nativeWorkspaceDraft`: local `manualRules` authored text (not `RuleSpec`/SchoolPort/published policy) and `subjectDocumentVersionIds` pinned to the exact active physical source version. No breaking C0 Main Principal/schema change; no second `case.json` or authority writer.
+- `native-workspace-case-v3.ts` now accepts native `UPDATE_CASE_SETTINGS` manual-rule and subject-file selection in one Main-authorized CAS+Receipt. It validates 100-rule limit, rule identity/length/duplicate ID, same-case active application documents and cross-case/stale versions, rechecks material scope at serialized commit, and holds changes when CanonicalPlan/D2RuntimePlan exists, state is not `draft`, or current confirmed facts/evidence would become unsupported. Projection maps version IDs back to current legacy IDs only when the same physical version remains active; a retired/replaced source is **not** silently reselected.
+- A native `ReviewSubject` projects into a legacy three-column `ReviewItem` only with explicit numeric declaredScore, nonempty category and a same-case/source-version/parse-revision grounded `SourceRef`. A file-level source remains file-level; only a real indexed paragraph becomes block anchor. Never invent score 0, precise coordinates, AI OCR, approved school standard, or evidence relationships. `UPDATE_REVIEW_ITEM` for existing valid native subjects now uses one C CAS/Receipt, main sender revalidation, draft-stage/frozen-plan/confirmed-observation blockers. New subject extraction/candidate acceptance awaits B/C trusted staging, not synthesized V1 fixtures.
+- Native `UPDATE_RULE_OUTLINE`, `CONFIRM_RULE_PACK`, `GENERATE_RULE_OUTLINE`, `EXTRACT_ITEMS`, old `RUN_REVIEW` and old `EXPORT_REPORT` are explicitly held with actionable `NATIVE_...` error codes. This is a **declared product gap**, not successful native AI/execution. Genuine migrated V1 cases retain existing handlers.
+- `plan-binding-v3.ts::checkPlan` now rejects binding/upgrading a formal CanonicalPlan while unadopted manual draft rules exist, a selected version is no longer current, or immutable Plan bindings omit a selected version. Only the later C-published provenance/InstallPlan flow can resolve these author intents; synthetic `verifiedFixtureOnly` still **must not** be used as a production verifier.
+- Native-origin detection validates parseable JSON structure (documents, blocks, subjects, source refs and draft) before projecting. Corrupted state is hidden/blocked without V1 fallback, auto-repair or forensic data destruction. Explicit unknown domain IDs refuse silent comprehensive-assessment fallback in **new** native Cases.
+
+**Actual test additions (committed; no claim of PASS):** `native-workspace-case-v3.test.ts` native settings persisted drafts, same-ID physical version selection, wrong/duplicate IDs, invalid rules, retirement preserves pinned history, sourced V2 subject correction and forged cross-case source, Main post-await revocation, corrupted-but-parseable state and unknown domain. `review-v3-legacy-entry-gates.test.ts` updated existing Main IPC expectation for now-supported manual rule drafts, plus negative checks that all held AI/Run/export interfaces leave the original aggregate unchanged and write no V1 shadow. `plan-binding-v3.test.ts` new source coverage / pending manual rules / current-version Plan bind cases.
+
+**Next required execution in isolated exact HEAD checkout:**
+
+```bash
+bun install --frozen-lockfile
+bun run typecheck
+bun run check:boundaries
+bun test --isolate apps/electron/src/main/lib/review/native-workspace-case-v3.test.ts apps/electron/src/main/lib/review/review-v3-legacy-entry-gates.test.ts apps/electron/src/main/lib/review/plan-binding-v3.test.ts apps/electron/src/renderer/components/content-review/review-actions-controller.test.ts
+bun test --isolate --timeout 30000
+```
+
+Preserve SHA, test exit codes, first real error and repro fixture. No runner logs/green checks for fixed R07 code at time of writing. GitHub queued workflows must **not** be counted as passed. Gate E Electron OS picker/drag, Gate L authorized campus proof, Gate P 71 product gates, I1 acceptance are separate; NO-GO.
+
+**Still open:** true Plan publisher/provenance verification from B, Main-minted B2 drag bytes/capability; source-bound native rule outline staging/confirmation; V2 Subject creation/candidate acceptance from AI; C2 durable ReviewRun and ReadReceipt/Check/Business ACK; native report/export grounded in formal Run; cross-PID/ENOSPC asset durability, native create lost-response idempotency; concentrated UI/Gate E/UAT. Do not present held interfaces as a completed workbench or silently downgrade workflow quality.
+
+**Rollback:** reverting #144 C1-R07 code is allowed on the isolated development branch; preserve current `state.v2.json`, all Receipt logs, source versions and physical bytes. Do not run V1-first rewrite on Cases whose native create Receipt exists. No I technical lease expansion or new C baseline promotion in this checkpoint.
