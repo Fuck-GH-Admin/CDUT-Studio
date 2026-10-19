@@ -133,6 +133,15 @@ describe('C2-R03 isolated, inert Main Pi session factory', () => {
     result.session.dispose()
   })
 
+  test('trusted long prompt remains intact rather than being constrained like an identifier', async () => {
+    const f = await fixture()
+    const fullPrompt = 'Approved Main source material '.repeat(300)
+    f.setBuild(async () => ({ ...f.newSession(), prompt: fullPrompt }))
+    const spec = await f.factory.create(f.request)
+    expect(spec.prompt).toBe(fullPrompt)
+    spec.session.dispose()
+  })
+
   test('candidate-held, missing current owner and pre-aborted construction never open SDK', async () => {
     const f = await fixture()
     f.candidateHeld()
