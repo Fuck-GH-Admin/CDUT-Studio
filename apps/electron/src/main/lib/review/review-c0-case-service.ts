@@ -21,23 +21,39 @@ export async function createCaseC0(
   templateId: string, version: number,
 ) {
   assertC0CaseAuthorization(command, 'CREATE_CASE_V2')
-  // V2 create receipt is deterministic. Same request + same payload is replay-safe;
-  // a different payload must not overwrite the existing aggregate.
-  const prior = readAggregate(command.caseId)
-  if (prior) {
-    const receipt = prior.receiptLog.find((r) => r.requestId === command.requestId)
-    if (receipt && receipt.type === 'CreateCaseFromTemplate' && receipt.payloadHash === command.payloadHash) {
-      return { ok: true as const, receipt, aggregate: prior, entity: prior.caseV2 }
-    }
-    throw new CommandValidationError('REQUEST_ID_COLLISION', 'Case already exists with different create request')
-  }
   if (command.expectedRevision !== 0 || command.requestId !== `create-${command.caseId}`) {
     throw new CommandValidationError('VALIDATION_FAILED', 'Legacy create identity/revision mismatch')
   }
   if (payloadHash('CreateCaseFromTemplate', command.payload) !== command.payloadHash) {
     throw new CommandValidationError('VALIDATION_FAILED', 'Create payload hash mismatch')
   }
-  return createCaseFromTemplate(templateId, version, command.payload, actorOf(command.principal), command.caseId)
+  const replayOrReject = (prior: NonNullable<ReturnType<typeof readAggregate>>) => {
+    const receipt = prior.receiptLog.find((r) => r.requestId === command.requestId)
+    // The historical V2 receipt hashes only the payload, not the template
+    // binding. Enforce both dimensions here: never replay onto another template.
+    if (prior.caseV2.templateId === templateId &&
+      prior.caseV2.templateVersion === version &&
+      receipt?.type === 'CreateCaseFromTemplate' &&
+      receipt.payloadHash === command.payloadHash) {
+      return { ok: true as const, receipt, aggregate: prior, entity: prior.caseV2 }
+    }
+    throw new CommandValidationError('REQUEST_ID_COLLISION',
+      'REQUEST_ID_COLLISION: case or template already exists with a different create request')
+  }
+  const prior = readAggregate(command.caseId)
+  if (prior) return replayOrReject(prior)
+  try {
+    return await createCaseFromTemplate(templateId, version, command.payload, actorOf(command.principal), command.caseId)
+  } catch (error) {
+    // A second identical concurrent create may have passed the first read and
+    // lost V2's per-case createAggregate lock. Replay only the *exact* winner;
+    // all other failures retain their original fail-closed behavior.
+    if (error instanceof CommandValidationError && error.code === 'INVALID_TRANSITION') {
+      const winner = readAggregate(command.caseId)
+      if (winner) return replayOrReject(winner)
+    }
+    throw error
+  }
 }
 
 export function updateFieldsC0(command: AuthorizedCaseCommand<UpdateFieldsPayload>) {

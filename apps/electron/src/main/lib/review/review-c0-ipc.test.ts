@@ -79,6 +79,20 @@ describe('C0 four actual Main IPC handler boundaries (synthetic harness)', () =>
       ...input, payload: { title: 'Different', fieldValues: {}, subjects: [] },
     }))).rejects.toThrow('REQUEST_ID_COLLISION')
     expect(JSON.stringify(readAggregate(input.caseId))).toBe(before)
+    // A matching payload against a different template version is NOT an
+    // idempotent replay. Legacy V2 receipt hash alone cannot distinguish it.
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, {
+      ...input, version: 2,
+    }))).rejects.toThrow('REQUEST_ID_COLLISION')
+    expect(JSON.stringify(readAggregate(input.caseId))).toBe(before)
+
+    const concurrent = { ...input, caseId: 'v3-c0-concurrent-create' }
+    const [a, b] = await Promise.all([
+      invoke(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, concurrent),
+      invoke(REVIEW_IPC_CHANNELS.CREATE_CASE_V2, concurrent),
+    ]) as Array<{ ok: boolean }>
+    expect(a.ok && b.ok).toBeTrue()
+    expect(readAggregate(concurrent.caseId)!.receiptLog).toHaveLength(1)
   })
 
   test('legitimate local three writes, duplicate request, stale CAS, scope and sender reject', async () => {
