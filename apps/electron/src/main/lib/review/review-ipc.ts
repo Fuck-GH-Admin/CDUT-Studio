@@ -54,7 +54,9 @@ import {
 import { startReviewRun } from './run-service'
 import { exportReport } from './report-service'
 import { getReviewModelGatewayStatus } from './review-model-gateway'
-import { createEmptyCase } from './case-creation'
+import {
+  createNativeWorkspaceCaseV3, isNativeWorkspaceCaseV3, updateNativeWorkspaceSettingsV3,
+} from './native-workspace-case-v3'
 import { importDocumentFromPath, importDocumentsIntoCase, removeDocumentsFromCase, reorderDocumentsInCase } from './case-import'
 import { invalidateDerivedReviewInputs } from './input-invalidation'
 import { ensureWorkspaceAggregateV2, syncWorkspaceProjectionV2 } from './workspace-service-v2'
@@ -143,7 +145,9 @@ export function registerReviewIpc(): void {
         const template = getTemplate(templateId, version)
         if (!template || template.status !== 'published') throw new Error('只能使用已发布的审核模板创建项目')
       }
-      const reviewCase = createEmptyCase({
+      // C-owned native-first V2 writer, single atomic Case + create Receipt.
+      // No legacy case.json is ever written; the V1-shaped result is view-only.
+      const created = await createNativeWorkspaceCaseV3({
         title: requireString(input.title, 'title'),
         type: input.type,
         applicant: requireString(input.applicant, 'applicant'),
@@ -151,8 +155,7 @@ export function registerReviewIpc(): void {
         ...(input.domainPackId ? { domainPackId: input.domainPackId } : {}),
         ...(input.reviewTemplate ? { reviewTemplate: input.reviewTemplate } : {}),
       })
-      await ensureWorkspaceAggregateV2(reviewCase.id)
-      return reviewCase
+      return created.view
     },
   )
 
@@ -167,6 +170,10 @@ export function registerReviewIpc(): void {
       // command; mutating legacy settings first would leave two contrary
       // template/source truths if a later projection rejects the write.
       const aggregate = readAggregate(caseId)
+      if (isNativeWorkspaceCaseV3(aggregate)) {
+        // Native-only business settings never write a V1 shadow.
+        return updateNativeWorkspaceSettingsV3(caseId, input)
+      }
       if (aggregate && !aggregate.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')) {
         throw new Error('原生审核案卷禁止通过旧版案卷写入口修改；请使用可信 V2 业务命令')
       }
@@ -510,6 +517,10 @@ export function registerReviewIpc(): void {
     if (typeof caseId !== 'string' || !caseId) throw new Error('参数 caseId 非法')
     const { getCase } = require('./case-store') as typeof import('./case-store')
     const { migrateCaseToV2 } = require('./migration') as typeof import('./migration')
+    const current = readAggregate(caseId)
+    if (isNativeWorkspaceCaseV3(current) && current) {
+      return { migrated: true, note: '原生 V2 案卷不需要 V1 迁移或旧版影子文件', caseV2: current.caseV2 }
+    }
     const v1 = getCase(caseId)
     if (!v1) throw new Error(`案卷不存在: ${caseId}`)
     const result = migrateCaseToV2(v1)
