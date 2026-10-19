@@ -144,3 +144,43 @@ export function inspectC2CaseDiskLock(caseId:string): {locked:boolean; owner?:Re
   const {lock}=paths(caseId)
   return {locked:existsSync(lock),owner:readOwner(lock)}
 }
+
+/**
+ * Explicit offline recovery — NOT an IPC channel. A caller with independently
+ * authenticated maintenance authority must approve the EXACT dead owner.
+ * No heartbeat/age expiry permits stealing a live or paused process's lock.
+ *
+ * If the PID has been recycled, is alive, or cannot be inspected, recovery
+ * refuses. A truncated/missing owner record also refuses; manual filesystem
+ * forensic recovery is then needed. The recoverer's own mkdir lock prevents
+ * two maintenance processes from both altering the same orphan fence.
+ */
+export function recoverC2AbandonedCaseDiskLock(
+  caseId:string,
+  authorize:(owner:Readonly<Owner>)=>void,
+):void {
+  if(typeof authorize!=='function') refuse('independent maintenance authorization required')
+  const {lock}=paths(caseId)
+  const recovery=lock+'.recovery'
+  if(!existsSync(lock)) refuse('no orphan Case lock to recover')
+  try {mkdirSync(recovery,{mode:0o700})}
+  catch {return refuse('another recovery process is active')}
+  try {
+    const owner=readOwner(lock)
+    if(!owner) refuse('missing or invalid lock owner; inspect offline before changing')
+    authorize(structuredClone(owner))
+    // PID 0 can address current process group: the contract excludes it.
+    let dead=false
+    try {process.kill(owner.pid,0)}
+    catch(e) {
+      if(typeof e==='object' && e!==null && 'code' in e &&
+          (e as {code?:string}).code==='ESRCH') dead=true
+    }
+    if(!dead) refuse('owner PID is alive, recycled, or not provably dead')
+    if(readOwner(lock)?.token!==owner.token) refuse('owner changed during recovery')
+    unlinkSync(ownerPath(lock))
+    rmdirSync(lock)
+  } finally {
+    rmdirSync(recovery)
+  }
+}
