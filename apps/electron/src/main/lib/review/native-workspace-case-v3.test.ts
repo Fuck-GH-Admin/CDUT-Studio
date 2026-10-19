@@ -98,8 +98,10 @@ describe('C1 native-first single Case writer and V1 read-only compatibility', ()
     expect(edit.manualRules).toEqual(rules)
     expect(edit.subjectDocumentIds).toEqual([source.id])
     expect(stored.caseV2.nativeWorkspaceDraft?.manualRules).toEqual(rules)
+    const registeredVersionId = stored.caseV2.documents[0]?.versionId
+    expect(registeredVersionId).toBeDefined()
     expect(stored.caseV2.nativeWorkspaceDraft?.subjectDocumentVersionIds)
-      .toEqual([stored.caseV2.documents[0]?.versionId])
+      .toEqual([registeredVersionId!])
     expect(stored.caseV2.reviewRules).toBeUndefined()
     expect(stored.canonicalPlan).toBeUndefined()
     expect(stored.receiptLog.map(r => r.type)).toEqual([
@@ -111,7 +113,7 @@ describe('C1 native-first single Case writer and V1 read-only compatibility', ()
       caseId: id, subjectDocumentIds: [source.id, source.id],
     }, actor)).rejects.toThrow('重复')
     await expect(updateNativeWorkspaceSettingsV3(id, {
-      caseId: id, manualRules: [...rules, { ...rules[0], requirement: '重复 ID' }],
+      caseId: id, manualRules: [...rules, { ...rules[0]!, requirement: '重复 ID' }],
     }, actor)).rejects.toThrow('无效')
     await expect(updateNativeWorkspaceSettingsV3(id, {
       caseId: id, subjectDocumentIds: ['cross-case-document'],
