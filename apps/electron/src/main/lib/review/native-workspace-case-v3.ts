@@ -120,9 +120,17 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
       current.some(doc => doc.versionId === ref.documentVersionId && doc.parseRevision === ref.parseRevision))
     if (!source) return []
     const doc = current.find(item => item.versionId === source.documentVersionId)!
-    const block = source.location.kind === 'paragraph' ?
-      doc.blocks.find(entry => entry.location?.kind === 'paragraph' &&
-        entry.location.index === source.location.index) : undefined
+    // An exact parser block ID is already verified by C Main when a human
+    // item is created. Preserve it even if the parser cannot provide page/
+    // paragraph geometry (SourceRef remains explicitly file-level).
+    const pinned = subject.fields.nativeSourceBlockId
+    const pinnedBlockId = pinned?.kind === 'text' ? pinned.value : undefined
+    const block = pinnedBlockId
+      ? doc.blocks.find(entry => entry.blockId === pinnedBlockId)
+      : source.location.kind === 'paragraph'
+        ? doc.blocks.find(entry => entry.location?.kind === 'paragraph' &&
+          entry.location.index === source.location.index)
+        : undefined
     const anchor: ReviewItem['anchor'] = {
       documentId: doc.documentId,
       ...(block ? { blockId: block.blockId } : {}),
@@ -576,6 +584,7 @@ export async function createNativeReviewItemV3(
           fields: {
             title: txt(payload.title), category: txt(payload.category),
             declaredScore: { kind: 'number', value: payload.declaredScore },
+            ...(payload.sourceBlockId ? { nativeSourceBlockId: txt(payload.sourceBlockId) } : {}),
             ...(payload.level ? { level: txt(payload.level) } : {}),
             ...(payload.activityDate ? { activityDate: { kind: 'date', value: payload.activityDate } } : {}),
             ...(payload.organizer ? { organizer: txt(payload.organizer) } : {}),
