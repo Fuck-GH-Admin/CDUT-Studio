@@ -192,12 +192,14 @@ export class CommandValidationError extends Error {
 }
 
 /** 创建新案卷聚合（CreateCaseFromTemplate 专用：不走 expectedRevision，revision=0 起） */
-export async function createAggregate(caseId: string, caseV2: ReviewCaseV2, initialReceipt?: CommandReceipt): Promise<void> {
+export async function createAggregate(caseId: string, caseV2: ReviewCaseV2, initialReceipt?: CommandReceipt, authorizeAtCommit?: () => void): Promise<void> {
   assertSafeReviewStorageId(caseId, 'caseId')
   assertSafeReviewStorageId(caseV2?.id, 'caseId')
   if (caseId !== caseV2.id) throw new CommandValidationError('VALIDATION_FAILED', '案卷 ID 与聚合内容不一致')
   await enqueueCase(caseId, async () => {
     if (existsSync(aggregatePath(caseId))) throw new CommandValidationError('INVALID_TRANSITION', `案卷聚合已存在: ${caseId}`)
+    // Main capability must still be alive at the serialized durable write.
+    authorizeAtCommit?.()
     const fresh = emptyAggregate(caseV2)
     // 创建回执与创建动作同事务落盘（08 设计：创建动作可追溯）
     if (initialReceipt) fresh.receiptLog = [initialReceipt]
