@@ -14,7 +14,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Check, ChevronDown, FolderOpen, Layers, MoreHorizontal, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, FolderOpen, Layers, MoreHorizontal, Plus, Trash2, Undo2 } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { ConfirmDialog } from '@profer/ui/primitives/confirm-dialog'
 import {
@@ -56,11 +56,20 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
 
   const [createOpen, setCreateOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [restoreOpen, setRestoreOpen] = React.useState(false)
+  const [restoreTarget, setRestoreTarget] = React.useState<{ caseId: string; title: string; revision: number } | null>(null)
+  const [archivedCases, setArchivedCases] = React.useState<Array<{ caseId: string; title: string; revision: number }>>([])
   const [switchingPack, setSwitchingPack] = React.useState(false)
   const [templateVersions, setTemplateVersions] = React.useState<import('@profer/shared').TemplateVersion[]>([])
   const [savingReviewSetup, setSavingReviewSetup] = React.useState(false)
 
   const currentPack = resolveDomainPack(currentCase?.domainPackId ?? DEFAULT_DOMAIN_PACK_ID)
+
+  React.useEffect(() => {
+    let active = true
+    void actions.listArchivedCases().then(cases => { if (active) setArchivedCases(cases) })
+    return () => { active = false }
+  }, [actions, caseList])
 
   React.useEffect(() => {
     let active = true
@@ -117,6 +126,22 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
     if (ok) {
       setDeleteOpen(false)
       toast.success(`已移出当前案卷：${target.title}`, { description: '包含 V2 业务记录的案卷已归档并保留历史数据。' })
+    }
+  }
+
+  const handleRestore = async (): Promise<void> => {
+    const target = restoreTarget
+    if (!target) return
+    const ok = await actions.restoreArchivedCase(target.caseId, target.revision)
+    if (ok) {
+      setRestoreOpen(false)
+      setRestoreTarget(null)
+      setArchivedCases(current => current.filter(item => item.caseId !== target.caseId))
+      toast.success(`已恢复原生案卷：「${target.title}」`, {
+        description: '恢复为草稿；原审核运行和审批结论保留为历史，必须重新核验。',
+      })
+    } else {
+      void actions.listArchivedCases().then(setArchivedCases)
     }
   }
 
@@ -182,16 +207,26 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon-sm" aria-label="更多审核操作" title="更多审核操作"><MoreHorizontal size={15} /></Button></DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-[260px]">
+          <DropdownMenuContent align="end" className="max-h-[65vh] w-[300px] overflow-y-auto">
             <DropdownMenuItem onSelect={() => setCreateOpen(true)}><Plus size={14} />新建审核项目</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void actions.loadDemoCase()}><FolderOpen size={14} />载入示例数据</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>已归档案卷（{archivedCases.length}）</DropdownMenuLabel>
+            {archivedCases.length === 0
+              ? <DropdownMenuItem disabled>暂无已归档案卷</DropdownMenuItem>
+              : archivedCases.map((item) => (
+                <DropdownMenuItem key={item.caseId} onSelect={() => {
+                  setRestoreTarget(item)
+                  setRestoreOpen(true)
+                }}><Undo2 size={14} />恢复：{item.title}</DropdownMenuItem>
+              ))}
             <DropdownMenuSeparator />
             <DropdownMenuLabel>高级操作</DropdownMenuLabel>
             {BUILTIN_DOMAIN_PACKS.map((pack) => (
               <DropdownMenuItem key={pack.id} disabled={!currentCase || switchingPack} onSelect={() => void handlePackChange(pack.id)}><Layers size={14} />审核类型：{pack.name}</DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive focus:text-destructive" disabled={!currentCase || demoUndeletable} onSelect={() => setDeleteOpen(true)}><Trash2 size={14} />删除审核任务</DropdownMenuItem>
+            <DropdownMenuItem className="text-destructive focus:text-destructive" disabled={!currentCase || demoUndeletable} onSelect={() => setDeleteOpen(true)}><Trash2 size={14} />归档 / 移除审核任务</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -222,6 +257,18 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
       </div>
       {/* 新建案卷对话框 */}
       <CreateCaseDialog open={createOpen} onOpenChange={setCreateOpen} templates={publishedTemplates} onCreate={actions.createCase} />
+
+      {/* 原生恢复必须由用户明确确认；不会复活历史运行或决定。 */}
+      <ConfirmDialog
+        open={restoreOpen}
+        onOpenChange={setRestoreOpen}
+        title="恢复已归档案卷"
+        description={restoreTarget
+          ? `确认恢复「${restoreTarget.title}」？案卷将返回草稿阶段；历史运行、证据及决定保留供审计，但不恢复原先的审批有效性。`
+          : '请先选择已归档案卷。'}
+        confirmLabel="恢复并重新审核"
+        onConfirm={handleRestore}
+      />
 
       {/* 删除二次确认 */}
       <ConfirmDialog
