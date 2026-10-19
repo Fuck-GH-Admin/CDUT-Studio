@@ -180,13 +180,13 @@ describe('C2 Main-only technical journal: durable evidence, never a BusinessDeci
       ['bad-grant',()=>({...host(),permissionGrantId:'other-grant'})],
     ] as const){
       const outcome=await recordV3TechnicalProposal(id,{
-        requestId:`event-${suffix}`,expectedRevision:1,actor,payload:event,
+        requestId:event.eventId,expectedRevision:1,actor,payload:event,
       },proof)
       expect(outcome.ok).toBe(false)
     }
     const fake={...event,eventId:'f'.repeat(64)}
     const counterfeit=await recordV3TechnicalProposal(id,{
-      requestId:'fake-hash',expectedRevision:1,actor,payload:fake,
+      requestId:fake.eventId,expectedRevision:1,actor,payload:fake,
     },()=>host())
     expect(counterfeit.ok).toBe(false)
     const other=await submitCommand(id,{
@@ -202,6 +202,23 @@ describe('C2 Main-only technical journal: durable evidence, never a BusinessDeci
     expect(stale.ok).toBe(false)
     expect(readAggregate(id)?.v3TechnicalExecution?.events).toHaveLength(0)
   })
+  test('non-identical command requestId cannot take ownership of a Host eventId', async () => {
+    const id = 'c2-ledger-request-mismatch'
+    await seed(id)
+    const run = evidence(id, 1)
+    expect((await admitV3TechnicalRun(id, {
+      requestId: 'request-identity-admit', expectedRevision: 0, actor, payload: run,
+    }, () => {})).ok).toBe(true)
+    const event = checkEvent(run, 1)
+    const denied = await recordV3TechnicalProposal(id, {
+      requestId: 'different-request-id', expectedRevision: 1, actor, payload: event,
+    }, () => host())
+    expect(denied.ok).toBe(false)
+    if (!denied.ok) expect(denied.message).toContain('requestId')
+    expect(readAggregate(id)?.receiptLog.filter(r =>
+      r.type === 'RecordV3TechnicalProposal')).toHaveLength(0)
+  })
+
   test('unreceipted business mutations and forged source versions cannot bypass frozen input digest', async () => {
     const id = 'c2-ledger-tamper-4'
     await seed(id)
