@@ -977,3 +977,31 @@ describe('C1 native manual Subject action uses Main V2 source and revision', () 
     expect(store.get(reviewErrorAtom)).toContain('不是受信的原生案卷')
   })
 })
+
+
+describe('C1-R09 switch-race safety for visible manual Subject dialog', () => {
+  test('does not write the old Case when selected Case changes during aggregate read', async () => {
+    const { api } = makeApi()
+    const store = createStore()
+    const actions = createReviewActionsController(store, api)
+    await actions.selectCase('native-human-A')
+    const delayed = new Deferred()
+    let invoked = false
+    api.getAggregateV2 = async caseId => caseId === 'native-human-A'
+      ? delayed.promise as Promise<CaseAggregateV2>
+      : undefined
+    api.createNativeReviewItemV3 = async () => { invoked = true; throw new Error('incorrect write') }
+    const pending = actions.createNativeReviewItem({
+      documentVersionId: 'physical-version-A', title: 'Old form',
+      category: '智育', declaredScore: 2,
+    }, 'native-human-A')
+    await actions.selectCase('native-human-B')
+    delayed.resolve({
+      caseV2: { id: 'native-human-A', revision: 1, stage: 'draft' },
+      receiptLog: [{ type: 'CreateNativeWorkspaceCaseV3' }],
+    })
+    expect(await pending).toBe(false)
+    expect(invoked).toBe(false)
+    expect(store.get(selectedCaseIdAtom)).toBe('native-human-B')
+  })
+})
