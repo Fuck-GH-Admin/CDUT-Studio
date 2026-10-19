@@ -6,12 +6,14 @@
 import { randomUUID } from 'node:crypto'
 import type {
   Actor, CaseAggregateV2, DocumentVersion, ReviewCase, ReviewCaseType,
-  ReviewCaseV2, ReviewCommandResult, SourceDocument, UpdateCaseSettingsRequest,
+  ReviewCaseV2, SourceDocument, UpdateCaseSettingsRequest,
 } from '@profer/shared'
 import { createAggregate, payloadHash, readAggregate, submitCommand, CommandValidationError } from './case-store-v2'
 import { mapDomainToTemplate } from './migration'
 import { ensureBuiltinTemplateDrafts } from './builtin-templates'
 import { getTemplate, saveDraft } from './template-store'
+import { registerMaterial } from './material-service'
+import { revokeCurrentSourceValidity } from './source-current-validity-v3'
 import { resolveDomainPack } from '@profer/shared'
 
 export const NATIVE_CREATE_RECEIPT_V3 = 'CreateNativeWorkspaceCaseV3'
@@ -209,4 +211,92 @@ export async function updateNativeWorkspaceSettingsV3(
   const projected = nativeWorkspaceProjectionV3(output.aggregate)
   if (!projected) throw new Error('原生设置已保存但兼容读取失败')
   return projected
+}
+
+/** Native material intake uses the existing C-owned physical-byte V2 service. */
+export async function registerNativeWorkspaceMaterialV3(
+  caseId: string, sourcePath: string, role: SourceDocument['role'], actor: Actor = MAIN_ACTOR,
+): Promise<SourceDocument> {
+  const current = readAggregate(caseId)
+  if (!isNativeWorkspaceCaseV3(current) || !current || current.caseV2.stage === 'archived')
+    throw new CommandValidationError('INVALID_TRANSITION', '案卷不存在、已归档或不是原生 V2 案卷')
+  const result = await registerMaterial(caseId, {
+    requestId: `native-register-${randomUUID().replace(/-/g, '')}`,
+    actor, expectedRevision: current.caseV2.revision,
+    payload: { sourcePath, role },
+  })
+  if (!result.ok) throw new CommandValidationError(result.code, result.message)
+  const doc = result.entity
+  const view = nativeWorkspaceProjectionV3(result.aggregate)
+  const found = view?.documents.find(candidate => candidate.id === doc?.documentId)
+  if (!found) throw new Error('原生材料已写入但只读兼容投影失败，请通过 V2 材料列表查看')
+  return found
+}
+
+export async function removeNativeWorkspaceDocumentsV3(
+  caseId: string, role: SourceDocument['role'], documentIds?: string[], actor: Actor = MAIN_ACTOR,
+): Promise<ReviewCase> {
+  if (documentIds !== undefined && (!Array.isArray(documentIds) ||
+      documentIds.some(id => typeof id !== 'string' || !id) ||
+      new Set(documentIds).size !== documentIds.length))
+    throw new CommandValidationError('VALIDATION_FAILED', '移除材料 ID 非法或重复')
+  const original = readAggregate(caseId)
+  if (!isNativeWorkspaceCaseV3(original) || !original)
+    throw new CommandValidationError('NOT_FOUND', '原生案卷不存在')
+  const result = await submitCommand(caseId, {
+    requestId: `native-remove-${randomUUID().replace(/-/g, '')}`,
+    expectedRevision: original.caseV2.revision, actor,
+    type: 'ArchiveNativeWorkspaceDocumentsV3',
+    payload: { role, documentIds: documentIds ?? null },
+  }, (snapshot, payload) => {
+    if (!isNativeWorkspaceCaseV3(snapshot))
+      throw new CommandValidationError('INVALID_TRANSITION', '原生案卷权威已经变化')
+    const applicable = snapshot.caseV2.documents.filter(d => d.active !== false && d.role === role &&
+      (payload.documentIds === null || payload.documentIds.includes(d.documentId)))
+    if (applicable.length === 0 || (payload.documentIds !== null &&
+        applicable.length !== payload.documentIds.length))
+      throw new CommandValidationError('VALIDATION_FAILED', '材料不存在、版本已失效或角色不匹配')
+    const retiring = new Set(applicable.map(d => d.versionId))
+    return { summary: '原生材料批量归档：保留物理原件及所有历史来源', mutate: draft => {
+      draft.caseV2.documents = draft.caseV2.documents.map(d =>
+        retiring.has(d.versionId) ? { ...d, active: false, usage: 'unread' as const } : d)
+      revokeCurrentSourceValidity(draft, retiring, 'archive')
+    } }
+  })
+  if (!result.ok) throw new CommandValidationError(result.code, result.message)
+  const view = nativeWorkspaceProjectionV3(result.aggregate)
+  if (!view) throw new Error('归档已写入，兼容视图未能恢复')
+  return view
+}
+
+export async function reorderNativeWorkspaceDocumentsV3(
+  caseId: string, role: SourceDocument['role'], documentIds: string[], actor: Actor = MAIN_ACTOR,
+): Promise<ReviewCase> {
+  if (!Array.isArray(documentIds) || documentIds.some(id => typeof id !== 'string' || !id) ||
+      new Set(documentIds).size !== documentIds.length)
+    throw new CommandValidationError('VALIDATION_FAILED', '材料顺序无效或存在重复')
+  const original = readAggregate(caseId)
+  if (!isNativeWorkspaceCaseV3(original) || !original)
+    throw new CommandValidationError('NOT_FOUND', '原生案卷不存在')
+  const outcome = await submitCommand(caseId, {
+    requestId: `native-reorder-${randomUUID().replace(/-/g, '')}`,
+    expectedRevision: original.caseV2.revision, actor,
+    type: 'ReorderNativeWorkspaceDocumentsV3', payload: { role, documentIds },
+  }, (snapshot, payload) => {
+    const active = snapshot.caseV2.documents.filter(d => d.active !== false && d.role === role)
+    if (active.length !== payload.documentIds.length ||
+        active.some(d => !payload.documentIds.includes(d.documentId)))
+      throw new CommandValidationError('VALIDATION_FAILED', '顺序必须覆盖当前角色的所有有效材料')
+    const byId = new Map(active.map(d => [d.documentId, d]))
+    const desired = payload.documentIds.map(id => byId.get(id)!)
+    return { summary: '调整原生材料显示次序，不更改任何物理身份', mutate: draft => {
+      let i = 0
+      draft.caseV2.documents = draft.caseV2.documents.map(d =>
+        d.active !== false && d.role === role ? desired[i++]! : d)
+    } }
+  })
+  if (!outcome.ok) throw new CommandValidationError(outcome.code, outcome.message)
+  const view = nativeWorkspaceProjectionV3(outcome.aggregate)
+  if (!view) throw new Error('材料顺序已写入，兼容投影失败')
+  return view
 }
