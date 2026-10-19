@@ -658,7 +658,7 @@ export function recordPiReviewDocumentRead(
   activity?: string,
 ): void {
   const run = getRunV2(binding.caseId, binding.runId)
-  if (!run || run.status !== 'running') return
+  if (!run || run.status !== 'running' || getCaseV2Aggregate(binding.caseId)?.caseV2.stage === 'archived') return
   const previous = readArtifact<PiDocumentReadState>(binding.caseId, binding.runId, 'node-pi-read-state') ?? { blocks: {} }
   const state = previous.blocks ?? {}
   state[documentVersionId] = [...new Set([...(state[documentVersionId] ?? []), ...blockIds])]
@@ -678,7 +678,7 @@ export function recordPiReviewPreviewByPath(
 ): boolean {
   const aggregate = getCaseV2Aggregate(binding.caseId)
   const run = getRunV2(binding.caseId, binding.runId)
-  if (!aggregate || !run || run.status !== 'running') return false
+  if (!aggregate || aggregate.caseV2.stage === 'archived' || !run || run.status !== 'running') return false
 
   let target: string
   let root: string
@@ -849,6 +849,7 @@ export function submitPiReviewResultV2(input: {
   if (!run || run.status !== 'running') throw new Error('本次审核运行已结束；请在工作台开始新一轮审核')
   const aggregate = getCaseV2Aggregate(input.binding.caseId)
   if (!aggregate) throw new Error('案卷已不存在')
+  if (aggregate.caseV2.stage === 'archived') throw new Error('案卷已经归档，迟到的 Pi 审核结果不能写入')
   const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
   if (!template) throw new Error('案卷模板版本不存在')
   if (!aggregate.d2RuntimePlan && isAuthoringCandidateDraft(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)) {
@@ -1037,6 +1038,15 @@ export function finishPiReviewRunV2(binding: PiReviewBinding, outcome: { status:
   const run = getRunV2(binding.caseId, binding.runId)
   if (!run || run.status !== 'running') return
   const aggregate = getCaseV2Aggregate(binding.caseId)
+  if (aggregate?.caseV2.stage === 'archived') {
+    // A running old Host cannot promote results after the archive CAS. Keep
+    // an explicit cancelled historical Run rather than accepting stale checks.
+    run.status = 'cancelled'
+    run.error = '案卷在运行期间已归档；该运行仅保留历史，不产生当前有效结果'
+    run.completedAt = new Date().toISOString()
+    saveRunV2(run)
+    return
+  }
   const template = aggregate ? getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion) : undefined
   run.status = outcome.status === 'completed' ? 'partially-completed' : outcome.status === 'stopped' ? 'cancelled' : 'failed'
   run.error = outcome.error
