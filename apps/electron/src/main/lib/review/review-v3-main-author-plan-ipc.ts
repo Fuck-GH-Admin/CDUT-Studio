@@ -47,42 +47,97 @@ export interface CMainV3Grant {
  * Requires independently trusted, live sources. None are synthesized from
  * local-device reviewer identity, Renderer payload or B candidate documents.
  */
-export interface CMainV3AuthorPlanAuthorities<T extends CMainB1CandidateDocument=CMainB1CandidateDocument> {
+/** Candidate-held author reading needs an actual Main Owner grant and B1 vault,
+ * but does NOT need a school policy publisher or Case write authorization. */
+export interface CMainV3AuthorReadAuthorities<T extends CMainB1CandidateDocument=CMainB1CandidateDocument> {
   getAuthorGrant(templateId:string):CMainV3Grant|undefined
   canReadAuthor(principalId:string,templateId:string,grant:CMainV3Grant):boolean
   readLatestB1AuthorRevision(templateId:string):Promise<CMainB1AuthorRevision<T>|undefined>
     |CMainB1AuthorRevision<T>|undefined
+}
+/** Formal Case mutation is independently gated on a privileged publisher. */
+export interface CMainV3PlanUpgradeAuthorities {
   getCaseGrant(caseId:string):CMainV3Grant|undefined
   canUpgradeCase(principalId:string,caseId:string,grant:CMainV3Grant):boolean
-  /** Independent issued school/published artifact registry; B candidates denied. */
   readonly publishedPlanSource:C2MainPublishedPlanSource
 }
+/** Backwards-compatible atomic Main installation for existing privileged callers.
+ * Prefer independently installed reader/writer authorities for production. */
+export interface CMainV3AuthorPlanAuthorities<T extends CMainB1CandidateDocument=CMainB1CandidateDocument>
+  extends CMainV3AuthorReadAuthorities<T>, CMainV3PlanUpgradeAuthorities {}
 
-let authorities:CMainV3AuthorPlanAuthorities|undefined
+type MainInstallation<T>={readonly source:T;readonly token:symbol}
+let authorReadInstallation:MainInstallation<CMainV3AuthorReadAuthorities>|undefined
+let planUpgradeInstallation:MainInstallation<CMainV3PlanUpgradeAuthorities>|undefined
 
-/** Main-only composition hook; no IPC method/renderer handler installs this. */
+function validateReader(next:CMainV3AuthorReadAuthorities):void {
+  if(!next || typeof next.getAuthorGrant!=='function' ||
+     typeof next.canReadAuthor!=='function' ||
+     typeof next.readLatestB1AuthorRevision!=='function')
+    refuse('AUTHOR_READER_SOURCE_REQUIRED')
+}
+function validateWriter(next:CMainV3PlanUpgradeAuthorities):void {
+  if(!next || typeof next.getCaseGrant!=='function' ||
+     typeof next.canUpgradeCase!=='function' ||
+     !next.publishedPlanSource) refuse('INDEPENDENT_PUBLISHED_PLAN_AUTHORITY_REQUIRED')
+  // This validates dependency shape, not school issuance. Only the real
+  // published Plan provenance checker inside Case CAS can attest a policy.
+  new C2MainPublishedPlanProvenance(next.publishedPlanSource)
+}
+function newInstallation<T>(source:T):MainInstallation<T> {
+  return {source,token:Symbol('main-v3-authority-installation')}
+}
+/** No IPC or renderer route may install either authority. Uninstall/reinstall of
+ * the SAME source object is still a new authority generation. */
+export function installCMainV3AuthorReadAuthorities(
+  next:CMainV3AuthorReadAuthorities,
+):()=>void {
+  if(authorReadInstallation) refuse('AUTHOR_READER_ALREADY_INSTALLED')
+  validateReader(next)
+  const installed=newInstallation(next)
+  authorReadInstallation=installed
+  return ()=>{if(authorReadInstallation===installed)authorReadInstallation=undefined}
+}
+export function installCMainV3PlanUpgradeAuthorities(
+  next:CMainV3PlanUpgradeAuthorities,
+):()=>void {
+  if(planUpgradeInstallation) refuse('PLAN_WRITER_ALREADY_INSTALLED')
+  validateWriter(next)
+  const installed=newInstallation(next)
+  planUpgradeInstallation=installed
+  return ()=>{if(planUpgradeInstallation===installed)planUpgradeInstallation=undefined}
+}
+/** Legacy combined installer is atomic and cannot silently take over an
+ * already installed independent reader or writer source. */
 export function installCMainV3AuthorPlanAuthorities(
   next:CMainV3AuthorPlanAuthorities,
 ):()=>void {
-  if(authorities) refuse('AUTHORITIES_ALREADY_INSTALLED')
-  if(!next || typeof next.getAuthorGrant!=='function' ||
-     typeof next.canReadAuthor!=='function' ||
-     typeof next.readLatestB1AuthorRevision!=='function' ||
-     typeof next.getCaseGrant!=='function' ||
-     typeof next.canUpgradeCase!=='function' ||
-     !next.publishedPlanSource) refuse('INDEPENDENT_AUTHORITIES_REQUIRED')
-  // Fail immediately if publisher is only a fake/malformed dependency;
-  // actual current source checks remain inside serialized Case CAS.
-  new C2MainPublishedPlanProvenance(next.publishedPlanSource)
-  authorities=next
-  return ()=>{if(authorities===next) authorities=undefined}
+  if(authorReadInstallation||planUpgradeInstallation)
+    refuse('AUTHORITIES_ALREADY_INSTALLED')
+  validateReader(next)
+  validateWriter(next)
+  const read=newInstallation<CMainV3AuthorReadAuthorities>(next)
+  const write=newInstallation<CMainV3PlanUpgradeAuthorities>(next)
+  authorReadInstallation=read
+  planUpgradeInstallation=write
+  return ()=>{
+    if(authorReadInstallation===read)authorReadInstallation=undefined
+    if(planUpgradeInstallation===write)planUpgradeInstallation=undefined
+  }
 }
-function requireAuthority():CMainV3AuthorPlanAuthorities {
-  if(!authorities) return refuse('INDEPENDENT_AUTHORITIES_NOT_INSTALLED')
-  return authorities
+function requireAuthorReader():MainInstallation<CMainV3AuthorReadAuthorities> {
+  if(!authorReadInstallation)return refuse('INDEPENDENT_AUTHORITIES_NOT_INSTALLED')
+  return authorReadInstallation
 }
-function assertCurrentAuthority(source:CMainV3AuthorPlanAuthorities):void {
-  if(authorities!==source) refuse('AUTHORITY_INSTALLATION_REVOKED')
+function requirePlanWriter():MainInstallation<CMainV3PlanUpgradeAuthorities> {
+  if(!planUpgradeInstallation)return refuse('INDEPENDENT_AUTHORITIES_NOT_INSTALLED')
+  return planUpgradeInstallation
+}
+function assertCurrentAuthorReader(installed:MainInstallation<CMainV3AuthorReadAuthorities>):void {
+  if(authorReadInstallation!==installed)refuse('AUTHORITY_INSTALLATION_REVOKED')
+}
+function assertCurrentPlanWriter(installed:MainInstallation<CMainV3PlanUpgradeAuthorities>):void {
+  if(planUpgradeInstallation!==installed)refuse('AUTHORITY_INSTALLATION_REVOKED')
 }
 
 /** Actual C0 verified live browser sender and stable per-frame identity. */
@@ -116,9 +171,10 @@ function sameGrant(a:CMainV3Grant,b:CMainV3Grant):boolean {
 }
 function liveAuthorIdentity(
   event:IpcMainInvokeEvent,templateId:string,
-  authority:CMainV3AuthorPlanAuthorities,
+  installed:MainInstallation<CMainV3AuthorReadAuthorities>,
 ):CMainAuthorReadIdentity {
-  assertCurrentAuthority(authority)
+  assertCurrentAuthorReader(installed)
+  const authority=installed.source
   const frame=liveFrame(event)
   const grant=checkGrant(authority.getAuthorGrant(templateId))
   return {
@@ -144,11 +200,12 @@ export async function handleCMainAuthorLatestRead(
   if(expected!==undefined&&(!Number.isSafeInteger(expected)||typeof expected!=='number')) {
     return refuse('EXPECTED_REVISION_INVALID')
   }
-  const authority=requireAuthority()
+  const installed=requireAuthorReader()
+  const authority=installed.source
   const port=new CMainTrustedAuthorRevisionRead({
-    currentIdentity:()=>liveAuthorIdentity(event,scope,authority),
+    currentIdentity:()=>liveAuthorIdentity(event,scope,installed),
     canRead:(id,templateId)=>{
-      const live=liveAuthorIdentity(event,templateId,authority)
+      const live=liveAuthorIdentity(event,templateId,installed)
       return id.principalId===live.principalId && id.sessionId===live.sessionId &&
         id.windowId===live.windowId&&id.frameId===live.frameId &&
         id.ownerId===live.ownerId&&id.ownerGeneration===live.ownerGeneration &&
@@ -199,13 +256,14 @@ export async function handleCMainUpgradeCanonicalPlan(
 ) {
   const atStart=liveFrame(event)
   const data=assertCaseInput(input)
-  const authority=requireAuthority()
+  const installed=requirePlanWriter()
+  const authority=installed.source
   const initial=checkGrant(authority.getCaseGrant(data.caseId))
   if(!authority.canUpgradeCase(atStart.principalId,data.caseId,initial))
     return refuse('CASE_UPGRADE_UNAUTHORIZED')
   const publisher=new C2MainPublishedPlanProvenance(authority.publishedPlanSource)
   const recheck=(aggregate:CaseAggregateV2):void=>{
-    assertCurrentAuthority(authority)
+    assertCurrentPlanWriter(installed)
     const now=liveFrame(event)
     const latest=checkGrant(authority.getCaseGrant(data.caseId))
     if(JSON.stringify(now)!==JSON.stringify(atStart)||
