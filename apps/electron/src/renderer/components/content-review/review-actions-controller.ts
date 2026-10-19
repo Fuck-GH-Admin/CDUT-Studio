@@ -101,6 +101,9 @@ export interface ReviewActionsApi {
   removeDocuments?(input: { caseId: string; role: SourceDocument['role']; documentIds?: string[] }): Promise<ReviewCase>
   reorderDocuments?(input: { caseId: string; role: SourceDocument['role']; documentIds: string[] }): Promise<ReviewCase>
   deleteCase(caseId: string): Promise<void>
+  /** Native archive discovery is read-only and separate from the V1 compatibility list. */
+  listCasesV2?(): Promise<Array<{ caseId: string; title: string; stage: string; revision: number }>>
+  restoreCaseV3?(input: { caseId: string; expectedRevision: number; reason: string }): Promise<{ ok: boolean }>
   updateCaseSettings(input: UpdateCaseSettingsRequest): Promise<ReviewCase>
   updateRuleOutline?(input: UpdateRuleOutlineRequest): Promise<ReviewCase>
   updateReviewItem?(input: UpdateReviewItemRequest): Promise<ReviewCase>
@@ -649,6 +652,45 @@ export function createReviewActionsController(
         return true
       } catch (error) {
         reportError('调整材料顺序失败', error, { caseId })
+        return false
+      }
+    },
+
+    async listArchivedCases(): Promise<Array<{ caseId: string; title: string; revision: number }>> {
+      if (!api.listCasesV2) return []
+      try {
+        const cases = await api.listCasesV2()
+        return cases.filter(c => c.stage === 'archived')
+          .map(({ caseId, title, revision }) => ({ caseId, title, revision }))
+      } catch (error) {
+        reportError('读取归档案卷失败', error)
+        return []
+      }
+    },
+
+    async restoreArchivedCase(caseId: string, expectedRevision: number): Promise<boolean> {
+      if (!api.restoreCaseV3) {
+        setError('当前版本尚未支持原生案卷恢复')
+        return false
+      }
+      try {
+        const result = await api.restoreCaseV3({
+          caseId, expectedRevision, reason: '用户在工作台明确确认恢复案卷并重新审核',
+        })
+        if (!result.ok) {
+          setError('案卷恢复未完成，请刷新归档列表后重试')
+          return false
+        }
+        await refreshCaseList()
+        // Restoring the native business ledger never re-approves a previous
+        // ReviewRun/Decision. Legacy migrated cases become selectable again;
+        // native-only cases remain in the V2 aggregate list pending the C1
+        // read-only three-column compatibility projection.
+        if (await api.getCase(caseId)) await selectCaseInternal(caseId)
+        setError(null)
+        return true
+      } catch (error) {
+        reportError('恢复案卷失败', error)
         return false
       }
     },
