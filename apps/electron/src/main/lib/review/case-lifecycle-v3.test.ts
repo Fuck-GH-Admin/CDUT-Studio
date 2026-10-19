@@ -9,6 +9,7 @@ import { ensureWorkspaceAggregateV2, syncWorkspaceProjectionV2 } from './workspa
 import { archiveReviewCaseV3, restoreReviewCaseV3 } from './case-lifecycle-v3'
 import { preparePiReviewRunV2 } from './pi-case-review-service'
 import { runReviewCaseV2 } from './run-service-v2'
+import { saveRunV2 } from './run-store-v2'
 
 const root = join(import.meta.dir, '../../../../../../work/tmp', `v3-c1-case-archive-${Date.now()}`)
 process.env.PROFER_CONFIG_DIR = root
@@ -96,6 +97,9 @@ describe('C1 authoritative reversible Case archive', () => {
     expect(now.receiptLog.slice(-2).map(x => x.type)).toEqual(['ArchiveReviewCaseV3', 'RestoreReviewCaseV3'])
     expect(now.caseV2.documents.map(x => x.versionId)).toEqual(archived.caseV2.documents.map(x => x.versionId))
     expect(getCase(id)?.id).toBe(id)
+    // A pre-archive decided snapshot must not resume after restore.
+    await expect(runReviewCaseV2(decided.caseV2, {} as never, {} as never))
+      .rejects.toThrow('旧快照禁止执行')
     const beforeReplay = JSON.stringify(now)
     const replay = await restoreReviewCaseV3(id, intent('restore-1', archived.caseV2.revision, '用户确认恢复后重新审核'))
     expect(replay.ok).toBe(true)
@@ -105,6 +109,21 @@ describe('C1 authoritative reversible Case archive', () => {
     expect(readAggregate(id)?.receiptLog.slice(-3).map(x => x.type)).toEqual([
       'ArchiveReviewCaseV3', 'RestoreReviewCaseV3', 'ArchiveReviewCaseV3',
     ])
+  })
+
+  test('active queued/running ReviewRun prevents archive until cancellation is durable', async () => {
+    const id = 'v3-archive-refuses-running-run'
+    const initial = await seed(id)
+    const run = { id: 'case-run-still-running', caseId: id, startedAt: new Date().toISOString(), status: 'running' } as never
+    saveRunV2(run)
+    const before = JSON.stringify(readAggregate(id))
+    const blocked = await archiveReviewCaseV3(id, intent('archive-running', initial.caseV2.revision))
+    expect(blocked).toMatchObject({ ok: false, code: 'INVALID_TRANSITION' })
+    expect(JSON.stringify(readAggregate(id))).toBe(before)
+    saveRunV2({ ...run, status: 'cancelled' } as never)
+    const archived = await archiveReviewCaseV3(id, intent('archive-running', initial.caseV2.revision))
+    expect(archived.ok).toBe(true)
+    expect(readAggregate(id)?.caseV2.stage).toBe('archived')
   })
 
   test('invalid actor/reason and untracked old archive cannot write without correct check', async () => {
