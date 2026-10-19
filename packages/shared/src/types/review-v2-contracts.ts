@@ -362,6 +362,8 @@ export interface CaseAggregateV2 {
    */
   v3TechnicalExecution?: {
     run: import('./review-v3-c0').RunEvidenceIdentity
+    /** Frozen non-journal aggregate input; business mutation invalidates it. */
+    frozenInputDigest: string
     admittedAtRevision: number
     events: Array<{
       sequence: number
