@@ -33,6 +33,11 @@ const canonical = (value: unknown): string => {
 const equal = (a: unknown, b: unknown): boolean => canonical(a) === canonical(b)
 const validId = (id: unknown): id is string =>
   typeof id === 'string' && id.trim().length > 0 && id.length <= 512
+/** A Run ID is never reusable within one Case, including after Owner rotation.
+ * Do not use Owner generation/attempt as a tombstone namespace: stale Host
+ * receipts could otherwise re-enter through a different generation/attempt. */
+const runTombstoneKey = (run: RunEvidenceIdentity): string =>
+  JSON.stringify([run.caseId,run.runId])
 const refuse = (reason: string): never => {
   throw new C0ContractError('RECOVERY_REQUIRED', reason)
 }
@@ -75,6 +80,8 @@ function live(
 export class C2MainPhysicalHostReceiptRegistry {
   private readonly receipts = new Map<string, C2MainHostWitness>()
   private readonly seenIds = new Set<string>()
+  /** Run-wide deny fence, including IDs that had not arrived at invalidate(). */
+  private readonly invalidatedRuns = new Set<string>()
   private closed = false
 
   constructor(private readonly observer: C2MainPhysicalHostSource) {
@@ -91,6 +98,8 @@ export class C2MainPhysicalHostReceiptRegistry {
     if (!observed || observed.hostReceiptId !== receiptId) {
       return refuse('No independently observed physical Host result for this ID')
     }
+    if (this.invalidatedRuns.has(runTombstoneKey(observed.run)))
+      return refuse('Run invalidated: late or unknown physical Host receipt denied')
     live(this.observer, observed)
     const previous = this.receipts.get(receiptId)
     if (previous) {
@@ -109,6 +118,7 @@ export class C2MainPhysicalHostReceiptRegistry {
     if (this.closed || !validId(receiptId)) return undefined
     const recorded = this.receipts.get(receiptId)
     if (!recorded) return undefined // No "recover from event" fallback.
+    if (this.invalidatedRuns.has(runTombstoneKey(recorded.run))) return undefined
     const latest = this.observer.getObservedPhysicalReceipt(receiptId)
     if (!latest || !equal(latest, recorded)) return undefined
     try { live(this.observer, latest) }
@@ -116,11 +126,26 @@ export class C2MainPhysicalHostReceiptRegistry {
     return structuredClone(recorded)
   }
 
-  /** Fail immediately after Owner revoke/cancel; prior IDs stay tombstoned. */
+  /**
+   * Permanent per-registry Run-wide fence, even for unknown/late Host IDs.
+   * Revoking a Run must never be reverted by reactivating an Owner or by
+   * delivering a fresh physical ID after the invalidation.
+   *
+   * This is in-process only. The persistent C Case/Run recovery gate must
+   * separately deny old Runs after a crash; no automatic rehydration here.
+   */
   invalidateRun(run: RunEvidenceIdentity): void {
     assertC0RunEvidenceIdentity(run)
+    if (this.closed) refuse('Host registry closed during Run invalidation')
+    const key=runTombstoneKey(run)
+    if (!this.invalidatedRuns.has(key) && this.invalidatedRuns.size >= 8192) {
+      // Never evict old fences to make room. Whole registry becomes unusable.
+      this.close()
+      refuse('Run invalidation capacity exhausted: registry sealed')
+    }
+    this.invalidatedRuns.add(key)
     for (const [id, receipt] of this.receipts) {
-      if (equal(receipt.run, run)) this.receipts.delete(id)
+      if (runTombstoneKey(receipt.run) === key) this.receipts.delete(id)
     }
   }
 
