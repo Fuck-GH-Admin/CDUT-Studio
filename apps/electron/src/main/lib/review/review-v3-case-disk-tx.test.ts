@@ -36,7 +36,7 @@ function startHolder(id:string,crash:boolean):ChildProcessWithoutNullStreams {
   const script=`import {withC2CaseDiskTransaction} from ${JSON.stringify(moduleUrl)};
     await withC2CaseDiskTransaction(${JSON.stringify(id)},async()=>{
       process.stdout.write('LOCKED\\n');
-      ${crash?"process.exit(0);":"await new Promise(resolve=>setTimeout(resolve,450));"}
+      ${crash?"await new Promise(resolve=>process.stdout.write('GOODBYE\\\\n',()=>{process.exit(0)}));":"await new Promise(resolve=>setTimeout(resolve,450));"}
     });`
   return spawn(process.execPath,['-e',script],{
     env:{...process.env,PROFER_CONFIG_DIR:root},
@@ -92,8 +92,10 @@ describe('C-Tx R01 same-Case durable multi-PID CAS fence',()=>{
       expect(Date.now()-at).toBeGreaterThanOrEqual(100)
       expect(readAggregate(id)?.caseV2.revision).toBe(1)
     } finally {
-      if(child.exitCode===null)child.kill()
-      await once(child,'close').catch(()=>undefined)
+      if(child.exitCode===null) {
+        child.kill()
+        await once(child,'close').catch(()=>undefined)
+      }
     }
     expect(inspectC2CaseDiskLock(id).locked).toBe(false)
   })
