@@ -167,6 +167,9 @@ export function registerReviewIpc(): void {
       // command; mutating legacy settings first would leave two contrary
       // template/source truths if a later projection rejects the write.
       const aggregate = readAggregate(caseId)
+      if (aggregate && !aggregate.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')) {
+        throw new Error('原生审核案卷禁止通过旧版案卷写入口修改；请使用可信 V2 业务命令')
+      }
       if (aggregate?.canonicalPlan || aggregate?.d2RuntimePlan) {
         if (input.reviewTemplate !== undefined || input.domainPackId !== undefined ||
           input.manualRules !== undefined || input.subjectDocumentIds !== undefined) {
