@@ -178,8 +178,23 @@ export function getCase(caseId: string): ReviewCase | undefined {
   return reviewCase
 }
 
+/**
+ * A native-first V2 aggregate is never writable through legacy case.json.
+ * Historical migrated legacy cases retain their compatibility updates.
+ * A corrupt or unreadable V2 state always fails closed.
+ */
+function assertWritableLegacyProjection(caseId: string): void {
+  const statePath = join(getCaseDir(caseId), 'state.v2.json')
+  if (!existsSync(statePath)) return
+  const state = readAggregate(caseId)
+  if (!state || !state.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')) {
+    throw new Error('原生审核案卷禁止通过旧版案卷写入口修改；请使用可信 V2 业务命令')
+  }
+}
+
 /** 保存案卷（原子写；目录不存在则创建） */
 export function saveCase(reviewCase: ReviewCase): void {
+  assertWritableLegacyProjection(reviewCase.id)
   const filePath = getCaseFilePath(reviewCase.id)
   mkdirSync(getCaseDir(reviewCase.id), { recursive: true })
   try {
@@ -239,16 +254,8 @@ export function updateCase(
 ): Promise<ReviewCase> {
   assertSafeId(caseId)
   return enqueueCaseWrite(caseId, () => {
-    // C1 transition invariant: any native V2 aggregate is the sole current
-    // business authority. A stale case.json with the same ID is NEVER a
-    // writable fallback. Missing/corrupt V2 data also fails closed.
-    const statePath = join(getCaseDir(caseId), 'state.v2.json')
-    if (existsSync(statePath)) {
-      const native = readAggregate(caseId)
-      if (!native || !native.receiptLog?.some(receipt => receipt.type === 'EnsureReviewWorkspaceAggregate')) {
-        throw new Error('原生审核案卷禁止通过旧版案卷写入口修改；请使用可信 V2 业务命令')
-      }
-    }
+    // Queued updates and direct saves obey the same native write barrier.
+    assertWritableLegacyProjection(caseId)
     const latest = getCase(caseId)
     if (!latest) throw new Error(`案卷不存在: ${caseId}`)
     const currentRevision = latest.revision ?? 0
