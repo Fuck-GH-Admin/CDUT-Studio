@@ -57,6 +57,7 @@ import { getReviewModelGatewayStatus } from './review-model-gateway'
 import {
   createNativeWorkspaceCaseV3, isNativeWorkspaceCaseV3, updateNativeWorkspaceSettingsV3,
   registerNativeWorkspaceMaterialV3, removeNativeWorkspaceDocumentsV3, reorderNativeWorkspaceDocumentsV3,
+  updateNativeWorkspaceReviewItemV3,
 } from './native-workspace-case-v3'
 import { importDocumentFromPath, importDocumentsIntoCase, removeDocumentsFromCase, reorderDocumentsInCase } from './case-import'
 import { invalidateDerivedReviewInputs } from './input-invalidation'
@@ -274,6 +275,8 @@ export function registerReviewIpc(): void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.UPDATE_RULE_OUTLINE, async (_event, input: UpdateRuleOutlineRequest): Promise<ReviewCase> => {
     if (!input || typeof input !== 'object') throw new Error('参数 input 缺失或类型非法')
     const caseId = requireString(input.caseId, 'caseId')
+    if (isNativeWorkspaceCaseV3(readAggregate(caseId)))
+      throw new Error('NATIVE_RULE_OUTLINE_SOURCE_REQUIRED: 原生规则摘要必须先与原件版本、来源锚点和正式规则提案建立绑定')
     const rulePackId = requireString(input.rulePackId, 'rulePackId')
     const ruleId = requireString(input.ruleId, 'ruleId')
     if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 160) throw new Error('规则名称不能为空且不能超过 160 字')
@@ -306,6 +309,10 @@ export function registerReviewIpc(): void {
     ] as const) {
       if (value !== undefined && (typeof value !== 'string' || value.length > maxLength)) throw new Error(`申报事项${field}字段无效`)
     }
+    if (isNativeWorkspaceCaseV3(readAggregate(caseId))) {
+      assertC0ReviewMainSender(_event)
+      return updateNativeWorkspaceReviewItemV3(caseId, input, undefined, () => assertC0ReviewMainSender(_event))
+    }
     const updated = await updateCase(caseId, (fresh) => {
       if (!fresh.items.some((item) => item.id === itemId)) throw new Error('申报事项已不存在，请刷新后重试')
       return {
@@ -329,6 +336,8 @@ export function registerReviewIpc(): void {
 
   ipcMain.handle(REVIEW_IPC_CHANNELS.CONFIRM_RULE_PACK, async (_event, input: { caseId: string; rulePackId: string }): Promise<ReviewCase> => {
     const caseId = requireString(input?.caseId, 'caseId')
+    if (isNativeWorkspaceCaseV3(readAggregate(caseId)))
+      throw new Error('NATIVE_RULE_CONFIRMATION_REQUIRED: 规则包确认必须使用 C-owned 原件验证和计划发布事务')
     const rulePackId = requireString(input?.rulePackId, 'rulePackId')
     const { confirmRulePackInCase } = require('./case-import') as typeof import('./case-import')
     return confirmRulePackInCase(caseId, rulePackId)
@@ -1018,6 +1027,9 @@ export function registerReviewIpc(): void {
   ipcMain.handle(
     REVIEW_IPC_CHANNELS.GENERATE_RULE_OUTLINE,
     async (_event, request: GenerateRuleOutlineRequest): Promise<RuleOutlineItem[]> => {
+      const caseId = requireString(request?.caseId, 'caseId')
+      if (isNativeWorkspaceCaseV3(readAggregate(caseId)))
+        throw new Error('NATIVE_OUTLINE_STAGING_REQUIRED: 原生案卷规则识别必须通过来源锚点绑定的候选区执行')
       const outline = await generateRuleOutline(request)
       await syncWorkspaceProjectionV2(request.caseId)
       return outline
@@ -1026,6 +1038,9 @@ export function registerReviewIpc(): void {
 
   /** 识别可审核条目（中栏；无出口时降级返回已有条目） */
   ipcMain.handle(REVIEW_IPC_CHANNELS.EXTRACT_ITEMS, async (_event, caseId: string): Promise<ReviewItem[]> => {
+    caseId = requireString(caseId, 'caseId')
+    if (isNativeWorkspaceCaseV3(readAggregate(caseId)))
+      throw new Error('NATIVE_SUBJECT_STAGING_REQUIRED: 原生事项识别需先通过 V2 来源候选核对后写入')
     const items = await extractItems(caseId)
     await syncWorkspaceProjectionV2(caseId)
     return items
@@ -1040,6 +1055,9 @@ export function registerReviewIpc(): void {
    * 网关不可用 → 直接走确定性模拟引擎（决策 D6，保证离线可演示）。
    */
   ipcMain.handle(REVIEW_IPC_CHANNELS.RUN_REVIEW, (_event, caseId: string): Promise<ReviewRun> => {
+    caseId = requireString(caseId, 'caseId')
+    if (isNativeWorkspaceCaseV3(readAggregate(caseId)))
+      throw new Error('NATIVE_C2_RUN_REQUIRED: 原生案卷不得使用旧模拟运行冒充正式 ReviewRun')
     const engine = getReviewModelGatewayStatus().available ? 'ai' : 'mock-engine'
     return startReviewRun(caseId, engine)
   })
@@ -1072,6 +1090,9 @@ export function registerReviewIpc(): void {
 
   /** 导出预审报告（JSON + Markdown） */
   ipcMain.handle(REVIEW_IPC_CHANNELS.EXPORT_REPORT, (_event, caseId: string): Promise<ExportReportResult> => {
+    caseId = requireString(caseId, 'caseId')
+    if (isNativeWorkspaceCaseV3(readAggregate(caseId)))
+      throw new Error('NATIVE_C2_REPORT_REQUIRED: 原生案卷不能导出旧模拟运行的正式预审报告')
     return exportReport(caseId)
   })
 
