@@ -99,6 +99,12 @@ async function fixture() {
     hold: () => { if (record) record = {...record,status:'candidate-held'} },
     missing: () => { record = undefined },
     untrust: () => { validPublisher = false },
+    replacePinnedArtifact: (bytes: Buffer) => {
+      writeFileSync(artifactPath, bytes)
+      if (record) record = {
+        ...record, artifactSha256: createHash('sha256').update(bytes).digest('hex'),
+      }
+    },
   }
 }
 
@@ -124,6 +130,18 @@ describe('C2-R05 physical published Plan and Case source provenance — Main onl
     const c=await fixture()
     c.missing()
     expect((await c.bind()).ok).toBe(false)
+  })
+
+  test('even re-pinning the raw digest cannot publish a B1 frozen candidate-held descriptor', async () => {
+    const f=await fixture()
+    const candidate=Buffer.from(JSON.stringify({
+      schemaVersion: 'review-b1-frozen/1', status: 'candidate-held',
+      descriptor: {descriptorVersion:'review-b1/1',publicationAllowed:false,canonicalPlan:f.plan},
+    }))
+    f.replacePinnedArtifact(candidate)
+    expect((await f.bind()).ok).toBe(false)
+    expect(readAggregate(f.id)?.canonicalPlan).toBeUndefined()
+    expect(readAggregate(f.id)?.receiptLog).toHaveLength(0)
   })
 
   test('trusted publisher must independently authenticate issuer, not rely on DTO status', async () => {
