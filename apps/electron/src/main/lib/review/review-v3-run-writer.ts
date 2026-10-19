@@ -71,7 +71,7 @@ export function getV3ReviewRunRecord(caseId: string): ReviewRunRecordV3 | undefi
     }))
   if (sealed.length !== 1 ||
       sealed[0]!.revision !== journal.admittedAtRevision + journal.events.length + 1 ||
-      sealed[0]!.actor.actorId !== record.sealedByActorId) return undefined
+      sealed[0]!.actor?.actorId !== record.sealedByActorId) return undefined
   const eventReceipts = aggregate.receiptLog.filter(receipt =>
     receipt.type === 'RecordV3TechnicalProposal' &&
     receipt.revision > journal.admittedAtRevision)
