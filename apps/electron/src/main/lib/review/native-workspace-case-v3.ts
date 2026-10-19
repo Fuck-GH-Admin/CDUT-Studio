@@ -167,6 +167,7 @@ export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceIn
 /** No V1 updateCase/saveCase; native settings share the existing durable ledger. */
 export async function updateNativeWorkspaceSettingsV3(
   caseId: string, input: UpdateCaseSettingsRequest, actor: Actor = MAIN_ACTOR,
+  authorizeAtCommit?: () => void,
 ): Promise<ReviewCase> {
   const original = readAggregate(caseId)
   if (!isNativeWorkspaceCaseV3(original) || !original)
@@ -195,6 +196,7 @@ export async function updateNativeWorkspaceSettingsV3(
       objectType: template?.objectType ?? 'document',
     },
   }, snapshot => {
+    authorizeAtCommit?.()
     if (!isNativeWorkspaceCaseV3(snapshot)) throw new CommandValidationError('INVALID_TRANSITION', '案卷权威已改变')
     if (snapshot.canonicalPlan || snapshot.d2RuntimePlan)
       throw new CommandValidationError('INVALID_TRANSITION', '审核计划已冻结')
@@ -239,6 +241,7 @@ export async function registerNativeWorkspaceMaterialV3(
 
 export async function removeNativeWorkspaceDocumentsV3(
   caseId: string, role: SourceDocument['role'], documentIds?: string[], actor: Actor = MAIN_ACTOR,
+  authorizeAtCommit?: () => void,
 ): Promise<ReviewCase> {
   if (documentIds !== undefined && (!Array.isArray(documentIds) ||
       documentIds.some(id => typeof id !== 'string' || !id) ||
@@ -253,6 +256,7 @@ export async function removeNativeWorkspaceDocumentsV3(
     type: 'ArchiveNativeWorkspaceDocumentsV3',
     payload: { role, documentIds: documentIds ?? null },
   }, (snapshot, payload) => {
+    authorizeAtCommit?.()
     if (!isNativeWorkspaceCaseV3(snapshot))
       throw new CommandValidationError('INVALID_TRANSITION', '原生案卷权威已经变化')
     const applicable = snapshot.caseV2.documents.filter(d => d.active !== false && d.role === role &&
@@ -275,6 +279,7 @@ export async function removeNativeWorkspaceDocumentsV3(
 
 export async function reorderNativeWorkspaceDocumentsV3(
   caseId: string, role: SourceDocument['role'], documentIds: string[], actor: Actor = MAIN_ACTOR,
+  authorizeAtCommit?: () => void,
 ): Promise<ReviewCase> {
   if (!Array.isArray(documentIds) || documentIds.some(id => typeof id !== 'string' || !id) ||
       new Set(documentIds).size !== documentIds.length)
@@ -287,6 +292,7 @@ export async function reorderNativeWorkspaceDocumentsV3(
     expectedRevision: original.caseV2.revision, actor,
     type: 'ReorderNativeWorkspaceDocumentsV3', payload: { role, documentIds },
   }, (snapshot, payload) => {
+    authorizeAtCommit?.()
     const active = snapshot.caseV2.documents.filter(d => d.active !== false && d.role === role)
     if (active.length !== payload.documentIds.length ||
         active.some(d => !payload.documentIds.includes(d.documentId)))
