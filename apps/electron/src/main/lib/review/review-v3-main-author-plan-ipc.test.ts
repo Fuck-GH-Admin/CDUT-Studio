@@ -106,6 +106,41 @@ async function fixture() {
       if(!validPublisher)throw Error('SCHOOL_PUBLISHER_REVOKED')
     },
   }
+  const approvals=new Map<string,{
+    schemaVersion:'review-v3-main-human-removal-consent/1'; approvalId:string;
+    caseId:string;requestId:string;expectedRevision:number;
+    principalId:string;sessionId:string;windowId:string;frameId:string;
+    ownerId:string;ownerGeneration:number;authorityEpoch:string;
+    previousFingerprint:string;nextFingerprint:string;
+    acknowledgedRemovedIdentities:string[];reason:string;observedAtMs:number;
+  }>()
+  const approveRemoval=(changes:Partial<{
+    approvalId:string;requestId:string;expectedRevision:number;
+    ownerGeneration:number;authorityEpoch:string;principalId:string;
+    frameId:string;previousFingerprint:string;nextFingerprint:string;
+    acknowledgedRemovedIdentities:string[];reason:string;observedAtMs:number;
+  }>={})=>{
+    const requestId=changes.requestId??'change-'+id
+    const approval={
+      schemaVersion:'review-v3-main-human-removal-consent/1' as const,
+      approvalId:changes.approvalId??'approval-'+id,
+      caseId:id,requestId,expectedRevision:changes.expectedRevision??1,
+      principalId:changes.principalId??'local-reviewer',
+      sessionId:'local-main-webcontents:91',
+      windowId:'main-webcontents:91',
+      frameId:changes.frameId??'777:3',
+      ownerId:'case-owner',
+      ownerGeneration:changes.ownerGeneration??epoch,
+      authorityEpoch:changes.authorityEpoch??'case-'+epoch,
+      previousFingerprint:changes.previousFingerprint??old.fingerprint,
+      nextFingerprint:changes.nextFingerprint??next.fingerprint,
+      acknowledgedRemovedIdentities:changes.acknowledgedRemovedIdentities??
+        describeRemovedPlanBindings(old,next),
+      reason:changes.reason??'Human confirms removal',
+      observedAtMs:changes.observedAtMs??Date.now(),
+    }
+    approvals.set(requestId,approval)
+  }
   const authority:CMainV3AuthorPlanAuthorities<Draft>={
     getAuthorGrant:()=>grantEnabled?{ownerId:'author-owner',generation:epoch,authorityEpoch:'author-'+epoch}:undefined,
     canReadAuthor:(principal,scope)=>allowedRead&&principal==='local-reviewer'&&scope==='template51',
@@ -113,6 +148,8 @@ async function fixture() {
     getCaseGrant:()=>grantEnabled?{ownerId:'case-owner',generation:epoch,authorityEpoch:'case-'+epoch}:undefined,
     canUpgradeCase:(principal,scope)=>grantEnabled&&principal==='local-reviewer'&&scope===id,
     publishedPlanSource:issued,
+    removalConsentSource:{getObservedMainHumanConsent:(caseId,requestId)=>
+      caseId===id ? approvals.get(requestId) : undefined},
   }
   const install=()=>installCMainV3AuthorPlanAuthorities(authority)
   const bound=await bindCanonicalPlanV3(id,{
@@ -132,7 +169,7 @@ async function fixture() {
         acknowledgedRemovedIdentities:describeRemovedPlanBindings(old,next)}},
   }
   return {
-    id,old,next,payload,install,authority,
+    id,old,next,payload,install,authority,approveRemoval,
     changeEpoch:()=>{epoch++},
     revokeGrant:()=>{grantEnabled=false},
     revokeRead:()=>{allowedRead=false},
@@ -186,6 +223,7 @@ describe('C-MAIN-WIRE-R01 real registered Electron Main/Preload contract',()=>{
   })
   test('real published source and old/new physical Case bytes produce one durable UpgradePlan Receipt',async()=>{
     const f=await fixture(),dispose=f.install()
+    f.approveRemoval()
     try{
       const good=await invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,f.payload) as {ok:boolean}
       expect(good.ok).toBe(true)
@@ -276,6 +314,7 @@ describe('C-MAIN-WIRE-R02 independently installed candidate read / formal write 
   })
   test('published Plan writer can be installed independently; absent B1 author grant stays denied',async()=>{
     const f=await fixture()
+    f.approveRemoval()
     const dispose=installCMainV3PlanUpgradeAuthorities({
       getCaseGrant:f.authority.getCaseGrant,
       canUpgradeCase:f.authority.canUpgradeCase,
@@ -336,6 +375,68 @@ describe('C-MAIN-WIRE-R02 independently installed candidate read / formal write 
         .toThrow('AUTHOR_READER_ALREADY_INSTALLED')
       expect((await invoke(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,
         {templateId:'template51'}) as {displayOnly:boolean}).displayOnly).toBe(true)
+    }finally{stop()}
+  })
+})
+
+describe('C-MAIN-REMOVAL-R01 physically observed human deletion one-use authority',()=>{
+  test('valid exact renderer ACK with no independently observed human approval cannot mutate Case',async()=>{
+    const f=await fixture(),stop=f.install()
+    try{
+      const denial=await invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,
+        f.payload) as {ok:boolean}
+      expect(denial.ok).toBe(false)
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
+      expect(readAggregate(f.id)?.canonicalPlan?.fingerprint).toBe(f.old.fingerprint)
+    }finally{stop()}
+  })
+  test('old/current Case version, physical principal and frame, or target fingerprint mismatch deny removal',async()=>{
+    for(const bad of [
+      {expectedRevision:2},
+      {principalId:'renderer-forged'},
+      {frameId:'not-physical-frame'},
+      {ownerGeneration:99},
+      {authorityEpoch:'old-window'},
+      {previousFingerprint:'f'.repeat(64)},
+      {nextFingerprint:'f'.repeat(64)},
+      {acknowledgedRemovedIdentities:['forged-removed-check']},
+      {reason:'different reason'},
+      {observedAtMs:Date.now()-6*60*1000},
+      {observedAtMs:Date.now()+60_000},
+    ]){
+      const f=await fixture(),stop=f.install()
+      f.approveRemoval(bad)
+      try{
+        const denied=await invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,
+          f.payload) as {ok:boolean}
+        expect(denied.ok).toBe(false)
+        expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
+      }finally{stop()}
+    }
+  })
+  test('a failed CAS does not make stale unconfirmed permission reusable for a new request',async()=>{
+    const f=await fixture(),stop=f.install()
+    try{
+      f.approveRemoval({requestId:'request-other',approvalId:'same-approval'})
+      const denied=await invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,
+        f.payload) as {ok:boolean}
+      expect(denied.ok).toBe(false)
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
+    }finally{stop()}
+  })
+  test('confirmation cannot survive install/revoke/reinstall even same Main source object',async()=>{
+    const f=await fixture()
+    f.approveRemoval()
+    let stop=installCMainV3PlanUpgradeAuthorities(f.authority)
+    try{
+      stop()
+      stop=installCMainV3PlanUpgradeAuthorities({
+        ...f.authority,removalConsentSource:undefined,
+      })
+      const denied=await invoke(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,
+        f.payload) as {ok:boolean}
+      expect(denied.ok).toBe(false)
+      expect(readAggregate(f.id)?.receiptLog).toHaveLength(1)
     }finally{stop()}
   })
 })
