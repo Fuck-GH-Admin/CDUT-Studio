@@ -160,6 +160,13 @@ export function recordV3TechnicalProposal(
       throw new CommandValidationError('STALE_INPUT', 'Run 准入后发生其他业务变更，技术账不再是当前证据')
     if (journal.terminalStatus)
       throw new CommandValidationError('INVALID_TRANSITION', '技术终态已记录，不接受后续写入')
+    if (event.kind === 'read') {
+      const doc = aggregate.caseV2.documents.find(item =>
+        item.versionId === event.read.source.documentVersionId && item.active !== false)
+      if (!doc || (doc.byteHash && doc.byteHash !== event.read.source.rawSha256))
+        throw new CommandValidationError('STALE_INPUT',
+          '物理 Host 来源 SHA256 与当前 Case 原件字节版本不一致')
+    }
     const proof = verifyHostAtCommit(aggregate, event)
     if (!proof || !proof.grantActive || !proof.permissionGrantId ||
         !proof.receipts || typeof proof.receipts.get !== 'function')
