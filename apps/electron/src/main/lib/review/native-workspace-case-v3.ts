@@ -82,6 +82,13 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
       receipt.type === 'RegisterMaterial' && receipt.summary.includes(doc.versionId))?.at ?? state.createdAt,
   })
   const documents = current.map(asDocument)
+  // Version-pinned selection prevents an old documentId from automatically
+  // selecting its new, as-yet-unreviewed physical bytes.
+  const savedSelection = state.nativeWorkspaceDraft?.subjectDocumentVersionIds
+  const subjectDocumentIds = savedSelection?.flatMap(versionId => {
+    const document = current.find(doc => doc.versionId === versionId && doc.role === 'application')
+    return document ? [document.documentId] : []
+  })
   const rulePacks = current.filter(doc => doc.role === 'rule').map(doc => ({
     id: `native-pack-${doc.versionId}`,
     documentId: doc.documentId,
@@ -103,6 +110,8 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
     })), isDemo: false,
     domainPackId: domainPackId as ReviewCase['domainPackId'],
     ...(hasBoundTemplate ? { reviewTemplate: { templateId: state.templateId, version: state.templateVersion } } : {}),
+    ...(state.nativeWorkspaceDraft?.manualRules ? { manualRules: state.nativeWorkspaceDraft.manualRules.map(rule => ({ ...rule })) } : {}),
+    ...(savedSelection !== undefined ? { subjectDocumentIds } : {}),
     revision: state.revision,
   }
 }
@@ -176,8 +185,37 @@ export async function updateNativeWorkspaceSettingsV3(
     throw new CommandValidationError('NOT_FOUND', '案卷不是原生工作台案卷')
   if (original.canonicalPlan || original.d2RuntimePlan)
     throw new CommandValidationError('INVALID_TRANSITION', '正式 Plan 已绑定；仅允许显式升版与确认')
-  if (input.manualRules !== undefined || input.subjectDocumentIds !== undefined)
-    throw new CommandValidationError('INVALID_TRANSITION', '规则和材料范围必须通过独立原生命令确认')
+  const inputRules = input.manualRules
+  let checkedRules: NonNullable<ReviewCaseV2['nativeWorkspaceDraft']>['manualRules'] | undefined
+  if (inputRules !== undefined) {
+    if (!Array.isArray(inputRules) || inputRules.length > 100)
+      throw new CommandValidationError('VALIDATION_FAILED', '手写规则必须是 100 条以内的列表')
+    const ids = new Set<string>()
+    checkedRules = inputRules.map((rule, index) => {
+      if (!rule || typeof rule !== 'object' || typeof rule.id !== 'string' ||
+          !/^[a-zA-Z0-9_-]{1,100}$/.test(rule.id) || ids.has(rule.id) ||
+          typeof rule.title !== 'string' || !rule.title.trim() || rule.title.length > 160 ||
+          typeof rule.requirement !== 'string' || !rule.requirement.trim() || rule.requirement.length > 8000)
+        throw new CommandValidationError('VALIDATION_FAILED', `第 ${index + 1} 条手写规则无效`)
+      ids.add(rule.id)
+      return { id: rule.id, title: rule.title.trim(), requirement: rule.requirement.trim() }
+    })
+  }
+  let selectedVersions: string[] | undefined
+  if (input.subjectDocumentIds !== undefined) {
+    if (!Array.isArray(input.subjectDocumentIds) ||
+        input.subjectDocumentIds.some(id => typeof id !== 'string' || !id) ||
+        new Set(input.subjectDocumentIds).size !== input.subjectDocumentIds.length)
+      throw new CommandValidationError('VALIDATION_FAILED', '待审主体文档列表无效或重复')
+    // Map the legacy document ID into its current exact physical V2 version.
+    // This is a draft scope, NOT a CanonicalPlan source authorization.
+    selectedVersions = input.subjectDocumentIds.map(documentId => {
+      const document = original.caseV2.documents.find(doc =>
+        doc.documentId === documentId && doc.role === 'application' && doc.active !== false)
+      if (!document) throw new CommandValidationError('STALE_INPUT', '待审主体材料不存在、已换版或角色不合法')
+      return document.versionId
+    })
+  }
   if (input.title !== undefined && (typeof input.title !== 'string' || !input.title.trim()))
     throw new CommandValidationError('VALIDATION_FAILED', '标题不能为空')
   if (input.type !== undefined && !TYPES.has(input.type))
@@ -193,6 +231,7 @@ export async function updateNativeWorkspaceSettingsV3(
     expectedRevision: original.caseV2.revision,
     actor, payload: {
       title: input.title, type: input.type, domainPackId: domain,
+      manualRules: checkedRules ?? null, subjectDocumentVersionIds: selectedVersions ?? null,
       templateChange: input.reviewTemplate !== undefined || input.domainPackId !== undefined,
       templateId: template?.templateId ?? PENDING_TEMPLATE, templateVersion: template?.version ?? 0,
       objectType: template?.objectType ?? 'document',
@@ -202,10 +241,30 @@ export async function updateNativeWorkspaceSettingsV3(
     if (!isNativeWorkspaceCaseV3(snapshot)) throw new CommandValidationError('INVALID_TRANSITION', '案卷权威已改变')
     if (snapshot.canonicalPlan || snapshot.d2RuntimePlan)
       throw new CommandValidationError('INVALID_TRANSITION', '审核计划已冻结')
-    return { summary: '修改原生案卷设置（无 V1 影子写入）', mutate: draft => {
+    if (snapshot.caseV2.stage !== 'draft')
+      throw new CommandValidationError('INVALID_TRANSITION', '只有草稿阶段可修改本地工作台规则及材料范围')
+    if ((checkedRules !== undefined || selectedVersions !== undefined) &&
+        (snapshot.observations.some(item => item.confirmed) ||
+          snapshot.evidenceLinks.some(item => item.status === 'confirmed')))
+      throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '存在已确认事实或证据，请先完成显式撤销与重新审核')
+    if (selectedVersions && selectedVersions.some(versionId =>
+      !snapshot.caseV2.documents.some(doc => doc.versionId === versionId &&
+        doc.role === 'application' && doc.active !== false)))
+      throw new CommandValidationError('STALE_INPUT', '材料在提交前已换版或归档，请重新选择')
+    return { summary: '修改原生案卷草稿设置（不产生校方政策与正式 Plan）', mutate: draft => {
       if (input.title !== undefined) draft.caseV2.title = input.title.trim()
       if (input.type !== undefined) draft.caseV2.caseFields.legacyReviewType = txt(input.type)
       if (input.domainPackId !== undefined) draft.caseV2.caseFields.legacyDomainPackId = txt(domain)
+      if (checkedRules !== undefined || selectedVersions !== undefined) {
+        const old = draft.caseV2.nativeWorkspaceDraft
+        draft.caseV2.nativeWorkspaceDraft = {
+          manualRules: checkedRules ?? old?.manualRules ?? [],
+          ...(selectedVersions !== undefined
+            ? { subjectDocumentVersionIds: [...selectedVersions] }
+            : old?.subjectDocumentVersionIds !== undefined
+              ? { subjectDocumentVersionIds: [...old.subjectDocumentVersionIds] } : {}),
+        }
+      }
       if (input.reviewTemplate !== undefined || input.domainPackId !== undefined) {
         draft.caseV2.templateId = template?.templateId ?? PENDING_TEMPLATE
         draft.caseV2.templateVersion = template?.version ?? 0
