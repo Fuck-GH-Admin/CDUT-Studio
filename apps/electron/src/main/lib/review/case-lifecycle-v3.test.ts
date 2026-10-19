@@ -109,6 +109,11 @@ describe('C1 authoritative reversible Case archive', () => {
     expect(readAggregate(id)?.receiptLog.slice(-3).map(x => x.type)).toEqual([
       'ArchiveReviewCaseV3', 'RestoreReviewCaseV3', 'ArchiveReviewCaseV3',
     ])
+    expect(readAggregate(id)?.caseArchiveHistory).toHaveLength(1)
+    expect(readAggregate(id)?.caseArchiveHistory?.[0]).toMatchObject({
+      previousStage: 'decided', restoredBy: actor.actorId,
+      restoreReason: '用户确认恢复后重新审核',
+    })
   })
 
   test('active queued/running ReviewRun prevents archive until cancellation is durable', async () => {
