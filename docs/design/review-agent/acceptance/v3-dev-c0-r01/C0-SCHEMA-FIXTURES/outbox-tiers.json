@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "review-c0/1",
+  "intentId": "i1",
+  "idempotencyKey": "k1",
+  "at": "2026-10-19T00:00:00Z",
+  "tiers": [
+    "mock-accepted",
+    "provider-accepted",
+    "externally-acknowledged",
+    "unknown"
+  ],
+  "note": "Only external acknowledged with reference counts as school completion; C4 pending"
+}
