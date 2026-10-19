@@ -222,4 +222,29 @@ describe('C2 Main-only technical journal: durable evidence, never a BusinessDeci
     expect(readAggregate(id)?.decisions).toHaveLength(0)
   })
 
+  test('corrupt ledger missing exact CAS receipts is quarantined before any new proposal', async () => {
+    const id = 'c2-ledger-corrupt-5'
+    await seed(id)
+    const run = evidence(id, 1)
+    expect((await admitV3TechnicalRun(id,{
+      requestId:'admit-corrupt-01',expectedRevision:0,actor,payload:run,
+    },()=>{})).ok).toBe(true)
+    const injected = readAggregate(id)!
+    const fake = checkEvent(run, 1)
+    injected.v3TechnicalExecution!.events.push({
+      sequence: 1, eventId: fake.eventId,
+      proposal: fake, committedAt: '2026-10-19T00:00:00Z',
+    })
+    // Simulated inconsistent disk copy: event exists but Receipt missing.
+    writeAggregate(injected)
+    const next = checkEvent(run,2)
+    const denied = await recordV3TechnicalProposal(id,{
+      requestId:next.eventId,expectedRevision:1,actor,payload:next,
+    },()=>host())
+    expect(denied.ok).toBe(false)
+    if (!denied.ok) expect(denied.message).toContain('缺少对应 CAS 回执')
+    expect(readAggregate(id)?.v3TechnicalExecution?.events).toHaveLength(1)
+    expect(readAggregate(id)?.caseV2.revision).toBe(1)
+  })
+
 })
