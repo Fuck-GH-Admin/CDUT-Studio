@@ -1005,3 +1005,37 @@ describe('C1-R09 switch-race safety for visible manual Subject dialog', () => {
     expect(store.get(selectedCaseIdAtom)).toBe('native-human-B')
   })
 })
+
+
+describe('C1-R09 same-intent retry identity survives a lost response', () => {
+  test('controller forwards an unchanged supplied idempotency ID across a transient IPC error', async () => {
+    const { api } = makeApi()
+    const id = 'manual-reply-loss-case'
+    const seen: string[] = []
+    api.getAggregateV2 = async caseId => ({
+      caseV2: { id: caseId, revision: seen.length ? 4 : 3, stage: 'draft' },
+      receiptLog: [{ type: 'CreateNativeWorkspaceCaseV3' }],
+    } as CaseAggregateV2)
+    api.createNativeReviewItemV3 = async input => {
+      seen.push(input.requestId)
+      if (seen.length === 1) throw new Error('IPC reply was lost after persistence')
+      return makeCase(id, { items: [{
+        id: 'manual-replayed', title: input.title, category: input.category,
+        declaredScore: input.declaredScore,
+        anchor: { documentId: 'file', precision: 'document' },
+        evidenceDocumentIds: [], identifiedBy: 'manual', status: 'identified',
+      }] as ReviewItem[] })
+    }
+    const store = createStore()
+    const actions = createReviewActionsController(store, api)
+    await actions.selectCase(id)
+    const intent = {
+      title: 'Human declared source', category: '智育', declaredScore: 3,
+      documentVersionId: 'native-source-v1',
+    }
+    expect(await actions.createNativeReviewItem(intent, id, 'ui-native-item-same-request')).toBe(false)
+    expect(await actions.createNativeReviewItem(intent, id, 'ui-native-item-same-request')).toBe(true)
+    expect(seen).toEqual(['ui-native-item-same-request', 'ui-native-item-same-request'])
+    expect(store.get(reviewCasesByIdAtom)[id]?.items).toHaveLength(1)
+  })
+})
