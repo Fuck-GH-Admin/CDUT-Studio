@@ -887,7 +887,7 @@ describe('C1 native archive discovery and explicit workbench restore', () => {
       { caseId: 'migrated', title: 'Migrated original', stage: 'archived', revision: 4 },
       { caseId: 'active', title: 'Still active', stage: 'draft', revision: 2 },
     ]
-    api.getCase = async id => id === 'migrated' ? makeCase('migrated') : undefined
+    api.getCase = async id => id === 'migrated' || id === 'native-only' ? makeCase(id) : undefined
     api.restoreCaseV3 = async input => { received = input; return { ok: true } }
     const store = createStore()
     const actions = createReviewActionsController(store, api)
@@ -900,9 +900,9 @@ describe('C1 native archive discovery and explicit workbench restore', () => {
       caseId: 'native-only', expectedRevision: 7,
       reason: '用户在工作台明确确认恢复案卷并重新审核',
     })
-    // Native-only cases need a native V2 -> three-column read projection.
-    // Restoring must not fabricate a legacy case.json or select a V1 ghost.
-    expect(store.get(selectedCaseIdAtom)).toBeNull()
+    // Main GET_CASE now derives a read-only V2 projection. No shadow file
+    // is created, and restore can safely reselect the same native authority.
+    expect(store.get(selectedCaseIdAtom)).toBe('native-only')
     expect(await actions.restoreArchivedCase('migrated', 4)).toBe(true)
     expect(store.get(selectedCaseIdAtom)).toBe('migrated')
   })
