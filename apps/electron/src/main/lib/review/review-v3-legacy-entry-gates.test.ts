@@ -401,4 +401,59 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(viaMain.some(c => c.caseId === badId || c.caseId === crossedId)).toBe(false)
   })
 
+
+  test('native-first legacy workbench material flow commits only V2 receipts; spoofed Main cannot register', async () => {
+    const sourceA = join(root, 'native-material-a.txt')
+    const sourceB = join(root, 'native-material-b.txt')
+    writeFileSync(sourceA, 'Evidence A physical text source', 'utf8')
+    writeFileSync(sourceB, 'Evidence B physical text source', 'utf8')
+    const created = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_CASE, {
+      title: 'Native material workspace', type: '综合测评', applicant: 'Applicant', academicYear: '2026',
+    })) as { id: string }
+    const starting = readAggregate(created.id)!
+    const inputA = { caseId: created.id, sourcePath: sourceA, role: 'evidence' }
+    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT_FROM_PATH, inputA,
+      { sender, senderFrame: { id: 999 } }))).rejects.toThrow('SENDER_UNTRUSTED')
+    expect(JSON.stringify(readAggregate(created.id))).toBe(JSON.stringify(starting))
+
+    const a = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT_FROM_PATH, inputA)) as {
+      id: string; fileName: string; parseStatus: string
+    }
+    const b = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT_FROM_PATH, {
+      caseId: created.id, sourcePath: sourceB, role: 'evidence',
+    })) as { id: string; fileName: string }
+    expect(a.fileName).toBe('native-material-a.txt')
+    expect(b.fileName).toBe('native-material-b.txt')
+    const state = readAggregate(created.id)!
+    expect(state.caseV2.documents.filter(doc => doc.active !== false)).toHaveLength(2)
+    expect(state.receiptLog.map(receipt => receipt.type)).toEqual([
+      'CreateNativeWorkspaceCaseV3', 'RegisterMaterial', 'RegisterMaterial',
+    ])
+    expect(getCase(created.id)?.documents.map(doc => doc.id)).toEqual([a.id, b.id])
+    const { existsSync, readFileSync } = await import('node:fs')
+    const first = state.caseV2.documents.find(doc => doc.documentId === a.id)!
+    expect(readFileSync(join(getReviewCasesDir(), created.id, first.assetPath), 'utf8'))
+      .toBe('Evidence A physical text source')
+    expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
+
+    const ordered = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REORDER_DOCUMENTS, {
+      caseId: created.id, role: 'evidence', documentIds: [b.id, a.id],
+    })) as { documents: Array<{ id: string }> }
+    expect(ordered.documents.map(doc => doc.id)).toEqual([b.id, a.id])
+    const retired = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REMOVE_DOCUMENTS, {
+      caseId: created.id, role: 'evidence', documentIds: [b.id],
+    })) as { documents: Array<{ id: string }>; archivedDocuments?: Array<{ id: string }> }
+    expect(retired.documents.map(doc => doc.id)).toEqual([a.id])
+    expect(retired.archivedDocuments?.map(doc => doc.id)).toContain(b.id)
+    const after = readAggregate(created.id)!
+    expect(after.caseV2.revision).toBe(4)
+    expect(after.receiptLog.slice(-2).map(x => x.type)).toEqual([
+      'ReorderNativeWorkspaceDocumentsV3', 'ArchiveNativeWorkspaceDocumentsV3',
+    ])
+    expect(after.caseV2.documents.find(doc => doc.documentId === b.id)?.active).toBe(false)
+    expect(after.sourceValidityRevocations?.some(x => x.documentVersionId ===
+      after.caseV2.documents.find(doc => doc.documentId === b.id)?.versionId)).toBe(true)
+    expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
+  })
+
 })
