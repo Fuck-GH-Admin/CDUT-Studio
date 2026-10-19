@@ -16,6 +16,7 @@ import type { ReviewCase, ReviewCaseSummary, ReviewRun } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
 import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
 import { readAggregate } from './case-store-v2'
+import { nativeWorkspaceProjectionV3 } from './native-workspace-case-v3'
 
 /** 演示案卷固定 ID（载入/重审/报告锚定同一个 ID） */
 export const DEMO_CASE_ID = 'demo-zhangsan-2026'
@@ -135,16 +136,19 @@ export function listCases(): ReviewCaseSummary[] {
   for (const name of entries) {
     // 跳过非目录与临时文件
     if (name.endsWith('.tmp')) continue
-    // Native-only Cases belong to LIST_CASES_V2, not to an obsolete V1 shadow.
-    try { if (!isLegacyProjectionAllowed(name)) continue } catch { continue }
-    const caseFile = join(root, name, 'case.json')
-    if (!existsSync(caseFile)) continue
-
-    const reviewCase = readJsonFile<ReviewCase>(caseFile)
-    if (!reviewCase || typeof reviewCase.id !== 'string') {
-      console.warn(`[审核专区] 案卷不可读，已跳过: ${caseFile}`)
-      continue
-    }
+    // Old three-column selector remains a READ-ONLY projection for genuine
+    // native-first Cases, never a stale V1 shadow nor a second business writer.
+    let reviewCase: ReviewCase | undefined
+    try {
+      if (isLegacyProjectionAllowed(name)) {
+        const caseFile = join(root, name, 'case.json')
+        if (!existsSync(caseFile)) continue
+        reviewCase = readJsonFile<ReviewCase>(caseFile)
+      } else {
+        reviewCase = nativeWorkspaceProjectionV3(readAggregate(name))
+      }
+    } catch { continue }
+    if (!reviewCase || reviewCase.id !== name) continue
 
     summaries.push({
       id: reviewCase.id,
@@ -169,9 +173,9 @@ export function listCases(): ReviewCaseSummary[] {
 /** 读取单个案卷；不存在或不可读返回 undefined */
 export function getCase(caseId: string): ReviewCase | undefined {
   assertSafeId(caseId)
-  // Never return stale V1 data as the view of a native-only V2 Case.
-  // The native UI uses GET_AGGREGATE_V2 instead.
-  if (!isLegacyProjectionAllowed(caseId)) return undefined
+  // No legacy shadow is ever returned for native-first Case; the returned
+  // object is a read-only in-memory compatibility shape from state.v2.json.
+  if (!isLegacyProjectionAllowed(caseId)) return nativeWorkspaceProjectionV3(readAggregate(caseId))
   const filePath = getCaseFilePath(caseId)
   if (!existsSync(filePath)) return undefined
 
