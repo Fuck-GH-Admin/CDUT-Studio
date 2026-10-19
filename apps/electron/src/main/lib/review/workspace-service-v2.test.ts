@@ -6,7 +6,7 @@ import { buildDemoCase } from './demo-fixtures/demo-case-fixture'
 import { getCase, saveCase } from './case-store'
 import { ensureBuiltinTemplateDrafts } from './builtin-templates'
 import { getTemplate as getTemplateStored, publishTemplate, saveDraft as saveDraftStored } from './template-store'
-import { readAggregate } from './case-store-v2'
+import { createAggregate, readAggregate } from './case-store-v2'
 import { ensureWorkspaceAggregateV2, syncWorkspaceProjectionV2 } from './workspace-service-v2'
 import { correctObservation, setEvidenceLink } from './application-service'
 import { acknowledgeWorkspaceMaterialV2 } from './workspace-business-service-v2'
@@ -217,5 +217,63 @@ describe('单一工作台案卷映射到 V2 聚合', () => {
     expect(confirmed.caseV2.reviewRules?.some((rule) => rule.execution === 'deterministic')).toBeTrue()
     expect(confirmed.caseV2.reviewRules?.some((rule) => rule.execution === 'manual')).toBeTrue()
     expect(confirmed.caseV2.reviewRules?.[0]?.sourceRefIds[0]).toEndWith('-v1')
+  })
+
+  test('C1 native CurrentCase ignores stale V1 projection even on colliding caseId', async () => {
+    const legacy = { ...buildDemoCase(), id: 'native-v2-no-legacy-writer' }
+    saveCase(legacy)
+    const seed = await ensureWorkspaceAggregateV2(legacy.id)
+    const nativeId = 'native-v2-authority-collision'
+    const native = {
+      ...seed.caseV2, id: nativeId, title: 'Native authoritative title',
+      subjects: [], documents: [], reviewRules: [], stage: 'draft' as const, revision: 0,
+    }
+    await createAggregate(nativeId, native, {
+      requestId: `create-${nativeId}`, type: 'CreateCaseFromTemplate', payloadHash: 'native-hash',
+      revision: 0, at: new Date().toISOString(), summary: 'native', actor: reviewer,
+    })
+    saveCase({ ...legacy, id: nativeId, title: 'Stale V1 title' })
+    const first = await ensureWorkspaceAggregateV2(nativeId)
+    const second = await syncWorkspaceProjectionV2(nativeId)
+    expect(first.caseV2.title).toBe('Native authoritative title')
+    expect(second.caseV2.title).toBe('Native authoritative title')
+    expect(second.caseV2.subjects).toEqual([])
+    expect(second.receiptLog).toHaveLength(1)
+  })
+
+  test('C1 archive cascades to confirmed Observation and prevents reconfirmation on retired source', async () => {
+    const legacy = { ...buildDemoCase(), id: 'archived-source-current-validity-c1' }
+    saveCase(legacy)
+    let aggregate = await ensureWorkspaceAggregateV2(legacy.id)
+    const subjectId = aggregate.caseV2.subjects[0]!.id
+    const version = aggregate.caseV2.documents.find((doc) => doc.role === 'evidence')!
+    const manual = await correctObservation(legacy.id, {
+      requestId: 'c1-correct-old-source', actor: reviewer, expectedRevision: aggregate.caseV2.revision,
+      payload: {
+        subjectId, fieldKey: 'declaredScore', value: { kind: 'number', value: 4 },
+        sourceRefs: [{ caseId: legacy.id, documentVersionId: version.versionId,
+          parseRevision: version.parseRevision, location: { kind: 'file' } }],
+        reason: '曾核对原件',
+      },
+    })
+    expect(manual.ok).toBeTrue()
+    const oldId = manual.ok ? manual.entity!.id : ''
+    const originalDoc = legacy.documents.find((doc) => `${doc.id}-v1` === version.versionId)!
+    await removeDocumentsFromCase({ caseId: legacy.id, role: 'evidence', documentIds: [originalDoc.id] })
+    aggregate = readAggregate(legacy.id)!
+    const oldFact = aggregate.observations.find((obs) => obs.id === oldId)!
+    expect(oldFact.value).toEqual({ kind: 'number', value: 4 })
+    expect(oldFact.sourceRefs[0]?.documentVersionId).toBe(version.versionId)
+    expect(oldFact.confirmed).toBe(false)
+    expect(aggregate.sourceValidityRevocations?.find((item) => item.documentVersionId === version.versionId)
+      ?.previouslyConfirmedObservationIds).toContain(oldId)
+    expect(aggregate.receiptLog.some((r) => r.requestId === 'c1-correct-old-source')).toBeTrue()
+    const rejected = await setEvidenceLink(legacy.id, {
+      requestId: 'c1-reconfirm-old', actor: reviewer, expectedRevision: aggregate.caseV2.revision,
+      payload: { documentVersionId: version.versionId, subjectIds: [subjectId],
+        supportsFact: 'old score', linkedBy: 'user' },
+    })
+    expect(rejected.ok).toBeFalse()
+    if (!rejected.ok) expect(rejected.code).toBe('STALE_INPUT')
   })
 })
