@@ -6,7 +6,7 @@ import {
   type CMainB1CandidateDocument,
 } from './review-v3-main-author-revision-read'
 
-type Draft=CMainB1CandidateDocument & { fields:string[]; sources:unknown[] }
+interface Draft extends CMainB1CandidateDocument { fields:string[]; sources:unknown[] }
 const digest=(x:unknown)=>createHash('sha256').update(JSON.stringify(x),'utf8').digest('hex')
 const document=(field='f1'):Draft=>({
   schemaVersion:'review-b1/1',templateId:'author-template-51',
