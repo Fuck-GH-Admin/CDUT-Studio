@@ -11,6 +11,7 @@ import { getTemplate, saveDraft } from './template-store'
 import { ensureBuiltinTemplateDrafts } from './builtin-templates'
 import { buildEvidenceLinks } from './evidence-service'
 import { compileWorkspaceRule } from './workspace-rule-compiler'
+import { revokeCurrentSourceValidity } from './source-current-validity-v3'
 
 const SYSTEM_ACTOR = { actorId: 'review-workspace-sync', actorSource: 'system', role: 'system' } as const
 const ensureFlights = new Map<string, Promise<CaseAggregateV2>>()
@@ -123,10 +124,11 @@ function projectionFingerprint(caseV2: ReviewCaseV2): string {
 async function initializeAggregate(caseId: string): Promise<CaseAggregateV2> {
   // First-use path must work even if the separate V2 setup panel has never been opened.
   ensureBuiltinTemplateDrafts({ getTemplate, saveDraft })
+  const existing = readAggregate(caseId)
+  // Native V2 cases are authoritative even when no V1 case.json exists.
+  if (existing) return existing
   const legacy = getCase(caseId)
   if (!legacy) throw new Error(`辅助审核案卷不存在: ${caseId}`)
-  const existing = readAggregate(caseId)
-  if (existing) return existing
 
   const migration = migrateCaseToV2(legacy)
   if (!migration.caseV2) throw new Error(migration.note || `案卷无法映射到 V2: ${caseId}`)
@@ -162,14 +164,26 @@ export async function ensureWorkspaceAggregateV2(caseId: string): Promise<CaseAg
 /** 将工作台已有的申报字段、事项和文件版本投影到同 ID 的 V2 聚合，不触碰人工业务记录。 */
 export async function syncWorkspaceProjectionV2(caseId: string): Promise<CaseAggregateV2> {
   ensureBuiltinTemplateDrafts({ getTemplate, saveDraft })
-  await upgradeLegacyComprehensiveTemplateAssignment(caseId)
   let current = readAggregate(caseId) ?? await initializeAggregate(caseId)
+  // A native aggregate never takes incoming V1 projections, even if a stale
+  // legacy case.json happens to share its ID. Only legacy-migrated cases sync.
+  if (!current.receiptLog.some((receipt) => receipt.type === 'EnsureReviewWorkspaceAggregate')) return current
+  if (!current.d2RuntimePlan && !current.canonicalPlan) {
+    await upgradeLegacyComprehensiveTemplateAssignment(caseId)
+  }
 
   // 乐观并发冲突时重新读取并重试；不会用旧快照覆盖另一条人工操作。
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const legacy = getCase(caseId)
     if (!legacy) throw new Error(`辅助审核案卷不存在: ${caseId}`)
-    const projection = projectedCase(legacy, current.caseV2)
+    const legacyProjection = projectedCase(legacy, current.caseV2)
+    // A bound Plan owns the Subject×Rule identity. V1 input editing cannot
+    // silently replace its frozen template, target map or rule inventory.
+    const projection: ReviewCaseV2 = current.d2RuntimePlan || current.canonicalPlan
+      ? { ...legacyProjection,
+          templateId: current.caseV2.templateId, templateVersion: current.caseV2.templateVersion,
+          subjects: current.caseV2.subjects, reviewRules: current.caseV2.reviewRules }
+      : legacyProjection
     const archivedVersionIds = new Set((legacy.archivedDocuments ?? []).map((document) => `${document.id}-v1`))
     if (projectionFingerprint(projection) === projectionFingerprint(current.caseV2)) return current
     const digest = createHash('sha256').update(projectionFingerprint(projection)).digest('hex')
@@ -183,16 +197,14 @@ export async function syncWorkspaceProjectionV2(caseId: string): Promise<CaseAgg
       summary: `同步申报输入与材料（${projection.subjects.length} 项 / ${projection.documents.length} 份）`,
       mutate: (draft) => {
         draft.caseV2 = { ...projection, revision: draft.caseV2.revision, updatedAt: draft.caseV2.updatedAt }
-        if (archivedVersionIds.size > 0) {
-          draft.evidenceLinks = draft.evidenceLinks.map((link) => archivedVersionIds.has(link.documentVersionId)
-            ? { ...link, status: 'rejected' }
-            : link)
-        }
+        // Archive revocation belongs to the SAME CAS+Receipt as V1 projection.
+        // Keep historical values, link identities, source refs and receipts.
+        revokeCurrentSourceValidity(draft, archivedVersionIds, 'archive')
         // 来自 V1 识别的关联先作为 AI 候选；审核员可在工作台确认、拒绝或改绑。
         for (const item of legacy.items) {
           const versionIds = item.evidenceDocumentIds.map((documentId) => `${documentId}-v1`)
           for (const documentVersionId of versionIds) {
-            if (!draft.caseV2.documents.some((document) => document.versionId === documentVersionId)) continue
+            if (!draft.caseV2.documents.some((document) => document.versionId === documentVersionId && document.active !== false)) continue
             draft.evidenceLinks = buildEvidenceLinks(draft.evidenceLinks, {
               documentVersionId,
               subjectIds: [item.id],
