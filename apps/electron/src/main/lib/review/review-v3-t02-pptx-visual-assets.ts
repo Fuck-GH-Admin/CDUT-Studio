@@ -97,11 +97,16 @@ export async function extractT02PptxImages(
 
     for (const [imageIndex, relId] of imageReferences.entries()) {
       const ref = rels.get(relId)
-      if (!ref || !/\/image$/.test(ref.type) || /^[a-z]+:/i.test(ref.target) || ref.target.startsWith('/')) {
+      if (!ref || !/\/image$/.test(ref.type) || /^[a-z]+:/i.test(ref.target)) {
         warnings.push('第 ' + (pageIndex + 1) + ' 页图片 ' + (imageIndex + 1) + ' 无本地媒体关系')
         continue
       }
-      const target = posix.normalize(posix.join(posix.dirname(slidePart), ref.target.replace(/\\/g, '/')))
+      // OPC package relationships may address an image as either
+      // ../media/pic.png or /ppt/media/pic.png. Both are local package parts.
+      const rawTarget = ref.target.replace(/\\/g, '/')
+      const target = posix.normalize(rawTarget.startsWith('/')
+        ? rawTarget.slice(1)
+        : posix.join(posix.dirname(slidePart), rawTarget))
       // Do not read arbitrary relationships, external URLs, charts, or OLE objects.
       if (!target.startsWith('ppt/media/') || !zip.file(target)) {
         warnings.push('第 ' + (pageIndex + 1) + ' 页图片 ' + (imageIndex + 1) + ' 缺少 PPTX 媒体字节')

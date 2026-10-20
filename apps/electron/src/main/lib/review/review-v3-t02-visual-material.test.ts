@@ -57,6 +57,22 @@ describe('T02 physically grounded PPTX image coverage', () => {
     }
   })
 
+  test('accepts package-absolute PPTX media relationship without mistaking it for an external image', async () => {
+    const zip = await JSZip.loadAsync(await examplePptx())
+    zip.file('ppt/slides/_rels/slide2.xml.rels',
+      '<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" ' +
+      'Target="/ppt/media/pic2.png"/></Relationships>')
+    const original = join(root, '绝对媒体关系.pptx')
+    writeFileSync(original, await zip.generateAsync({ type: 'nodebuffer' }))
+    const result = await extractT02PptxImages(original, {
+      directory: root, relativeOriginalPath: 'source-docs/绝对媒体关系.pptx',
+    })
+    expect(result.warnings).toEqual([])
+    expect(result.slideCount).toBe(2)
+    expect(result.images.map(image => image.page)).toEqual([1, 2])
+    expect(result.images[0]?.imageAssetPath).toContain('t02-ppt-slide-1')
+  })
+
   test('real image-only deck exposes image source blocks rather than falsely claiming parsed text', async () => {
     const original = join(root, '图像简报.pptx')
     writeFileSync(original, await examplePptx())
@@ -95,9 +111,40 @@ describe('T02 actual OCR port reuse, never fabricated verdicts', () => {
     const hypothesis = result.source.blocks.find(b => b.text === '实验室使用许可')
     expect(hypothesis?.page).toBe(1)
     expect(hypothesis?.confidence).toBeCloseTo(0.91)
+    expect(hypothesis?.bbox).toEqual([0.1, 0.125, 0.6, 0.375])
+    expect(hypothesis?.imageAssetPath).toBe('source-docs/证明.png')
     expect(hypothesis?.id).toContain('-ocr-001')
     expect(result.source.parseError).toContain('待人工确认')
   })
+  test('PPTX OCR points back to its real media but does not invent slide geometry', async () => {
+    const original = join(root, '图片页来源.pptx')
+    writeFileSync(original, await examplePptx())
+    const ocr: OcrPort = {
+      available: true,
+      async recognize() {
+        return {
+          engine: 'test-ocr-port', engineVersion: 'test',
+          imageWidth: 100, imageHeight: 80,
+          blocks: [{ text: '来自幻灯片媒体', confidence: 0.9,
+            rect: { x: 10, y: 10, w: 50, h: 20 } }],
+        }
+      },
+    }
+    const outcome = await parseT02VisualMaterialWithOcr({
+      filePath: original, fileName: '图片页来源.pptx', role: 'evidence',
+      assetRelativePath: 'source-docs/图片页来源.pptx', assetDirectory: root, ocr,
+    })
+    const hypotheses = outcome.source.blocks.filter(b => b.text === '来自幻灯片媒体')
+    expect(hypotheses).toHaveLength(2)
+    expect(hypotheses.map(b => b.page)).toEqual([1, 2])
+    for (const hypothesis of hypotheses) {
+      expect(hypothesis.imageAssetPath).toContain('t02-ppt-slide-')
+      expect(hypothesis.bbox).toBeUndefined()
+      expect(hypothesis.confidence).toBe(0.9)
+    }
+    expect(outcome.source.parseStatus).toBe('partial')
+  })
+
   test('unavailable OCR leaves the original readable only as an image, not as text', async () => {
     const original = join(root, '未识别.png')
     writeFileSync(original, PNG)
@@ -144,6 +191,7 @@ describe('T02 trusted B2 image OCR preview', () => {
     })
     expect(result.ocrText[0]).toMatchObject({
       text: '原件申请者 A', page: 1, confidence: 0.88,
+      bbox: [0.01, 0.01, 0.13, 0.09],
     })
     expect(result.ocrText[0]?.sourceBlockKey).toContain(image.documentVersionId)
     staging.revoke(ctx)
