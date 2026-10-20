@@ -22,7 +22,7 @@ export interface D4ClientSelection {
   useControlledStudentFixture?: boolean
 }
 
-export type D2TargetKind = 'campus-card' | 'archive-item' | 'archive-operation' | 'student-field' | 'generic-object'
+export type D2TargetKind = 'campus-card' | 'archive-item' | 'archive-operation' | 'student-field' | 'generic-object' | 'custom-object'
 
 /** Explicit case-side condition selection; NOT a trusted school record or policy authorization. */
 export interface D2ObjectConditionV1 {
