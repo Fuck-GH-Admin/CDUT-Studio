@@ -33,6 +33,8 @@ export interface T03SplitPart {
   fieldKeys: string[]
   /** Explicit old link IDs: no guessing from a shared certificate or matching names. */
   evidenceLinkIds: string[]
+  /** Optional explicit original anchors for this new subject (not all old anchors). */
+  sourceRefs?: SourceRef[]
 }
 
 function activeRef(ref: SourceRef, aggregate: CaseAggregateV2): boolean {
@@ -141,11 +143,28 @@ export function proposeT03SubjectSplit(
   for (const part of input.parts) {
     const valueFields: Record<string, FieldValue> = {}
     for (const key of part.fieldKeys) if (origin.fields[key]) valueFields[key] = origin.fields[key]!
+    // Only evidence explicitly assigned to this part can become its source.
+    // Copying all original subject refs into every split part would fabricate ownership.
+    const assignedLinks = oldLinks.filter(link => part.evidenceLinkIds.includes(link.id))
+    const linkRefs: SourceRef[] = assignedLinks.flatMap(link => {
+      const doc = aggregate.caseV2.documents.find(item =>
+        item.versionId === link.documentVersionId && item.active !== false)
+      if (!doc) return []
+      const ref: SourceRef = link.blockRef && activeRef(link.blockRef, aggregate)
+        ? link.blockRef
+        : { caseId: aggregate.caseV2.id, documentVersionId: doc.versionId,
+            parseRevision: doc.parseRevision, location: { kind: 'file' } }
+      return [ref]
+    })
     const sources = uniqueRefs([
-      ...origin.sourceRefs.filter(ref => activeRef(ref, aggregate)),
+      ...(part.sourceRefs ?? []).filter(ref => activeRef(ref, aggregate)),
       ...latest.filter(ob => part.fieldKeys.includes(ob.fieldKey)).flatMap(ob => ob.sourceRefs)
         .filter(ref => activeRef(ref, aggregate)),
+      ...linkRefs,
     ])
+    if (!sources.length) blockedReasons.push('新事项缺少可核验来源：' + part.id)
+    if ((part.sourceRefs ?? []).some(ref => !activeRef(ref, aggregate)))
+      blockedReasons.push('新事项包含失效来源：' + part.id)
     proposedSubjects.push({
       id: part.id, title: part.title, type: origin.type, sectionId: origin.sectionId,
       fields: valueFields, sourceRefs: sources, correction: 'user-confirmed', status: 'identified',
@@ -207,10 +226,15 @@ export function proposeT03SubjectMerge(
   const now = input.now ?? new Date().toISOString()
   const proposedObservations = latest.map((ob, i) =>
     freshObservation(ob, input.newSubjectId, input.operationId, i, now))
-  const proposedEvidenceLinks = oldLinks.filter(link =>
-    aggregate.caseV2.documents.some(doc =>
-      doc.versionId === link.documentVersionId && doc.active !== false))
-    .map((link, i) => freshLink(link, input.newSubjectId, input.operationId, i))
+  const distinctLinks = new Map<string, EvidenceLink>()
+  for (const link of oldLinks) {
+    if (!aggregate.caseV2.documents.some(doc =>
+      doc.versionId === link.documentVersionId && doc.active !== false)) continue
+    const signature = JSON.stringify([link.documentVersionId, link.supportsFact, link.blockRef ?? null])
+    if (!distinctLinks.has(signature)) distinctLinks.set(signature, link)
+  }
+  const proposedEvidenceLinks = [...distinctLinks.values()].map((link, i) =>
+    freshLink(link, input.newSubjectId, input.operationId, i))
   if (new Set(originals.map(subject => subject.sectionId)).size > 1)
     blockedReasons.push('跨分项事项不能直接合并')
   const proposedSubjects: ReviewSubject[] = [{
