@@ -7,6 +7,7 @@ import { useSetAtom } from 'jotai'
 import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { reviewV2AggregateAtom } from './V2CasePanel'
 import { ReviewV3LocalManualItem } from './ReviewV3LocalManualItem'
+import { ReviewV3LocalPiControls } from './ReviewV3LocalPiControls'
 import { ReviewV3CandidateIntakeSurface } from '../review-v3-dev-b/ReviewV3CandidateIntakeSurface'
 import type { C11MainLocalProductRead } from '../../../main/lib/review/review-v3-main-local-product-intake'
 import { ReviewV3AuthorWizard, emptyB1AuthorDocument } from '../review-v3-dev-b/ReviewV3AuthorWizard'
@@ -224,6 +225,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       />}
     </div>}
     <ReviewV3LocalManualItem key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
+    <ReviewV3LocalPiControls key={localCaseId} caseId={localCaseId} />
     <ReviewV3AuthorWizard key={key} initialDraft={loaded?.document??emptyB1AuthorDocument()}
       initialRevision={loaded?.revision??0}
       onSaveDraft={(document,expectedRevision)=>
