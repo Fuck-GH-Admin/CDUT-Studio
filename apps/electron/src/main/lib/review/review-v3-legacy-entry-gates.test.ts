@@ -30,6 +30,74 @@ const invoke = (channel: string, input: unknown, ev: unknown = event): unknown =
 const legacy = (id: string) => ({ ...buildDemoCase(), id, title: 'Legacy original' })
 afterAll(() => { setMainWindow(null); rmSync(root, { recursive: true, force: true }) })
 
+/**
+ * 现造一份最小但合法的多页 PDF（无第三方依赖）。
+ *
+ * 用途：验证「真实 PDF 材料」能经原生材料服务登记、解析出逐页文本层并读回原件字节，
+ * 而不是只测 .txt。文本用 Helvetica 单字体，pdfjs 与 @profer/core 均能解析。
+ */
+function buildMinimalPdf(pageTexts: string[]): Uint8Array {
+  const objects: string[] = []
+  const pageObjNumbers = pageTexts.map((_, index) => 3 + index * 2)
+  const fontObjNumber = 3 + pageTexts.length * 2
+  objects[1] = '<< /Type /Catalog /Pages 2 0 R >>'
+  objects[2] = `<< /Type /Pages /Kids [${pageObjNumbers.map((n) => `${n} 0 R`).join(' ')}] /Count ${pageTexts.length} >>`
+  for (const [index, pageNumber] of pageObjNumbers.entries()) {
+    const contentNumber = pageNumber + 1
+    const stream = `BT /F1 14 Tf 60 760 Td (${pageTexts[index]!.replace(/[()\\]/g, '')}) Tj ET`
+    objects[pageNumber] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] `
+      + `/Resources << /Font << /F1 ${fontObjNumber} 0 R >> >> /Contents ${contentNumber} 0 R >>`
+    objects[contentNumber] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
+  }
+  objects[fontObjNumber] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+
+  let out = '%PDF-1.4\n'
+  const offsets: number[] = []
+  for (let number = 1; number < objects.length; number++) {
+    offsets[number] = out.length
+    out += `${number} 0 obj\n${objects[number]}\nendobj\n`
+  }
+  const xrefStart = out.length
+  out += `xref\n0 ${objects.length}\n0000000000 65535 f \n`
+  for (let number = 1; number < objects.length; number++) out += `${String(offsets[number]).padStart(10, '0')} 00000 n \n`
+  out += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`
+  return new TextEncoder().encode(out)
+}
+
+/** 现造一份最小但合法的 DOCX（OOXML zip）：标题 + 段落 + 表格，供 mammoth 结构解析。 */
+async function buildReviewDocx(): Promise<Buffer> {
+  const { default: JSZip } = await import('jszip')
+  const zip = new JSZip()
+  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    + '<Default Extension="xml" ContentType="application/xml"/>'
+    + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+    + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+    + '</Types>')
+  zip.folder('_rels')!.file('.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+    + '</Relationships>')
+  // 定义 Heading1 样式：否则 mammoth 会告警"样式被引用但未定义"，材料只能记为 partial。
+  zip.folder('word')!.file('styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    + '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style>'
+    + '</w:styles>')
+  zip.folder('word')!.folder('_rels')!.file('document.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+    + '</Relationships>')
+  zip.folder('word')!.file('document.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+    + '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Eligibility requirements</w:t></w:r></w:p>'
+    + '<w:p><w:r><w:t>Applicant must submit the certificate before the deadline.</w:t></w:r></w:p>'
+    + '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Applicant</w:t></w:r></w:p></w:tc>'
+    + '<w:tc><w:p><w:r><w:t>Deadline</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+    + '</w:body></w:document>')
+  return zip.generateAsync({ type: 'nodebuffer' })
+}
+
 describe('C1 legacy Main command isolation and compatibility', () => {
   test('legacy CREATE_CASE rejects forged window and subframe without V1/V2 write', async () => {
     handlers.clear()
@@ -424,18 +492,28 @@ describe('C1 legacy Main command isolation and compatibility', () => {
       { sender, senderFrame: { id: 999 } }))).rejects.toThrow('SENDER_UNTRUSTED')
     expect(JSON.stringify(readAggregate(created.id))).toBe(JSON.stringify(starting))
 
-    // V2 legacy drag-drop path strings are not OS-minted physical capability.
-    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
+    // 拖拽/路径导入现在由主进程原生材料服务承载（REGISTER_MATERIAL_PATH_V2 → isNativeWorkspaceCaseV3
+    // → registerNativeWorkspaceMaterialV3 → registerMaterial），受信 Main 传来的纯路径字符串会被真实
+    // 登记成 V2 RegisterMaterial 回执。旧断言要求 SOURCE_CAPABILITY_REQUIRED，那是该通道尚未接入
+    // 原生材料服务时的行为，已过期；这里改为断言新的真实行为。
+    const aId = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
       caseId: created.id, sourcePath: sourceA, role: 'evidence',
-    }))).rejects.toThrow('SOURCE_CAPABILITY_REQUIRED')
+    })) as string
+    expect(typeof aId).toBe('string')
+    const afterPathRegister = readAggregate(created.id)!
+    const registeredA = afterPathRegister.caseV2.documents.find(doc => doc.documentId === aId)
+    expect(registeredA).toMatchObject({ fileName: 'native-material-a.txt', role: 'evidence', active: true })
+    expect(afterPathRegister.receiptLog.at(-1)).toMatchObject({ type: 'RegisterMaterial' })
+
+    // 伪造 sender/frame 仍被拒绝，且不产生新的材料或回执（安全边界不因新路径放宽）。
+    const beforeForged = JSON.stringify(readAggregate(created.id))
     await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
       caseId: created.id, sourcePath: sourceA, role: 'evidence',
     }, { sender, senderFrame: { id: 55 } }))).rejects.toThrow('SENDER_UNTRUSTED')
-    expect(JSON.stringify(readAggregate(created.id))).toBe(JSON.stringify(starting))
+    expect(JSON.stringify(readAggregate(created.id))).toBe(beforeForged)
 
-    const a = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT_FROM_PATH, inputA)) as {
-      id: string; fileName: string; parseStatus: string
-    }
+    // A 已在上面通过拖拽/路径通道真实登记，这里不再重复导入（同槽位同名会形成新版本并停用旧版本）。
+    const a = { id: aId, fileName: registeredA!.fileName, parseStatus: registeredA!.parseStatus }
     const b = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT_FROM_PATH, {
       caseId: created.id, sourcePath: sourceB, role: 'evidence',
     })) as { id: string; fileName: string }
@@ -471,6 +549,67 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(after.sourceValidityRevocations?.some(x => x.documentVersionId ===
       after.caseV2.documents.find(doc => doc.documentId === b.id)?.versionId)).toBe(true)
     expect(existsSync(join(getReviewCasesDir(), created.id, 'case.json'))).toBe(false)
+  })
+
+  test('native drag-drop path import registers a real multi-page PDF and DOCX with readable originals', async () => {
+    const created = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.CREATE_CASE, {
+      title: 'Real physical material', type: '综合测评', applicant: 'Applicant', academicYear: '2026',
+    })) as { id: string }
+
+    // 真实多页 PDF：手写最小合法 PDF（不引入任何新依赖），三页各有独立文本层。
+    const pdfSource = join(root, 'real-material.pdf')
+    const pdfBytes = buildMinimalPdf(['CDUT page one evidence', 'CDUT page two evidence', 'CDUT page three evidence'])
+    writeFileSync(pdfSource, pdfBytes)
+
+    const pdfId = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
+      caseId: created.id, sourcePath: pdfSource, role: 'evidence',
+    })) as string
+    expect(typeof pdfId).toBe('string')
+
+    const afterPdf = readAggregate(created.id)!
+    const pdfDoc = afterPdf.caseV2.documents.find(doc => doc.documentId === pdfId)!
+    expect(pdfDoc).toMatchObject({ fileName: 'real-material.pdf', role: 'evidence', active: true })
+    // 真实解析：三页文本层都进入材料块，不是空占位（引擎同时写入锚点/定位行，故按内容断言）
+    const pdfText = pdfDoc.blocks.map(block => block.text).join('\n')
+    expect(pdfDoc.blocks.length).toBeGreaterThanOrEqual(3)
+    expect(pdfText).toContain('CDUT page one evidence')
+    expect(pdfText).toContain('CDUT page two evidence')
+    expect(pdfText).toContain('CDUT page three evidence')
+    expect(pdfDoc.parseStatus).toBe('parsed')
+    // 原件落盘：assetPath 指向案卷内副本，字节与源文件完全一致，且字节 hash 与内容指纹一致
+    const { createHash } = await import('node:crypto')
+    const { existsSync, readFileSync: readBytes } = await import('node:fs')
+    const storedPdf = readBytes(join(getReviewCasesDir(), created.id, pdfDoc.assetPath))
+    expect(Buffer.compare(storedPdf, readBytes(pdfSource))).toBe(0)
+    expect(pdfDoc.byteHash).toBe(createHash('sha256').update(readBytes(pdfSource)).digest('hex'))
+
+    // 真实 DOCX：OOXML zip（标题 + 段落 + 表格单元格），经 mammoth 结构解析登记。
+    const docxSource = join(root, 'real-material.docx')
+    writeFileSync(docxSource, await buildReviewDocx())
+    const docxId = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
+      caseId: created.id, sourcePath: docxSource, role: 'application',
+    })) as string
+    const docxDoc = readAggregate(created.id)!.caseV2.documents.find(doc => doc.documentId === docxId)!
+    expect(docxDoc).toMatchObject({ fileName: 'real-material.docx', role: 'application', active: true })
+    // 材料块的 kind 只有 text/table/image；DOCX 结构类型（标题/段落/单元格）记录在 format 上
+    expect(docxDoc.blocks.find(block => block.format === 'heading')?.text).toBe('Eligibility requirements')
+    expect(docxDoc.blocks.filter(block => block.format === 'table-cell').map(block => block.text))
+      .toEqual(['Applicant', 'Deadline'])
+    expect(docxDoc.parseStatus).toBe('parsed')
+    expect(Buffer.compare(
+      readBytes(join(getReviewCasesDir(), created.id, docxDoc.assetPath)),
+      readBytes(docxSource),
+    )).toBe(0)
+
+    // 重开（重新读聚合，等价于重启后再读）两份材料与原件引用都仍在
+    const reopened = readAggregate(created.id)!
+    expect(reopened.caseV2.documents.filter(doc => doc.active !== false)).toHaveLength(2)
+    expect(reopened.receiptLog.map(receipt => receipt.type)).toEqual([
+      'CreateNativeWorkspaceCaseV3', 'RegisterMaterial', 'RegisterMaterial',
+    ])
+    for (const doc of reopened.caseV2.documents) {
+      expect(existsSync(join(getReviewCasesDir(), created.id, doc.assetPath))).toBe(true)
+    }
   })
 
   test('native Main old AI/rule/report hooks do not create a fake V1 success or policy', async () => {

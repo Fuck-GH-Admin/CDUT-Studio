@@ -121,10 +121,14 @@ export async function registerMaterial(caseId: string, command: { requestId: str
   const pdfImageTempDir = incomingExtension === '.pdf' ? mkdtempSync(join(tmpdir(), 'cdut-review-pdf-images-')) : undefined
   let parsedPdfImages: ReviewDocumentBlock[] = []
   let pdfParseWarning: string | undefined
+  const pdfPageWarnings: string[] = []
   if (pdfImageTempDir) {
     try {
       const { renderPdfImageBlocks } = await import('./case-import')
-      parsedPdfImages = await renderPdfImageBlocks({ filePath: command.payload.sourcePath, fileName: basename(command.payload.sourcePath), documentId: 'pending-review', assetDir: pdfImageTempDir })
+      const pdfImages = await renderPdfImageBlocks({ filePath: command.payload.sourcePath, fileName: basename(command.payload.sourcePath), documentId: 'pending-review', assetDir: pdfImageTempDir })
+      parsedPdfImages = pdfImages.blocks
+      // 页图像被截断或中途失败时如实进入解析警告，登记状态不伪造成 parsed。
+      pdfPageWarnings.push(...pdfImages.warnings)
     } catch (error) {
       pdfParseWarning = `PDF 图像页提取失败，需查看原件人工核对：${error instanceof Error ? error.message : String(error)}`
     }
@@ -197,7 +201,7 @@ export async function registerMaterial(caseId: string, command: { requestId: str
     } else if (imageExtensions.has(fileExtension)) {
       blocks.push({ blockId: `${versionId}-block-001`, text: '', location: { kind: 'paragraph', index: 0 }, kind: 'image', imageAssetPath: assetKey })
     }
-    const parseWarnings = [...(parsedDocx?.warnings ?? []), ...(parsedXlsx?.warnings ?? [])]
+    const parseWarnings = [...(parsedDocx?.warnings ?? []), ...(parsedXlsx?.warnings ?? []), ...pdfPageWarnings]
     if (pdfParseWarning) parseWarnings.push(pdfParseWarning)
     if (imageExtensions.has(fileExtension)) parseWarnings.push('图片原件已保存；内容由视觉模型识别（不做文本切块），无法视觉识别时需人工核对')
     if (omittedEmbeddedImage) parseWarnings.push('部分 DOCX 内嵌图片未能提取或保存，需人工查看原件')
