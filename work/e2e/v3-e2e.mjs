@@ -2550,6 +2550,11 @@ const scenarios = {
       // 真实驱动 GTK 文件对话框：Ctrl+L 输入绝对路径后回车
       await sleep(1800)
       try {
+        const shot = await send('Page.captureScreenshot', { format: 'png' })
+        if (shot?.data) writeFileSync('/tmp/s4-dialog.png', Buffer.from(shot.data, 'base64'))
+        trace.push('screenshot=/tmp/s4-dialog.png')
+      } catch (error) { trace.push('screenshot=failed') }
+      try {
         const listed = spawnSync('wmctrl', ['-l'], { encoding: 'utf8' })
         trace.push('windows=' + JSON.stringify(String(listed.stdout ?? '').split('\n').filter(Boolean).slice(0, 6)))
       } catch (error) { trace.push('wmctrl=failed') }
