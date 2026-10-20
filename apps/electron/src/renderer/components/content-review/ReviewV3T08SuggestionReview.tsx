@@ -57,7 +57,7 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
           payload: update,
         },
       })
-      if (!response.ok) throw new Error('业务字段保存失败')
+      if (!response?.ok) throw new Error('业务字段保存失败')
       await actions.refresh()
       setNotice('修改已通过 Main 案卷命令保存。旧 Run 不会被改写，需重新审核受影响的规则。')
       setConfirmed(false)
