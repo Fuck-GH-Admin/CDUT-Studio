@@ -109,8 +109,27 @@ export class CMainNativeArchiveRegistry {
        typeof source.assertCurrentArchive!=='function'||
        typeof source.pickZipPath!=='function')refuse('INDEPENDENT_MAIN_AND_B_VAULT_REQUIRED')
   }
-  /** Requires an actual OS selection and B Vault's exact current expectation. */
+  /**
+   * Bind an independently Main-held B2 Vault physical key to a fresh actual
+   * OS ZIP selection. Never derive this key from filename, archiveId or IPC.
+   * B Vault's sealed checkpoint must supply its physicalArchiveKeyDigest.
+   * Previous pick() is only a new transient key and cannot claim B's bytes.
+   */
+  pickForBVault(expectedValue:CMainNativeArchiveExpectation,
+    previouslyMainIssuedKey:string, checkpointKeyDigest:string):void {
+    if(!safe(previouslyMainIssuedKey)||
+       !sha.test(checkpointKeyDigest)||
+       createHash('sha256').update(previouslyMainIssuedKey).digest('hex')!==checkpointKeyDigest)
+      return refuse('B_VAULT_PHYSICAL_ORIGIN_KEY_INVALID')
+    this.pickPhysical(expectedValue,previouslyMainIssuedKey)
+  }
+  /** Generic new Main physical witness, NOT a B Vault confirmation. */
   pick(expectedValue:CMainNativeArchiveExpectation):void {
+    this.pickPhysical(expectedValue,randomUUID())
+  }
+  /** The OS picker is the only physical path authority. */
+  private pickPhysical(expectedValue:CMainNativeArchiveExpectation,
+    nativeKey:string):void {
     if(this.closed)refuse('REGISTRY_CLOSED')
     const expected=validateArchive(expectedValue)
     const initial=validateScope(this.source.currentScope())
@@ -129,7 +148,7 @@ export class CMainNativeArchiveRegistry {
     // reader might hold an earlier private archive key. Revoke first.
     if(this.entries.has(index))refuse('ARCHIVE_ALREADY_REGISTERED')
     this.entries.set(index,{scope:initial,expected,path:disk.path,
-      dev:disk.dev,ino:disk.ino,nativeKey:randomUUID()})
+      dev:disk.dev,ino:disk.ino,nativeKey})
   }
   /** Main-only internal key; B ZIP Vault must verify digest in its own ledger. */
   resolveNativeArchiveKey(expectedValue:CMainNativeArchiveExpectation):string {

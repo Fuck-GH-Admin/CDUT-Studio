@@ -341,11 +341,12 @@ export async function handleCMainB20CandidateRead(
     readCurrentBundle:expected=>{
       requireInstalled()
       const physical=liveFrame(event)
+      const frame=event.senderFrame
       const senderId=event.sender.id
-      const frameId=event.senderFrame?.routingId
-      if(!Number.isSafeInteger(senderId)||senderId<0||
+      const frameId=frame?.routingId
+      if(!frame||!Number.isSafeInteger(senderId)||senderId<0||
          !Number.isSafeInteger(frameId)||frameId<0 ||
-         physical.frameId!==event.senderFrame.processId+':'+frameId)
+         physical.frameId!==frame.processId+':'+frameId)
         return refuse('B20_NUMERIC_MAIN_FRAME_NOT_CURRENT')
       const identity=current()
       if(!identity)return refuse('B20_MAIN_CURRENT_SCOPE_LOST')
