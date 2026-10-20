@@ -4719,6 +4719,16 @@ const reviewAPI = {
     updatedAt: string
     view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
   }>,
+  /** T06 选择物理来源（Main 弹出真实 OS 选择器，渲染层只拿到不透明 entryId） */
+  pickT06PhysicalSource: (input: { sourceKind: 'folder' | 'zip' }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T06_PICK_PHYSICAL_SOURCE, input) as Promise<
+      import('../main/lib/review/review-v3-t06-main-service').T06PhysicalSelection | null
+    >,
+  /** T06 提交物理入库（建案 + 逐原件入库 + 批次回执；requestId 幂等） */
+  commitT06PhysicalImport: (input: import('../main/lib/review/review-v3-t06-main-service').T06PhysicalCommitRequest) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T06_COMMIT_PHYSICAL_IMPORT, input) as Promise<
+      import('../main/lib/review/review-v3-t06-main-service').T06CommitReceipt
+    >,
   /** T05 可信阶段能力投影（只读；渲染层只展示，不构成授权） */
   getT05StageCapability: (input: { caseId: string; claim?: { role?: string } }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T05_STAGE_CAPABILITY, input) as Promise<{

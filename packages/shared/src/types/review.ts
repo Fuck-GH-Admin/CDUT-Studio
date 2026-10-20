@@ -602,6 +602,10 @@ export const REVIEW_IPC_CHANNELS = {
   T07_APPLY_ACTION: 'review-v3:t07-apply-action',
   /** T07 建立评分轮次（仅组织者、仅首次） */
   T07_INIT_STATE: 'review-v3:t07-init-state',
+  /** T06 物理来源选择（Main 弹真实 OS 选择器，返回不透明 entryId） */
+  T06_PICK_PHYSICAL_SOURCE: 'review-v3:t06-pick-physical-source',
+  /** T06 物理入库提交（建案 + 逐原件入库 + 批次回执，requestId 幂等） */
+  T06_COMMIT_PHYSICAL_IMPORT: 'review-v3:t06-commit-physical-import',
   /** T05 可信阶段能力投影（只读；不构成授权） */
   T05_STAGE_CAPABILITY: 'review-v3:t05-stage-capability',
   /** T05 可信阶段决定（Main 重核身份/Run/准备度后原子写入） */

@@ -833,6 +833,20 @@ export function registerReviewIpc(): void {
     return result
   })
   // ===== T05 可信阶段事务（Local-L04 R02，CR-T05-04）=====
+  // ===== T06 物理入库（Local-L04 R02 桥接：真实选择器 + 幂等提交）=====
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T06_PICK_PHYSICAL_SOURCE, async (event, input: { sourceKind?: string }) => {
+    assertC0ReviewMainSender(event)
+    if (input?.sourceKind !== 'folder' && input?.sourceKind !== 'zip') throw new Error('来源类型非法')
+    const { pickT06PhysicalSource } = require('./review-v3-t06-main-service') as typeof import('./review-v3-t06-main-service')
+    return pickT06PhysicalSource(input.sourceKind)
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T06_COMMIT_PHYSICAL_IMPORT, async (event, input: unknown) => {
+    assertC0ReviewMainSender(event)
+    const request = input as import('./review-v3-t06-main-service').T06PhysicalCommitRequest
+    if (!request?.requestId || !request.selectionId || !Array.isArray(request.groups)) throw new Error('参数非法')
+    const { commitT06PhysicalImport } = require('./review-v3-t06-main-service') as typeof import('./review-v3-t06-main-service')
+    return commitT06PhysicalImport(request)
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T05_STAGE_CAPABILITY, (event, input: {
     caseId: string; claim?: { role?: string }
   }) => {

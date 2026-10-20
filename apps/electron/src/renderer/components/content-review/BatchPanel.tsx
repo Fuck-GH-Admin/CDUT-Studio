@@ -763,9 +763,13 @@ function CreateBatchDialog({
 }): JSX.Element {
   const selectedTemplate = templates.find((template) => `${template.templateId}@${template.version}` === templateKey)
   const canCreate = !!selectedTemplate && batchName.trim().length > 0 && selectedCaseIds.length > 0 && !creating
-  const physicalMain = window.reviewAPI as typeof window.reviewAPI & Partial<T06PhysicalMainApi>
-  const physicalApi: T06PhysicalMainApi | undefined = physicalMain.pickT06PhysicalSource && physicalMain.commitT06PhysicalImport
-    ? { pickT06PhysicalSource: physicalMain.pickT06PhysicalSource, commitT06PhysicalImport: physicalMain.commitT06PhysicalImport } : undefined
+  // Main 已提供物理入库端口；仍保留存在性判断，便于旧 preload 降级为不可用而不是崩
+  const physicalMain = window.reviewAPI as Partial<T06PhysicalMainApi>
+  const physicalApi: T06PhysicalMainApi | undefined =
+    typeof physicalMain.pickT06PhysicalSource === 'function'
+    && typeof physicalMain.commitT06PhysicalImport === 'function'
+      ? { pickT06PhysicalSource: physicalMain.pickT06PhysicalSource, commitT06PhysicalImport: physicalMain.commitT06PhysicalImport }
+      : undefined
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
