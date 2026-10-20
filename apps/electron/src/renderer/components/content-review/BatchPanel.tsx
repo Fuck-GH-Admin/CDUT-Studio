@@ -721,7 +721,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         selectedCaseIds={selectedCaseIds}
         onToggleCase={toggleCase}
         onApplyCaseIds={setSelectedCaseIds}
-        onPhysicalCommitted={(result) => { if (result.batchId) { setCreateOpen(false); void refresh() } }}
+        onPhysicalCommitted={(result) => { void refresh(); if (result.batchId && result.cases.every(item => item.status === 'done')) setCreateOpen(false) }}
         onCreate={createBatch}
       />
     </div>
