@@ -72,15 +72,15 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
-  const importMaterial=async ():Promise<void>=>{
+  const importMaterial=async (role:'application'|'evidence'):Promise<void>=>{
     if(caseBusy||!localCaseId)return
     setCaseBusy(true);setCaseError('');setCaseNotice('')
     try{
-      const imported=await window.reviewAPI.importDocument({caseId:localCaseId,role:'application'})
+      const imported=await window.reviewAPI.importDocument({caseId:localCaseId,role})
       if(imported.canceled){setCaseNotice('已取消选择，没有导入原件')}
       else{
         setMaterialsEpoch(x=>x+1)
-        setCaseNotice('成功导入 '+imported.documents.length+' 份原件；失败 '+imported.failures.length+' 份')
+        setCaseNotice((role==='application'?'申请原件':'证明材料')+'：成功导入 '+imported.documents.length+' 份；失败 '+imported.failures.length+' 份')
         if(imported.failures.length)
           setCaseError(imported.failures.map(x=>x.fileName+': '+x.message).join('；').slice(0,500))
       }
@@ -135,7 +135,9 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
           disabled={caseBusy} onClick={()=>void listSavedCases()}>列出本机历史案卷</button>
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
-          disabled={caseBusy||!localCaseId} onClick={()=>void importMaterial()}>选择并导入真实申请材料</button>
+          disabled={caseBusy||!localCaseId} onClick={()=>void importMaterial('application')}>选择并导入真实申请材料</button>
+        <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          disabled={caseBusy||!localCaseId} onClick={()=>void importMaterial('evidence')}>选择并导入证明材料</button>
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
           disabled={caseBusy||!localCaseId} onClick={()=>void openCase()}>打开案卷历史/人工流程</button>
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
