@@ -168,6 +168,8 @@ export function proposeT03SubjectSplit(
       fields: valueFields, sourceRefs: sources, correction: 'user-confirmed', status: 'identified',
     })
     for (const ob of latest.filter(ob => part.fieldKeys.includes(ob.fieldKey))) {
+      if (!ob.sourceRefs.length || ob.sourceRefs.some(ref => !activeRef(ref, aggregate)))
+        blockedReasons.push('拆分事实缺少当前有效来源：' + ob.fieldKey)
       proposedObservations.push(freshObservation(ob, part.id, input.operationId, proposedObservations.length, now))
     }
     for (const link of oldLinks.filter(link => part.evidenceLinkIds.includes(link.id))) {
@@ -222,6 +224,10 @@ export function proposeT03SubjectMerge(
   const sources = uniqueRefs(originals.flatMap(subject => subject.sourceRefs)
     .filter(ref => activeRef(ref, aggregate)))
   const now = input.now ?? new Date().toISOString()
+  for (const ob of latest) {
+    if (!ob.sourceRefs.length || ob.sourceRefs.some(ref => !activeRef(ref, aggregate)))
+      blockedReasons.push('合并事实缺少当前有效来源：' + ob.fieldKey)
+  }
   const proposedObservations = latest.map((ob, i) =>
     freshObservation(ob, input.newSubjectId, input.operationId, i, now))
   const distinctLinks = new Map<string, EvidenceLink>()
