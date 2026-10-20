@@ -49,7 +49,7 @@ describe('C-MAIN-HUMAN-R02 physical Main OS dialog from native CAS',()=>{
     const fresh=new CMainNativeRemovalObserver(()=>true)
     fresh.close()
     expect(()=>fresh.observeAtCommit(ctx())).toThrow('CLOSED_OR_REENTRANT')
-    expect(()=>fresh.getObservedMainHumanConsent('case51','req51')).toBeUndefined()
+    expect(fresh.getObservedMainHumanConsent('case51','req51')).toBeUndefined()
   })
   test('rejects altered obligations, invalid JSON identity, missing owner, very long lists BEFORE dialog',()=>{
     let dialogs=0
