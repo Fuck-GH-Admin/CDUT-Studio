@@ -25,6 +25,7 @@ import { load } from 'cheerio'
 import type { DocumentLayoutBlock, LayoutRegionKind, ReviewDocumentBlock, SourceDocument } from '@profer/shared'
 import { extractDocxReviewContent, extractSpreadsheetReviewContent, extractTextFromFile } from '../document-parser'
 import { parseCsvRows } from './source-index'
+import { extractT02PptxImages, type T02SlideImage } from './review-v3-t02-pptx-visual-assets'
 
 /** 支持直接按文本切块的扩展名 */
 const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.csv', '.json', '.html', '.htm', '.eml'])
@@ -598,17 +599,68 @@ export async function parseFileIntoSourceDocument(
         return draftOf('parsed', layoutBlocks)
       }
     } else {
-      // OOXML Office 文档（DOCX / PPTX / XLSX）：优先走双平面重排引擎
+      // T02: restore physical PPTX image bytes before presenting a geometry-only
+      // deck as reviewed. A staged preview without a persistent case-owned
+      // asset directory can see the images, but cannot claim they are inspectable.
+      const isPptx = ['.pptx', '.pptm', '.potx', '.potm', '.ppsx', '.ppsm'].includes(ext)
+      let slideImages: T02SlideImage[] = []
+      let visualWarnings: string[] = []
+      if (isPptx) {
+        try {
+          const result = await extractT02PptxImages(filePath,
+            assetDirectory && assetRelativePath
+              ? { directory: assetDirectory, relativeOriginalPath: assetRelativePath }
+              : undefined)
+          slideImages = result.images
+          visualWarnings = result.warnings
+        } catch (error) {
+          visualWarnings = ['PPTX 图片字节读取失败：' + (error instanceof Error ? error.message : String(error))]
+        }
+      }
       const officeBlocks = await parseOfficeLayoutBlocks(filePath, fileName)
       if (officeBlocks && officeBlocks.length > 0) {
         const isPresentation = ['.ppt', '.pptx', '.pptm', '.potx', '.potm', '.ppsx', '.ppsm', '.dps', '.dpt', '.odp'].includes(ext)
-        const unresolvedImages = officeBlocks.filter((block) => block.kind === 'image' && !block.imageAssetPath).length
-        // OOXML layout blocks describe geometry but do not provide slide image bytes.
-        // Never claim that a PPTX (or other slide deck) has been visually checked.
+        const blocks: ReviewDocumentBlock[] = [...officeBlocks]
+        const matched = new Set<T02SlideImage>()
+        // Use the Office geometry when a page has exactly the same number of
+        // figures and physical image references. A mismatch must NOT invent a
+        // figure-to-image association: instead add separate page anchors.
+        for (const page of new Set(slideImages.map(img => img.page))) {
+          const pageImages = slideImages.filter(img => img.page === page)
+          const pageFigures = blocks.filter(b => b.page === page && b.kind === 'image')
+          if (pageFigures.length !== pageImages.length) continue
+          pageFigures.forEach((figure, index) => {
+            const image = pageImages[index]!
+            if (image.imageAssetPath) figure.imageAssetPath = image.imageAssetPath
+            figure.imageAlt = image.imageAlt
+            matched.add(image)
+          })
+        }
+        for (const image of slideImages.filter(img => !matched.has(img))) {
+          blocks.push({
+            id: 'blk-' + slug + '-slide-' + image.page + '-img-' + image.order + '-' + image.sha256.slice(0, 8),
+            kind: 'image', text: '', page: image.page,
+            imageAlt: image.imageAlt,
+            ...(image.imageAssetPath ? { imageAssetPath: image.imageAssetPath } : {}),
+          })
+        }
+        const unresolvedImages = blocks.filter(block => block.kind === 'image' && !block.imageAssetPath).length
         const incompleteVisuals = isPresentation || unresolvedImages > 0
-        return draftOf(incompleteVisuals ? 'partial' : 'parsed', officeBlocks, incompleteVisuals
-          ? `Office 结构文本已读取；${unresolvedImages} 个图像块尚无可视原件，演示文稿页面需视觉核验`
-          : undefined)
+        const message = [
+          isPresentation ? '演示文稿页需逐页视觉核验（已提取实际可解码的嵌入图片，不表示已识别图中文字）' : '',
+          unresolvedImages ? unresolvedImages + ' 个图像块无可访问的视觉原件' : '',
+          ...visualWarnings,
+        ].filter(Boolean).join('；')
+        return draftOf(incompleteVisuals || visualWarnings.length > 0 ? 'partial' : 'parsed', blocks, message || undefined)
+      }
+      // A picture-only deck may produce no office text/layout blocks. Its
+      // physical images still belong in the source inventory.
+      if (slideImages.length > 0) {
+        return draftOf('partial', slideImages.map(image => ({
+          id: 'blk-' + slug + '-slide-' + image.page + '-img-' + image.order + '-' + image.sha256.slice(0, 8),
+          kind: 'image', text: '', page: image.page, imageAlt: image.imageAlt,
+          ...(image.imageAssetPath ? { imageAssetPath: image.imageAssetPath } : {}),
+        })), ['PPTX 仅找到图片原件，文字与版面仍待核验', ...visualWarnings].join('；'))
       }
     }
 
