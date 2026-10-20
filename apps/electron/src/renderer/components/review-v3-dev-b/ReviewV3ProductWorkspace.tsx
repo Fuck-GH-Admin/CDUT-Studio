@@ -93,6 +93,7 @@ export function ReviewV3ProductWorkspace({
  const [sourcePage,setSourcePage]=useState(0)
  const [domain,setDomain]=useState('')
  const [issueKind,setIssueKind]=useState('')
+ const [sourceQuery,setSourceQuery]=useState('')
  const [selectedIssue,setSelectedIssue]=useState('')
  const [observation,setObservation]=useState('')
  const [localEvents,setLocalEvents]=useState<string[]>([])
@@ -112,6 +113,7 @@ export function ReviewV3ProductWorkspace({
   setTab('materials');setRead(null);setError('');setNotice('')
   setEditor(null);setConfirmEditorExit(false);setLocalEvents([]);setSelectedIssue('');setRepairStatus('unsubmitted')
   setMaterialQuery('');setMaterialRole('all');setCheckQuery('');setCheckUnresolvedOnly(false)
+  setSourceQuery('')
   setCheckPage(0);setSourcePage(0);setMaterialPage(0)
  },[scope])
  const fetchCurrent=async():Promise<void>=>{
@@ -143,6 +145,7 @@ export function ReviewV3ProductWorkspace({
  const visibleMaterials=materialRows.slice(materialStart,materialStart+25)
  const issueList=pageB32Issues(read?.historical??null,sourcePage*25,25,{
   domain:domain||undefined,kind:issueKind?issueKind as B26IssueKind:undefined,
+  query:sourceQuery||undefined,
  })
  const issue=issueList.items.find(x=>x.id===selectedIssue)||
   read?.historical?.issues.find(x=>x.id===selectedIssue)
@@ -338,6 +341,9 @@ export function ReviewV3ProductWorkspace({
      <p>版本 {s.documentVersionId??'未知'} · Parser {s.parseRevision??'未确认'} · Block {s.parserBlockId??'未确认'}</p>
      <p>定位：{s.locator}</p>
      <p className="break-all">字节：{s.rawSha256??'无当前来源哈希'}</p>
+     <button type="button" className={btn} onClick={()=>{
+      setSourceQuery(s.sourceId);setDomain('');setIssueKind('');setSourcePage(0);setTab('sources')
+     }}>在人工复核待办中检索 SourceRef</button>
      <button type="button" className={btn} disabled={!s.rawSha256}
       onClick={()=>{setMaterialQuery(s.rawSha256??'');setMaterialRole('all');setMaterialPage(0);setTab('materials')}}>
       定位当前原件（按字节 SHA）
@@ -359,18 +365,26 @@ export function ReviewV3ProductWorkspace({
     {Object.entries(kindNames).map(([id,label])=><span key={id} className="rounded border border-border p-2">{label}：{read.historical!.issues.filter(x=>x.kind===id).length}</span>)}
    </div>}
    <div className="flex flex-wrap gap-2">
-    <select aria-label="领域过滤" className={field} value={domain} onChange={e=>{setDomain(e.target.value);setSourcePage(0);setSelectedIssue('')}}>
+    <input aria-label="检索人工来源待办" className={field}
+      placeholder="模板 ID / Check / SourceRef / 原因"
+      value={sourceQuery} onChange={e=>{setSourceQuery(e.target.value);setSourcePage(0)}}/>
+    <select aria-label="领域过滤" className={field} value={domain} onChange={e=>{setDomain(e.target.value);setSourcePage(0)}}>
      <option value="">所有领域</option>
      {['G01','G02','G03','G04','G05','G06','G07','G08'].map(x=><option key={x} value={x}>{x}</option>)}
     </select>
-    <select aria-label="缺口类型" className={field} value={issueKind} onChange={e=>{setIssueKind(e.target.value);setSourcePage(0);setSelectedIssue('')}}>
+    <select aria-label="缺口类型" className={field} value={issueKind} onChange={e=>{setIssueKind(e.target.value);setSourcePage(0)}}>
      <option value="">全部原因</option>
      {Object.entries(kindNames).map(([id,label])=><option key={id} value={id}>{label}</option>)}
     </select>
    </div>
-   <p>筛选后 {issueList.total} 条，按任务粒度分页展示。</p>
+   <p>筛选后 {issueList.total} 条，按任务粒度分页展示；不改变任何原文待办及 UNKNOWN 状态。</p>
+   {issueList.total===0&&<p className="text-sm">此筛选下暂无来源待办；可清空查询或更换领域、缺口类型。</p>}
    {issueList.items.map(x=><button key={x.id} type="button" className="block w-full rounded border border-border p-3 text-left text-sm hover:bg-muted"
-    onClick={()=>{setSelectedIssue(x.id);setObservation('');setRepairStatus('unsubmitted')}}>
+    onClick={()=>{
+     if(x.id!==selectedIssue&&observation.trim()&&
+        !window.confirm('当前人工观察尚未提交到 Main。切换待办将放弃这段文字，确定继续？'))return
+     if(x.id!==selectedIssue){setSelectedIssue(x.id);setObservation('');setRepairStatus('unsubmitted')}
+    }}>
     <strong>{x.domain} · {x.templateId} · {kindNames[x.kind]}</strong>
     <p>{x.checkId??'整个模板'} · {x.sourceId??x.ruleId??'无明细来源'}</p>
     <p>{x.reason} · {x.state}</p>
@@ -381,6 +395,8 @@ export function ReviewV3ProductWorkspace({
     <button className={btn} disabled={issueList.nextOffset===null} onClick={()=>setSourcePage(p=>p+1)}>下一页</button>
    </div>
    {issue&&<div className="space-y-2 rounded border border-border p-3">
+    {sourceQuery&&!issueList.items.some(x=>x.id===issue.id)&&
+      <p className="text-xs">正在编辑的待办不在当前筛选页，编辑内容仍保留。</p>}
     <h4 className="font-semibold">修复任务：{kindNames[issue.kind]}</h4>
     <p className="text-sm">Check：{issue.checkId??'模板原文'}；SourceRef：{issue.sourceId??'无'}；规则：{issue.ruleId??'无'}</p>
     <p className="text-sm">推荐处理：{repairGuidance[issue.kind]}</p>

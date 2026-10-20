@@ -211,13 +211,16 @@ export function pageB32Checks(rows:readonly B32CheckRow[],offset:number,limit=25
    nextOffset:offset+limit<rows.length?offset+limit:null}
 }
 export function pageB32Issues(data:B26Workbench|null,offset:number,limit=25,
- filter?:{domain?:string;kind?:B26IssueKind}):
+ filter?:{domain?:string;kind?:B26IssueKind;query?:string}):
  {total:number;items:B26Issue[];nextOffset:number|null}{
  if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||
     limit<1||limit>100)reject('ISSUE_PAGE_INVALID')
+ const needle=filter?.query?.trim().toLocaleLowerCase()??''
  const filtered=(data?.issues??[]).filter(x=>
   (!filter?.domain||x.domain===filter.domain)&&
-  (!filter?.kind||x.kind===filter.kind))
+  (!filter?.kind||x.kind===filter.kind)&&
+  (!needle||[x.templateId,x.checkId??'',x.sourceId??'',x.ruleId??'',
+   x.reason,x.id].some(value=>value.toLocaleLowerCase().includes(needle))))
  return {total:filtered.length,items:filtered.slice(offset,offset+limit),
   nextOffset:offset+limit<filtered.length?offset+limit:null}
 }

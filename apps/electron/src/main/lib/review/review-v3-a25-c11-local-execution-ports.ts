@@ -179,7 +179,14 @@ export class A25C11LocalExecutionPorts {
   }
   check(call:V3ReviewToolCall,binding:Pick<CanonicalPlan['bindings'][number],
     'checkKey'|'targetKey'|'objectKey'|'subjectId'>){
-    return this.assertBound(call).producer.check(call,binding)
+    // Callers commonly use the complete frozen Plan binding. Only the
+    // four immutable Check identity fields belong in this physical request.
+    // Forwarding applicability/sourceVersionIds would make a valid Host
+    // observation fail A2's exact tuple comparison after the physical call.
+    const {checkKey,targetKey,objectKey,subjectId}=binding
+    return this.assertBound(call).producer.check(call,{
+      checkKey,targetKey,objectKey,subjectId,
+    })
   }
   terminal(call:V3ReviewToolCall,status:ATechnicalStatus){
     return this.assertBound(call).producer.terminal(call,status)

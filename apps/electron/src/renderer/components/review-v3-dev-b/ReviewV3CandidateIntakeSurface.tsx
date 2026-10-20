@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   B3ManualCatalogEntry, B3RouteState,
 } from '../../../main/lib/review/review-intake-routing-adapter-v3-b3'
-import { buildB3RouteView, requireB3VisibleManualChoice } from './review-v3-route-view'
+import { buildB3RouteView, filterB3Catalog, requireB3VisibleManualChoice } from './review-v3-route-view'
 import { ReviewV3AuthorWizard, type B1AuthorWizardProps } from './ReviewV3AuthorWizard'
 import { ReviewV3ProductWorkspace, type B32ProductPorts } from './ReviewV3ProductWorkspace'
 
@@ -57,11 +57,12 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
   const refreshRef=useRef(props.onRequestRefresh)
   refreshRef.current=props.onRequestRefresh
   const [chosenKey,setChosenKey]=useState('')
+  const [catalogQuery,setCatalogQuery]=useState('')
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
   useEffect(()=>{
-    setChosenKey('');setBusy(false);setError('');setNotice('')
+    setChosenKey('');setCatalogQuery('');setBusy(false);setError('');setNotice('')
   },[scope])
   useEffect(()=>{
     if(route.status!=='countdown')return
@@ -75,7 +76,8 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
     },500)
     return ()=>{active=false;clearInterval(handle)}
   },[route.status,scope])
-  const options=view.eligible
+  const options=filterB3Catalog(view.eligible,catalogQuery)
+  const held=filterB3Catalog(view.held,catalogQuery)
   const selected=options.find(x=>JSON.stringify([x.templateId,x.templateVersion])===chosenKey)
   const interruptRoute=async():Promise<void>=>{
     if(busy)return
@@ -148,6 +150,12 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
     </div>}
     <div className="space-y-2">
       <h3 className="font-semibold">人工选择已有业务模板</h3>
+      <label className="block space-y-1 text-sm">搜索模板名称、编号或版本
+       <input aria-label="搜索模板目录" type="search"
+        className="w-full rounded border border-border bg-background px-2 py-2"
+        placeholder="例如 G03、体育场馆、T01"
+        value={catalogQuery} onChange={e=>{setCatalogQuery(e.target.value);setError('');setNotice('')}}/>
+      </label>
       <label className="block space-y-1 text-sm">
         <span>可供技术选择的模板</span>
         <select className="w-full rounded border border-border bg-background px-2 py-2"
@@ -161,11 +169,12 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
       </label>
       <button type="button" className={action} disabled={!selected||busy}
         onClick={()=>void manual()}>提交选择给 Main 再核验（不建案）</button>
-      <p className="text-xs text-muted-foreground">当前展示 {options.length+view.held.length} 套候选版本；可提交 {options.length} 套，待人工复核 {view.held.length} 套。</p>
-      {view.held.length>0 && <details className="rounded border border-border p-3 text-sm">
-        <summary className="cursor-pointer">查看尚不可提交的 {view.held.length} 套候选（来源/政策授权待核）</summary>
+      <p className="text-xs text-muted-foreground">匹配 {options.length+held.length} / 共 {view.eligible.length+view.held.length} 套候选版本；其中可提交 {options.length} 套，待人工复核 {held.length} 套。</p>
+      {options.length+held.length===0&&<p className="text-xs">未找到符合关键词的模板；清空检索可恢复全部候选。</p>}
+      {held.length>0 && <details className="rounded border border-border p-3 text-sm">
+        <summary className="cursor-pointer">查看尚不可提交的 {held.length} 套候选（来源/政策授权待核）</summary>
         <ul className="mt-2 max-h-64 list-disc space-y-1 overflow-y-auto pl-5">
-         {view.held.map(item=><li key={item.templateId+'@'+item.templateVersion}>
+         {held.map(item=><li key={item.templateId+'@'+item.templateVersion}>
           {item.name} · {item.templateId} · {item.templateVersion} · 待人工复核，不可直接提交
          </li>)}
         </ul>
