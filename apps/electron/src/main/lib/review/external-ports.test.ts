@@ -29,6 +29,22 @@ describe('MockSchoolAdapter（C 类模拟）', () => {
     expect(second.id).toBe(first.id)
   })
 
+  test('模拟端口可读取任务/案卷、核验和回执；断线不伪造成功', async () => {
+    const mock = new MockSchoolAdapter()
+    mock.seedCase('mock-case', 'school-ref-1', { applicant: 'demo' })
+    mock.seedTask({ id: 'task-1', caseId: 'mock-case', actorId: 'demo', role: 'student', status: 'open', title: '补件' })
+    mock.seedVerification('proof-001', 'verified')
+    expect((await mock.fetchCase('mock-case'))?.source).toBe('mock')
+    expect((await mock.listTasks('mock-case'))).toHaveLength(1)
+    expect((await mock.verify('proof-001')).result).toBe('verified')
+    const receipt = await mock.push(payload({ caseId: 'mock-case', actionId: 'mock-action-unique' }))
+    expect((await mock.getReceipt('mock-action-unique'))?.id).toBe(receipt.id)
+    expect((await mock.fetchCase('mock-case'))?.revision).toBe(1)
+    expect((await mock.push(payload({ caseId: 'mock-case', actionId: 'mock-action-unique', body: { result: 'changed' } }))).status).toBe('rejected')
+    mock.setOnline(false)
+    await expect(mock.listTasks('mock-case')).rejects.toThrow('MOCK_PORT_OFFLINE')
+  })
+
   test('Given 外部版本已推进 When 旧版本推送 Then conflict（C02）', async () => {
     const mock = new MockSchoolAdapter()
     mock.seedRevision('c1', 5)
