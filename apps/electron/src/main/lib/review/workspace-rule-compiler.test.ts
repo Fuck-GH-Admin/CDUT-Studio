@@ -19,6 +19,15 @@ describe('审核依据规则编译', () => {
     expect(compileWorkspaceRule(pack, outline('exclusive', { kind: 'mutual-exclusion', exclusionGroup: 'same-event' })).execution).toBe('manual')
   })
 
+  test('适用条件不能替代审核要求：越界金额/日期仍要接受判定，固定分只用于指定类别',()=>{
+    const amount=compileWorkspaceRule(pack,outline('money',{kind:'amount-limit',value:180}))
+    const date=compileWorkspaceRule(pack,outline('period',{kind:'date-range',dateFrom:'2025-01-01',dateTo:'2025-12-31'}))
+    const fixed=compileWorkspaceRule(pack,outline('level',{kind:'score-value',value:4,appliesWhen:{field:'category',equals:'contest'}}))
+    expect(amount.when).toEqual({field:'amount',op:'exists'})
+    expect(date.when).toEqual({field:'activityDate',op:'exists'})
+    expect(fixed.when).toEqual({field:'category',op:'eq',value:'contest'})
+  })
+
   test('未确认规则始终人工核验；确认的自由文本才交给 semantic', () => {
     expect(compileWorkspaceRule({ ...pack, confirmed: false }, outline('max', { kind: 'max-score', value: 8 })).execution).toBe('manual')
     expect(compileWorkspaceRule(pack, outline('impact')).execution).toBe('semantic')
