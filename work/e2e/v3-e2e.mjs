@@ -803,6 +803,55 @@ const scenarios = {
     `.replace('__CASE_ID__', JSON.stringify(process.env.E2E_CASE_ID ?? '')))
   },
 
+  /**
+   * L2 学年解耦的真机验证：走真实 IPC 建案。
+   * 非综测通用草稿可省略学年；综测仍必须提供。
+   */
+  async 'verify-academic-year'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = {}
+
+      // 1) 非综测通用草稿：不传学年
+      try {
+        const generic = await api.createCase({
+          title: 'L2 通用草稿', type: '自定义审核', applicant: 'E2E',
+          domainPackId: 'contract-review', reviewTemplate: null,
+        })
+        const reopened = await api.getCase(generic.id)
+        out.genericNoYear = { ok: true, id: generic.id,
+          academicYear: reopened?.academicYear ?? null, title: reopened?.title ?? null }
+      } catch (error) {
+        out.genericNoYear = { ok: false, error: String(error?.message ?? error) }
+      }
+
+      // 2) 综测：不传学年应被拒绝
+      try {
+        await api.createCase({
+          title: 'L2 综测缺学年', type: '综合测评', applicant: 'E2E',
+          domainPackId: 'comprehensive-assessment', reviewTemplate: null,
+        })
+        out.comprehensiveNoYear = { ok: true, unexpected: '不应建案成功' }
+      } catch (error) {
+        out.comprehensiveNoYear = { rejected: true,
+          error: String(error?.message ?? error).slice(0, 120) }
+      }
+
+      // 3) 综测：带学年正常
+      try {
+        const c = await api.createCase({
+          title: 'L2 综测带学年', type: '综合测评', applicant: 'E2E',
+          academicYear: '2026', domainPackId: 'comprehensive-assessment', reviewTemplate: null,
+        })
+        out.comprehensiveWithYear = { ok: true, id: c.id }
+      } catch (error) {
+        out.comprehensiveWithYear = { ok: false, error: String(error?.message ?? error) }
+      }
+
+      return out
+    `)
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()
