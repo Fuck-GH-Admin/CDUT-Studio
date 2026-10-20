@@ -228,7 +228,7 @@ export function ContentReviewView(): React.ReactElement {
       </header>
 
       <ReviewV3T10WorkspaceOverview
-        onOpenReview={() => setSection('workbench')}
+        onOpenReview={() => openPane('left')}
         onOpenMaterials={() => openPane('center')}
         onOpenTasks={() => openPane('right')}
         onOpenTemplates={() => setSection('templates')}
@@ -297,7 +297,6 @@ export function ContentReviewView(): React.ReactElement {
             const aggregate = await window.reviewAPI.openAggregateV2(caseId)
             if (aggregate) {
               setV2Aggregate(aggregate)
-              void actions.selectCase(caseId)
               setSection('case-v2')
               return true
             }
