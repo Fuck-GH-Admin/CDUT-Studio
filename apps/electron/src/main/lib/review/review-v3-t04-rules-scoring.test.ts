@@ -100,7 +100,7 @@ describe('T04 multi-policy and Plan adapter (D09)',()=>{
   test('two enabled conflicting caps block only their claim; explicit named decision chooses one',()=>{
     const claims=[{key:'competition-cap',rule:a,operation:cap('10')},{key:'competition-cap',rule:b,operation:cap('12')},
       {key:'date-rule',rule:makeRule('date'),operation:{kind:'date-range' as const,field:'date'}}]
-    expect(resolveT04PolicyClaims(claims).blocked[0]?.ruleIds).toEqual(['p@1::a','p@1::b'])
+    expect(resolveT04PolicyClaims(claims).blocked[0]?.ruleIds).toEqual(['faculty@1::b','school@1::a'])
     expect(resolveT04PolicyClaims(claims).selected.map(x=>x.rule.id)).toEqual(['date'])
     const resolved=resolveT04PolicyClaims(claims,[{key:'competition-cap',selectedRuleId:'a',confirmedBy:'local-reviewer',reason:'确定学校政策优先'}])
     expect(resolved.blocked).toHaveLength(0)
