@@ -16,13 +16,23 @@ import { Send, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { Spinner } from '@profer/ui/primitives/spinner'
 import { Textarea } from '@profer/ui/primitives/textarea'
-import type { ReviewAssistantMessage } from '@profer/shared'
+import type { CaseAggregateV2, ReviewAssistantMessage, SourceRef } from '@profer/shared'
+import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
+import { ReviewV3T08ReportPanel } from './ReviewV3T08ReportPanel'
+import { resolveT08Source, type T08ResolvedSource } from './review-v3-t08-case-report'
 import {
   reviewAssistantOpenAtom,
   reviewAssistantPendingAtom,
   reviewAssistantThreadsAtom,
   reviewCaseAtom,
   selectedFindingAtom,
+  selectedCaseIdAtom,
+  reviewWorkspaceAggregateAtom,
+  reviewWorkspaceRunAtom,
+  reviewWorkspaceRunStaleAtom,
+  reviewWorkspaceTemplateAtom,
+  reviewSourceFocusAtom,
+  reviewActivePaneAtom,
 } from '@/atoms/review-atoms'
 import { cn } from '@/lib/utils'
 import type { ReviewActions } from './use-review-actions'
@@ -42,13 +52,68 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
   const threads = useAtomValue(reviewAssistantThreadsAtom)
   const setOpen = useSetAtom(reviewAssistantOpenAtom)
   const setThreads = useSetAtom(reviewAssistantThreadsAtom)
-
+  const selectedCaseId = useAtomValue(selectedCaseIdAtom)
+  const aggregate = useAtomValue(reviewWorkspaceAggregateAtom)
+  const workspaceRun = useAtomValue(reviewWorkspaceRunAtom)
+  const workspaceRunStale = useAtomValue(reviewWorkspaceRunStaleAtom)
+  const workspaceTemplate = useAtomValue(reviewWorkspaceTemplateAtom)
+  const setSourceFocus = useSetAtom(reviewSourceFocusAtom)
+  const setActivePane = useSetAtom(reviewActivePaneAtom)
+  const [tab, setTab] = React.useState<'chat' | 'sources' | 'reports'>('chat')
+  const [inspected, setInspected] = React.useState<T08ResolvedSource | null>(null)
+  const [preview, setPreview] = React.useState<{ path: string; fileName: string } | null>(null)
+  const [sourceNotice, setSourceNotice] = React.useState('')
+  const [draftOpinionId, setDraftOpinionId] = React.useState<string | null>(null)
+  const [proposal, setProposal] = React.useState('')
   const [draft, setDraft] = React.useState('')
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
 
-  const caseId = reviewCase?.id ?? ''
+  const caseId = selectedCaseId ?? reviewCase?.id ?? ''
   const messages = threads[caseId] ?? []
+  const currentRun = workspaceRun?.caseId === aggregate?.caseV2.id ? workspaceRun : null
+  const opinions = currentRun?.opinions ?? []
+  const draftOpinion = opinions.find((opinion) => opinion.id === draftOpinionId)
+  React.useEffect(() => {
+    setInspected(null)
+    setPreview(null)
+    setDraftOpinionId(null)
+    setProposal('')
+    setSourceNotice('')
+  }, [caseId, currentRun?.id])
+
+  const openSource = async (ref: SourceRef): Promise<void> => {
+    if (!aggregate) return
+    const resolved = resolveT08Source(ref, aggregate)
+    setInspected(resolved)
+    setSourceNotice('')
+    if (!resolved.document || resolved.state === 'foreign-case' || resolved.state === 'parse-revision-mismatch') {
+      setSourceNotice('无法核对本案的精确原件版本；不执行猜测跳转。')
+      return
+    }
+    const purpose = resolved.document.role === 'rule' ? 'rule'
+      : resolved.document.role === 'application' ? 'application' : 'evidence'
+    setSourceFocus({ ref, purpose, nonce: Date.now() })
+    setActivePane(purpose === 'rule' ? 'left' : 'center')
+  }
+  const openOriginal = async (): Promise<void> => {
+    if (!aggregate || !inspected?.document) return
+    try {
+      const path = await window.reviewAPI.getWorkspaceDocumentPreviewPath({
+        caseId: aggregate.caseV2.id, documentVersionId: inspected.document.versionId,
+      })
+      if (!path) { setSourceNotice('原件路径暂不可读取，可先核对下方的已解析文本。'); return }
+      setPreview({ path, fileName: inspected.document.fileName })
+    } catch (error) { setSourceNotice('打开原件失败：' + String(error)) }
+  }
+  const resolveReference = (id: string): SourceRef | undefined => {
+    if (!currentRun || !aggregate) return undefined
+    const opinion = currentRun.opinions.find((item) => item.id === id || item.checkId === id)
+    const check = currentRun.checks.find((item) => item.checkId === id)
+    const refs = opinion?.sourceRefs ?? check?.sourceRefs ?? []
+    return refs.find((ref) => resolveT08Source(ref, aggregate).state === 'located')
+      ?? refs.find((ref) => resolveT08Source(ref, aggregate).state === 'file-only')
+  }
 
   // 新消息到达 → 滚到底部
   React.useEffect(() => {
@@ -111,17 +176,55 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
         </Button>
       </header>
 
+      <nav aria-label="助手功能" className="flex gap-1 border-b border-border/60 px-3 py-2 text-xs">
+        {([['chat','案卷问答'],['sources','检查与来源'],['reports','报告导出']] as const).map(([id, label]) =>
+          <button type="button" key={id} onClick={() => setTab(id)}
+            className={cn('rounded px-2 py-1.5', tab === id ? 'bg-primary text-primary-foreground' : 'bg-muted/60 text-foreground')}>{label}</button>)}
+      </nav>
       {/* 消息列表 */}
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto scrollbar-thin px-4 py-3">
-        {messages.length === 0 && (
+        {tab === 'chat' && messages.length === 0 && (
           <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
             我会基于本案卷的规则、申报与证明回答你的问题，并标注引用出处；没有依据时会明说无法确定。
           </p>
         )}
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+        {tab === 'chat' && messages.map((message) => (
+          <MessageBubble
+            key={message.id}
+            message={message}
+            onReference={(id) => { const ref = resolveReference(id); if (ref) void openSource(ref) }}
+            canLocate={(id) => !!resolveReference(id)}
+          />
         ))}
-        {pending && (
+        {tab === 'sources' && <>
+          {!currentRun && <p className="rounded bg-muted p-3 text-xs text-muted-foreground">先打开并运行真实案卷，才能查看本次 Run 的检查来源。</p>}
+          {currentRun && <div className="space-y-3">
+            <p className="rounded bg-muted/50 p-2 text-xs">Run：{currentRun.id} · {currentRun.status} · {currentRun.coverage.pendingChecks} 项待处理
+              {workspaceRunStale ? ' · 历史/过期输入，请勿作当前结论' : ''}</p>
+            {currentRun.checks.map((check) => <article key={check.checkId} className="rounded border border-border p-2 text-xs">
+              <p className="font-semibold">{check.checkId} · {check.status}</p>
+              <p className="my-1 whitespace-pre-wrap">{check.reason}</p>
+              {check.sourceRefs.map((ref, idx) => <SourceLink key={idx} refItem={ref} aggregate={aggregate} onOpen={openSource} />)}
+            </article>)}
+            {opinions.map((opinion) => <article key={opinion.id} className="rounded border border-border p-2 text-xs">
+              <p className="font-semibold">{opinion.title} · {opinion.verification}</p>
+              <p className="my-1 whitespace-pre-wrap">{opinion.detail}</p>
+              <p className="mb-1 text-muted-foreground">AI 建议（并非已执行的修改）：{opinion.suggestionText}</p>
+              {opinion.sourceRefs.map((ref, idx) => <SourceLink key={idx} refItem={ref} aggregate={aggregate} onOpen={openSource} />)}
+              <button type="button" className="mt-2 rounded border border-border px-2 py-1" onClick={() => {setDraftOpinionId(opinion.id);setProposal(opinion.suggestionText);}}>审阅修改草案</button>
+            </article>)}
+            {!currentRun.checks.length && !opinions.length && <p>该 Run 无检查/建议记录，不能制造问题卡。</p>}
+          </div>}
+          {draftOpinion && <div className="rounded border border-primary/30 p-2 text-xs">
+            <p className="mb-1 font-medium">待确认草案 · {draftOpinion.title}</p>
+            <textarea aria-label="编辑待确认建议" className="h-24 w-full resize-y rounded border border-border bg-background p-2" value={proposal} onChange={(event) => setProposal(event.target.value)} />
+            <p className="mb-2 text-muted-foreground">仅为可审阅草案，未改变任何案卷字段或原件；正式应用须经具名用户的 Main 写入操作。</p>
+            <button type="button" className="mr-2 rounded border px-2 py-1" onClick={() => void navigator.clipboard.writeText(proposal).then(() => setSourceNotice('草案已复制；可在相应人工处理页面确认应用。')).catch((error) => setSourceNotice('复制失败：' + error))}>复制草案</button>
+            <button type="button" className="rounded border px-2 py-1" onClick={() => { setTab('chat'); setActivePane('right') }}>查看审核员待办</button>
+          </div>}
+        </>}
+        {tab === 'reports' && <ReviewV3T08ReportPanel aggregate={aggregate} currentRun={currentRun} currentStale={workspaceRunStale} template={workspaceTemplate} />}
+        {tab === 'chat' && pending && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Spinner size="sm" />
             助手思考中…
@@ -129,8 +232,17 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
         )}
       </div>
 
+      {inspected && <section className="max-h-[27vh] shrink-0 overflow-y-auto border-t border-primary/20 bg-muted/40 p-3 text-xs" aria-label="来源核对">
+        <p className="font-semibold">定位来源：{inspected.label}</p>
+        <p>核对状态：{inspected.state}{inspected.blockId ? ' · 文本块 '+inspected.blockId : ' · 不保证块级定位'}</p>
+        {inspected.excerpt && <blockquote className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap border-l-2 border-primary pl-2">{inspected.excerpt}</blockquote>}
+        {sourceNotice && <p className="mt-1 text-muted-foreground">{sourceNotice}</p>}
+        {inspected.document && <button type="button" className="mt-2 rounded border border-border px-2 py-1" onClick={() => void openOriginal()}>查看真实原件</button>}
+        <button type="button" onClick={() => setInspected(null)} className="ml-2 rounded border px-2 py-1">返回</button>
+      </section>}
+      {preview && <FilePreviewDialog open filePath={preview.path} fileName={preview.fileName} onClose={() => setPreview(null)} />}
       {/* 快捷提问 */}
-      <div className="flex shrink-0 flex-wrap gap-1.5 border-t border-border/60 px-4 py-2">
+      {tab === 'chat' && <div className="flex shrink-0 flex-wrap gap-1.5 border-t border-border/60 px-4 py-2">
         {QUICK_PROMPTS.map((prompt) => (
           <button
             key={prompt}
@@ -142,10 +254,10 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
             {prompt}
           </button>
         ))}
-      </div>
+      </div>}
 
       {/* 输入区 */}
-      <div className="flex shrink-0 items-end gap-2 border-t border-border/60 px-4 py-3">
+      {tab === 'chat' && <div className="flex shrink-0 items-end gap-2 border-t border-border/60 px-4 py-3">
         <Textarea
           ref={textareaRef}
           value={draft}
@@ -170,13 +282,30 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
         >
           {pending ? <Spinner size="sm" /> : <Send size={15} />}
         </Button>
-      </div>
+      </div>}
     </aside>
   )
 }
 
 /** 单条消息气泡（含 degraded 灰条与 references 徽标） */
-function MessageBubble({ message }: { message: ReviewAssistantMessage }): React.ReactElement {
+function SourceLink({ refItem, aggregate, onOpen }: {
+  refItem: SourceRef
+  aggregate: CaseAggregateV2 | null
+  onOpen(ref: SourceRef): Promise<void>
+}): React.ReactElement {
+  const located = aggregate ? resolveT08Source(refItem, aggregate) : null
+  const possible = located?.state === 'located' || located?.state === 'file-only'
+  return <button type="button" disabled={!possible} onClick={() => void onOpen(refItem)}
+    title={possible ? '定位已知版本的原件' : '来源版本不存在或无法核对，禁止猜测跳转'}
+    className="mr-1 mt-1 rounded bg-blue-500/10 px-2 py-1 text-left text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-300">
+    {located?.label ?? refItem.documentVersionId} {located?.state === 'file-only' ? '（仅文件）' : ''}
+  </button>
+}
+function MessageBubble({ message, onReference, canLocate }: {
+  message: ReviewAssistantMessage
+  onReference(id: string): void
+  canLocate(id: string): boolean
+}): React.ReactElement {
   const isUser = message.role === 'user'
   return (
     <div className={cn('flex flex-col gap-1', isUser && 'items-end')}>
@@ -198,12 +327,16 @@ function MessageBubble({ message }: { message: ReviewAssistantMessage }): React.
       {message.references && message.references.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1">
           {message.references.map((reference) => (
-            <span
+            <button
+              type="button"
               key={reference}
-              className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400"
+              disabled={!canLocate(reference)}
+              onClick={() => onReference(reference)}
+              title={canLocate(reference) ? '查看本次运行的真实来源' : '该引用不含已核验的原件落点'}
+              className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-xs font-medium text-blue-600 disabled:opacity-50 dark:text-blue-400"
             >
-              {reference}
-            </span>
+              {reference}{!canLocate(reference) ? '（仅标识）' : ''}
+            </button>
           ))}
         </div>
       )}
