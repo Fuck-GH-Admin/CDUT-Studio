@@ -621,22 +621,11 @@ export async function parseFileIntoSourceDocument(
       if (officeBlocks && officeBlocks.length > 0) {
         const isPresentation = ['.ppt', '.pptx', '.pptm', '.potx', '.potm', '.ppsx', '.ppsm', '.dps', '.dpt', '.odp'].includes(ext)
         const blocks: ReviewDocumentBlock[] = [...officeBlocks]
-        const matched = new Set<T02SlideImage>()
-        // Use the Office geometry when a page has exactly the same number of
-        // figures and physical image references. A mismatch must NOT invent a
-        // figure-to-image association: instead add separate page anchors.
-        for (const page of new Set(slideImages.map(img => img.page))) {
-          const pageImages = slideImages.filter(img => img.page === page)
-          const pageFigures = blocks.filter(b => b.page === page && b.kind === 'image')
-          if (pageFigures.length !== pageImages.length) continue
-          pageFigures.forEach((figure, index) => {
-            const image = pageImages[index]!
-            if (image.imageAssetPath) figure.imageAssetPath = image.imageAssetPath
-            figure.imageAlt = image.imageAlt
-            matched.add(image)
-          })
-        }
-        for (const image of slideImages.filter(img => !matched.has(img))) {
+        // Geometry AST figures do not expose r:embed IDs. Assigning an image
+        // to a figure solely because their counts match can link the WRONG
+        // physical evidence. Preserve figures unlinked and add physical,
+        // unambiguous slide/image anchors instead.
+        for (const image of slideImages) {
           blocks.push({
             id: 'blk-' + slug + '-slide-' + image.page + '-img-' + image.order + '-' + image.sha256.slice(0, 8),
             kind: 'image', text: '', page: image.page,
