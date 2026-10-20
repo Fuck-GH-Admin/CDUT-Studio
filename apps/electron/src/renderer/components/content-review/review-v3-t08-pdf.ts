@@ -122,7 +122,7 @@ export function renderT08ReportPdf(markdown: string, title = '审核报告'): Ui
 
   for (const source of markdown.replace(/\r\n?/g, '\n').split('\n')) {
     const match = /^(#{1,4})\s+/.exec(source)
-    const heading = match ? match[1].length : 0
+    const heading = match?.[1]?.length ?? 0
     const text = heading ? source.slice(match![0].length) : source
     const size = heading === 1 ? 18 : heading === 2 ? 15 : heading ? 13 : 11
     const lineHeight = size * 1.68
