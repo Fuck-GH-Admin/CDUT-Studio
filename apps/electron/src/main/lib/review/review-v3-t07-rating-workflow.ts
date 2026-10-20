@@ -19,7 +19,7 @@ export type T07Vote = {
   submittedAt: string
 }
 export type T07RankingRow = {
-  caseId: string; blindLabel: string; total: number | null; rank: number | null
+  caseId: string; blindLabel: string; total: number | null; convertedTotal: number | null; rank: number | null
   selected: boolean | null; effectiveJudges: number; blockers: string[]
   dimensions: Array<{ dimensionId: string; average: number | null; voters: number }>
   divergence: number | null
@@ -178,7 +178,7 @@ export function computeT07Ranking(state: T07State): T07RankingRow[] {
   const minJudges = rubric.minEffectiveJudges ?? 1
   const rows: T07RankingRow[] = state.cases.map((entry) => {
     const asg = round.assignments.filter((a) => a.caseId === entry.caseId)
-    const active = asg.filter((a) => a.status !== 'recused')
+    const active = asg.filter((a) => a.status !== 'recused' && a.status !== 'missing')
     const votes = round.votes.filter((v) => active.some((a) => a.id === v.assignmentId))
     const validTotals: number[] = []
     const dims: T07RankingRow['dimensions'] = rubric.dimensions.map((d) => ({ dimensionId: d.id, average: null, voters: 0 }))
@@ -213,7 +213,9 @@ export function computeT07Ranking(state: T07State): T07RankingRow[] {
     const total = validTotals.length
       ? roundNumber(validTotals.reduce((sum, v) => sum + v, 0) / validTotals.length, rubric.totalPrecision)
       : null
-    return { caseId: entry.caseId, blindLabel: entry.blindLabel, total, rank: null,
+    const convertedTotal = total !== null && rubric.scaleConversion
+      ? roundNumber(total / rubric.scaleConversion.fromMax * rubric.scaleConversion.toMax, rubric.totalPrecision) : null
+    return { caseId: entry.caseId, blindLabel: entry.blindLabel, total, convertedTotal, rank: null,
       selected: false, effectiveJudges: validTotals.length, blockers, dimensions: dims, divergence }
   })
   // Scores are not rankable while their case is unresolved.
@@ -227,15 +229,14 @@ export function computeT07Ranking(state: T07State): T07RankingRow[] {
     row.rank = rank; previous = row.total
   }
   const quota = rubric.quota
-  if (rubric.tieBreaker === 'by-dimension' && !state.tieDimensionId && quota !== undefined) {
-    eligible.forEach((r) => r.blockers.push('按维度打破同分尚未指定维度'))
-  }
   let i = 0
   while (i < eligible.length) {
     let end = i + 1
     while (end < eligible.length && eligible[end]!.total === eligible[i]!.total) end++
     const group = eligible.slice(i, end)
-    if (group.length > 1 && rubric.tieBreaker === 'by-dimension' && state.tieDimensionId) {
+    if (group.length > 1 && rubric.tieBreaker === 'by-dimension' && !state.tieDimensionId) {
+      group.forEach((r) => r.blockers.push('按维度打破同分尚未指定维度'))
+    } else if (group.length > 1 && rubric.tieBreaker === 'by-dimension' && state.tieDimensionId) {
       const dimScore = (r: T07RankingRow): number => r.dimensions.find((d) => d.dimensionId === state.tieDimensionId)?.average ?? Number.NEGATIVE_INFINITY
       group.sort((a, b) => dimScore(b) - dimScore(a))
       eligible.splice(i, group.length, ...group)
