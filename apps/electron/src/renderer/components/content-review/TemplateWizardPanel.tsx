@@ -10,6 +10,7 @@ import { useStore } from 'jotai'
 import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { T01_SCENARIOS, createT01Scenario, type T01ScenarioId } from './review-v3-t01-business-presets'
 import { ReviewV3T01TrialPanel } from './ReviewV3T01TrialPanel'
+import { ReviewV3T01AuthoringLaunchpad } from './ReviewV3T01AuthoringLaunchpad'
 import { ReviewV3T01ConditionEditor } from './ReviewV3T01ConditionEditor'
 import { exportT01Template, importT01Template } from './review-v3-t01-template-portability'
 
@@ -352,6 +353,7 @@ export function TemplateWizardPanel(): JSX.Element {
           <span className="font-medium text-foreground">{libraryCounts.reference + libraryCounts.drafts} 套待配置</span>。
           草稿不会直接进入审核，避免未确认的示例标准被当成本校正式规则。
         </div>
+        <ReviewV3T01AuthoringLaunchpad onDraft={(draft) => { setEditing(draft); setMessage([]) }} />
         <div className="mt-3 flex flex-wrap gap-1" role="tablist" aria-label="模板库分类">
           {([
             ['all', `全部模板（${libraryCounts.all}）`],
