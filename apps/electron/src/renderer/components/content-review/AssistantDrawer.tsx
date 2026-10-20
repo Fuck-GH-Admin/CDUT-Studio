@@ -27,6 +27,8 @@ import {
   reviewCaseAtom,
   selectedFindingAtom,
   selectedCaseIdAtom,
+  reviewRunAtom,
+  reviewFocusAtom,
   reviewWorkspaceAggregateAtom,
   reviewWorkspaceRunAtom,
   reviewWorkspaceRunStaleAtom,
@@ -52,6 +54,8 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
   const threads = useAtomValue(reviewAssistantThreadsAtom)
   const setOpen = useSetAtom(reviewAssistantOpenAtom)
   const setThreads = useSetAtom(reviewAssistantThreadsAtom)
+  const legacyRun = useAtomValue(reviewRunAtom)
+  const setLegacyFocus = useSetAtom(reviewFocusAtom)
   const selectedCaseId = useAtomValue(selectedCaseIdAtom)
   const aggregate = useAtomValue(reviewWorkspaceAggregateAtom)
   const workspaceRun = useAtomValue(reviewWorkspaceRunAtom)
@@ -113,6 +117,43 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
     const refs = opinion?.sourceRefs ?? check?.sourceRefs ?? []
     return refs.find((ref) => resolveT08Source(ref, aggregate).state === 'located')
       ?? refs.find((ref) => resolveT08Source(ref, aggregate).state === 'file-only')
+  }
+
+  const canNavigateReference = (id: string): boolean => {
+    if (resolveReference(id)) return true
+    if (legacyRun?.findings.some((finding) => finding.id === id)) return true
+    if (reviewCase?.items.some((item) => item.id === id)) return true
+    if (reviewCase?.documents.some((doc) => doc.id === id && doc.blocks.length > 0)) return true
+    return !!reviewCase?.rulePacks.some((pack) =>
+      (pack.id === id || pack.outline.some((rule) => rule.id === id)) &&
+      pack.outline.some((rule) => rule.anchors.length > 0))
+  }
+  const navigateReference = (id: string): void => {
+    const v3Source = resolveReference(id)
+    if (v3Source) { void openSource(v3Source); return }
+    const finding = legacyRun?.findings.find((item) => item.id === id)
+    if (finding) { actions.focusFinding(finding); setActivePane('center'); return }
+    const item = reviewCase?.items.find((candidate) => candidate.id === id)
+    if (item) {
+      setLegacyFocus({ findingId: id, subjectAnchor: item.anchor, severity: 'yellow', nonce: Date.now() })
+      setActivePane('center')
+      return
+    }
+    const pack = reviewCase?.rulePacks.find((rulePack) => rulePack.id === id || rulePack.outline.some((rule) => rule.id === id))
+    if (pack) {
+      const anchors = pack.id === id ? pack.outline.flatMap((rule) => rule.anchors)
+        : pack.outline.find((rule) => rule.id === id)?.anchors ?? []
+      if (anchors.length > 0) { actions.locateRuleAnchor(anchors); setActivePane('left') }
+      return
+    }
+    const doc = reviewCase?.documents.find((document) => document.id === id)
+    if (doc?.blocks.length) {
+      setLegacyFocus({
+        findingId: id, subjectAnchor: { documentId: doc.id, precision: 'document' },
+        severity: 'yellow', nonce: Date.now(),
+      })
+      setActivePane(doc.role === 'rule' ? 'left' : 'center')
+    }
   }
 
   // 新消息到达 → 滚到底部
@@ -198,8 +239,8 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
             key={message.id}
             message={message}
             extraReferences={currentRun ? [...currentRun.checks.map((x) => x.checkId), ...opinions.map((x) => x.id)].filter((id) => message.role === 'assistant' && message.content.split(/[^\p{L}\p{N}_.:-]+/gu).includes(id)).slice(0, 12) : []}
-            onReference={(id) => { const ref = resolveReference(id); if (ref) void openSource(ref) }}
-            canLocate={(id) => !!resolveReference(id)}
+            onReference={navigateReference}
+            canLocate={canNavigateReference}
           />
         ))}
         {tab === 'sources' && <>
