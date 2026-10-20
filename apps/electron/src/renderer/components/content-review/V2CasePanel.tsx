@@ -15,6 +15,7 @@ import { ObservationConfirmPanel } from './ObservationConfirmPanel'
 import { ReviewAssignmentCard } from './ReviewAssignmentCard'
 import { CaseTimelinePanel } from './CaseTimelinePanel'
 import { ReviewV3T05HumanWorkflow } from './ReviewV3T05HumanWorkflow'
+import { ReviewV3T05RunDecision } from './ReviewV3T05RunDecision'
 import { MaterialDropZone } from './MaterialDropZone'
 
 /** 当前案卷聚合 */
@@ -358,6 +359,7 @@ export function V2CasePanel(): JSX.Element {
               )}
             </div>
             <ReviewV3T05HumanWorkflow aggregate={current} onResult={applyResult} />
+            <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
             <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
             <ReviewAssignmentCard caseId={current.caseV2.id} />
