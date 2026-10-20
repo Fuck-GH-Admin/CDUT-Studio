@@ -26,7 +26,7 @@
 
 **Main 写入**：实现 recordTrustedStageDecision(T05TrustedStageCommand) 传给 T05 组件（仍复用现有 V2CasePanel 挂载点）。
 输入：caseId、templateId、version、expectedRevision、taskId、action、reason、supplementRequiredElements?、supplementReason?。
-Main 不接受 Renderer 伪造的 Actor、role、isRunCurrent 或 Run ID，必须在共享 CaseAggregateV2/ReviewRun/TemplateVersion 真实事务中重核身份、权限、源版本、expectedRevision，并使用 planT05LocalStageAction 生成 Proposal，再复用 submitCommand 原子追加写入。
+Main 不接受 Renderer 伪造的 Actor、role、isRunCurrent 或 Run ID，必须在共享 CaseAggregateV2/ReviewRun/TemplateVersion 真实事务中重核身份、权限、源版本、expectedRevision，并使用 planT05LocalStageAction 生成 Proposal，再复用 submitCommand 原子追加写入。提供给纯领域函数的 verifiedRun.decisionReadiness 必须由 Main 对当前必需检查、人工处置和可适用例外计算：只有 ready 才允许 stage-pass；blocked 可以发出有依据的 final-reject 或要求补件，不能把 Run 完成误当成业务检查全部通过（A15 21 人上限反例）。
 
 - stage-pass：非最终初审只生成下一阶段 teacher 任务；终审才 final；真实 basedOnRunId，不写 run@rev。
 - return-for-supplement：尚未得到完整原件时可以直接创建补件请求，不伪造 Run/Decision。第一次不足、第二次有真实新 DocumentVersion，再核验完成且关联新 Run；多请求全部结束才能恢复原阶段。
