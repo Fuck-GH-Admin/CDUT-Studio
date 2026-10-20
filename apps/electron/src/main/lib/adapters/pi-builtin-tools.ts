@@ -126,6 +126,7 @@ import { describeCdutMutation, executeDomainTool, isCdutMutationAction } from '.
 import { requestCdutMutationConfirm } from '../cdut/cdut-mutation-guard'
 import { cdutDemoService } from '../cdut/cdut-demo/demo-service'
 import { buildPiStudyTools } from '../study/study-tools'
+import { buildPiCsLabTools } from './pi-cslab-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -143,6 +144,8 @@ export interface PiBuiltinToolsContext {
   /** 是否为 AI 速课堂专属会话；仅此时注册速课堂学习工具（资料查阅 / 学生认知档案）。 */
   isStudyClass?: boolean
   permissionMode?: ProferPermissionMode
+  /** 执行期动态读取当前会话权限模式（用于 CSLab 工具审计记账）。 */
+  getPermissionMode?: () => ProferPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation' | 'goal'
   /** 当前 Agent 工作目录；用于解析生图产物、参考图和本地网页预览的相对路径。 */
   agentCwd?: string
@@ -2192,6 +2195,13 @@ export async function buildPiBuiltinTools(
     } catch (error) {
       console.error('[Pi 桥接] 注入 AI 速课堂学习工具失败:', error)
     }
+  }
+
+  // 15. CSLab 自定义科研工具（仅会话绑定 cslabLabId 时注入，禁止全局 activeLabId）
+  try {
+    tools.push(...buildPiCsLabTools(sdk, { sessionId: ctx.sessionId, getPermissionMode: ctx.getPermissionMode }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 CSLab 科研工具失败:', error)
   }
 
   const cloudTools = buildProferCloudTools(sdk, ctx)

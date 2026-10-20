@@ -11,6 +11,26 @@ export default defineConfig({
   },
   root: resolve(__dirname, 'src/renderer'),
   base: './',
+  optimizeDeps: {
+    // Mol* 5.x 的 package.json 没有根入口（无 main/module/exports），
+    // 直接写 'molstar' 会让 Vite 预构建报 Failed to resolve entry for package "molstar"。
+    // 这里按代码实际使用的深路径声明预构建入口，避免 dev 首屏逐个请求造成长时间白屏。
+    include: [
+      'molstar/lib/mol-plugin/context',
+      'molstar/lib/mol-plugin/commands',
+      'molstar/lib/mol-plugin/spec',
+      'molstar/lib/mol-plugin-state/objects',
+      'molstar/lib/mol-state',
+      'molstar/lib/mol-util/color',
+      'molstar/lib/mol-util/assets',
+      'molstar/lib/mol-util/param-definition',
+      'molstar/lib/mol-math/linear-algebra',
+      'molstar/lib/mol-model/structure',
+      'molstar/lib/mol-model/shape',
+      'molstar/lib/mol-geo/geometry/mesh/mesh-builder',
+      'molstar/lib/mol-geo/geometry/mesh/mesh',
+    ],
+  },
   build: {
     outDir: resolve(__dirname, 'dist/renderer'),
     emptyOutDir: true,
@@ -19,6 +39,13 @@ export default defineConfig({
         main: resolve(__dirname, 'src/renderer/index.html'),
         // 浏览器列里的独立文件预览页（Open File Viewer 宿主）；见 src/renderer/viewer/main.ts
         viewer: resolve(__dirname, 'src/renderer/viewer.html'),
+      },
+      output: {
+        // Mol* 体积较大且仅 CSLab 使用，单独分块避免拖慢主应用首屏。
+        manualChunks(id: string) {
+          if (id.includes('node_modules/molstar')) return 'molstar'
+          return undefined
+        },
       },
     },
   },

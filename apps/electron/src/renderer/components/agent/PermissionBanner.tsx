@@ -13,6 +13,7 @@ import { useAtom } from 'jotai'
 import { Shield, ShieldAlert, Check, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { allPendingPermissionRequestsAtom } from '@/atoms/agent-atoms'
+import { isCsLabExecutionTool } from '@profer/shared'
 import type { DangerLevel } from '@profer/shared'
 
 /** 危险等级对应的图标颜色 */
@@ -78,6 +79,8 @@ export function PermissionBanner({ sessionId, onRequestStop }: PermissionBannerP
   const iconColor = DANGER_ICON_STYLES[request.dangerLevel]
   const isDangerous = request.dangerLevel === 'dangerous'
   const IconComponent = isDangerous ? ShieldAlert : Shield
+  // 实验室 Python 工具不提供持久白名单，必须逐次确认。
+  const allowAlways = !isCsLabExecutionTool(request.toolName)
 
   /** 响应权限请求 */
   const respond = async (behavior: 'allow' | 'deny', alwaysAllow = false): Promise<void> => {
@@ -182,15 +185,17 @@ export function PermissionBanner({ sessionId, onRequestStop }: PermissionBannerP
           拒绝
         </Button>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => respond('allow', true)}
-          disabled={responding}
-          className="h-7 px-3 text-xs"
-        >
-          本次会话总是允许
-        </Button>
+        {allowAlways && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => respond('allow', true)}
+            disabled={responding}
+            className="h-7 px-3 text-xs"
+          >
+            本次会话总是允许
+          </Button>
+        )}
 
         <Button
           variant="default"

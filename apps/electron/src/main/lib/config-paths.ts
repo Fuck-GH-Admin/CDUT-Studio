@@ -110,6 +110,17 @@ export function getCdutAccountPath(): string {
 }
 
 /**
+ * 获取 CDUT Science 本机门禁凭据存储路径
+ *
+ * 与特区账户同级放置于全局配置目录，仅存放经 token-crypto 加密的访问密码。
+ *
+ * @returns ~/.cdutai/cslab-security.json
+ */
+export function getCsLabSecurityPath(): string {
+  return join(getConfigDir(), 'cslab-security.json')
+}
+
+/**
  * 获取 CDUT 课表离线缓存路径（SWR 秒开渲染）
  *
  * @returns ~/.cdutai/cdut-schedule-cache.json

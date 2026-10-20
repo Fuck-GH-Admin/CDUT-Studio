@@ -337,6 +337,8 @@ export interface AppSettings {
   memoryRetrievalEngine?: 'classic' | 'hipporag'
   /** 速课堂知识检索引擎：'classic' 经典混合检索 | 'graphrag' 分层 Leiden GraphRAG（默认 classic） */
   studyRetrievalEngine?: 'classic' | 'graphrag'
+  /** 全局上下文索引开关：true 时所有会话强制使用索引模式（默认 false）。 */
+  agentContextIndexGlobal?: boolean
 }
 
 /** 主窗口大小、位置和最大化状态 */

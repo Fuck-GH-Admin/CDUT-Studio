@@ -25,6 +25,7 @@ import {
   hasDangerousStructure,
   hasDangerousPowerShellStructure,
   canonicalAgentToolName,
+  isCsLabExecutionTool,
 } from '@profer/shared'
 
 /** SDK PermissionBehavior */
@@ -137,6 +138,14 @@ export class AgentPermissionService {
       // Worker（子代理）的工具调用基本安全审查
       // 避免 UI 等待导致超时死锁，但仍需拦截明确的危险操作
       if (options.agentID) {
+        // 子代理没有交互式审批通道：实验室 Python 工具一律硬阻断。
+        if (isCsLabExecutionTool(toolName)) {
+          return {
+            behavior: 'deny' as const,
+            message: 'Custom Python tool execution is disabled in non-interactive subagent channels.',
+            interrupt: true,
+          }
+        }
         // 子代理没有交互式审批通道：PowerShell 仅允许与主 Agent 相同的保守只读查询。
         // Bash 保留既有危险命令拦截语义，避免改变现有跨平台工作流。
         if (toolName === 'PowerShell') {
@@ -237,6 +246,8 @@ export class AgentPermissionService {
    */
   private isReadOnlyTool(toolName: string, input: Record<string, unknown>): boolean {
     const canonicalToolName = canonicalAgentToolName(toolName)
+    // 实验室 Python 执行工具永远不走只读自动放行，必须逐次审批。
+    if (isCsLabExecutionTool(toolName)) return false
     // 安全工具白名单使用 shared registry 的逻辑短名，兼容 Claude MCP namespace。
     if (SAFE_TOOLS.includes(canonicalToolName)) return true
 
@@ -252,6 +263,8 @@ export class AgentPermissionService {
    * 判断工具/命令是否在会话白名单中
    */
   private isWhitelisted(sessionId: string, toolName: string, input: Record<string, unknown>): boolean {
+    // 实验室 Python 工具禁止"总是允许"，历史白名单也不再生效。
+    if (isCsLabExecutionTool(toolName)) return false
     const whitelist = this.sessionWhitelists.get(sessionId)
     if (!whitelist) return false
 
@@ -275,6 +288,8 @@ export class AgentPermissionService {
    * 将工具/命令加入会话白名单
    */
   private addToWhitelist(sessionId: string, toolName: string, input: Record<string, unknown>): void {
+    // 实验室 Python 工具不提供持久白名单，避免局部隐式提权。
+    if (isCsLabExecutionTool(toolName)) return
     const whitelist = this.getOrCreateWhitelist(sessionId)
 
     const canonicalToolName = canonicalAgentToolName(toolName)

@@ -794,6 +794,13 @@ export interface AgentSessionUiProjection {
 }
 
 /**
+ * 会话上下文模式。
+ * - classic：经典模式，由 Pi resumeSessionId 续接完整前序对话。
+ * - index：索引模式，仅按当前提问检索相关历史，不再上传全量 transcript。
+ */
+export type AgentContextMode = 'classic' | 'index'
+
+/**
  * Agent 会话轻量索引项
  *
  * 存储在 ~/.proma/agent-sessions.json 中，
@@ -814,6 +821,8 @@ export interface AgentSessionMeta {
   sdkSessionId?: string
   /** Pi session JSONL 的精确路径；避免仅按 session ID 子串定位 artifact。 */
   piSessionFile?: string
+  /** 最近一次实际使用的上下文模式；用于检测 index → classic 切换并重置失效的 SDK 链。 */
+  lastContextMode?: AgentContextMode
   /** Profer assistant UI UUID 到 Pi 树状 session entry ID 的持久映射。 */
   piEntryBindings?: Record<string, string>
   /** Pi entry 对应的文件检查点（回退时恢复到该 turn 之前的工作区状态）。 */
@@ -842,6 +851,8 @@ export interface AgentSessionMeta {
   agentEffort?: AgentEffort | null
   /** 所属工作区 ID */
   workspaceId?: string
+  /** 绑定的 CSLab 实验室 ID；仅该会话注入实验室 Python 工具，缺省不注入。 */
+  cslabLabId?: string
   /** 当前 Agent 会话是否已激活 PPT 专用能力；缺省为 false。 */
   pptCapabilityActive?: boolean
   /** 当前 Agent 会话已按需激活的场景能力组列表（如 'cdut-tools' | 'browser' | 'automation' 等）；缺省为空。 */
@@ -1395,6 +1406,8 @@ export interface AgentSendInput {
   permissionModeOverride?: ProferPermissionMode
   /** 会话级记忆控制：true 表示本轮仅聚焦当前问答，不加载/不向模型回传历史前序问答 */
   disableContextMemory?: boolean
+  /** 本轮上下文模式；缺省为 classic。全局索引开关开启时主进程强制 index。 */
+  contextMode?: AgentContextMode
   /** 用户通过 /skill:xxx 引用的 Skill slug 列表 */
   mentionedSkills?: string[]
   /** 用户通过 #mcp:xxx 引用的 MCP 服务器名称列表 */

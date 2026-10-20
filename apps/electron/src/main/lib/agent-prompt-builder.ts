@@ -14,7 +14,7 @@
  */
 
 import { AGENT_PRESET_CAPABILITY_GROUPS, isAgentPresetToolGroupDisabled } from '@profer/shared'
-import type { AgentPresetToolGroup, ProferPermissionMode } from '@profer/shared'
+import type { AgentContextMode, AgentPresetToolGroup, ProferPermissionMode } from '@profer/shared'
 import { join } from 'node:path'
 import { getUserProfile } from './user-profile-service'
 import { getWorkspaceMcpConfig } from './workspace-mcp-config'
@@ -467,6 +467,8 @@ interface SystemPromptContext {
   studyOutline?: string
   /** 速课堂学生认知档案摘要（仅速课堂注入）。 */
   studyCognition?: string
+  /** 当前会话上下文模式；缺省按 classic 处理。 */
+  contextMode?: AgentContextMode
 }
 
 interface WorkspacePromptPaths {
@@ -666,6 +668,33 @@ Each JSON object contains fields such as:
 - \`media\`: An array of media (e.g. images) attached to the step, each with a \`mime_type\` and a \`uri\` referencing the media file on disk. Media bytes are not stored in the transcript; view the \`uri\` path to see the media.
 - \`truncated_fields\`: An array of field names that were truncated (e.g., \`["content"]\`, \`["thinking"]\`, \`["tool_calls"]\`). Only present in \`transcript.jsonl\` when truncation occurred (never in \`transcript_full.jsonl\`). When present, read the corresponding line in \`transcript_full.jsonl\` for the complete content.
 </conversation_transcript>`
+}
+
+/**
+ * 索引模式的会话记忆契约。
+ *
+ * 索引模式每轮都是临时 Pi session，磁盘上的 transcript 不是本轮上下文来源；
+ * 历史已由客户端检索并注入 <conversation_evidence> / <recent_context>。
+ * 这里必须明确禁止模型再用 shell / 文件工具去搜索 transcript，否则会出现
+ * “搜 transcript → 找不到 → 换目录继续搜”的无意义工具循环。
+ */
+function buildConversationMemoryBlock(): string {
+  return `<conversation_memory>
+Conversation history for this session is supplied by the client at the start of each turn:
+
+- <conversation_evidence>: historical turns retrieved for the current question.
+- <recent_context>: the immediately preceding turn.
+- <working_memory>: current task notes when available.
+
+Treat these injected blocks as the authoritative conversation memory.
+
+Rules:
+- Do NOT run shell commands, grep, Read, Glob, or any filesystem search to recover conversation history.
+- Do NOT search transcript.jsonl, transcript_full.jsonl, brain/**/.system_generated, or agent-sessions/*.jsonl. Those files are not the conversation memory in index mode.
+- If the injected evidence is insufficient, say what is missing and ask the user; do not scan the filesystem for a transcript.
+- When citing a historical turn, use its msg:<uuid> anchor.
+- Tool calls and tool results are summarized in the evidence; do not re-run commands only to recover old outputs.
+</conversation_memory>`
 }
 
 function buildCommunicationStyleBlock(): string {
@@ -1086,7 +1115,7 @@ When entering plan mode (EnterPlanMode), the plan file must be written into the 
  * 全量对齐 Google Antigravity 12 模块 XML 拓扑架构：
  * 1. <identity>
  * 2. <artifacts>
- * 3. <conversation_transcript>
+ * 3. <conversation_transcript>（经典）/ <conversation_memory>（索引）
  * 4. <guidelines>
  * 5. <communication_style>
  * 6. <slash_commands>
@@ -1112,10 +1141,16 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   const epistemicMode = ctx.epistemicMode ?? 'grounded'
 
+  // 索引模式不再暴露 transcript 路径；历史完全由客户端检索注入。
+  const conversationMemoryBlock =
+    ctx.contextMode === 'index'
+      ? buildConversationMemoryBlock()
+      : buildTranscriptBlock(ctx.sessionId)
+
   const xmlBlocks: string[] = [
     buildIdentityBlock(ctx),
     buildArtifactsBlock(ctx.sessionId),
-    buildTranscriptBlock(ctx.sessionId),
+    conversationMemoryBlock,
     buildGuidelinesBlock(ctx, capabilityMounted, capabilityDisabled, toolDisabled, suppress, epistemicMode, workspacePaths),
     buildCommunicationStyleBlock(),
     ANTIGRAVITY_SLASH_COMMANDS,

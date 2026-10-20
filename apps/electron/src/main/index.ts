@@ -186,6 +186,15 @@ import { yanhuExpressManager } from './lib/cdut/yanhu/yanhu-express-manager'
 import { yanhuPetWindowManager } from './lib/cdut/yanhu/yanhu-pet-window-manager'
 import { startStudyBenchmarkServer, stopStudyBenchmarkServer } from './lib/study/study-benchmark-server'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
+import { closeAllLabToolWatchers } from './lib/cslab/cslab-tool-registry'
+import { closeAllVaultWatchers } from './lib/cslab/cslab-canvas-sync'
+import { closeAllCsLabVaultCaches } from './lib/cslab/cslab-vault-cache'
+import { stopAllShareWatchers } from './lib/cslab/cslab-share-watcher'
+import { closeAllShareDatabases } from './lib/cslab/cslab-share-db'
+import { stopAllHpcBridges } from './lib/cslab/cslab-hpc'
+import { closeAllHpcDatabases } from './lib/cslab/cslab-hpc-db'
+import { closeAllCsLabDatabases } from './lib/cslab/cslab-db'
+import { stopAllZoteroWatchers } from './lib/cslab/cslab-zotero'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
   registerBridge,
@@ -1180,6 +1189,17 @@ app.on('before-quit', () => {
   killOrphanedClaudeSubprocesses()
   // 停止工作区文件监听
   stopWorkspaceWatcher()
+  // 显式释放 CSLab 目录监听句柄（Windows 下不释放会阻止重命名/删除实验室目录）
+  void closeAllVaultWatchers()
+  void closeAllLabToolWatchers()
+  void stopAllShareWatchers()
+  void stopAllHpcBridges()
+  closeAllCsLabVaultCaches()
+  closeAllShareDatabases()
+  closeAllHpcDatabases()
+  // 关闭 CSLab 中央库并停止 Zotero WAL 监听，避免退出时残留 SQLite 句柄
+  void stopAllZoteroWatchers()
+  closeAllCsLabDatabases()
   // 停止所有 Bridge
   stopBridgeSelfHealing()
   stopAllBridges()
