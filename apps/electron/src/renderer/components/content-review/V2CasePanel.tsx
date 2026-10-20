@@ -58,7 +58,7 @@ function renderTemplateFieldInput(
 }
 
 /** 案卷面板：选择模板 → 创建案卷 → 登记材料 → 开始审核 */
-export function V2CasePanel(): JSX.Element {
+export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) => void } = {}): JSX.Element {
   const store = useStore()
   const aggregate = useAtomValue(reviewV2AggregateAtom)
   const setNotice = useSetAtom(reviewV2NoticeAtom)
@@ -117,8 +117,9 @@ export function V2CasePanel(): JSX.Element {
     const loaded = await window.reviewAPI.openAggregateV2(caseId)
     if (!loaded) { toast.error(`案卷不存在: ${caseId}`); return }
     store.set(reviewV2AggregateAtom, loaded)
+    onCaseOpened?.(caseId)
     toast.success(`已打开案卷：${loaded.caseV2.title}`)
-  }), [run, store])
+  }), [run, store, onCaseOpened])
 
   const loadTemplates = useCallback(async (): Promise<void> => {
     try {
@@ -158,10 +159,11 @@ export function V2CasePanel(): JSX.Element {
     })
     const aggregate = await window.reviewAPI.getAggregateV2(caseId)
     store.set(reviewV2AggregateAtom, aggregate ?? null)
+    if (aggregate) onCaseOpened?.(caseId)
     await refreshList()
     setNewTitle(''); setFieldValues({}); setSubjectRows([])
     toast.success(`案卷已创建：${caseId}（${selectedTemplate.name}）`)
-  }), [selectedTemplate, newTitle, fieldValues, subjectRows, run, store, refreshList])
+  }), [selectedTemplate, newTitle, fieldValues, subjectRows, run, store, refreshList, onCaseOpened])
   const seedAndCreate = useCallback(() => run(async () => {
     await window.reviewAPI.seedFixtureV2()
     const caseId = `v2-demo-${Date.now().toString(36)}`
@@ -178,9 +180,10 @@ export function V2CasePanel(): JSX.Element {
     })
     const aggregate = await window.reviewAPI.getAggregateV2(caseId)
     store.set(reviewV2AggregateAtom, aggregate ?? null)
+    if (aggregate) onCaseOpened?.(caseId)
     await refreshList()
     if (result) toast.success(`审核任务已创建：${caseId}`)
-  }), [run, store, toast, refreshList])
+  }), [run, store, toast, refreshList, onCaseOpened])
 
   const current = aggregate
 
@@ -230,7 +233,15 @@ export function V2CasePanel(): JSX.Element {
 
   return (
     <div className="mx-3 mb-3 rounded-xl border bg-card p-3 shadow-sm">
-      <p className="mb-2 flex items-center gap-2 text-sm font-semibold">审核任务</p>
+      <p className="mb-2 flex items-center gap-2 text-sm font-semibold">案卷办理</p>
+      {current && <p className="mb-3 rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        当前案卷：<span className="font-medium text-foreground">{current.caseV2.title}</span>
+        {' · '}{current.caseV2.documents.filter((item) => item.active !== false).length} 份原件
+        {' · '}{current.caseV2.stage === 'decided' ? '已形成业务决定' : '当前阶段：' + current.caseV2.stage}
+      </p>}
+      <details className="mb-3 rounded-md border border-border/60 px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium">打开其他案卷 / 从已发布模板新建</summary>
+        <div className="mt-3">
       <div className="mb-2 space-y-1.5 rounded-lg border-t pt-2">
         <p className="text-xs font-medium text-muted-foreground">从模板新建审核任务</p>
         <select className="w-full rounded-md border bg-background px-2 py-1 text-xs" value={selectedTemplate ? `${selectedTemplate.templateId}@${selectedTemplate.version}` : ''} onChange={(event) => selectTemplate(event.target.value)}>
@@ -313,6 +324,8 @@ export function V2CasePanel(): JSX.Element {
           ))}
         </div>
       )}
+        </div>
+      </details>
       <div className="space-y-2">
         {!current && (
           <Button size="sm" disabled={store.get(reviewV2BusyAtom)} onClick={seedAndCreate}>
@@ -374,6 +387,7 @@ export function V2CasePanel(): JSX.Element {
             <p className="text-muted-foreground">
               阶段 {current.caseV2.stage} · 已记录操作 {current.receiptLog.length} 条
             </p>
+            {(currentTemplate?.fields.some((field) => field.key === 'studentName') || Object.prototype.hasOwnProperty.call(current.caseV2.caseFields, 'studentName')) && (
             <div className="flex items-center gap-1.5">
               <input key={current.caseV2.id} id="v2-student-name" className="h-7 w-32 rounded-md border bg-background px-2 text-xs" placeholder="学生姓名" defaultValue={String((current.caseV2.caseFields.studentName as { value?: string })?.value ?? '')} />
               <Button size="sm" variant="outline" onClick={() => {
@@ -395,6 +409,7 @@ export function V2CasePanel(): JSX.Element {
                 })
               }}>保存姓名</Button>
             </div>
+            )}
           </div>
         )}
       </div>
