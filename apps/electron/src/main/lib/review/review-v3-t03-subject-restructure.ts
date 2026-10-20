@@ -8,7 +8,7 @@
 import type {
   CaseAggregateV2, EvidenceLink, FieldValue, Observation, ReviewRunV2, ReviewSubject, SourceRef,
 } from '@profer/shared'
-import { planT03Recheck, type T03RecheckImpact } from './review-v3-t03-fact-workflow'
+import { planT03Recheck, projectT03Facts, type T03RecheckImpact } from './review-v3-t03-fact-workflow'
 
 export interface T03RestructureProposal {
   kind: 'split' | 'merge'
@@ -90,16 +90,14 @@ function ensureNewIds(aggregate: CaseAggregateV2, ids: readonly string[]): void 
   }
 }
 function currentObservations(aggregate: CaseAggregateV2, sourceSubjectIds: readonly string[]): Observation[] {
-  const seen = new Set<string>()
-  const current: Observation[] = []
-  // Select latest per subject+field, retaining the original historical record.
-  for (const observation of [...aggregate.observations].reverse()) {
-    const key = JSON.stringify([observation.subjectId, observation.fieldKey])
-    if (!sourceSubjectIds.includes(observation.subjectId) || seen.has(key)) continue
-    seen.add(key)
-    current.push(observation)
-  }
-  return current
+  // A later AI hypothesis may not displace a still-valid human confirmation.
+  // Fall back to the latest candidate only when this field has no current confirmation.
+  return projectT03Facts(aggregate)
+    .filter(row => sourceSubjectIds.includes(row.subjectId))
+    .flatMap(row => {
+      const picked = row.current ?? row.history[row.history.length - 1]
+      return picked ? [picked] : []
+    })
 }
 function operationChecks(aggregate: CaseAggregateV2, operationId: string): void {
   if (!operationId.trim()) throw new Error('拆并操作必须有稳定 requestId')
