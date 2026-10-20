@@ -86,13 +86,9 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     try{
       const source=await readLatest(templateId.trim())
       setLoaded({document:source.document,revision:source.revision})
+      // A preview is not a frozen candidate. The existing B1 editor must
+      // explicitly freeze the loaded revision before the install button enables.
       setB1Frozen(null)
-      // Reopening an incomplete draft must remain possible. Only a fully
-      // compiled candidate can be offered to Main as an installable Plan.
-      try{
-        const descriptor=await window.reviewAPI.previewLocalCandidateAuthorV3({document:source.document})
-        setB1Frozen({templateId:source.document.templateId,fingerprint:descriptor.canonicalPlan.fingerprint})
-      }catch{ /* An incomplete author draft remains editable. */ }
       setKey(k=>k+1)
       setMessage('已从 Main 重新读取本机保存的候选修订 '+source.revision)
     }catch(e){setError(e instanceof Error?e.message:String(e))}
