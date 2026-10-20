@@ -28,7 +28,8 @@ export function D4CaseSetup({ onChange, suggestedTemplateId }: {
   React.useEffect(()=>{
     if(!suggestedTemplateId||!templates.length)return
     const suggested=templates.find(t=>t.templateId===suggestedTemplateId)
-    if(!suggested)return
+    // 缺件的候选不可自动带入：如实保留为不可用，不伪造空选择。
+    if(!suggested||suggested.selectionIssue)return
     setTemplateId(suggested.templateId)
     setDraft(JSON.stringify(suggested.selection,null,2))
     setConfirmed(false);setStudentFixture(false);setError('')
@@ -37,7 +38,7 @@ export function D4CaseSetup({ onChange, suggestedTemplateId }: {
     let value: D4ClientSelection | undefined
     try {
       const selected = JSON.parse(draft)
-      if (confirmed && template && selected.templateId === template.templateId && selected.version === template.version && Array.isArray(selected.targets)) {
+      if (confirmed && template && !template.selectionIssue && selected.templateId === template.templateId && selected.version === template.version && Array.isArray(selected.targets)) {
         value = { selection: selected, useControlledStudentFixture: studentFixture }
       }
     } catch { /* 非法 JSON 由提交状态直接提示。 */ }
@@ -72,8 +73,10 @@ export function D4CaseSetup({ onChange, suggestedTemplateId }: {
         const next = templates.find(t => t.templateId === e.target.value)
         setTemplateId(e.target.value); setDraft(next ? JSON.stringify(next.selection, null, 2) : ''); setConfirmed(false); setStudentFixture(false)
       }}>
-        <option value="">选择受控 D4 候选（{templates.length} 套）…</option>
-        {templates.map(t => <option key={t.templateId} value={t.templateId}>{t.domain} · {t.templateId} · {t.name}</option>)}
+        <option value="">选择受控 D4 候选（{templates.filter(t=>!t.selectionIssue).length}/{templates.length} 可用）…</option>
+        {templates.map(t => <option key={t.templateId} value={t.templateId} disabled={!!t.selectionIssue}>
+          {t.domain} · {t.templateId} · {t.name}{t.selectionIssue ? ' · 不可用（' + t.selectionIssue + '）' : ''}
+        </option>)}
       </select>
     </label>
     {selection?.targets?.map((target, index) => <fieldset key={index} className="space-y-2 rounded-lg bg-background p-2">
@@ -112,6 +115,7 @@ export function D4CaseSetup({ onChange, suggestedTemplateId }: {
     {template?.controlledStudentFixture && <label className="flex gap-2"><input type="checkbox" checked={studentFixture} onChange={e => { setStudentFixture(e.target.checked); setConfirmed(false) }} />使用随包的受控合成学籍快照（姓名/证号独立字段；非正式学籍接口）</label>}
     {template && <label className="flex gap-2"><input aria-label="确认 D4 对象和条件" type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />我已核对对象、场景、条件及其来源版本，按以上选择创建固定任务。</label>}
     {draft && !selection && <p role="alert" className="text-destructive">场景 JSON 格式不正确</p>}
+    {template?.selectionIssue && <p role="alert" className="text-destructive">该候选缺少冻结选择文件，不能用于建案：{template.selectionIssue}</p>}
     {error && <p role="alert" className="text-destructive">{error}</p>}
   </div>
 }

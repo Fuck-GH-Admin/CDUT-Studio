@@ -10,7 +10,7 @@ import { REVIEW_IPC_CHANNELS } from '@profer/shared'
 import { assertC0ReviewMainSender } from './review-c0-authority'
 import { readAggregate } from './case-store-v2'
 import { isNativeWorkspaceCaseV3 } from './native-workspace-case-v3'
-import { loadD4UnifiedCatalog, loadD4UnifiedWorkspace, resolveD4SourcePath } from './review-d4-catalog'
+import { loadD4UnifiedCatalog, loadD4UnifiedWorkspace, resolveD4SourcePath, type D4UnifiedEntry } from './review-d4-catalog'
 import { attachD2RuntimePlan, makeD2CandidateShell, verifyD2InstalledPlan } from './review-d2-runtime'
 import { getTemplate, isAuthoringCandidateDraft, saveAuthoringCandidateDraft } from './template-store'
 import { assertC2PhysicalOriginalBytes } from './review-v3-main-trust-port'
@@ -18,24 +18,60 @@ import { assertC2PhysicalOriginalBytes } from './review-v3-main-trust-port'
 const reviewer: Actor = { actorId:'local-reviewer', actorSource:'local', role:'reviewer' }
 const readJson=<T>(path:string):T=>JSON.parse(readFileSync(resolveD4SourcePath(path),'utf8')) as T
 const base=(path:string):string=>path.replace(/\/workspace(?:\/workspace)?\.json$/, '')
-export function listLocalD4Templates(): D4ClientTemplate[] {
-  return loadD4UnifiedCatalog().templates.map(entry=>{
-    const workspace=loadD4UnifiedWorkspace(entry)
-    const template=workspace.definitions.templates[0]!
-    const directory=base(entry.workspacePath)
-    const controlledStudentFixture=entry.templateId==='g01-student-identity-correction'
-    const fixture=['selection.json','synthetic-selection.json','fixtures/selection.json']
-      .map(name=>directory+'/'+name).find(path=>existsSync(resolveD4SourcePath(path)))
-    const selection=controlledStudentFixture
-      ? readJson<{two:D2ScenarioSelection}>(directory+'/fixtures/selections.json').two
-      : fixture ? readJson<D2ScenarioSelection>(fixture)
-      : {templateId:entry.templateId,version:entry.templateVersion,targets:[]}
-    return {templateId:entry.templateId,version:entry.templateVersion,domain:entry.domain,
-      name:template.name,workspaceGitBlobSha:entry.workspaceGitBlobSha,
-      primary:template.genericScenarioAxes?.primary??[],
-      conditions:template.genericScenarioAxes?.conditions??[],
-      selection,controlledStudentFixture}
+/** 唯一使用受控合成学籍快照的候选；其选择冻结在 fixtures/selections.json 的 two 分支。 */
+const CONTROLLED_STUDENT_TEMPLATE='g01-student-identity-correction'
+
+/**
+ * 读取单个候选的冻结选择。缺件一律抛错，由调用方把该候选标记为不可用：
+ * 绝不返回 targets:[] 之类的空选择冒充「无需对象/条件」。
+ */
+export function localD4Selection(entry:D4UnifiedEntry,directory:string):D2ScenarioSelection {
+  if(entry.templateId===CONTROLLED_STUDENT_TEMPLATE){
+    const path=directory+'/fixtures/selections.json'
+    if(!existsSync(resolveD4SourcePath(path)))
+      throw new Error('D4_SELECTION_MISSING: 受控学籍选择文件缺失 '+path)
+    const frozen=readJson<{two?:D2ScenarioSelection}>(path).two
+    if(!frozen||!Array.isArray(frozen.targets)||!frozen.targets.length)
+      throw new Error('D4_SELECTION_MISSING: 受控学籍选择 two 分支为空 '+path)
+    return frozen
+  }
+  const fixture=['selection.json','synthetic-selection.json','fixtures/selection.json']
+    .map(name=>directory+'/'+name).find(path=>existsSync(resolveD4SourcePath(path)))
+  if(!fixture)throw new Error('D4_SELECTION_MISSING: 候选缺少冻结选择 '+directory)
+  return readJson<D2ScenarioSelection>(fixture)
+}
+
+/** 不可用候选：保留目录身份，selection 仅作空占位，原因经 selectionIssue 如实暴露。 */
+function unavailableLocalD4Template(entry:D4UnifiedEntry,reason:string):D4ClientTemplate {
+  return {templateId:entry.templateId,version:entry.templateVersion,domain:entry.domain,
+    name:entry.templateId,workspaceGitBlobSha:entry.workspaceGitBlobSha,
+    primary:[],conditions:[],
+    selection:{templateId:entry.templateId,version:entry.templateVersion,targets:[]},
+    controlledStudentFixture:entry.templateId===CONTROLLED_STUDENT_TEMPLATE,
+    selectionIssue:reason}
+}
+
+/** 逐候选隔离：单个候选缺件/损坏只影响自身，不能让整套 50 套目录整体不可读。 */
+export function buildLocalD4Templates(entries:readonly D4UnifiedEntry[]):D4ClientTemplate[] {
+  return entries.map(entry=>{
+    try{
+      const workspace=loadD4UnifiedWorkspace(entry)
+      const template=workspace.definitions.templates[0]!
+      return {templateId:entry.templateId,version:entry.templateVersion,domain:entry.domain,
+        name:template.name,workspaceGitBlobSha:entry.workspaceGitBlobSha,
+        primary:template.genericScenarioAxes?.primary??[],
+        conditions:template.genericScenarioAxes?.conditions??[],
+        selection:localD4Selection(entry,base(entry.workspacePath)),
+        controlledStudentFixture:entry.templateId===CONTROLLED_STUDENT_TEMPLATE}
+    }catch(error){
+      const reason=error instanceof Error?error.message:String(error)
+      console.error('[review-v3] D4 候选不可用 '+entry.templateId+'@'+entry.templateVersion+'：'+reason)
+      return unavailableLocalD4Template(entry,reason)
+    }
   })
+}
+export function listLocalD4Templates(): D4ClientTemplate[] {
+  return buildLocalD4Templates(loadD4UnifiedCatalog().templates)
 }
 export function installC11NativeD4TechnicalPlan():void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.LOCAL_D4_LIST_V3,(event:IpcMainInvokeEvent)=>{
