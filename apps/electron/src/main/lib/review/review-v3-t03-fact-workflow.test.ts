@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { proposeT03SubjectMerge, proposeT03SubjectSplit } from './review-v3-t03-subject-restructure'
 import type { CaseAggregateV2, ReviewRunV2 } from '@profer/shared'
 import {
   parseT03Correction, planT03Recheck, projectT03Evidence, projectT03Facts, proposedT03EvidenceLinks,
@@ -13,7 +14,7 @@ function fixture(): CaseAggregateV2 {
   })
   return {
     caseV2: {
-      id: 'case1', subjects: [{ id: 'alice', title: '张同学' }, { id: 'bob', title: '另一位张同学' }],
+      id: 'case1', subjects: [{ id: 'alice', title: '张同学', type: 'item', status: 'identified', correction: 'user-confirmed', sourceRefs: [], fields: { score: {kind: 'number', value: 0} } }, { id: 'bob', title: '另一位张同学', type: 'item', status: 'identified', correction: 'user-confirmed', sourceRefs: [], fields: { score: {kind: 'number', value: 6} } }],
       documents: [document('certificate'), document('notice'), document('old', false)],
     },
     observations: [
@@ -74,4 +75,28 @@ describe('T03 real fact/evidence review', () => {
     expect(retired.affectedCheckIds).toContain('bob-score')
     expect(run.checks).toHaveLength(3)
   })
+  test('split/merge proposes one atomic source-preserving change, leaves originals intact', () => {
+    const aggregate = fixture()
+    const split = proposeT03SubjectSplit(aggregate, null, {
+      operationId: 'split-request-1', subjectId: 'alice', now: '2026-10-21',
+      parts: [
+        { id: 'alice-award', title: '获奖事项', fieldKeys: ['score'], evidenceLinkIds: ['a1'] },
+        { id: 'alice-other', title: '其他事项', fieldKeys: [], evidenceLinkIds: [] },
+      ],
+    })
+    expect(split.blockedReasons).toEqual([])
+    expect(split.proposedSubjects).toHaveLength(2)
+    expect(split.proposedObservations.every(ob => !ob.confirmed)).toBe(true)
+    expect(split.proposedEvidenceLinks[0]?.status).toBe('candidate')
+    expect(aggregate.caseV2.subjects).toHaveLength(2)
+    expect(aggregate.evidenceLinks.find(link => link.id === 'a1')?.status).toBe('candidate')
+    const merge = proposeT03SubjectMerge(aggregate, null, {
+      operationId: 'merge-request-1', subjectIds: ['alice', 'bob'],
+      newSubjectId: 'same-entity', title: '核对后的同一事项', now: '2026-10-21',
+    })
+    expect(merge.blockedReasons).toContain('合并字段存在冲突，必须人工确认：score')
+    expect(merge.proposedSubjects[0]!.fields.score).toBeUndefined()
+    expect(merge.proposedEvidenceLinks.every(link => link.status === 'candidate')).toBe(true)
+  })
+
 })
