@@ -46,8 +46,8 @@ const fieldKeys: Array<[RegExp, string]> = [
 const clean = (value: string): string => value.trim().replace(/^[\s"'“”‘’]+|[\s"'“”‘’。]+$/g, '')
 const unique = (s: string[]): string[] => [...new Set(s)]
 const pick = (text: string, label: string): string | undefined => {
-  const line = text.split(/\r?\n/).find(s => new RegExp('^\\s*' + label + '\\s*[:：]').test(s))
-  return line?.replace(new RegExp('^\\s*' + label + '\\s*[:：]\\s*'), '').trim()
+  const line = text.split(/\r?\n/).find(s => new RegExp('^\\s*(?:' + label + ')\\s*[:：]').test(s))
+  return line?.replace(new RegExp('^\\s*(?:' + label + ')\\s*[:：]\\s*'), '').trim()
 }
 const tokens = (text: string): string[] => text.split(/[、，,；;]+/).map(clean).filter(Boolean)
 function sourceKey(label: string, used: Set<string>): string {
