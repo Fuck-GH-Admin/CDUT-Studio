@@ -1,70 +1,134 @@
-/**
- * C local native Case -> existing genuine V2/Pi background service entry.
- * The Main service decides whether the selected Case/Plan/model is eligible.
- * A RUNNING technical phase is never a business Check PASS or C11 Host receipt.
+/** Real local Pi/ReviewRun visibility for the native V3 workbench.
+ * Display Main's existing persisted Run, not a fabricated progress or approval.
  */
 import * as React from 'react'
-import type {ReviewBackgroundPiRunState} from '@profer/shared'
+import type { ReviewBackgroundPiRunState, ReviewRunV2 } from '@profer/shared'
 
-export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactElement{
+const statusName: Record<string,string> = {
+  compliant:'符合', 'non-compliant':'不符合',
+  'awaiting-supplement':'待补材料', 'awaiting-confirmation':'待人工确认',
+  'not-applicable':'不适用','not-executed':'尚未执行',
+  'execution-failed':'执行失败',
+}
+const button='rounded border border-border px-3 py-1 text-sm disabled:opacity-40'
+
+export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactElement {
   const [state,setState]=React.useState<ReviewBackgroundPiRunState|null>(null)
+  const [run,setRun]=React.useState<ReviewRunV2|null>(null)
   const [busy,setBusy]=React.useState(false)
   const [error,setError]=React.useState('')
   const [notice,setNotice]=React.useState('')
-  const refresh=React.useCallback(async()=>{
+  const [showAll,setShowAll]=React.useState(false)
+  const generation=React.useRef(0)
+
+  const refresh=React.useCallback(async():Promise<void>=>{
     if(!caseId)return
-    const value=await window.reviewAPI.getBackgroundPiReviewStateV2(caseId)
-    if(value.caseId!==caseId)throw new Error('MAIN_PI_CASE_SCOPE_MISMATCH')
-    setState(value)
+    const currentGeneration=generation.current
+    const next=await window.reviewAPI.getBackgroundPiReviewStateV2(caseId)
+    if(next.caseId!==caseId)throw new Error('MAIN_PI_CASE_SCOPE_MISMATCH')
+    const actual=next.runId
+      ? await window.reviewAPI.getRunV2(caseId,next.runId) : undefined
+    if(actual&&(actual.caseId!==caseId||actual.id!==next.runId))
+      throw new Error('MAIN_PI_PERSISTED_RUN_SCOPE_MISMATCH')
+    if(currentGeneration!==generation.current)return
+    setState(next)
+    setRun(actual??null)
   },[caseId])
+
   React.useEffect(()=>{
-    setState(null);setError('');setNotice('')
-    if(!caseId)return
+    generation.current+=1
     let live=true
-    void window.reviewAPI.getBackgroundPiReviewStateV2(caseId)
-      .then(x=>{if(live&&x.caseId===caseId)setState(x)})
-      .catch(e=>{if(live)setError(e instanceof Error?e.message:String(e))})
-    return()=>{live=false}
-  },[caseId])
+    setState(null);setRun(null);setShowAll(false);setError('');setNotice('')
+    if(!caseId)return()=>{live=false;generation.current+=1}
+    void refresh().catch(e=>{
+      if(live)setError(e instanceof Error?e.message:String(e))
+    })
+    return()=>{live=false;generation.current+=1}
+  },[caseId,refresh])
+
+  React.useEffect(()=>{
+    if(!caseId||!['running','queued','awaiting-input','awaiting-decision'].includes(state?.runStatus??''))return
+    let active=true
+    const timer=setInterval(()=>{
+      if(!active||busy)return
+      void refresh().catch(e=>{
+        if(active)setError(e instanceof Error?e.message:String(e))
+      })
+    },2500)
+    return()=>{active=false;clearInterval(timer)}
+  },[caseId,state?.runStatus,refresh,busy])
+
   const execute=async(kind:'start'|'stop'|'refresh'):Promise<void>=>{
     if(!caseId||busy)return
     setBusy(true);setError('');setNotice('')
     try{
       if(kind==='start'){
-        // Real Main creates a review-owned Pi session, authenticates model
-        // configuration and persists a V2 Run/assignment before dispatch.
         const next=await window.reviewAPI.startBackgroundPiReviewV2({caseId})
         if(next.caseId!==caseId)throw new Error('MAIN_PI_START_CASE_SCOPE_MISMATCH')
-        setState(next)
-        setNotice('已接收 Main 后台执行回执；仅显示真实运行阶段，不代表审核通过')
+        setNotice('已提交真实 Pi 审核；下方只显示 Main 持久运行记录，不代表审核通过')
       }else if(kind==='stop'){
         if(!state?.runId)throw new Error('没有 Main 当前 Run ID，不能停止未知运行')
         const next=await window.reviewAPI.stopBackgroundPiReviewV2({caseId,runId:state.runId})
         if(next.caseId!==caseId)throw new Error('MAIN_PI_STOP_CASE_SCOPE_MISMATCH')
-        setState(next)
-        setNotice('停止请求已由 Main 处理；实际状态以运行账本为准')
-      }else{
-        await refresh()
-        setNotice('已重新读取 Main 实际后台 Pi 状态')
-      }
+        setNotice('Main 已受理停止；下方显示实际持久状态')
+      }else setNotice('已重新读取最新 Main Run 账本')
+      await refresh()
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
-  return <section className="space-y-2 rounded border border-border p-3">
-    <h3 className="text-sm font-semibold">现有真实 Pi 后台审核 · 原生案卷</h3>
-    <p className="text-xs text-muted-foreground">直接调用已安装的 Main V2/Pi 会话与 Run 账本；需案卷具有实际可执行的模板/材料、并已在审核设置中配置模型。未发布候选模板、未绑定的原生草稿或失败运行不自动放行。此入口不是新 C11 物理 Host/学校审批。</p>
-    <p className="text-xs">当前案卷：{caseId||'尚未创建'} · Main 阶段：{state?.phase??'未读取'}
+  const items=run?.checks??[]
+  const opinions=run?.opinions??[]
+  const shown=showAll?items:items.slice(0,30)
+  return <section className="space-y-3 rounded border border-border p-3" data-testid="review-v3-local-pi-ledger">
+    <h3 className="text-sm font-semibold">真实 Pi 后台审核与结果账本</h3>
+    <p className="text-xs text-muted-foreground">使用已存在的 Main Pi/ReviewRun 持久存储。案卷需要具备可执行模板、申报事项、材料及有效模型配置。运行结果是本地技术预审，不是学校审批。</p>
+    <p className="break-all text-xs">案卷：{caseId||'尚未选择'} · 阶段：{state?.phase??'未读取'}
       {' · '}Run：{state?.runId??'未创建'}
-      {' · '}运行状态：{state?.runStatus??'未取得'}</p>
+      {' · '}状态：{run?.status??state?.runStatus??'未取得'}</p>
     <div className="flex flex-wrap gap-2">
-      <button type="button" className="rounded border border-border px-3 py-1 text-sm disabled:opacity-40"
-        disabled={!caseId||busy} onClick={()=>void execute('start')}>使用现有 Main Pi 启动审核</button>
-      <button type="button" className="rounded border border-border px-3 py-1 text-sm disabled:opacity-40"
-        disabled={!caseId||busy||!state?.runId}
-        onClick={()=>void execute('stop')}>停止当前真实 Run</button>
-      <button type="button" className="rounded border border-border px-3 py-1 text-sm disabled:opacity-40"
-        disabled={!caseId||busy} onClick={()=>void execute('refresh')}>刷新后台状态</button>
+      <button type="button" className={button} disabled={!caseId||busy}
+        onClick={()=>void execute('start')}>启动真实 Pi 审核</button>
+      <button type="button" className={button} disabled={!caseId||busy||!state?.runId||
+        !['running','queued','awaiting-input','awaiting-decision'].includes(state?.runStatus??'')}
+        onClick={()=>void execute('stop')}>停止当前 Run</button>
+      <button type="button" className={button} disabled={!caseId||busy}
+        onClick={()=>void execute('refresh')}>刷新运行与检查结果</button>
     </div>
+    {run&&<div className="space-y-3 rounded border border-border/70 p-3">
+      <p className="text-sm font-medium">真实运行 {run.id} · 模板 {run.templateId}@{run.templateVersion}</p>
+      <p className="text-xs">检查计划 {run.coverage.plannedChecks} 项 · 已完成 {run.coverage.completedChecks} 项
+        {' · '}有效判断 {run.coverage.effectiveVerdicts} 项 · 待处理 {run.coverage.pendingChecks} 项
+        {' · '}模型意见 {opinions.length} 条</p>
+      {run.error&&<p role="alert" className="text-xs text-red-600">执行异常：{run.error}</p>}
+      {items.length===0?<p className="text-xs text-muted-foreground">Main 当前未持久化检查结果；执行中或待补充材料。</p>:
+        <div className="space-y-2">
+          <h4 className="text-sm font-medium">逐项检查结果（来自 Run 账本）</h4>
+          {shown.map((item,index)=><div key={item.checkId+'-'+index}
+              className="rounded border border-border/70 p-2 text-xs">
+            <div className="font-medium">{item.checkId} · {statusName[item.status]??item.status}
+              {' · '}{item.executedBy}</div>
+            <p className="mt-1 whitespace-pre-wrap">{item.reason||'无说明'}</p>
+            {item.sourceRefs.length>0&&<p className="mt-1 break-all text-muted-foreground">
+              原件来源：{item.sourceRefs.map(s=>s.documentVersionId).join('、')}
+            </p>}
+            {item.calculation?.detailLines?.length>0&&<p className="mt-1 whitespace-pre-wrap">
+              {item.calculation.detailLines.join('；')}
+            </p>}
+          </div>)}
+          {items.length>30&&<button type="button" className={button}
+            onClick={()=>setShowAll(x=>!x)}>{showAll?'只看前 30 项':`展开全部 ${items.length} 项`}</button>}
+        </div>}
+      {opinions.length>0&&<details className="text-xs">
+        <summary className="cursor-pointer font-medium">模型意见与待人工处理项（{opinions.length}）</summary>
+        <div className="mt-2 space-y-2">{opinions.map(item=><div key={item.id}
+          className="rounded border border-border/70 p-2">
+          <p className="font-medium">{item.title} · {item.verification}</p>
+          <p className="mt-1 whitespace-pre-wrap">{item.detail}</p>
+          <p className="mt-1 text-muted-foreground">{item.suggestionText}</p>
+        </div>)}</div>
+      </details>}
+      <p className="text-xs text-muted-foreground">原件和案卷的后续人工复核、历史回执及报告导出请使用同一案卷工作台；本视图不另写 Decision。</p>
+    </div>}
     {notice&&<p role="status" className="text-xs">{notice}</p>}
     {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
   </section>
