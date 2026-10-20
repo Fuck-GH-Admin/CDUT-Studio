@@ -89,6 +89,7 @@ export function validateT01TypedCriteria(template: TemplateVersion): string[] {
   const errors: string[] = []
   for (const section of template.sections ?? []) {
     for (const criterion of section.criteria) {
+      const location = `分项「${section.name}」标准「${criterion.title}」`
       const raw = (criterion as T01CriterionWithConstraint).deterministicConstraint
       if (raw === undefined) {
         if (criterion.execution === 'deterministic' && !criterion.dataCheck) {
@@ -96,7 +97,6 @@ export function validateT01TypedCriteria(template: TemplateVersion): string[] {
         }
         continue
       }
-      const location = `分项「${section.name}」标准「${criterion.title}」`
       if (!raw || raw.schemaVersion !== 1 || raw.kind !== 'field-number-limit') {
         errors.push(`${location} 的确定性条件格式无法识别`)
         continue
