@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createT01Scenario, T01_SCENARIOS, trialT01Template } from './review-v3-t01-business-presets'
+import { createT01Scenario, T01_SCENARIOS, trialT01Template, exampleT01TrialInput } from './review-v3-t01-business-presets'
 import { validateTemplate } from '../../../main/lib/review/template-store'
 
 const make=(id:Parameters<typeof createT01Scenario>[0])=>createT01Scenario(id,'t01-test-'+id,'2026-10-21T00:00:00.000Z')
@@ -53,6 +53,16 @@ describe('T01 configurable business templates',()=>{
     expect(template.objectType).toBe('project')
     expect(template.rubric?.minEffectiveJudges).toBe(2)
     expect(template.stages.some(s=>s.kind==='independent-rating')).toBe(true)
+  })
+
+  test('each simulated sample can be entered without a developer and remains unreviewed',()=>{
+    for (const scenario of T01_SCENARIOS) {
+      const template=make(scenario.id)
+      const { values,materialCounts }=exampleT01TrialInput(template)
+      const result=trialT01Template(template,values,materialCounts)
+      expect(result.status).toBe('ready-for-human-review')
+      expect(result.note).toContain('未执行制度规则')
+    }
   })
 
   test('template configuration trials do not mutate authored template',()=>{
