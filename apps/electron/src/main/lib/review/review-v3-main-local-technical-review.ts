@@ -122,8 +122,8 @@ export class C11MainLocalTechnicalReview {
        !same(proposal.owner.sourceVersionIds,run.sourceVersionIds))
       return reject('A_OWNER_DOES_NOT_MATCH_INDEPENDENT_C_OWNER')
     const events=proposal.technicalEvents
-    if(!Array.isArray(events)||events.length>8192)
-      return reject('TECHNICAL_EVENT_SET_INVALID')
+    if(!Array.isArray(events)||events.length===0||events.length>8192)
+      return reject('TECHNICAL_EVENT_SET_INVALID_OR_NO_PHYSICAL_PROOF')
     const registry=new C2MainPhysicalHostReceiptRegistry(this.source,{
       isRunFenced:isC2RunDurablyFenced,
     })
@@ -153,6 +153,11 @@ export class C11MainLocalTechnicalReview {
              !same(physical.verified.source,event.read.source)||
              physical.verified.extent!==event.read.extent)
             return reject('C_HOST_READ_OR_SOURCE_NOT_EQUAL')
+          const original=before.aggregate.caseV2.documents.filter(doc=>
+            doc.active!==false&&doc.versionId===event.read.source.documentVersionId&&
+            doc.documentId===event.read.source.materialId)
+          if(original.length!==1||original[0]!.byteHash!==event.read.source.rawSha256)
+            return reject('C_HOST_READ_ORIGINAL_SHA_NOT_PINNED_TO_REAL_CASE')
           readCount++
         }else if(event.kind==='check'){
           if(physical.verified.kind!=='check'||

@@ -184,6 +184,12 @@ describe('C R11 local Pi technical inspection independent of future School Gate 
     expect(()=>g.getReview().inspect(g.seal(bad)))
       .toThrow('A_EVENT_DIGEST_INVALID')
   })
+  test('empty A evidence never produces manual-review without any physical observation',async()=>{
+    const f=await fixture()
+    const empty={...f.proof,technicalEvents:[]}
+    expect(()=>f.getReview().inspect(f.seal(empty)))
+      .toThrow('TECHNICAL_EVENT_SET_INVALID_OR_NO_PHYSICAL_PROOF')
+  })
   test('unknown Provider effect remains local recovery-required even with real physical witness',async()=>{
     const f=await fixture();f.observe()
     const payload={...f.proof,unresolvedProviderEffect:true}
