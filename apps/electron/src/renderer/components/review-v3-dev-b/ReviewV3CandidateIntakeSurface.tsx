@@ -102,7 +102,7 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
       const reply=await props.onManualChoice(proposal)
       const confirmed=assertB3TechnicalChoiceAck(reply,proposal)
       if(scopeRef.current===startScope)
-        setNotice(confirmed?'Main 已将所选模板写入当前本机案卷；现在可以继续配置材料与运行审核（不代表学校审批）':
+        setNotice(confirmed?'已确认技术路由；D4 候选请在案卷上方完成对象/场景配置并固定审核任务。只有固定 Plan 后才可运行 Pi。':
           '选择请求已发送，但 Main 尚未返回已记录回执；请重新读取当前路由状态')
     }catch(reason){
       if(scopeRef.current===startScope)
@@ -168,7 +168,7 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
         </select>
       </label>
       <button type="button" className={action} disabled={!selected||busy}
-        onClick={()=>void manual()}>确认并绑定到当前本机案卷</button>
+        onClick={()=>void manual()}>确认技术模板并继续配置审核任务</button>
       <p className="text-xs text-muted-foreground">匹配 {options.length+held.length} / 共 {view.eligible.length+view.held.length} 套候选版本；其中可提交 {options.length} 套，待人工复核 {held.length} 套。</p>
       {options.length+held.length===0&&<p className="text-xs">未找到符合关键词的模板；清空检索可恢复全部候选。</p>}
       {held.length>0 && <details className="rounded border border-border p-3 text-sm">
