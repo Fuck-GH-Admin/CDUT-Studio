@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { extname, join } from 'node:path'
+import type { ReviewDocumentBlock } from '@profer/shared'
 import type { OcrPort } from './ocr-port'
 import {
   ReviewB2StagingService, type B2MainContext,
@@ -18,6 +19,8 @@ export interface T02StagedVisualText {
   text: string
   page: number
   confidence: number | null
+  /** Present only when OCR covers a whole image/page; PPTX placements remain unknown. */
+  bbox?: ReviewDocumentBlock['bbox']
 }
 
 export interface T02StagedVisualOcrPreview {
@@ -66,6 +69,7 @@ export async function previewT02StagedVisualOcr(
       text: block.text,
       page: block.page,
       confidence: block.confidence ?? null,
+      ...(block.bbox ? { bbox: block.bbox } : {}),
     }))
     return {
       schemaVersion: 'review-v3-t02-staged-visual-ocr/1',
