@@ -94,7 +94,7 @@ try{
  await step('E3 OS native picker, physical original and SHA',async()=>{
   await click('选择并导入真实申请材料');await sleep(1200)
   const xd=(...args)=>execFileSync('xdotool',args,{encoding:'utf8',timeout:10000}).trim()
-  console.log('Focused chooser: '+xd('getactivewindow','getwindowname'))
+  try{console.log('Focused chooser: '+xd('getactivewindow','getwindowname'))}catch(e){console.log('No active window reported yet: '+String(e))}
   xd('key','--clearmodifiers','ctrl+l');await sleep(300)
   xd('type','--clearmodifiers','--delay','2',file);xd('key','Return');await sleep(850);xd('key','Return')
   await wait('material import','document.body?.innerText?.includes("成功导入 1 份")',65000)
