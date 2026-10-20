@@ -106,6 +106,24 @@ describe('T04 R01 published template -> explicit typed rule -> immutable Plan',(
     expect(()=>compile([target(12)],{rules:[peopleRule(),peopleRule()]})).toThrow(
       'T04_PUBLISHED_PLAN_INVALID')
   })
+  test('unit-specific maximum without confirmed matching unit stays pending',()=>{
+    const uncertain=target(18)
+    delete uncertain.fields.peopleCount?.unit
+    expect(statuses(compile([uncertain]))['section-eligibility-count']).toBe('awaiting-confirmation')
+    const mismatched=target(18)
+    mismatched.fields.peopleCount!.unit = '元'
+    expect(statuses(compile([mismatched]))['section-eligibility-count']).toBe('awaiting-confirmation')
+  })
+  test('conflicting versions of the same policy limit are not silently both accepted',()=>{
+    const second=peopleRule({id:'school-count',policyVersionId:'school-policy@2'})
+    const a=clause({claimKey:'lab-attendance'})
+    const b=clause({ruleId:'school-count',policyVersionId:'school-policy@2',claimKey:'lab-attendance',
+      constraint:{kind:'field-maximum',fieldKey:'peopleCount',maximum:'19',unit:'人'}})
+    const compiled=compile([target(20)],{rules:[peopleRule(),second],constraints:[a,b]})
+    const proposals=evaluateT04Plan(compiled.plan,compiled.checks)
+    expect(proposals.filter(p=>p.ruleId==='section-eligibility-count' || p.ruleId==='school-count')
+      .every(p=>p.outcome.status==='awaiting-confirmation')).toBe(true)
+  })
   test('plan and binding digest change if rule/owner constraint/source change',()=>{
     const first=compile([target(18)])
     expect(compile([target(18,['document-version-2'])]).plan.fingerprint).not.toBe(first.plan.fingerprint)
