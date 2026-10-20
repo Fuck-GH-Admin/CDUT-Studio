@@ -66,6 +66,28 @@ function renderTask(){
  box.classList.remove('hidden');form.replaceChildren();desc.replaceChildren();
  $('caseInfo').textContent='案卷：'+task.caseId+' ｜ 版本 '+task.baseRevision+' ｜ 收件人：'+task.recipient.actorId;
  const t=task.task;
+ const fields=Object.entries(task.publicContext?.fields||{});
+ if(fields.length){
+   const section=el('div');section.append(el('h3','可见申请信息'));
+   for(const [key,value] of fields)section.append(el('p',key+'：'+(typeof value==='object'?JSON.stringify(value):String(value))));
+   desc.append(section);
+ }
+ if(task.assets?.length){
+   const section=el('div');section.append(el('h3','随任务提供的资料'));
+   for(const asset of task.assets){
+     const button=el('button','查看 / 保存：'+asset.name);
+     button.type='button';button.style.margin='4px 8px 4px 0';
+     button.addEventListener('click',()=>{
+       const binary=atob(asset.dataBase64);
+       const bytes=Uint8Array.from(binary,x=>x.charCodeAt(0));
+       const url=URL.createObjectURL(new Blob([bytes],{type:asset.mimeType||'application/octet-stream'}));
+       const a=el('a');a.href=url;a.download=asset.name;document.body.append(a);a.click();a.remove();
+       setTimeout(()=>URL.revokeObjectURL(url),1000);
+     });
+     section.append(button);
+   }
+   desc.append(section);
+ }
  $('taskTitle').textContent='2. '+(t.kind==='student-reply'?'学生补件回复':'评委独立评分');
  if(t.kind==='student-reply'){
   desc.append(el('p','补件事项：'+t.reason));
