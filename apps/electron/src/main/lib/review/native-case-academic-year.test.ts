@@ -56,3 +56,29 @@ describe('学年按领域解耦', () => {
     expect(nativeWorkspaceProjectionV3(reread)?.academicYear).toBe('2026')
   })
 })
+
+describe('切换领域时的学年一致性', () => {
+  test('通用草稿切到综测：无学年则拒绝', async () => {
+    const { updateNativeWorkspaceSettingsV3 } = await import('./native-workspace-case-v3')
+    const created = await createNativeWorkspaceCaseV3({
+      title: '通用草稿', type: '自定义审核', applicant: 'E2E',
+      domainPackId: 'contract-review', reviewTemplate: null,
+    }, actor)
+    await expect(updateNativeWorkspaceSettingsV3(created.aggregate.caseV2.id, {
+      domainPackId: 'comprehensive-assessment',
+    }, actor)).rejects.toThrow('请先为案卷填写适用学年')
+  })
+
+  test('通用草稿切到综测：已有学年则允许', async () => {
+    const { updateNativeWorkspaceSettingsV3 } = await import('./native-workspace-case-v3')
+    // 建案时若有学年，后续切领域不被误拦
+    const created = await createNativeWorkspaceCaseV3({
+      title: '通用草稿带学年', type: '自定义审核', applicant: 'E2E', academicYear: '2026',
+      domainPackId: 'contract-review', reviewTemplate: null,
+    }, actor)
+    const updated = await updateNativeWorkspaceSettingsV3(created.aggregate.caseV2.id, {
+      domainPackId: 'comprehensive-assessment',
+    }, actor)
+    expect(updated.id).toBe(created.aggregate.caseV2.id)
+  })
+})

@@ -326,6 +326,12 @@ export async function updateNativeWorkspaceSettingsV3(
   if (!isKnownDomainPack(input.domainPackId))
     throw new CommandValidationError('VALIDATION_FAILED', '未知审核领域不能静默回退综测')
   const domain = resolveDomainPack(input.domainPackId ?? value(original.caseV2, 'legacyDomainPackId')).id
+  // 切到按学年组织评审的领域时，案卷必须已有学年；否则会留下不自洽的案卷
+  // （通用草稿可以没有学年，综测案卷不行）。不自动编造，交由调用方补填。
+  if (domainRequiresAcademicYear(domain) && !value(original.caseV2, 'academicYear')) {
+    throw new CommandValidationError('VALIDATION_FAILED',
+      '该审核领域按学年组织评审，请先为案卷填写适用学年后再切换领域')
+  }
   const template = input.reviewTemplate === undefined && input.domainPackId === undefined
     ? undefined : resolvedTemplate(domain, input.reviewTemplate ?? undefined)
   const output = await submitCommand(caseId, {
