@@ -28,6 +28,15 @@ function emitImportProgress(
   context.onProgress?.({ ...payload, requestId: context.requestId, caseId: context.caseId, role: context.role })
 }
 
+/**
+ * 单份 PDF 最多保留多少页原件图像。
+ *
+ * 每一页图像都是一次隐藏 renderer 截图（真实 26 页 PDF 实测约 0.27 秒/页），
+ * 与 DOCX 内嵌图片的 24 张上限对齐；超出部分如实写入解析警告，原件仍在案卷内，
+ * 审核时可用单页核验继续查看指定页。
+ */
+const MAX_PDF_PAGE_IMAGES = 24
+
 /** PDF raster images are retained as image blocks so the model sees embedded scans and charts. */
 export async function renderPdfImageBlocks(input: {
   filePath: string
@@ -36,7 +45,7 @@ export async function renderPdfImageBlocks(input: {
   assetDir: string
   assetDirectoryPrefix?: string
   onProgress?: (progress: { phase: 'scanning-pdf' | 'rendering-pdf'; page: number; totalPages: number }) => void
-}): Promise<ReviewDocumentBlock[]> {
+}): Promise<{ blocks: ReviewDocumentBlock[]; warnings: string[] }> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs') as unknown as {
     OPS: Record<string, number>
     GlobalWorkerOptions: { workerSrc: string }
@@ -67,19 +76,36 @@ export async function renderPdfImageBlocks(input: {
   } finally {
     await pdf.destroy()
   }
-  if (imagePages.length === 0) return []
+  if (imagePages.length === 0) return { blocks: [], warnings: [] }
 
   const { renderAuthorizedPreview } = await import('../preview-inspection-service')
   const blocks: ReviewDocumentBlock[] = []
-  for (const page of imagePages) {
+  const warnings: string[] = []
+  const pagesToRender = imagePages.slice(0, MAX_PDF_PAGE_IMAGES)
+  if (imagePages.length > pagesToRender.length) {
+    // 如实记录被截断的页数：不伪造"已看完全部页"，也不让登记被长文档拖死。
+    warnings.push(`PDF 含图像页 ${imagePages.length} 页，超过 ${MAX_PDF_PAGE_IMAGES} 页上限，仅保留前 ${pagesToRender.length} 页图像；其余页需查看原件核对`)
+    console.warn(`[审核专区] PDF 页图像超出上限，仅保留前 ${pagesToRender.length}/${imagePages.length} 页`)
+  }
+  for (const page of pagesToRender) {
     input.onProgress?.({ phase: 'rendering-pdf', page, totalPages: pdf.numPages })
-    const rendered = await renderAuthorizedPreview({
-      filePath: input.filePath,
-      fileName: input.fileName,
-      kind: 'pdf',
-      scope: 'page',
-      page,
-    })
+    let rendered: Awaited<ReturnType<typeof renderAuthorizedPreview>>
+    try {
+      rendered = await renderAuthorizedPreview({
+        filePath: input.filePath,
+        fileName: input.fileName,
+        kind: 'pdf',
+        scope: 'page',
+        page,
+      })
+    } catch (error) {
+      // 单页截图失败不再继续逐页重试：隐藏 renderer 每次失败都要等满 30 秒超时，
+      // 继续循环会把登记拖成十几分钟。首帧失败即停止，并由调用方写入解析警告。
+      const message = error instanceof Error ? error.message : String(error)
+      warnings.push(`PDF 第 ${page} 页图像提取失败，已停止后续页图像提取，需查看原件核对：${message}`)
+      console.warn(`[审核专区] PDF 第 ${page} 页截图失败，停止后续页图像提取:`, message)
+      break
+    }
     const image = rendered.images[0]
     if (!image) continue
     const imageFileName = `${input.documentId}-page-${String(page).padStart(3, '0')}.png`
@@ -94,7 +120,7 @@ export async function renderPdfImageBlocks(input: {
       imageAssetPath,
     })
   }
-  return blocks
+  return { blocks, warnings }
 }
 
 /**
