@@ -7,7 +7,6 @@
  * 红线：数据必须来自用户确认的 series，绝不在主进程重新拟合或补点。
  */
 
-import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createHash } from 'node:crypto'
@@ -30,6 +29,7 @@ import {
 } from './cslab-db'
 import { assertLabId, resolveLabDir, resolveLabRelativePath } from './cslab-paths'
 import { buildCsLabUri } from './cslab-uri'
+import { writeBufferAtomic } from './cslab-atomic'
 
 interface CleanSeries {
   label: string
@@ -128,8 +128,8 @@ export async function persistDigitizedFigure(
   const previewRelPath = `vault/tables/${tableUuid}.preview.json`
   const sha256 = createHash('sha256').update(image).digest('hex')
 
-  await fs.writeFile(resolveLabRelativePath(labId, figRelPath), image)
-  await writeDatasetParquet(dataset, resolveLabRelativePath(labId, tableRelPath))
+  await writeBufferAtomic(resolveLabRelativePath(labId, figRelPath), image)
+  const parquet = await writeDatasetParquet(dataset, resolveLabRelativePath(labId, tableRelPath))
   await writeDatasetPreview(dataset, resolveLabRelativePath(labId, previewRelPath))
 
   const db = labDb(labId)
@@ -159,7 +159,7 @@ export async function persistDigitizedFigure(
       format: 'digitized',
       relPath: tableRelPath,
       sha256,
-      bytes: image.length,
+      bytes: parquet.bytes,
       revision,
       locked: true,
       createdAt: now,
