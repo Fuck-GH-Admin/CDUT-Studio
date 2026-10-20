@@ -27,6 +27,7 @@ export type T07RankingRow = {
 export type T07Freeze = { by: string; at: string; round: number; ranking: T07RankingRow[] }
 export type T07Round = {
   number: number; assignments: T07Assignment[]; votes: T07Vote[]
+  revisionHistory?: Array<{ vote: T07Vote; by: string; at: string; reason: string }>
   divergenceReasons: Record<string, string>
   /** Organizer-defined priority order for each still-tied group; key: sorted case IDs joined by | */
   tieOrders: Record<string, string[]>
@@ -44,6 +45,7 @@ export type T07Action =
   | { type: 'recuse'; assignmentId: string; reason: string }
   | { type: 'self-recuse'; assignmentId: string; reason: string }
   | { type: 'mark-missing'; assignmentId: string; reason: string }
+  | { type: 'request-revision'; assignmentId: string; reason: string }
   | { type: 'submit'; assignmentId: string; scores: T07Score[]; publicFeedback: string; internalNotes?: string }
   | { type: 'resolve-divergence'; caseId: string; reason: string }
   | { type: 'set-tie-order'; caseIds: string[] }
@@ -89,9 +91,6 @@ function checkSubmission(state: T07State, caseId: string, scores: T07Score[], co
       if (entry.score !== null) throw new Error('N/A 维度不能同时给分')
       if (!dimension.naWhen || !context.naEligible?.(caseId, dimension.id)) {
         throw new Error('维度 ' + dimension.name + ' 未经适用条件确认，不能标 N/A')
-      }
-      if (rubric.naStrategy !== 'exclude' && rubric.naStrategy !== 'exclude-renormalize') {
-        throw new Error('当前量表的 N/A 策略要求人工裁定，不能作为有效票提交')
       }
     } else if (entry.score === null || !Number.isFinite(entry.score) || entry.score < dimension.min || entry.score > dimension.max) {
       throw new Error('维度 ' + dimension.name + ' 必须在 ' + dimension.min + '–' + dimension.max + ' 范围内填写有效分数')
@@ -139,6 +138,18 @@ export function applyT07Action(state: T07State, action: T07Action, context: T07C
     }
     return withRound(state, { ...round, assignments: round.assignments.map((a) => a.id === target.id
       ? { ...a, status: action.type === 'mark-missing' ? 'missing' : 'recused', reason: action.reason.trim() } : a) })
+  }
+  if (action.type === 'request-revision') {
+    requireOrganizer(context)
+    if (!action.reason.trim()) throw new Error('退回改分必须写明理由')
+    const target = round.assignments.find((a) => a.id === action.assignmentId && a.status === 'submitted')
+    const vote = round.votes.find((v) => v.assignmentId === target?.id)
+    if (!target || !vote) throw new Error('只有已提交且未冻结的评分可以退回重评')
+    return withRound(state, { ...round,
+      assignments: round.assignments.map((a) => a.id === target.id ? { ...a, status: 'assigned' } : a),
+      votes: round.votes.filter((v) => v.assignmentId !== target.id),
+      revisionHistory: [...(round.revisionHistory ?? []), { vote, by: context.actor.actorId, at: context.at, reason: action.reason.trim() }],
+    })
   }
   if (action.type === 'submit') {
     if (context.actor.role !== 'judge') throw new Error('只有被分配的评委能提交本人评分')
@@ -189,17 +200,18 @@ export function computeT07Ranking(state: T07State): T07RankingRow[] {
     const dims: T07RankingRow['dimensions'] = rubric.dimensions.map((d) => ({ dimensionId: d.id, average: null, voters: 0 }))
     const blockers: string[] = []
     for (const vote of votes) {
-      let sum = 0; let weight = 0
+      let sum = 0; let weight = 0; let blockedNA = false
       for (const d of rubric.dimensions) {
         const v = vote.scores.find((s) => s.dimensionId === d.id)
         if (!v || (v.na && rubric.naStrategy !== 'exclude' && rubric.naStrategy !== 'exclude-renormalize')) {
-          blockers.push('存在未处理的量表维度')
+          blockers.push('存在待裁定的 N/A 或缺失维度')
+          blockedNA = true
           continue
         }
         if (!v.na && v.score !== null) { sum += v.score * d.weight; weight += d.weight }
       }
-      if (weight > 0) validTotals.push(sum / weight)
-      else blockers.push('有效评分权重为空')
+      if (weight > 0 && !blockedNA) validTotals.push(sum / weight)
+      else if (!blockedNA) blockers.push('有效评分权重为空')
     }
     for (const dim of dims) {
       const values = votes.flatMap((v) => v.scores.filter((s) => s.dimensionId === dim.dimensionId && !s.na && s.score !== null).map((s) => s.score as number))
