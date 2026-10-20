@@ -32,8 +32,10 @@ export interface D4UnifiedCatalog {
 }
 const CATALOG_PATH = 'docs/design/review-agent/acceptance/d4-unified-r01/catalog.json'
 // 源码测试与 Electron 构建均读取同一组冻结输入；发行包只读取随包资源。
-const SOURCE_ROOT = [resolve(__dirname, 'resources/d4-unified'), resolve(__dirname, '../../..'),
-  resolve(__dirname, '../../../../../..')].find(root => existsSync(resolve(root, CATALOG_PATH)))
+const SOURCE_ROOT = [resolve(__dirname, '../resources/d4-unified'),
+  resolve(__dirname, 'resources/d4-unified'), resolve(__dirname, '../../../..'),
+  resolve(__dirname, '../../..'), resolve(__dirname, '../../../../../..')]
+  .find(root => existsSync(resolve(root, CATALOG_PATH)))
 const INDEX = SOURCE_ROOT ? resolve(SOURCE_ROOT, CATALOG_PATH) : ''
 const EXPECTED: Record<string, number> = { G01: 5, G02: 3, G03: 10, G04: 8, G05: 6, G06: 9, G07: 7, G08: 2 }
 const COMMON = 'a7a6a11d4840ad64cfc858c17b35f35180adf063'
