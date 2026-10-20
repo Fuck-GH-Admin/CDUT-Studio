@@ -142,7 +142,10 @@ export function compileD2RuntimePlan(
 ): D2RuntimePlan {
   const errors = validateReviewAuthoringV1(workspace)
   if (errors.length) throw new Error('D2_AUTHORING_INVALID: ' + errors.join('；'))
-  const lockErrors = validateD3WorkspaceLocks(workspace, true)
+  // Bundled D4 candidates carry their exact frozen modules inside the
+  // verified workspace; compilation must not depend on a separate user's
+  // mutable D3 library installation. Lock digests/dependencies are checked.
+  const lockErrors = validateD3WorkspaceLocks(workspace, false)
   if (lockErrors.length) throw new Error('D3_FROZEN_LOCK_INVALID: ' + lockErrors.join('；'))
   if (workspace.advanced && Object.values(workspace.advanced).some((value) => Array.isArray(value) && value.length)) {
     throw new Error('D2_UNMAPPED_ADVANCED: 高级 Claim/Evidence 关系尚无无损执行映射，不得忽略')
