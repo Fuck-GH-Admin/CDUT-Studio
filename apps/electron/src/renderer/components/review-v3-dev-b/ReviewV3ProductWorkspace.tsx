@@ -6,7 +6,7 @@
  */
 import { useEffect,useRef,useState,type ReactNode } from 'react'
 import {
- buildB32ProductView,pageB32Checks,pageB32Issues,assertB32StillCurrent,
+ buildB32ProductView,pageB32Checks,pageB32Issues,filterB32Checks,filterB32Materials,assertB32StillCurrent,
  type B32ProductRead,type B29HumanAuthorIntent,type B29UnmatchedAuthorDraft,
 } from './review-v3-product-workflow'
 import type { B26IssueKind } from '../../../main/lib/review/review-v3-b4-bulk-evidence-workbench'
@@ -85,6 +85,10 @@ export function ReviewV3ProductWorkspace({
  const [notice,setNotice]=useState('')
  const [checkPage,setCheckPage]=useState(0)
  const [materialPage,setMaterialPage]=useState(0)
+ const [materialQuery,setMaterialQuery]=useState('')
+ const [materialRole,setMaterialRole]=useState<'all'|'application'|'supporting'|'unassigned'>('all')
+ const [checkQuery,setCheckQuery]=useState('')
+ const [checkUnresolvedOnly,setCheckUnresolvedOnly]=useState(false)
  const [reopenTemplateId,setReopenTemplateId]=useState('')
  const [sourcePage,setSourcePage]=useState(0)
  const [domain,setDomain]=useState('')
@@ -94,6 +98,7 @@ export function ReviewV3ProductWorkspace({
  const [localEvents,setLocalEvents]=useState<string[]>([])
  const [repairStatus,setRepairStatus]=useState<'unsubmitted'|'awaiting-main'|'persisted'|'unconfirmed'>('unsubmitted')
  const [editor,setEditor]=useState<{key:string;document:B1AuthorDocument|undefined}|null>(null)
+ const [confirmEditorExit,setConfirmEditorExit]=useState(false)
  const [authorIntent,setAuthorIntent]=useState({
   templateId:'',name:'',purpose:'',scenario:'',objectKey:'',
   humanRequirement:'',reviewerRole:'reviewer',recordedBy:'human-author',
@@ -105,7 +110,8 @@ export function ReviewV3ProductWorkspace({
  useEffect(()=>{
   generation.current+=1
   setTab('materials');setRead(null);setError('');setNotice('')
-  setEditor(null);setLocalEvents([]);setSelectedIssue('');setRepairStatus('unsubmitted')
+  setEditor(null);setConfirmEditorExit(false);setLocalEvents([]);setSelectedIssue('');setRepairStatus('unsubmitted')
+  setMaterialQuery('');setMaterialRole('all');setCheckQuery('');setCheckUnresolvedOnly(false)
   setCheckPage(0);setSourcePage(0);setMaterialPage(0)
  },[scope])
  const fetchCurrent=async():Promise<void>=>{
@@ -130,8 +136,9 @@ export function ReviewV3ProductWorkspace({
  try{if(read)view=buildB32ProductView(read)}
  catch(e){view=null}
  const connected=view?.mainConnected===true
- const checks=pageB32Checks(view?.checks??[],checkPage*25)
- const materialRows=view?.materials??[]
+ const filteredChecks=filterB32Checks(view?.checks??[],checkQuery,checkUnresolvedOnly)
+ const checks=pageB32Checks(filteredChecks,checkPage*25)
+ const materialRows=filterB32Materials(view?.materials??[],materialQuery,materialRole)
  const materialStart=materialPage*25
  const visibleMaterials=materialRows.slice(materialStart,materialStart+25)
  const issueList=pageB32Issues(read?.historical??null,sourcePage*25,25,{
@@ -166,7 +173,7 @@ export function ReviewV3ProductWorkspace({
    const after=await ports.onReadCurrent()
    if(startScope!==currentScope.current||epoch!==generation.current)return
    buildB32ProductView(after)
-   setRead(after);setObservation('');setSelectedIssue('')
+   setRead(after);if(persisted)setObservation('')
    setLocalEvents(prev=>[
     (persisted&&receipt?'Main 已持久化技术观察 '+receipt.receiptId:'未取得 Main 持久回执，保存状态待确认')+
     ' · '+issue.id+' · UNKNOWN 仍待人工/权威证据核验',
@@ -195,6 +202,7 @@ export function ReviewV3ProductWorkspace({
    const candidate=await ports.onPrepareUnmatchedDraft(intent)
    if(startScope!==currentScope.current||epoch!==generation.current)return
    const again=await ports.onReadCurrent()
+   if(startScope!==currentScope.current||epoch!==generation.current)return
    assertB32StillCurrent(fresh,again)
    if(candidate.schemaVersion!=='review-v3-b29-unmatched-author-draft/1'||
       candidate.caseCandidateId!==caseCandidateId||
@@ -222,6 +230,7 @@ export function ReviewV3ProductWorkspace({
        x.applicability!=='unknown'||x.sourceIds.length!==all.length))
      throw new Error('B_PRODUCT_R29_SOURCE_SET_INCOMPLETE_OR_CHANGED')
    setRead(again)
+   setConfirmEditorExit(false)
    setEditor({key:candidate.snapshotSha256,document:candidate.document})
    setTab('author')
    setNotice('已取得第 51 套候选草稿；可修改、保存修订、技术试跑和候选冻结，不能正式发布')
@@ -231,6 +240,7 @@ export function ReviewV3ProductWorkspace({
  }
  const openBlankAuthor=():void=>{
   if(editor){setTab('author');setError('B_PRODUCT_ACTIVE_AUTHOR_MUST_SAVE_OR_BACKUP_BEFORE_SWITCH');return}
+  setConfirmEditorExit(false)
   setEditor({key:'unbound-'+scope,document:undefined});setTab('author')
   setError('');setNotice('已打开无绑定本地候选草稿。可编辑字段、对象、条件和 Check；保存/预览/冻结须由 C Main 作者端口确认，导出 JSON 可独立使用。')
  }
@@ -240,15 +250,16 @@ export function ReviewV3ProductWorkspace({
   if(read?.route.status==='unmatched'&&connected){
    setEditor(null);setTab('author')
   }else{
+   setConfirmEditorExit(false)
    setEditor({key:'manual-'+scope,document:undefined});setTab('author')
   }
  }
  return <section className="space-y-4 rounded-lg border border-border p-4"
   data-testid="review-v3-r30-r32-product-workspace">
   <header className="space-y-2">
-   <h2 className="text-lg font-semibold">审核输入与候选工作台 · R30–R32</h2>
+   <h2 className="text-lg font-semibold">审核输入与候选工作台 · 本地 50+1</h2>
    <p className="text-sm text-muted-foreground">全量材料 → 业务匹配或临时模板 → Check×Subject×Source → UNKNOWN 处理 → 人工复核候选。所有步骤均非正式建案、审批或校规发布。</p>
-   <p className="text-xs">会话 {caseCandidateId} · {connected?'Main 来源只读数据已返回（仍需 C 在 IPC 响应处复核）':'Main 未接通'} · {read?.readVersion??'无当前读取版本'}</p>
+   <p className="text-xs">会话 {caseCandidateId} · {connected?'B30 原件 Main 已返回当前数据':'B30 原件 Main 未接通'} · {canReadLatestAuthor?'B1 本地修订读取可用':'B1 修订读取未接线'} · {read?.readVersion??'无当前读取版本'}</p>
    <nav className="flex flex-wrap gap-2" aria-label="审核输入工作流">
     {([
       ['materials','1 原件'],['routing','2 匹配'],['checks','3 Check'],
@@ -268,6 +279,16 @@ export function ReviewV3ProductWorkspace({
    <h3 className="font-semibold">全部已暂存原件 · {view?.totalStaged??0}</h3>
    <p className="text-xs text-muted-foreground">ZIP 内每个已暂存条目均独立列出，不能只显示第一份材料。文件 SHA 为技术原字节身份，不是学校盖章。</p>
    <p className="text-sm">申请材料 {view?.applications??0} · ZIP 条目 {view?.zipEntries??0} · 未分配用途 {view?.unassigned??0}</p>
+   <div className="flex flex-wrap gap-2">
+    <input aria-label="检索原件" className={field} placeholder="文件名 / 原件 ID / Subject / 版本 / SHA"
+     value={materialQuery} onChange={e=>{setMaterialQuery(e.target.value);setMaterialPage(0)}}/>
+    <select aria-label="原件用途筛选" className={field} value={materialRole}
+     onChange={e=>{setMaterialRole(e.target.value as typeof materialRole);setMaterialPage(0)}}>
+     <option value="all">所有用途</option><option value="application">申请材料</option>
+     <option value="supporting">支撑材料</option><option value="unassigned">用途待确认</option>
+    </select>
+   </div>
+   <p className="text-xs">筛选显示 {materialRows.length} / 全部 {view?.totalStaged??0} 份。仅过滤视图，未删除或忽略任何原件。</p>
    {view?.warnings.map(w=><p key={w} className="rounded border border-border p-2 text-sm" role="status">{w}</p>)}
    <div className="max-h-80 space-y-2 overflow-y-auto">
     {visibleMaterials.map(m=><article key={m.candidateId} className="rounded border border-border p-3 text-sm">
@@ -275,6 +296,9 @@ export function ReviewV3ProductWorkspace({
      <p>Subject：{m.subjectId??'尚未确认'} · 版本：{m.documentVersionId}</p>
      <p className="break-all text-xs text-muted-foreground">原字节 SHA256：{m.rawSha256}</p>
      <p className="text-xs">{m.reviewReason}</p>
+     <button type="button" className={btn} onClick={()=>{
+      setCheckQuery(m.rawSha256);setCheckUnresolvedOnly(false);setCheckPage(0);setTab('checks')
+     }}>按原件 SHA 查找引用它的 Check</button>
     </article>)}
    </div>
    <div className="flex items-center gap-3 text-sm">
@@ -283,6 +307,7 @@ export function ReviewV3ProductWorkspace({
     <button className={btn} disabled={materialStart+25>=materialRows.length} onClick={()=>setMaterialPage(p=>p+1)}>下一页</button>
    </div>
    {view?.totalStaged===0&&<p>当前没有可验证的完整暂存集合，不会推断出申请主体。</p>}
+   {view && view.totalStaged>0 && materialRows.length===0 && <p>没有符合筛选条件的原件；清空筛选可恢复完整清单。</p>}
   </div>
   <div hidden={tab!=='routing'} className="space-y-3">
    {renderRoute(openAuthor,read?.route??route)}
@@ -295,7 +320,16 @@ export function ReviewV3ProductWorkspace({
     {read.readiness.actions.slice(0,20).map((a,i)=><p key={i} className="text-xs">{a.action}: {a.reason} · Check {a.checkKey??'整案'} · Source {a.sourceId??'未知'}</p>)}
     {read.readiness.actions.length>20&&<p>其余 {read.readiness.actions.length-20} 项仍需独立复核；不能因为视图分页而清零</p>}
    </div>}
-   <p className="text-sm">当前 {checks.total} 个逐对象 Check；其中 UNKNOWN 或物理来源未确认 {view?.checks.filter(x=>x.unresolved).length??0} 个。历史原文的 3,875 项 Check 与当前作者候选不是同一个业务列表。</p>
+   <p className="text-sm">当前共 {view?.checks.length??0} 个逐对象 Check；其中 UNKNOWN 或物理来源未确认 {view?.checks.filter(x=>x.unresolved).length??0} 个。历史原文的 3,875 项 Check 与当前作者候选不是同一个业务列表。</p>
+   <div className="flex flex-wrap items-center gap-2">
+    <input aria-label="检索 Check 来源" className={field} placeholder="Check / Target / Subject / SourceRef / 来源定位"
+      value={checkQuery} onChange={e=>{setCheckQuery(e.target.value);setCheckPage(0)}}/>
+    <label className="flex items-center gap-2 text-sm">
+      <input type="checkbox" checked={checkUnresolvedOnly}
+       onChange={e=>{setCheckUnresolvedOnly(e.target.checked);setCheckPage(0)}}/>只看 UNKNOWN / 未确认来源
+    </label>
+   </div>
+   <p className="text-xs">筛选后 {checks.total} 条；仅影响显示，不影响审核来源完整性。</p>
    {checks.items.map(row=><article key={row.key} className="rounded border border-border p-3 space-y-1 text-sm">
     <p className="font-medium">{row.checkKey} · {row.applicability==='unknown'?'UNKNOWN：待核业务条件':row.applicability+'（仅技术候选）'}</p>
     <p>Target {row.targetKey} · Object {row.objectKey} · Subject {row.subjectId}</p>
@@ -304,8 +338,13 @@ export function ReviewV3ProductWorkspace({
      <p>版本 {s.documentVersionId??'未知'} · Parser {s.parseRevision??'未确认'} · Block {s.parserBlockId??'未确认'}</p>
      <p>定位：{s.locator}</p>
      <p className="break-all">字节：{s.rawSha256??'无当前来源哈希'}</p>
+     <button type="button" className={btn} disabled={!s.rawSha256}
+      onClick={()=>{setMaterialQuery(s.rawSha256??'');setMaterialRole('all');setMaterialPage(0);setTab('materials')}}>
+      定位当前原件（按字节 SHA）
+     </button>
     </div>)}
    </article>)}
+   {checks.total===0&&<p className="text-sm">没有符合当前条件的 Check。可修改筛选查看其它来源。</p>}
    <div className="flex items-center gap-3 text-sm">
     <button className={btn} disabled={checkPage===0} onClick={()=>setCheckPage(p=>p-1)}>上一页</button>
     第 {checkPage+1} 页 · 共 {checks.total} 项
@@ -386,15 +425,16 @@ export function ReviewV3ProductWorkspace({
    </div>
    <div className="rounded border border-border p-3 space-y-2">
     <h4 className="font-medium">重开已保存的第 51 套或其它候选修订</h4>
-    <p className="text-xs">仅打开未编辑的候选 ID 查询页。进入后由用户在原 B1 作者界面主动点击读取最新修订，C Main 必须验证持久作者链；不直接导入浏览器旧快照。</p>
+    <p className="text-xs">只依赖 C Main 已安装的 B1 作者历史读端口；即使 B30 原件工作台未接线，也允许重开不绑定原件的本地候选。载入前须在 B1 作者内再次确认，且不能把它当作已绑定材料的模板。</p>
     <label className="block text-sm">候选模板 ID
      <input className={field} value={reopenTemplateId} onChange={e=>setReopenTemplateId(e.target.value)}/>
     </label>
-    <button className={btn} type="button" disabled={busy||!connected||!ports.onReadCurrent||!canReadLatestAuthor||editor!==null}
+    <button className={btn} type="button" disabled={busy||!canReadLatestAuthor||editor!==null}
      onClick={()=>{
       try{
        if(editor!==null||!canReadLatestAuthor)throw new Error('B_PRODUCT_AUTHOR_REOPEN_NOT_AUTHORIZED_OR_ACTIVE')
        const blank=prepareB33PristineReopenLookup(reopenTemplateId)
+       setConfirmEditorExit(false)
        setEditor({key:'reopen-'+reopenTemplateId,document:blank})
        setError('');setNotice('仅打开候选修订查询页。请在 B1 作者中主动用 C Main 读取最新修订；没有自动恢复或覆盖。')
       }catch(e){setError(e instanceof Error?e.message:String(e))}
@@ -406,6 +446,18 @@ export function ReviewV3ProductWorkspace({
    {editor&&<div className="space-y-2">
     <p className="text-xs">草稿改动须在原 B1 编辑器明确保存、修订和冻结。刷新 Main 源不会悄悄覆盖作者编辑。</p>
     <div key={editor.key}>{renderAuthor(editor.document)}</div>
+    <button type="button" className={btn} disabled={busy}
+     onClick={()=>setConfirmEditorExit(true)}>结束当前作者编辑，返回候选选择</button>
+    {confirmEditorExit&&<div className="space-y-2 rounded border border-amber-500/40 p-3" role="alert">
+     <p>退出将卸载当前编辑器，尚未保存到 C Main 的修改会丢失。请先在上方保存修订或导出并核对 JSON 备份。已保存的 Main 修订不会被删除。</p>
+     <div className="flex flex-wrap gap-2">
+      <button type="button" className={btn} onClick={()=>{
+       setEditor(null);setConfirmEditorExit(false);setError('')
+       setNotice('已返回作者候选选择；只保留 C Main 真正保存过的修订，未保存编辑不再留在屏幕中')
+      }}>确认退出并放弃未保存的屏幕修改</button>
+      <button type="button" className={btn} onClick={()=>setConfirmEditorExit(false)}>继续编辑</button>
+     </div>
+    </div>}
    </div>}
   </div>
   <footer className="border-t border-border pt-2 text-xs text-muted-foreground">

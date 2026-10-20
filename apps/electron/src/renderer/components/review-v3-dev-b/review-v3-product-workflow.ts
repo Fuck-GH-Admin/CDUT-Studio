@@ -184,6 +184,25 @@ export function buildB32ProductView(data:B32ProductRead):B32ProductView {
     inventory.sources.length>0,
   readyForSchoolApproval:false,warnings}
 }
+/** Filtering is a view operation; the complete inventory remains in the read snapshot. */
+export function filterB32Materials(
+ rows:readonly B32MaterialRow[], query:string, role:'all'|'application'|'supporting'|'unassigned'='all',
+):B32MaterialRow[]{
+ const needle=query.trim().toLocaleLowerCase()
+ return rows.filter(row=>(role==='all'||row.role===role)&&(
+  !needle||[row.fileName,row.candidateId,row.subjectId??'',row.documentVersionId,
+    row.rawSha256,row.sourceType].some(value=>value.toLocaleLowerCase().includes(needle))))
+}
+export function filterB32Checks(
+ rows:readonly B32CheckRow[],query:string,onlyUnresolved=false,
+):B32CheckRow[]{
+ const needle=query.trim().toLocaleLowerCase()
+ return rows.filter(row=>(!onlyUnresolved||row.unresolved)&&(
+  !needle||[row.checkKey,row.targetKey,row.objectKey,row.subjectId,
+    ...row.sources.flatMap(source=>[source.sourceId,source.locator,source.reason,
+      source.rawSha256??'',source.documentVersionId??''])].some(
+    value=>value.toLocaleLowerCase().includes(needle))))
+}
 export function pageB32Checks(rows:readonly B32CheckRow[],offset:number,limit=25):
  {total:number;items:B32CheckRow[];nextOffset:number|null}{
  if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||

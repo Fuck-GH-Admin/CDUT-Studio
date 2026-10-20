@@ -7,6 +7,8 @@ import { useSetAtom } from 'jotai'
 import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { reviewV2AggregateAtom } from './V2CasePanel'
 import { ReviewV3LocalManualItem } from './ReviewV3LocalManualItem'
+import { ReviewV3CandidateIntakeSurface } from '../review-v3-dev-b/ReviewV3CandidateIntakeSurface'
+import type { C11MainLocalProductRead } from '../../../main/lib/review/review-v3-main-local-product-intake'
 import { ReviewV3AuthorWizard, emptyB1AuthorDocument } from '../review-v3-dev-b/ReviewV3AuthorWizard'
 import type { B1AuthorDocument } from '../../../main/lib/review/review-template-plan-adapter-v3-b1'
 import type { B1CandidateReadResponse } from '../review-v3-dev-b/review-v3-author-revision-read'
@@ -20,6 +22,23 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   const [localCaseId,setLocalCaseId]=React.useState('')
   const [savedCases,setSavedCases]=React.useState<Array<{id:string;title:string}>>([])
   const [materialsEpoch,setMaterialsEpoch]=React.useState(0)
+  const [product,setProduct]=React.useState<C11MainLocalProductRead|null>(null)
+  const [productError,setProductError]=React.useState('')
+  const readProduct=React.useCallback(async()=>{
+    if(!localCaseId)throw new Error('请先创建或选择本机案卷')
+    const data=await window.reviewAPI.readLocalNativeProductV3(localCaseId)
+    setProduct(data);setProductError('')
+    return data.read
+  },[localCaseId])
+  React.useEffect(()=>{
+    setProduct(null);setProductError('')
+    if(!localCaseId)return
+    let mounted=true
+    void window.reviewAPI.readLocalNativeProductV3(localCaseId)
+      .then(data=>{if(mounted)setProduct(data)})
+      .catch(e=>{if(mounted)setProductError(e instanceof Error?e.message:String(e))})
+    return ()=>{mounted=false}
+  },[localCaseId,materialsEpoch])
   const [caseBusy,setCaseBusy]=React.useState(false)
   const [caseNotice,setCaseNotice]=React.useState('')
   const [caseError,setCaseError]=React.useState('')
@@ -165,6 +184,40 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       {message&&<p role="status" className="text-xs">{message}</p>}
       {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
     </div>
+    {localCaseId&&<div className="space-y-2">
+      {productError&&<p role="alert" className="text-xs text-red-600">
+        当前材料 Main 读取失败：{productError}（未返回候选结果）
+      </p>}
+      <button type="button" className="rounded border border-border px-3 py-1.5 text-sm"
+        onClick={()=>void readProduct().catch(e=>setProductError(e instanceof Error?e.message:String(e)))}>
+        从真实原件刷新 50+1 候选工作台
+      </button>
+      {product&&<ReviewV3CandidateIntakeSurface
+        key={localCaseId+'-'+product.sessionKey}
+        caseCandidateId={localCaseId} sessionKey={product.sessionKey}
+        route={product.read.route} manualCatalog={product.catalog}
+        onRequestRefresh={async()=>{await readProduct()}}
+        onInterrupt={async()=>{
+          const data=await window.reviewAPI.interruptLocalNativeProductV3(localCaseId)
+          setProduct(data)
+        }}
+        onManualChoice={async choice=>{
+          const ack=await window.reviewAPI.chooseLocalNativeProductTemplateV3({
+            caseId:localCaseId,templateId:choice.templateId,templateVersion:choice.templateVersion})
+          await readProduct()
+          return ack
+        }}
+        author={{
+          onSaveDraft:(document,expectedRevision)=>
+            window.reviewAPI.saveLocalCandidateAuthorV3({document,expectedRevision}),
+          onPreview:document=>window.reviewAPI.previewLocalCandidateAuthorV3({document}),
+          onFreezeCandidate:(document,expectedRevision)=>
+            window.reviewAPI.freezeLocalCandidateAuthorV3({document,expectedRevision}),
+          onReadLatestCandidate:async id=>readLatest(id),
+        }}
+        product={{onReadCurrent:readProduct}}
+      />}
+    </div>}
     <ReviewV3LocalManualItem key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
     <ReviewV3AuthorWizard key={key} initialDraft={loaded?.document??emptyB1AuthorDocument()}
       initialRevision={loaded?.revision??0}

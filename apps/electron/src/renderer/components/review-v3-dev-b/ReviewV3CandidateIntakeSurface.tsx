@@ -18,6 +18,22 @@ export interface B3TechnicalChoice {
   templateId: string
   templateVersion: string
 }
+/** Only a technical Main acknowledgement; not a Case or School decision. */
+export interface B3TechnicalChoiceAck {
+ candidateOnly:true;technicalChoiceRecorded:true
+ caseCandidateId:string;templateId:string;templateVersion:string
+}
+export function assertB3TechnicalChoiceAck(
+ response:B3TechnicalChoiceAck|void, choice:B3TechnicalChoice,
+):boolean {
+ if(response===undefined)return false
+ if(response.candidateOnly!==true||response.technicalChoiceRecorded!==true||
+   response.caseCandidateId!==choice.caseCandidateId||
+   response.templateId!==choice.templateId||
+   response.templateVersion!==choice.templateVersion)
+  throw new Error('B3_MAIN_TECHNICAL_ACK_MISMATCH')
+ return true
+}
 export interface B3RoutePanelProps {
   /** Main is responsible for creating and changing this scope on every new Owner/Case. */
   caseCandidateId: string
@@ -25,9 +41,9 @@ export interface B3RoutePanelProps {
   route: B3RouteState
   manualCatalog: readonly B3ManualCatalogEntry[]
   /** Polling only asks Main to recompute; Renderer never decides timeout success. */
-  onRequestRefresh: () => void
-  onInterrupt: () => void
-  onManualChoice: (choice: B3TechnicalChoice) => Promise<void> | void
+  onRequestRefresh: () => Promise<void> | void
+  onInterrupt: () => Promise<void> | void
+  onManualChoice: (choice: B3TechnicalChoice) => Promise<B3TechnicalChoiceAck|void> | B3TechnicalChoiceAck | void
   onOpenCustomAuthor: () => void
 }
 const action = 'rounded border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50'
@@ -37,6 +53,7 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
   const scope=sessionKey+'::'+caseCandidateId
   const scopeRef=useRef(scope)
   scopeRef.current=scope
+  const refreshInFlight=useRef(false)
   const refreshRef=useRef(props.onRequestRefresh)
   refreshRef.current=props.onRequestRefresh
   const [chosenKey,setChosenKey]=useState('')
@@ -48,22 +65,43 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
   },[scope])
   useEffect(()=>{
     if(route.status!=='countdown')return
-    const handle=setInterval(()=>refreshRef.current(),500)
-    return ()=>clearInterval(handle)
+    let active=true
+    const handle=setInterval(()=>{
+      if(refreshInFlight.current)return
+      refreshInFlight.current=true
+      void Promise.resolve().then(()=>refreshRef.current()).catch(reason=>{
+        if(active)setError(reason instanceof Error?reason.message:String(reason))
+      }).finally(()=>{refreshInFlight.current=false})
+    },500)
+    return ()=>{active=false;clearInterval(handle)}
   },[route.status,scope])
   const options=view.eligible
   const selected=options.find(x=>JSON.stringify([x.templateId,x.templateVersion])===chosenKey)
+  const interruptRoute=async():Promise<void>=>{
+    if(busy)return
+    setBusy(true);setError('');setNotice('')
+    const startScope=scope
+    try{
+      await props.onInterrupt()
+      if(scopeRef.current===startScope)setNotice('已请求停止自动选择，请以 Main 下次返回的路由状态为准')
+    }catch(reason){if(scopeRef.current===startScope)
+      setError(reason instanceof Error?reason.message:String(reason))
+    }finally{if(scopeRef.current===startScope)setBusy(false)}
+  }
   const manual=async():Promise<void>=>{
     if(!selected || busy)return
     const startScope=scope
     setBusy(true);setError('');setNotice('')
     try {
       const technical=requireB3VisibleManualChoice(manualCatalog,selected.templateId,selected.templateVersion)
-      await props.onManualChoice({
+      const proposal:B3TechnicalChoice={
         proposalOnly:true,caseCandidateId,sessionKey,...technical,
-      })
+      }
+      const reply=await props.onManualChoice(proposal)
+      const confirmed=assertB3TechnicalChoiceAck(reply,proposal)
       if(scopeRef.current===startScope)
-        setNotice('已提交技术模板候选，等待 Main 对身份、材料与模板权限再次核验；尚未创建案卷')
+        setNotice(confirmed?'Main 已确认技术模板选择；仍未创建正式案卷或学校审批':
+          '选择请求已发送，但 Main 尚未返回已记录回执；请重新读取当前路由状态')
     }catch(reason){
       if(scopeRef.current===startScope)
         setError(reason instanceof Error?reason.message:String(reason))
@@ -95,7 +133,7 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
       aria-label="自动建议倒计时">
       <p>剩余约 <strong>{view.remainingSeconds} 秒</strong>；此处仅展示 Main 计算的剩余时间</p>
       <progress className="w-full" max={20} value={20-Math.min(20,view.remainingSeconds)}/>
-      <button type="button" className={action} onClick={props.onInterrupt}>
+      <button type="button" className={action} disabled={busy} onClick={()=>void interruptRoute()}>
         停止自动选择，改为人工确认
       </button>
     </div>}

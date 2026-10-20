@@ -4028,6 +4028,13 @@ const reviewAPI = {
   /** Freeze only the persisted, still-current B1 revision in the local candidate vault. */
   freezeLocalCandidateAuthorV3: (input: {document:import('../main/lib/review/review-template-plan-adapter-v3-b1').B1AuthorDocument;expectedRevision:number}) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.AUTHOR_FREEZE_LOCAL_V3,input) as Promise<{fingerprint:string}>,
+  /** Native Main Case source bytes rehashed and staged into real B2/B30 candidate read. */
+  readLocalNativeProductV3: (caseId:string) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_CURRENT_V3,caseId) as Promise<import('../main/lib/review/review-v3-main-local-product-intake').C11MainLocalProductRead>,
+  interruptLocalNativeProductV3: (caseId:string) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_INTERRUPT_V3,caseId) as Promise<import('../main/lib/review/review-v3-main-local-product-intake').C11MainLocalProductRead>,
+  chooseLocalNativeProductTemplateV3: (input:{caseId:string;templateId:string;templateVersion:string}) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_MANUAL_CHOICE_V3,input) as Promise<import('../main/lib/review/review-v3-main-local-product-intake').C11MainLocalTechnicalChoiceAck>,
   /** C Main-only B20 source view; requires separate trusted picker, B vault/ledger and current Owner. */
   readCurrentB20CandidateV3: (templateId:string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.B20_CANDIDATE_READ_V3,{templateId}) as Promise<{
