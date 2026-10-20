@@ -14,7 +14,7 @@
 
 ## 本轮已交付的 T05 增量
 
-1. apps/electron/src/main/lib/review/review-v3-t05-local-stage-plan.ts：纯领域决策 Proposal。由可信 Main 给定 Actor、已发布 TemplateVersion、开放 WorkflowTask、local-business 模式及核验过的当前真实 Run；初审推进下一阶段，终审才形成 final；缺计划书可在没有 Run 时创建补件要求，但不能虚构 BusinessDecision 或 Run；补件首次不足、第二次满足须等全部请求处理。
+1. apps/electron/src/main/lib/review/review-v3-t05-local-stage-plan.ts：纯领域决策 Proposal + applyT05LocalStageProposal（纯粹追加式状态变换）。由可信 Main 给定 Actor、已发布 TemplateVersion、开放 WorkflowTask、local-business 模式、核验过的真实 Run 及生成的 ID/时间；初审追加阶段决定并打开终审任务，终审追加 final 决定；缺计划书允许先只生成补件（不伪造 Run 或业务决定）；所有返回的 tasks/decisions/supplements 都由 Main 在唯一 CaseAggregate 事务一次性持久化。补件首次不足、第二次满足须等全部请求处理。
 2. 同路径 review-v3-t05-local-stage-plan.test.ts：定向单元用例。
 3. apps/electron/src/renderer/components/content-review/ReviewV3T05HumanWorkflow.tsx：接受可信 Main stageCapability 与 recordTrustedStageDecision 回调，支持经 Main 确认的 reviewer/teacher 任务；未具可信 Run 时不能凭旧 Run 作出阶段结论；申诉下拉框只显示有效 final 决定。保留既有 reviewer UI 通路作为兼容，不能当作 A15 已验收。
 
@@ -26,7 +26,7 @@
 
 **Main 写入**：实现 recordTrustedStageDecision(T05TrustedStageCommand) 传给 T05 组件（仍复用现有 V2CasePanel 挂载点）。
 输入：caseId、templateId、version、expectedRevision、taskId、action、reason、supplementRequiredElements?、supplementReason?。
-Main 不接受 Renderer 伪造的 Actor、role、isRunCurrent 或 Run ID，必须在共享 CaseAggregateV2/ReviewRun/TemplateVersion 真实事务中重核身份、权限、源版本、expectedRevision，并使用 planT05LocalStageAction 生成 Proposal，再复用 submitCommand 原子追加写入。提供给纯领域函数的 verifiedRun.decisionReadiness 必须由 Main 对当前必需检查、人工处置和可适用例外计算：只有 ready 才允许 stage-pass；blocked 可以发出有依据的 final-reject 或要求补件，不能把 Run 完成误当成业务检查全部通过（A15 21 人上限反例）。
+Main 不接受 Renderer 伪造的 Actor、role、isRunCurrent 或 Run ID，必须在共享 CaseAggregateV2/ReviewRun/TemplateVersion 真实事务中重核身份、权限、源版本、expectedRevision，并使用 planT05LocalStageAction 生成 Proposal，随后由 Main 提供唯一 ID/时间交给 applyT05LocalStageProposal 生成新的 tasks/decisions/supplements/caseStage，最后复用 submitCommand 在唯一 CaseAggregate 事务中原子写入；禁止再自己重写一套阶段状态机。提供给纯领域函数的 verifiedRun.decisionReadiness 必须由 Main 对当前必需检查、人工处置和可适用例外计算：只有 ready 才允许 stage-pass；blocked 可以发出有依据的 final-reject 或要求补件，不能把 Run 完成误当成业务检查全部通过（A15 21 人上限反例）。
 
 - stage-pass：非最终初审只生成下一阶段 teacher 任务；终审才 final；真实 basedOnRunId，不写 run@rev。
 - return-for-supplement：尚未得到完整原件时可以直接创建补件请求，不伪造 Run/Decision。第一次不足、第二次有真实新 DocumentVersion，再核验完成且关联新 Run；多请求全部结束才能恢复原阶段。
