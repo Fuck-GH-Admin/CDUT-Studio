@@ -32,6 +32,9 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   const [d4Error,setD4Error]=React.useState('')
   const [materialsEpoch,setMaterialsEpoch]=React.useState(0)
   const [product,setProduct]=React.useState<C11MainLocalProductRead|null>(null)
+  const [activePlan,setActivePlan]=React.useState<{
+    templateId:string;templateVersion:number;checks:number;fingerprint:string
+  }|null>(null)
   const [productError,setProductError]=React.useState('')
   const readProduct=React.useCallback(async()=>{
     if(!localCaseId)throw new Error('请先创建或选择本机案卷')
@@ -40,12 +43,23 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     return data.read
   },[localCaseId])
   React.useEffect(()=>{
-    setProduct(null);setProductError('')
+    setProduct(null);setActivePlan(null);setProductError('')
     if(!localCaseId)return
     let mounted=true
-    void window.reviewAPI.readLocalNativeProductV3(localCaseId)
-      .then(data=>{if(mounted)setProduct(data)})
-      .catch(e=>{if(mounted)setProductError(e instanceof Error?e.message:String(e))})
+    void (async()=>{
+      try{
+        const aggregate=await window.reviewAPI.getAggregateV2(localCaseId)
+        if(!mounted)return
+        if(aggregate?.d2RuntimePlan){
+          const plan=aggregate.d2RuntimePlan
+          setActivePlan({templateId:plan.templateId,templateVersion:plan.templateVersion,
+            checks:plan.mapping.length,fingerprint:plan.fingerprint})
+          return
+        }
+        const data=await window.reviewAPI.readLocalNativeProductV3(localCaseId)
+        if(mounted)setProduct(data)
+      }catch(e){if(mounted)setProductError(e instanceof Error?e.message:String(e))}
+    })()
     return ()=>{mounted=false}
   },[localCaseId,materialsEpoch])
   const [caseBusy,setCaseBusy]=React.useState(false)
@@ -216,7 +230,13 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       {caseNotice&&<p role="status" className="text-xs">{caseNotice}</p>}
       {caseError&&<p role="alert" className="text-xs text-red-600">{caseError}</p>}
     </div>
-    {localCaseId&&<div className="space-y-3 rounded-lg border border-border p-4">
+    {activePlan&&<div className="space-y-2 rounded-lg border border-border p-4">
+      <h2 className="text-base font-semibold">本案已绑定审核计划</h2>
+      <p className="text-sm">{activePlan.templateId}@{activePlan.templateVersion} · 已固定 {activePlan.checks} 项检查</p>
+      <p className="break-all text-xs text-muted-foreground">任务指纹：{activePlan.fingerprint}</p>
+      <p className="text-xs">不必重新选择模板。继续导入材料、在下方启动 Pi，或打开案卷进行人工复核。</p>
+    </div>}
+    {localCaseId&&!activePlan&&<div className="space-y-3 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">使用已有 50 套 D4 模板生成本案审核任务</h2>
       <p className="text-xs text-muted-foreground">复用 G01–G08 冻结候选和原有 D2 规则编译器。明确选择对象/场景后，一次性把技术预审 Plan 写入当前原生案卷；不另外创建案卷，不代表校方审批。已添加人工事项或已固定 Plan 的案卷请另建新案卷。</p>
       <D4CaseSetup onChange={setD4Selection}/>
@@ -231,7 +251,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       <h2 className="text-base font-semibold">本地候选审核模板 · 第 51 套</h2>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
-          disabled={caseBusy||!localCaseId||!b1Frozen} onClick={()=>void attachB1()}>
+          disabled={caseBusy||!localCaseId||!b1Frozen||!!activePlan} onClick={()=>void attachB1()}>
           将已冻结第 51 套安装为当前案卷的审核任务
         </button>
         <span className="text-xs">{b1Frozen?.templateId??'请先在下方保存并冻结模板'}</span>
@@ -249,7 +269,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       {message&&<p role="status" className="text-xs">{message}</p>}
       {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
     </div>
-    {localCaseId&&<div className="space-y-2">
+    {localCaseId&&!activePlan&&<div className="space-y-2">
       {productError&&<p role="alert" className="text-xs text-red-600">
         当前材料 Main 读取失败：{productError}（未返回候选结果）
       </p>}
