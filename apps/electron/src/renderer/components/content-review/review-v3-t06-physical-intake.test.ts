@@ -29,7 +29,7 @@ test('T06 wrapper-folder removal must be explicit and root files are not silentl
 
 test('T06 rejects duplicate path tokens and file traversal before any commit', () => {
   const bad = { ...selected, entries: [
-    selected.entries[0], { entryId: 'duplicate', relativePath: '申报甲/计划书.PDF', byteLength: 3 },
+    selected.entries[0]!, { entryId: 'duplicate', relativePath: '申报甲/计划书.PDF', byteLength: 3 },
     { entryId: 'walk', relativePath: '../else.pdf', byteLength: 10 },
   ] }
   const preview = previewT06PhysicalImport(bad)
