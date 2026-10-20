@@ -122,7 +122,7 @@ export function previewBatchAssignment(
   const results = rows.map((row): BatchAssignment => {
     if (excluded.has(row.line)) return { row, caseId: '', status: 'excluded', detail: '已显式排除' }
     const manuallySelected = Object.prototype.hasOwnProperty.call(overrides, row.line)
-    const caseId = (manuallySelected ? overrides[row.line] : row.caseId).trim()
+    const caseId = (manuallySelected ? (overrides[row.line] ?? '') : row.caseId).trim()
     const match = eligible.get(caseId)
     if (!caseId || !match) {
       return { row, caseId: '', status: 'unassigned', detail: caseId ? '案卷不存在或模板版本不匹配；请手动选择' : '缺少案卷 ID；请手动选择' }
