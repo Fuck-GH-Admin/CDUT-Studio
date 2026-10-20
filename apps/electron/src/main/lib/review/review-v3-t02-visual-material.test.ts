@@ -7,6 +7,8 @@ import type { OcrPort } from './ocr-port'
 import { extractT02PptxImages } from './review-v3-t02-pptx-visual-assets'
 import { parseFileIntoSourceDocument } from './document-service'
 import { parseT02VisualMaterialWithOcr } from './review-v3-t02-visual-ocr'
+import { ReviewB2StagingService, type B2MainContext } from './review-intake-adapter-v3-b2'
+import { previewT02StagedVisualOcr } from './review-v3-t02-staged-visual-ocr'
 
 const root = mkdtempSync(join(tmpdir(), 'review-t02-real-visual-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -110,5 +112,42 @@ describe('T02 actual OCR port reuse, never fabricated verdicts', () => {
     expect(result.imagesAwaitingInspection).toBe(1)
     expect(result.source.blocks.every(b => !b.text)).toBeTrue()
     expect(result.warnings.join('；')).toContain('未安装')
+  })
+})
+
+
+describe('T02 trusted B2 image OCR preview', () => {
+  test('reads actual staged bytes and keeps OCR text candidate-only with stable version identity', async () => {
+    const ctx: B2MainContext = {
+      senderId: 11, frameId: 12, ownerId: 'main-owner', ownerGeneration: 1,
+      caseCandidateId: 'candidate-ocr',
+    }
+    const staging = new ReviewB2StagingService()
+    const token = staging.grant(ctx).token
+    const image = staging.stage(ctx, token, {
+      requestId: 'ocr-material-1', physicalSourceKey: 'physical-camera-1',
+      fileName: '实拍证明.png', bytes: PNG, role: 'supporting', subjectId: null,
+    })
+    const ocr: OcrPort = {
+      available: true,
+      async recognize() {
+        return { engine: 'test-ocr-port', engineVersion: 'test',
+          imageWidth: 100, imageHeight: 100,
+          blocks: [{ text: '原件申请者 A', confidence: 0.88, rect: { x: 1, y: 1, w: 12, h: 8 } }] }
+      },
+    }
+    const result = await previewT02StagedVisualOcr(ctx, staging, image.candidateId, ocr)
+    expect(result).toMatchObject({
+      checkpoint: 'staging-only', candidateOnly: true, candidateId: image.candidateId,
+      documentVersionId: image.documentVersionId, ocrEngine: 'test-ocr-port',
+      inspectedImages: 1, imagesAwaitingInspection: 0,
+    })
+    expect(result.ocrText[0]).toMatchObject({
+      text: '原件申请者 A', page: 1, confidence: 0.88,
+    })
+    expect(result.ocrText[0]?.sourceBlockKey).toContain(image.documentVersionId)
+    staging.revoke(ctx)
+    await expect(previewT02StagedVisualOcr(ctx, staging, image.candidateId, ocr))
+      .rejects.toThrow('B2_OWNER_INVALID_OR_REVOKED')
   })
 })
