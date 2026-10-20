@@ -6,6 +6,7 @@ import * as React from 'react'
 import { useSetAtom } from 'jotai'
 import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { reviewV2AggregateAtom } from './V2CasePanel'
+import { ReviewV3LocalManualItem } from './ReviewV3LocalManualItem'
 import { ReviewV3AuthorWizard, emptyB1AuthorDocument } from '../review-v3-dev-b/ReviewV3AuthorWizard'
 import type { B1AuthorDocument } from '../../../main/lib/review/review-template-plan-adapter-v3-b1'
 import type { B1CandidateReadResponse } from '../review-v3-dev-b/review-v3-author-revision-read'
@@ -121,6 +122,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       {message&&<p role="status" className="text-xs">{message}</p>}
       {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
     </div>
+    <ReviewV3LocalManualItem caseId={localCaseId} />
     <ReviewV3AuthorWizard key={key} initialDraft={loaded?.document??emptyB1AuthorDocument()}
       initialRevision={loaded?.revision??0}
       onSaveDraft={(document,expectedRevision)=>
