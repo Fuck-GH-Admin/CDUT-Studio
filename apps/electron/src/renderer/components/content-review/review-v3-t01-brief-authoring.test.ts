@@ -39,6 +39,17 @@ describe('T01 explicit-language authoring and honest uncertainty',()=>{
     expect(result.template.materialSlots[0]?.name).toBe('询价表')
     expect(result.template.stages).toHaveLength(2)
   })
+  test('extracts an ordinary Chinese paragraph without colon-labelled lines',()=>{
+    const result=make('我想建立一个社团活动申请模板。申请人填写活动名称、负责人、参与人数和预算；必须提交活动计划书和参与名单；参与人数不能超过40，预算不得超过5000。先由审核员初审，然后老师终审。不评分。')
+    expect(result.template.objectType).toBe('organization')
+    expect(result.template.fields.map(x=>x.label)).toEqual(['活动名称','负责人','参与人数','预算'])
+    expect(result.template.fields.find(x=>x.key==='peopleCount')?.max).toBe(40)
+    expect(result.template.fields.find(x=>x.key==='budget')?.max).toBe(5000)
+    expect(result.template.materialSlots.map(x=>x.name)).toEqual(['活动计划书','参与名单'])
+    expect(result.template.stages.map(x=>x.kind)).toEqual(['manual-review','manual-review'])
+    expect(result.template.rubric).toBeUndefined()
+    expect(validateTemplate(result.template).filter(x=>x.level==='error')).toEqual([])
+  })
   test('does not turn an unknown subjective requirement into an executable policy rule',()=>{
     const result=make('模板名称：艺术作品审核\n审核对象：项目\n字段：项目名称\n材料：作品说明\n规则：作品具有创新性；符合主办方要求\n流程：初审→终审')
     expect(result.template.sections?.[0]?.criteria.map(x=>x.execution)).toEqual(['manual','manual'])
