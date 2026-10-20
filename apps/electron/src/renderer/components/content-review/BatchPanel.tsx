@@ -99,6 +99,8 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
   const [queueQuery, setQueueQuery] = useState('')
   const [queueFilter, setQueueFilter] = useState('all')
   const [selectedRetryIds, setSelectedRetryIds] = useState<string[]>([])
+  const [reopenOpen, setReopenOpen] = useState(false)
+  const [reopenReason, setReopenReason] = useState('')
 
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -262,6 +264,25 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
     } finally { setHandlingBatch(false) }
   }
 
+  const reopenFinalizedBatch = async (): Promise<void> => {
+    if (!selectedBatch || selectedBatch.status !== 'finalized' || !reopenReason.trim() || handlingBatch) return
+    setHandlingBatch(true)
+    try {
+      const reopened = await window.reviewAPI.batchActionV2({
+        action: 'reopen', batchId: selectedBatch.batch.id,
+        newBatchId: 'batch-reopen-' + Date.now().toString(36),
+        reason: reopenReason.trim(),
+      })
+      setReopenOpen(false)
+      setReopenReason('')
+      await refresh()
+      setSelectedBatchId(reopened.batch.id)
+      toast.success('已建立新评审轮次；旧批次及定稿快照保持不变')
+    } catch (cause) {
+      toast.error('重开批次失败：' + reviewBusinessError(cause))
+    } finally { setHandlingBatch(false) }
+  }
+
   const exportBatchSummary = (): void => {
     if (!selectedBatch) return
     const csv = buildBatchSummaryCsv(rows.map((row) => {
@@ -407,6 +428,12 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
                 核验并定稿
               </Button>
             </>
+          )}
+          {selectedBatch?.status === 'finalized' && (
+            <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg px-3"
+              disabled={handlingBatch || executing} onClick={() => setReopenOpen(true)}>
+              重开新评审轮次
+            </Button>
           )}
           {selectedBatch?.status === 'running' && (
             <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg px-3"
@@ -654,6 +681,29 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         <BatchAutomationDialog key={selectedBatch.batch.id} batch={selectedBatch}
           onClose={() => setConfigureAutomationOpen(false)} onSaved={refresh} />
       )}
+
+      <Dialog open={reopenOpen} onOpenChange={setReopenOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>重开批次评审</DialogTitle>
+            <DialogDescription>
+              为已定稿批次建立新的评审轮次，保留原来的批次、定稿快照和历史结果。
+              新轮次将重新进入待审队列，不会修改原轮次的业务决定。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="t06-reopen-reason">重开原因</Label>
+            <Input id="t06-reopen-reason" value={reopenReason}
+              onChange={(event) => setReopenReason(event.target.value)}
+              placeholder="说明需要重新审核的原因" />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setReopenOpen(false)}>取消</Button>
+            <Button type="button" disabled={!reopenReason.trim() || handlingBatch}
+              onClick={() => void reopenFinalizedBatch()}>{handlingBatch ? '正在建立…' : '确认重开'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <CreateBatchDialog
         open={createOpen}
