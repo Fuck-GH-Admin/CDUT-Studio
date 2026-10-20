@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { ReviewB2StagingService, type B2MainContext } from './review-intake-adapter-v3-b2'
-import { previewT02StagedSource } from './review-v3-t02-staged-source-preview'
+import { previewT02StagedInventory, previewT02StagedSource } from './review-v3-t02-staged-source-preview'
 
 const ctx: B2MainContext = {
   senderId: 1, frameId: 2, ownerId: 'main-owner', ownerGeneration: 1,
@@ -65,6 +65,20 @@ describe('T02 trusted staged material parsing', () => {
     expect(result.parseStatus).toBe('failed')
     expect(result.blocks).toHaveLength(0)
     expect(result.parseError).toContain('暂不支持')
+  })
+
+  test('all twelve staged image originals are reported, including same-name files', async () => {
+    const staging = new ReviewB2StagingService()
+    for (let index = 0; index < 12; index++) {
+      stage(staging, '图片.jpg', Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'main-image-' + index)
+    }
+    const summary = await previewT02StagedInventory(ctx, staging)
+    expect(summary).toMatchObject({
+      candidateOnly: true, checkpoint: 'staging-only', total: 12,
+      partial: 12, parsed: 0, failed: 0, imagesAwaitingInspection: 12,
+    })
+    expect(new Set(summary.sources.map((s) => s.documentVersionId)).size).toBe(12)
+    expect(summary.sources.every((s) => s.blocks.length === 1 && s.blocks[0]?.kind === 'image')).toBeTrue()
   })
 
   test('staging scope revoked before source read cannot yield a usable preview', async () => {
