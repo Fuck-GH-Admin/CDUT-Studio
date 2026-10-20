@@ -38,6 +38,22 @@ export function D4CaseSetup({ onChange }: { onChange: (value: D4ClientSelection 
     setDraft(JSON.stringify({ ...selection, targets: selection.targets.map((target, i) => i === index ? { ...target, ...patch } : target) }, null, 2))
     setConfirmed(false)
   }
+  const addObject=():void=>{
+    if(!selection)return
+    const first=selection.targets.find(t=>t.kind==='generic-object')
+    if(!first){setError('请先在完整场景 JSON 中定义一个业务对象及其来源');return}
+    let n=selection.targets.length+1, objectKey='',subjectId=''
+    do{objectKey=first.objectKey+'-new-'+n;subjectId=first.subjectId+'-new-'+n;n++}
+    while(selection.targets.some(t=>t.objectKey===objectKey||t.subjectId===subjectId))
+    const next:D2TargetBinding={...structuredClone(first),objectKey,subjectId,title:'待填写对象 '+(n-1)}
+    setDraft(JSON.stringify({...selection,targets:[...selection.targets,next]},null,2))
+    setConfirmed(false);setError('')
+  }
+  const removeObject=(index:number):void=>{
+    if(!selection)return
+    setDraft(JSON.stringify({...selection,targets:selection.targets.filter((_,i)=>i!==index)},null,2))
+    setConfirmed(false)
+  }
   return <div className="space-y-3 rounded-lg bg-muted/40 p-3 text-sm" data-testid="d4-case-setup">
     <p className="text-amber-700 dark:text-amber-300">D4 候选 · 技术预审。初始值为受控合成示例，请逐对象核对。条件改变后须新建案卷。</p>
     <label className="block">D4 模板
@@ -51,7 +67,14 @@ export function D4CaseSetup({ onChange }: { onChange: (value: D4ClientSelection 
     </label>
     {selection?.targets?.map((target, index) => <fieldset key={index} className="space-y-2 rounded-lg bg-background p-2">
       <legend className="px-1">对象 {index + 1} · {target.subjectId}</legend>
-      <input aria-label={`对象 ${index + 1} 名称`} className="w-full rounded border bg-background p-1.5" value={target.title} onChange={e => updateTarget(index, { title: e.target.value })} />
+      <div className="flex items-center gap-2">
+        <input aria-label={`对象 ${index+1} 名称`} className="min-w-0 flex-1 rounded border bg-background p-1.5" value={target.title} onChange={e=>updateTarget(index,{title:e.target.value})}/>
+        <button type="button" className="rounded border px-2 py-1 text-xs" onClick={()=>removeObject(index)}>移除此对象</button>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-xs">业务对象 ID<input aria-label={`对象 ${index+1} 标识`} className="mt-1 w-full rounded border bg-background p-1.5" value={target.objectKey} onChange={e=>updateTarget(index,{objectKey:e.target.value})}/></label>
+        <label className="text-xs">审核主体 ID<input aria-label={`对象 ${index+1} 主体标识`} className="mt-1 w-full rounded border bg-background p-1.5" value={target.subjectId} onChange={e=>updateTarget(index,{subjectId:e.target.value})}/></label>
+      </div>
       {target.kind === 'generic-object' && template && <>
         {template.primary.length > 0 && <label className="block">主场景（互斥）
           <select aria-label={`对象 ${index + 1} 主场景`} className="ml-2 rounded border bg-background p-1" value={target.scenario} onChange={e => updateTarget(index, { scenario: e.target.value })}>
@@ -68,7 +91,11 @@ export function D4CaseSetup({ onChange }: { onChange: (value: D4ClientSelection 
         </label>)}</div>
       </>}
     </fieldset>)}
-    {template && <details><summary className="cursor-pointer">对象标识与完整场景 JSON</summary>
+    {template && <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className="rounded border px-3 py-1.5 text-sm" onClick={addObject}>新增同类型审核对象</button>
+      <span className="text-xs text-muted-foreground">当前 {selection?.targets.length??0} 个对象，各自独立编译检查任务</span>
+    </div>}
+    {template && <details><summary className="cursor-pointer">完整场景、对象类型与来源标识 JSON（高级编辑）</summary>
       <textarea aria-label="D4 场景 JSON" className="mt-2 h-48 w-full rounded border bg-background p-2 font-mono text-xs" value={draft} onChange={e => { setDraft(e.target.value); setConfirmed(false) }} />
     </details>}
     {template?.controlledStudentFixture && <label className="flex gap-2"><input type="checkbox" checked={studentFixture} onChange={e => { setStudentFixture(e.target.checked); setConfirmed(false) }} />使用随包的受控合成学籍快照（姓名/证号独立字段；非正式学籍接口）</label>}
