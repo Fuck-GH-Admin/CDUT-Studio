@@ -138,13 +138,13 @@ export function projectT03Evidence(
         })
       }
       const subjects = [...new Set([
-        ...links.filter(link => link.status === 'candidate').map(link => link.subjectId),
+        ...links.filter(link => link.status !== 'rejected').map(link => link.subjectId),
         ...suggestions.map(item => item.subjectId),
       ])]
       return {
         documentVersionId: doc.versionId, fileName: doc.fileName,
         active: doc.active !== false, links, suggestions,
-        ambiguousSubjectIds: subjects.length > 1 ? subjects : [],
+        ambiguousSubjectIds: subjects.length > 1 && (suggestions.length > 0 || links.some(link => link.status === 'candidate')) ? subjects : [],
       }
     })
 }
