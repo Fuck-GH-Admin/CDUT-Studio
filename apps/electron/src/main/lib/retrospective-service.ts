@@ -228,7 +228,8 @@ Output only JSON with the following structure (abandonments may be an empty arra
 
 // ===== 一次性 LLM 调用（复用 generateTitle 的渠道/鉴权链，改写 body） =====
 
-async function oneShotJsonCall(systemPrompt: string, userPrompt: string): Promise<string | null> {
+/** 一次性 JSON 调用；CSLab 审稿等服务复用同一套渠道/代理/商用计费链路。 */
+export async function oneShotJsonCall(systemPrompt: string, userPrompt: string): Promise<string | null> {
   const settings = getSettings()
   const channelId = settings.agentChannelId
   const modelId = settings.agentModelId

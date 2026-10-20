@@ -95,6 +95,7 @@ export function CdutHeroSection({ onSelect }: CdutHeroSectionProps): React.React
           <button
             key={mod.id}
             type="button"
+            data-tour={`cdut-module-${mod.id}`}
             onClick={() => onSelect?.(mod.id)}
             className={`group relative flex flex-col gap-3 overflow-hidden rounded-2xl border border-surface-border/60 bg-gradient-to-br ${mod.surface} p-5 text-left shadow-sm transition-all duration-300 hover:-translate-y-1.5 hover:shadow-lg ${mod.glow}`}
           >

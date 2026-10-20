@@ -99,12 +99,14 @@ export function TabSwitcher(): ReactElement | null {
       }
     }
 
+    const defaultWorkspaceId = agentWorkspaces.find((w) => w.slug === 'default')?.id
+
     const agentCandidates = agentSessions
       .filter((session) => (
         !session.archived
         && !session.draft
         && !draftSessionIds.has(session.id)
-        && (!session.workspaceId || visibleWorkspaceIds.has(session.workspaceId))
+        && (!session.workspaceId || session.workspaceId === defaultWorkspaceId || visibleWorkspaceIds.has(session.workspaceId))
       ))
       .map(buildAgentCandidate)
 

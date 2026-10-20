@@ -244,18 +244,31 @@ export function releaseVisualSnapshot(tabId: string): void {
 /**
  * 生成页内 DOM 磁吸对齐脚本。
  *
- * 映射到逻辑坐标后，在半径 ε 窗口内自上而下探测命中元素；若命中可交互控件（含 cursor:pointer
- * 软交互 / 图标子节点），吸附到其几何中心再落地，保证点击 100% 幂等精确。
+ * 映射到逻辑坐标后，在半径 ε 窗口内自上而下探测命中元素；若命中**控件尺度**的可交互控件
+ * （含 cursor:pointer 软交互 / 图标子节点），吸附到其几何中心再落地，保证点击 100% 幂等精确。
+ *
+ * 关键约束（历史缺陷）：祖先上溯必须设「控件尺度」上限。此前不设限，一旦坐标落在普通文本上，
+ * 上溯会一路爬到面板 / 表单级大容器并吸附到它的中心——点击被拖走数百像素，既点不中目标，
+ * 又让模型看到与标定表完全对不上的 DIP 坐标（表现为「磁吸后反而越点越偏」）。
+ * 找不到控件尺度的目标时，宁可**不吸附**、按模型给出的原始坐标落地。
  */
 export function buildVisualSnapScript(x: number, y: number, radius = VISUAL_SNAP_RADIUS_PX): string {
   return `(() => {
     const cx = ${Math.round(x)};
     const cy = ${Math.round(y)};
     const R = ${Math.round(radius)};
+    // 控件尺度上限：超过即视为面板 / 容器，绝不吸附
+    const MAX_W = 480, MAX_H = 140;
+    const inControlScale = (el) => {
+      let r = null;
+      try { r = el.getBoundingClientRect(); } catch (e) { r = null; }
+      if (!r || r.width <= 0 || r.height <= 0) return false;
+      return r.width <= MAX_W && r.height <= MAX_H;
+    };
     const isInteractive = (el) => {
       if (!el) return false;
       const tag = (el.tagName || '').toLowerCase();
-      if (['button','a','input','select','textarea','summary','option'].indexOf(tag) >= 0) return true;
+      if (['button','a','input','select','textarea','summary','option','label'].indexOf(tag) >= 0) return true;
       const role = (el.getAttribute && (el.getAttribute('role') || '')).toLowerCase();
       if (['button','link','tab','menuitem','checkbox','radio','switch','textbox','combobox'].indexOf(role) >= 0) return true;
       try {
@@ -270,11 +283,12 @@ export function buildVisualSnapScript(x: number, y: number, radius = VISUAL_SNAP
       if (!hit) return null;
       let node = hit, guard = 0;
       while (node && guard < 8) {
-        if (isInteractive(node)) return node;
+        if (isInteractive(node) && inControlScale(node)) return node;
         node = node.parentElement;
         guard += 1;
       }
-      return hit;
+      // 未上溯到控件尺度的可交互目标：仅当命中元素本身足够小时才吸附它，否则放弃吸附
+      return inControlScale(hit) ? hit : null;
     };
     let target = probe(cx, cy);
     // 半径 ε 内沿十字方向补漏探测（应对图标/内边距导致中心点落空）
@@ -289,6 +303,6 @@ export function buildVisualSnapScript(x: number, y: number, radius = VISUAL_SNAP
     const sy = Math.round(rect.top + rect.height / 2);
     const tag = (target.tagName || '').toLowerCase();
     const name = (target.innerText || target.textContent || target.value || '').replace(/\\s+/g, ' ').trim().slice(0, 40);
-    return { ok: true, x: sy === cy && sx === cx ? cx : sx, y: sy === cy && sx === cx ? cy : sy, snapped: true, hit: { tag: tag, name: name } };
+    return { ok: true, x: sx, y: sy, snapped: true, hit: { tag: tag, name: name } };
   })()`
 }

@@ -12,5 +12,8 @@ import { atom } from 'jotai'
 /** 是否展示全屏开屏动画重播遮罩 */
 export const replayIntroOpenAtom = atom(false)
 
-/** 主界面重播结束后是否展示首次 onboarding 的环境配置页（仅测试，不持久化）。 */
-export const replayIntroEnvironmentTestAtom = atom(false)
+/**
+ * 开屏重播结束后是否进入首次欢迎导览（欢迎 / 功能导览 / 导入数据 / 诗意插页 / 欢迎您）。
+ * 走 OnboardingView 的 persistCompletion=false 分支，不写 onboardingCompleted，可反复重放。
+ */
+export const replayWelcomeTourAtom = atom(false)

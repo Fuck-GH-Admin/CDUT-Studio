@@ -51,6 +51,7 @@ import {
   paginateSDKMessages,
   searchAgentSessionMessages,
 } from './agent-session-manager'
+import { grantCsLabToolTrust, revokeCsLabToolTrust } from './cslab/cslab-tool-trust'
 import { getAgentSessionsDir, getAttachmentsDir, getConfigDir, getAgentSessionWorkspacePath, getAgentWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getSettings } from './settings-service'
 import {
@@ -956,6 +957,13 @@ export async function handleRemoteCommand(
       if (!result) return { ok: false, error: '计划审批不存在或已处理' }
       agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'exit_plan_mode_resolved', requestId } })
       if (result.targetMode) {
+        const meta = getAgentSessionMeta(result.sessionId)
+        // 远程计划审批选择"完全自动"同样属于显式授权。
+        if (result.targetMode === 'bypassPermissions') {
+          grantCsLabToolTrust(result.sessionId, meta?.cslabLabId)
+        } else {
+          revokeCsLabToolTrust(result.sessionId)
+        }
         updateAgentSessionUiMeta(result.sessionId, { permissionMode: result.targetMode })
         agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode: result.targetMode } })
       }
@@ -1099,10 +1107,21 @@ export async function handleRemoteCommand(
       const current = getAgentSessionMeta(sessionId)
       if (!current) return { ok: false, error: '会话不存在' }
       const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
+      // 远程显式切换为免审批时授予 CSLab 工具信任；切回 auto/plan 立即撤销。
+      if (mode === 'bypassPermissions') {
+        grantCsLabToolTrust(sessionId, current.cslabLabId)
+      } else {
+        revokeCsLabToolTrust(sessionId)
+      }
       try {
         if (isAgentSessionActive(sessionId)) await updateAgentPermissionMode(sessionId, mode)
       } catch (error) {
         const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode })
+        if ((current.permissionMode ?? 'bypassPermissions') === 'bypassPermissions') {
+          grantCsLabToolTrust(sessionId, current.cslabLabId)
+        } else {
+          revokeCsLabToolTrust(sessionId)
+        }
         publishAgentSessionProjection(restored)
         return { ok: false, error: error instanceof Error ? error.message : '切换权限模式失败' }
       }

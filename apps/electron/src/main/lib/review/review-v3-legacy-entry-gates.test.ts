@@ -424,10 +424,9 @@ describe('C1 legacy Main command isolation and compatibility', () => {
       { sender, senderFrame: { id: 999 } }))).rejects.toThrow('SENDER_UNTRUSTED')
     expect(JSON.stringify(readAggregate(created.id))).toBe(JSON.stringify(starting))
 
-    // V2 legacy drag-drop path strings are not OS-minted physical capability.
-    await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
-      caseId: created.id, sourcePath: sourceA, role: 'evidence',
-    }))).rejects.toThrow('SOURCE_CAPABILITY_REQUIRED')
+    // 拖拽登记已转入原生材料服务：真实 Main 的纯路径字符串会被接受并登记，
+    // 与系统文件选择器共用同一个 C-owned 物理材料导入通道（不再拒绝）。
+    // 伪造 sender / 非主 frame 仍必须被拒，且不产生任何写入。
     await expect(Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
       caseId: created.id, sourcePath: sourceA, role: 'evidence',
     }, { sender, senderFrame: { id: 55 } }))).rejects.toThrow('SENDER_UNTRUSTED')

@@ -131,7 +131,7 @@ import type {
   BrowserAddBookmarkInput,
 } from '@profer/shared'
 import { KNOWLEDGE_IPC_CHANNELS, isReviewOwnedAgentSession } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type CdutToolInvokeParams, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, YANHU_EXPRESS_IPC_CHANNELS, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutLoginInput, type CdutMutationConfirmResult, type CdutToolInvokeParams, type StudyDocumentQueryInput, type StudyGraphGenerateInput, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput, type YanhuCdpInput, type YanhuCdpResult, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuViewLayout } from '@profer/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { browserController } from './lib/browser-controller'
@@ -146,6 +146,8 @@ import { isReviewPrivateDesktopPath, isUnsafeAgentWorkspaceMutationPath, filterO
 import { CHANGELOG_IPC_CHANNELS, type ChangelogEntry } from '@profer/shared'
 import { getChangelog } from './lib/changelog-service'
 import { registerReviewIpc } from './lib/review/review-ipc'
+import { registerCsLabIpc } from './lib/cslab'
+import { grantCsLabToolTrust, revokeCsLabToolTrust } from './lib/cslab/cslab-tool-trust'
 import { cdutAuthManager, CDUT_AUTH_PARTITION } from './lib/cdut/cdut-auth-manager'
 import { executeDomainTool } from './lib/cdut/cdut-jw-client'
 import { cdutDemoService } from './lib/cdut/cdut-demo/demo-service'
@@ -186,6 +188,7 @@ import {
   updateCardRating as updateStudyCardRating,
   getQuiz as getStudyQuiz,
   submitQuizAnswer as submitStudyQuizAnswer,
+  resetQuiz as resetStudyQuiz,
   listStudyArtifacts,
 } from './lib/study/study-session-store'
 import { generateStudyArtifact } from './lib/study/study-artifact-service'
@@ -335,7 +338,8 @@ import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
 import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath, getStudySessionDir } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath, getStudySessionDir, getCdutScheduleCachePath, getCdutGradesCachePath } from './lib/config-paths'
+import { writeJsonFileAtomic, readJsonFileSafe } from './lib/safe-file'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import { compactAgentSessionStorage, previewAgentSessionCompaction } from './lib/agent-session-compaction'
 import { resolveMessageBlobs } from './lib/agent-session-manager'
@@ -3455,15 +3459,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 快照回退（同一会话内回退到指定点）
+  // 快照回退（同一会话内撤销本轮及之后所有对话与文件更改）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.REWIND_SESSION,
     async (event, input: RewindSessionInput): Promise<RewindSessionResult> => {
+      // 审核归属会话不走普通会话的快照回退，普通会话仍需主窗口敏感操作校验。
       assertSensitiveAgentIpcSender(event)
       assertOrdinaryAgentSession(input.sessionId)
+      const targetUuid = input.targetMessageUuid || input.assistantMessageUuid
+      if (!targetUuid) {
+        throw new Error('撤销失败：未指定目标消息 UUID')
+      }
       return rewindAgentSession(
         input.sessionId,
-        input.assistantMessageUuid,
+        targetUuid,
       )
     }
   )
@@ -4058,10 +4067,23 @@ export function registerIpcHandlers(): void {
         throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
       }
       const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
+      // 显式切换到免审批才授予 CSLab Python 工具信任；切回 auto/plan 立即撤销。
+      if (mode === 'bypassPermissions') {
+        grantCsLabToolTrust(sessionId, current.cslabLabId)
+      } else {
+        revokeCsLabToolTrust(sessionId)
+      }
       // 若 session 正在跑，同步热切换运行时模式；失败时广播回滚后的权威状态。
       if (isAgentSessionActive(sessionId)) {
+        const previousMode = current.permissionMode ?? 'bypassPermissions'
         await updateAgentPermissionMode(sessionId, mode).catch((err) => {
           const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode })
+          // 热切换失败时同步回滚内存信任，避免权限与信任状态脱节。
+          if (previousMode === 'bypassPermissions') {
+            grantCsLabToolTrust(sessionId, current.cslabLabId)
+          } else {
+            revokeCsLabToolTrust(sessionId)
+          }
           publishAgentSessionProjection(restored)
           throw err
         })
@@ -4310,6 +4332,12 @@ export function registerIpcHandlers(): void {
           if (meta) {
             try {
               const updated = updateAgentSessionMeta(sessionId, { permissionMode: targetMode })
+              // 计划审批选择"完全自动"属于显式授权；选择其他模式则撤销 CSLab 工具信任。
+              if (targetMode === 'bypassPermissions') {
+                grantCsLabToolTrust(sessionId, meta.cslabLabId)
+              } else {
+                revokeCsLabToolTrust(sessionId)
+              }
               publishAgentSessionProjection(updated)
             } catch (err) {
               console.warn(`[IPC] ExitPlanMode 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
@@ -4939,7 +4967,9 @@ export function registerIpcHandlers(): void {
       if (!input || typeof input.sessionId !== 'string' || typeof input.requestId !== 'string' || typeof input.targetName !== 'string') {
         throw new Error('文件搜索请求无效')
       }
+      // 审核归属会话不参与普通会话文件检索；普通会话仍需存在性校验。
       assertOrdinaryAgentSession(input.sessionId)
+      if (!getAgentSessionMeta(input.sessionId)) throw new Error('Agent 会话不存在')
       const roots = getFileSearchRoots(input.sessionId)
       if (roots.length === 0) {
         console.warn('[IPC] file:search-candidate 没有可用授权搜索目录:', input.sessionId)
@@ -6214,6 +6244,9 @@ export function registerIpcHandlers(): void {
   // 注册内容审核专区 IPC 处理器
   registerReviewIpc()
 
+  // 注册 CDUT Science (CSLab) IPC 处理器
+  registerCsLabIpc()
+
   // ===== CDUT 专区特区账户 =====
   // 特区账户与通用账户物理隔离，独立持久化于 ~/.cdutai/cdut-account.json
   ipcMain.handle(CDUT_ZONE_IPC_CHANNELS.GET_ACCOUNT, () => cdutAuthManager.getProfile())
@@ -6264,6 +6297,39 @@ export function registerIpcHandlers(): void {
       // 演示数据无缝回退
       const demoResult = cdutDemoService.execute(domain, params)
       return { ...demoResult, isDemo: true }
+    },
+  )
+
+  // ===== 业务域离线缓存（SWR：抽屉打开先读缓存秒开，网络成功后原子落盘） =====
+  const CDUT_CACHE_PATHS: Record<CdutDomainCacheName, () => string> = {
+    schedule: getCdutScheduleCachePath,
+    grades: getCdutGradesCachePath,
+  }
+
+  ipcMain.handle(
+    CDUT_ZONE_IPC_CHANNELS.READ_DOMAIN_CACHE,
+    (_event, name: CdutDomainCacheName): unknown => {
+      const pathOf = CDUT_CACHE_PATHS[name]
+      if (!pathOf) return null
+      try {
+        return readJsonFileSafe<unknown>(pathOf())
+      } catch {
+        return null
+      }
+    },
+  )
+
+  ipcMain.handle(
+    CDUT_ZONE_IPC_CHANNELS.WRITE_DOMAIN_CACHE,
+    (_event, input: { name: CdutDomainCacheName; payload: unknown }): { success: boolean } => {
+      const pathOf = CDUT_CACHE_PATHS[input.name]
+      if (!pathOf || input.payload === null || typeof input.payload !== 'object') return { success: false }
+      try {
+        writeJsonFileAtomic(pathOf(), { savedAt: Date.now(), data: input.payload })
+        return { success: true }
+      } catch {
+        return { success: false }
+      }
     },
   )
 
@@ -6501,6 +6567,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(STUDY_IPC_CHANNELS.SUBMIT_QUIZ_ANSWER, (_event, input: StudyQuizAnswerInput) =>
     submitStudyQuizAnswer(input),
+  )
+
+  ipcMain.handle(STUDY_IPC_CHANNELS.RESET_QUIZ, (_event, input: { sessionId: string; quizId: string }) =>
+    resetStudyQuiz(input),
   )
 
   ipcMain.handle(STUDY_IPC_CHANNELS.GENERATE_ARTIFACT, async (_event, input: StudyGenerateArtifactInput) =>

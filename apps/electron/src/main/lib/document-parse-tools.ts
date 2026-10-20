@@ -20,9 +20,11 @@
  */
 
 import { createHash } from 'node:crypto'
+import { homedir } from 'node:os'
 import { extname, basename, dirname, join, resolve, isAbsolute } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
+import { isAgentWorkspaceSandbox } from './pi-file-checkpoint'
 import {
   OoxmlZipReader,
   inferOfficeFormatFromExtension,
@@ -358,7 +360,10 @@ export function materializeToWorkspace(
   parsed: Omit<ParseDocumentResult, 'materialized'>,
   preferredFileId?: string,
 ): MaterializedDocumentIndex | undefined {
-  if (!agentCwd || !existsSync(agentCwd)) return undefined
+  if (!agentCwd || !existsSync(agentCwd) || !isAgentWorkspaceSandbox(agentCwd)) {
+    console.warn(`[文档解析] 拒绝写入非沙箱目录: ${agentCwd}`)
+    return undefined
+  }
   try {
     const ext = extname(resolvedSourcePath)
     const stem = basename(resolvedSourcePath, ext).trim() || 'document'
@@ -1486,7 +1491,10 @@ export async function redirectBinaryDocumentRead(
   filePath: string,
   context: PreviewInspectionContext,
 ): Promise<string> {
-  const resolved = isAbsolute(filePath) ? filePath : resolve(context.agentCwd || process.cwd(), filePath)
+  if (!isAbsolute(filePath) && !context.agentCwd?.trim()) {
+    throw new Error('当前会话没有可用的 Agent 工作目录，已拒绝解析相对路径文档')
+  }
+  const resolved = isAbsolute(filePath) ? filePath : resolve(context.agentCwd, filePath)
   const parsed = await parseAttachedDocument(resolved, context)
   if (!parsed) {
     throw new Error(`无法解析文档文件: ${filePath}`)

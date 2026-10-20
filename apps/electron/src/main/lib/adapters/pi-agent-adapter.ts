@@ -13,8 +13,10 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { PREINGEST_DOCUMENT_EXTENSIONS, redirectBinaryDocumentRead } from '../document-parse-tools'
+import { isAgentWorkspaceSandbox } from '../pi-file-checkpoint'
 import type {
   AgentThinkingLevel,
+  AgentContextMode,
   AgentRuntime,
   AgentProviderAdapter,
   AgentQueryInput,
@@ -215,6 +217,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   runtimeEnv?: AgentRuntimeEnv
   /** 手动压缩请求：走 pi 原生 session.compact()，而非把 /compact 当普通 prompt 发给模型 */
   compactRequest?: boolean
+  /** 当前上下文模式；index 时启用历史文件检索护栏。 */
+  contextMode?: AgentContextMode
   /** ChatGPT Codex Fast Mode；仅 openai-codex 的受支持模型实际注入 priority service tier。 */
   codexFastMode?: boolean
   /** Pi 的 OAuth credential store 使用真实 expires 和 refresh，不读取 ~/.pi。 */
@@ -1257,6 +1261,60 @@ function installCurrentSessionCompactionHooks(session: AgentSession, cwd?: strin
     return {
       block: true,
       reason: 'CompactContext 必须单独调用。请先完成当前工具批次，在下一回合仅调用 CompactContext。',
+    }
+  }
+}
+
+/** 会话历史文件路径特征：transcript / harness 日志 / 会话 JSONL */
+const CONVERSATION_HISTORY_PATH_RE =
+  /(?:transcript(?:_full)?\.jsonl|\.system_generated[\/\\]logs|brain[\/\\][^\s"']+[\/\\]\.system_generated|agent-sessions[\/\\][^\s"']+\.jsonl)/i
+
+/** 判断 shell 命令是否在检索会话历史文件（索引模式下应被拦截） */
+export function isConversationHistoryLookupCommand(command: string): boolean {
+  if (!command.trim()) return false
+  // 只按历史文件路径判定，避免误伤 `grep "transcript" src` 这类正常源码搜索
+  return CONVERSATION_HISTORY_PATH_RE.test(command)
+}
+
+/** 判断工具调用是否在检索会话历史文件（shell / Read / Grep / Glob / LS） */
+export function isConversationHistoryLookupToolCall(
+  toolName: string,
+  args: Record<string, unknown>,
+): boolean {
+  const name = toolName.toLowerCase()
+  if (name === 'bash' || name === 'powershell') {
+    return isConversationHistoryLookupCommand(typeof args.command === 'string' ? args.command : '')
+  }
+  if (name === 'read' || name === 'grep' || name === 'glob' || name === 'ls') {
+    const target = args.path ?? args.file_path ?? args.pattern ?? args.query ?? ''
+    return typeof target === 'string' && CONVERSATION_HISTORY_PATH_RE.test(target)
+  }
+  return false
+}
+
+/**
+ * 索引模式历史检索护栏。
+ *
+ * 索引模式的会话历史已由客户端检索注入 <conversation_evidence> / <recent_context>，
+ * 磁盘上的 transcript / agent-sessions JSONL 不是本轮上下文来源。这里只拦截针对这些
+ * 历史文件的 shell 与文件读取，不影响工作区源码、文档、构建与测试等正常工具调用。
+ */
+function installIndexModeHistoryGuard(session: AgentSession): void {
+  const previousBeforeToolCall = session.agent.beforeToolCall
+  session.agent.beforeToolCall = async (context, signal) => {
+    const previousResult = await previousBeforeToolCall?.(context, signal)
+    if (previousResult?.block) return previousResult
+
+    const args = (context.toolCall.arguments ?? {}) as Record<string, unknown>
+    if (!isConversationHistoryLookupToolCall(context.toolCall.name, args)) {
+      return previousResult
+    }
+
+    console.log(`[上下文索引] 已拦截历史文件检索: ${context.toolCall.name}`)
+    return {
+      block: true,
+      reason:
+        '【上下文索引】当前会话历史已由客户端自动检索并注入 <conversation_evidence> / <recent_context>。禁止通过 shell、grep 或文件读取搜索 transcript/agent-sessions 历史文件。若注入证据不足，请直接说明缺少什么或询问用户。',
     }
   }
 }
@@ -2510,7 +2568,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       if (active.abortRequested) throw createAbortError()
 
       if (!existsSync(input.piSessionDir)) mkdirSync(input.piSessionDir, { recursive: true })
-      const cwd = input.cwd ?? process.cwd()
+      const cwd = input.cwd?.trim()
+      // 安全红线：缺少会话工作目录或非沙箱目录时必须中止，严禁回退到进程启动目录
+      if (!cwd || !isAgentWorkspaceSandbox(cwd)) {
+        throw new Error(`[Pi 安全拦截] 目标目录 (${cwd}) 不是合法的会话沙箱目录，拒绝启动 Pi Agent`)
+      }
       const sessionFile = input.resumeSessionId ? findSessionFile(input.piSessionDir, input.resumeSessionId) : undefined
       if (input.resumeSessionId && !sessionFile) {
         throw new Error(`No conversation found with session ID ${input.resumeSessionId}`)
@@ -2698,6 +2760,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       }
       installRuntimeGuardHooks(session, runtimeGuard)
       installCurrentSessionCompactionHooks(session, cwd)
+      if (input.contextMode === 'index') {
+        installIndexModeHistoryGuard(session)
+      }
       active.session = session
       resolveActiveReady(active, session)
 

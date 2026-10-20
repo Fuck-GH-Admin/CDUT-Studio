@@ -107,6 +107,11 @@ extraResources:
   # 背景图
   - from: resources/background.png
     to: background.png
+  # CDUT Science 可选 Python 增强脚本（TS 主实现缺失能力时的增强通道）
+  - from: resources/cslab
+    to: cslab
+    filter:
+      - "**/*"
 
 # ============================================
 # macOS 本地构建（P1：仅 Apple Silicon）

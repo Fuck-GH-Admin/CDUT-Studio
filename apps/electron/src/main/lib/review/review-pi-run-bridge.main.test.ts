@@ -35,6 +35,7 @@ const { createCaseFromTemplate } = await import('./application-service')
 const { saveDraft, publishTemplate } = await import('./template-store')
 const { getBackgroundPiReviewState } = await import('./review-background-state')
 const { listAgentSessions, getAgentSessionMeta, updateAgentSessionMeta } = await import('../agent-session-manager')
+const { ensureDefaultWorkspace } = await import('../agent-workspace-manager')
 const { saveReviewModuleSettings } = await import('./module-settings-store')
 const { getRunV2 } = await import('./run-store-v2')
 const { getPiReviewBindingForSession } = await import('./pi-case-review-service')
@@ -84,7 +85,8 @@ describe('后台 Main 入口与受理边界', () => {
     expect('assignmentId' in receipt).toBeFalse()
     const meta = getAgentSessionMeta(context.execution.input.sessionId)!
     expect(meta.owner).toEqual({ kind: 'review-case', caseId: context.caseId })
-    expect(meta.workspaceId).toBeUndefined()
+    // 审核会话不显式指定工作区时，Main 统一绑定默认沙箱工作区（杜绝无工作区漂移）。
+    expect(meta.workspaceId).toBe(ensureDefaultWorkspace().id)
     expect(meta.attachedDirectories).toHaveLength(1)
     context.execution.end('completed')
     await Bun.sleep(0)

@@ -120,7 +120,7 @@ export function MindMapBlock({ code }: { code: string }): React.ReactElement | n
           <button type="button" onClick={() => zoomByFactor(1.2)} className={iconButton} title="放大" aria-label="放大">
             <Plus size={13} />
           </button>
-          <button type="button" onClick={viewport.fit} className={iconButton} title="复位视图" aria-label="复位视图">
+          <button type="button" onClick={() => viewport.fit()} className={iconButton} title="复位视图" aria-label="复位视图">
             <RotateCcw size={13} />
           </button>
           <button type="button" onClick={() => void handleCopy()} className={iconButton} title="复制源码" aria-label="复制源码">
@@ -166,6 +166,10 @@ export function MindMapBlock({ code }: { code: string }): React.ReactElement | n
           overrides={overrides}
           onOverridesChange={setOverrides}
           onPersist={persist}
+          onResetOverrides={() => {
+            setOverrides({})
+            persist({})
+          }}
           onClose={() => setOpen(false)}
         />
       )}

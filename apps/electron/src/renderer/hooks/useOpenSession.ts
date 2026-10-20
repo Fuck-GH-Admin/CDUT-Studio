@@ -15,6 +15,7 @@ import {
   openTab,
   promoteSessionMru,
   tabMruAtom,
+
   type TabType,
 } from '@/atoms/tab-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
@@ -56,6 +57,9 @@ export function useOpenSession(): OpenSessionFn {
         return
       }
 
+      // 上游「不可见工作区不得打开 Agent Tab」的守卫已由 openAuthorized 内的
+      // isAgentWorkspaceIdVisible 校验覆盖，这里保留我们更宽的 requiresAgentSession
+      // 判定（agent + browser 统一走授权路径）。
       const requiresAgentSession = type === 'agent' || type === 'browser'
       const knownSession = requiresAgentSession
         ? agentSessions.find((session) => session.id === sessionId)

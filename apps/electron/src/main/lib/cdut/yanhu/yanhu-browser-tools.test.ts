@@ -9,20 +9,32 @@ import { describe, expect, test } from 'bun:test'
 import type { YanhuBidNode, YanhuNetworkEntry } from '@profer/shared'
 import type { ContinuationMessage } from '@profer/core'
 import {
+  asInt,
+  buildEmapTreeSelectScript,
   buildForceTriggerScript,
   buildHardwareClickTargetScript,
   buildJqxSelectScript,
   buildOpenDropdownScript,
   buildPickCustomOptionScript,
+  buildTreeItemCommitScript,
+  buildUnchangedNotice,
   buildYanhuBrowserTools,
   createYanhuToolLabeler,
   DEFAULT_READ_PAGE_TOKENS,
   enforceYanhuHumanInterval,
+  relocateBySemantics,
   resetYanhuActionThrottle,
   sanitizeYanhuNetworkLogs,
+  stripDecorators,
+  URL_DECORATORS,
   YANHU_ACTION_MIN_INTERVAL_MS,
 } from './yanhu-browser-tools'
-import { buildYanhuCollectorScript, normalizeStateString, yanhuDomDistillationEngine } from './yanhu-dom-distillation'
+import {
+  buildYanhuCollectorScript,
+  normalizeStateString,
+  yanhuDomDistillationEngine,
+  type YanhuCollectedPage,
+} from './yanhu-dom-distillation'
 import {
   YANHU_CAUSAL_OBSERVATION_MS,
   YANHU_STABILIZE_WINDOW_MS,
@@ -362,10 +374,11 @@ describe('页面指纹比对与防重复读屏（防死循环）', () => {
       const second = await readPage.execute({})
       expect(second.content).toContain('页面无变化')
       expect(second.content).not.toContain('=== [PageDigest: 成绩查询] ===')
-      // 附带精简可用控件索引，避免模型因看不到任何 [BID] 而幻觉操作
+      // 附带完整可用控件索引（与全量摘要同口径：含当前值），避免模型因看不到任何 [BID] 而幻觉操作
       expect(second.content).toContain('当前可用控件索引')
-      expect(second.content).toContain('[1] button "查询"')
-      expect(second.content.length).toBeLessThan(300)
+      expect(second.content).toContain('[BID: 1] button "查询"')
+      // 仍属「紧凑短路」，绝不等价于重放整份 PageDigest
+      expect(second.content.length).toBeLessThan(400)
     } finally {
       yanhuExpressManager.evalInPage = originalEval
       yanhuExpressManager.getFullAXTree = originalAx
@@ -624,6 +637,29 @@ describe('深度审计修复回归（BUG 回归用例）', () => {
     }
   })
 
+  test('参数别名容错：script / code / js 均等价于规范名 expression（未知工具故障同源修复）', async () => {
+    const originalEval = yanhuExpressManager.evalInPage
+    try {
+      const seen: string[] = []
+      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) => {
+        seen.push(expr)
+        return { ok: true }
+      }
+      const tools = buildYanhuBrowserTools(() => 'tab-eval-alias')
+      const evalTool = tools.find((t) => t.definition.name === 'yanhu_eval_script')!
+      for (const key of ['script', 'code', 'js']) {
+        const res = await evalTool.execute({ [key]: 'document.title' })
+        expect(res.isError).toBeFalsy()
+      }
+      expect(seen).toEqual(['document.title', 'document.title', 'document.title'])
+      // 全空入参时给出可读错误，而不是带着空表达式继续执行
+      const missing = await evalTool.execute({})
+      expect(missing.isError).toBe(true)
+    } finally {
+      yanhuExpressManager.evalInPage = originalEval
+    }
+  })
+
   test('BUG-2：工具抛异常（非法 BID）后自动释放熔断，不再死锁', async () => {
     const originalEval = yanhuExpressManager.evalInPage
     const originalAx = yanhuExpressManager.getFullAXTree
@@ -749,7 +785,7 @@ describe('深度审计修复回归（BUG 回归用例）', () => {
       expect(second.content).toContain('页面无变化')
       expect(second.content).toContain('共 12 项')
       // 第 9~12 项也必须可见（历史缺陷只回传前 8 项，导致 BID > 8 的控件永久不可见）
-      expect(second.content).toContain('[12] link "菜单项-12"')
+      expect(second.content).toContain('[BID: 12] link "菜单项-12"')
     } finally {
       yanhuExpressManager.evalInPage = originalEval
       yanhuExpressManager.getFullAXTree = originalAx
@@ -932,10 +968,16 @@ describe('深度审计修复回归（BUG 回归用例）', () => {
           actionable: true,
         },
       ]
+      let pickedOnce = false
       yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) => {
         if (expr === buildYanhuCollectorScript()) return { url: 'https://x/y', title: 't', elements }
         if (expr.includes('isNativeSelect')) return { ok: false, isNativeSelect: false, reason: 'not-native-select', tag: 'div' }
-        if (expr.includes('selectors =')) return { ok: true, matched: 2, text: '事假' }
+        if (expr.includes('selectors =')) {
+          pickedOnce = true
+          return { ok: true, matched: 2, text: '事假' }
+        }
+        // 显示文本探针：真实控件在点选生效后会把显示文本改成所选选项（此处如实模拟）
+        if (expr.includes('__yanhuOwnText')) return { ok: true, text: pickedOnce ? '事假' : '' }
         return { ok: true }
       }
       yanhuExpressManager.getFullAXTree = async () => []
@@ -1597,10 +1639,21 @@ describe('选中事假/病假失败根因根治回归（BUG-37 ~ BUG-43）', () 
       dispatchEvent: (ev: { type?: string }) => boolean
       click: () => void
     } | null = null
-    const mockDoc = {
+    // 桩必须体现真实包含关系：选项位于**已展开的浮层**之内（.bh-pull-down-list / .jqx-listbox ...）。
+    // 采集端现在要求「选项只能来自已展开的浮层」，否则会把页面上的泛化类名杂项误当选项回传。
+    const popup = {
+      textContent: text,
+      children: [] as unknown[],
+      ownerDocument: undefined as unknown,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 200, height: 320 }),
       querySelectorAll: (sel: string) => (selectorHit(sel) && item ? [item] : []),
+    }
+    const mockDoc = {
+      querySelectorAll: (sel: string) =>
+        sel.indexOf('.bh-pull-down-list') >= 0 || sel.indexOf('.jqx-listbox') >= 0 ? [popup] : [],
       defaultView: mockWindow,
     }
+    popup.ownerDocument = mockDoc
     item = {
       textContent: text,
       children: [],
@@ -1951,5 +2004,569 @@ describe('复杂布局与表单加固回归（Shadow DOM / 富文本 / 吸顶遮
     for (const script of scripts) {
       expect(() => new Function('document', 'window', script)).not.toThrow()
     }
+  })
+});
+
+/**
+ * 入参净化与 BID 自愈重定位回归。
+ *
+ * 锁死两个高频故障：
+ *   1. 模型把提示词示例里的反引号一并抄进入参（`"url": "\`https://...\`"`），导航拿到脏值必失败；
+ *   2. 页面局部重绘后 BID 台账整体重新编号，工具报「定位失败」，模型被迫再花两轮 read_page
+ *      才能拿到新 BID —— 现在由 relocateBySemantics 直接回传新编号。
+ */
+/**
+ * 「页面无变化」短路的自证能力回归。
+ *
+ * 锁死历史故障：该短路口径曾只输出「[bid] role "name"」，把各控件**当前值**全部丢掉。
+ * 长表单填写过程中绝大多数 read_page 都走这条短路，于是模型无法核对「刚填的值进没进去」，
+ * 进而怀疑自己的历史操作是否真的发生过（思考链原话：「worried that many of the earlier fills
+ * were hallucinated by me」）。台账必须与全量摘要同口径。
+ */
+describe('buildUnchangedNotice（页面无变化台账必须带当前值）', () => {
+  test('每个控件都带 value / options 等当前状态，与全量摘要同口径', () => {
+    const notice = buildUnchangedNotice({
+      url: 'https://xgfw.cdut.edu.cn/x',
+      title: '学生请假',
+      digestText: '',
+      bidCount: 2,
+      timestamp: Date.now(),
+      nodes: [
+        {
+          bid: 15,
+          role: 'textbox',
+          tag: 'input',
+          name: '请假结束时间',
+          value: '2026-10-17 18:00',
+          bounds: { x: 480, y: 300, width: 200, height: 30 },
+        },
+        {
+          bid: 6,
+          role: 'combobox',
+          tag: 'div',
+          name: '请假类型',
+          options: [
+            { value: '1', text: '事假', selected: true },
+            { value: '2', text: '病假', selected: false },
+          ],
+          bounds: { x: 480, y: 200, width: 200, height: 30 },
+        },
+      ],
+    })
+    expect(notice).toContain('value="2026-10-17 18:00"')
+    expect(notice).toContain('current: "事假"')
+    expect(notice).toContain('[BID: 15]')
+    expect(notice).toContain('共 2 项，含当前值')
+  })
+})
+
+/**
+ * 自定义下拉失败回执必须自带「已渲染的可用选项」。
+ *
+ * 历史故障：级联选择的浮层不进 PageDigest，失败回执又只说「未能匹配到选项」，
+ * 模型只能靠猜选项名反复空转（连试 武侯区 / 锦江区 / 青羊区 多轮全败）。
+ */
+describe('buildPickCustomOptionScript（失败时回传已渲染选项）', () => {
+  test('匹配失败时列出可见选项文本，且剔除未渲染项', async () => {
+    const makeOption = (text: string, display: string) => ({
+      textContent: text,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 60, height: 20 }),
+      ownerDocument: {
+        defaultView: { getComputedStyle: () => ({ display, visibility: 'visible', opacity: '1' }) },
+      },
+    })
+    const visible = makeOption('武侯区', 'block')
+    const hidden = makeOption('隐藏模板项', 'none')
+    const doc = {
+      querySelectorAll: (selector: string) => (selector === '[role="option"]' ? [visible, hidden] : []),
+    }
+    const script = buildPickCustomOptionScript('锦江区')
+    const runner = new Function('document', 'window', `return ${script}`)
+    const result = (await runner(doc, {})) as { ok: boolean; options?: string[] }
+
+    expect(result.ok).toBe(false)
+    expect(result.options).toContain('武侯区')
+    expect(result.options).not.toContain('隐藏模板项')
+  })
+
+  test('Given 浮层未展开 When 页面存在 .jqx-item 等泛化类名杂项 Then 绝不把它们当作选项回传', async () => {
+    // 复现历史误导：回执曾回传「已渲染的可用选项：没有数据 / 事假 / 10 / 请选择...」
+    const junk = {
+      textContent: '没有数据',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 80, height: 20 }),
+      ownerDocument: {
+        defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }) },
+      },
+    }
+    const doc = {
+      querySelectorAll: (selector: string) => (selector === '.jqx-item' ? [junk] : []),
+    }
+    const runner = new Function('document', 'window', `return ${buildPickCustomOptionScript('香港特别行政区')}`)
+    const result = (await runner(doc, {})) as { ok: boolean; options?: string[] }
+
+    expect(result.ok).toBe(false)
+    expect(result.options ?? []).toEqual([])
+  })
+
+  test('Given 浮层已展开 When 扫描选项 Then 只认浮层内的项，浮层外的同名文本不算', async () => {
+    const makeNode = (text: string, children: unknown[] = []) => ({
+      textContent: text,
+      children,
+      getBoundingClientRect: () => ({ left: 100, top: 100, width: 120, height: 24 }),
+      ownerDocument: {
+        defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }) },
+      },
+    })
+    const provinceItem = makeNode('吉林省')
+    const popup = {
+      ...makeNode('吉林省 贵州省'),
+      querySelectorAll: (selector: string) =>
+        selector === '.jqx-item' || selector === '*' ? [provinceItem] : [],
+    }
+    const doc = {
+      querySelectorAll: (selector: string) => (selector.indexOf('.jqx-listbox') >= 0 ? [popup] : []),
+    }
+    const runner = new Function('document', 'window', `return ${buildPickCustomOptionScript('香港特别行政区')}`)
+    const result = (await runner(doc, {})) as { ok: boolean; options?: string[] }
+
+    expect(result.ok).toBe(false)
+    expect(result.options).toEqual(['吉林省'])
+  })
+  test('Given 浮层内只有「文本包含目标」的聚合容器 When 匹配 Then 绝不点中容器误报成功（虚假成功回归）', async () => {
+    // 真实事故：目标控件名是「请选择... 香港特别行政区」，其文本本身包含目标「香港特别行政区」，
+    // 旧逻辑以子串匹配命中了这个容器并点击，回报「已选择 -> 香港特别行政区」，而控件毫无变化。
+    const leaf = (text: string) => ({
+      textContent: text,
+      children: [],
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 60, height: 20 }),
+      ownerDocument: {
+        defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }) },
+      },
+    })
+    const leafA = leaf('吉林省')
+    const leafB = leaf('贵州省')
+    const container = {
+      textContent: '吉林省 贵州省 香港特别行政区',
+      children: [leafA, leafB],
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 220, height: 300 }),
+      ownerDocument: {
+        defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }) },
+      },
+    }
+    const popup = {
+      ...container,
+      querySelectorAll: (selector: string) =>
+        selector === '.jqx-item' ? [container] : selector === '*' ? [container, leafA, leafB] : [],
+    }
+    const doc = {
+      querySelectorAll: (selector: string) => (selector.indexOf('.jqx-listbox') >= 0 ? [popup] : []),
+    }
+    const runner = new Function('document', 'window', `return ${buildPickCustomOptionScript('香港特别行政区')}`)
+    const result = (await runner(doc, {})) as { ok: boolean; options?: string[] }
+
+    // 关键：不得返回成功（旧行为会点掉容器并误报「已选择」）
+    expect(result.ok).toBe(false)
+    // 回传清单只列叶子选项，聚合容器名不得出现（否则会再次误导模型）
+    expect(result.options).toEqual(['吉林省', '贵州省'])
+  })
+})
+
+/**
+ * 只读控件的填写通道。
+ *
+ * 历史浪费：只读输入框（EMAP 日历 / 时间选择器 / 树选择的承载框）的值由页面自带控件驱动，
+ * CDP 物理输入对它 100% 无效，但旧逻辑每次都先跑一遍「聚焦 + 输入 + 回读校验」才降级。
+ */
+describe('只读控件填写通道', () => {
+  test('Given 目标是只读输入框 When 填写 Then 跳过物理输入，直接走 JS 原生 setter 通道并说明', async () => {
+    const originalEval = yanhuExpressManager.evalInPage
+    const originalAx = yanhuExpressManager.getFullAXTree
+    const originalStable = yanhuExpressManager.awaitStable
+    const originalTextInput = yanhuExpressManager.dispatchHumanTextInput
+    const exprs: string[] = []
+    let textInputCalls = 0
+    try {
+      const elements = [
+        {
+          tag: 'input',
+          role: 'textbox',
+          name: '请假开始时间',
+          bounds: { x: 480, y: 300, width: 200, height: 30 },
+          visible: true,
+          ariaHidden: false,
+          occluded: false,
+          region: '业务表单',
+          actionable: true,
+        },
+      ]
+      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) => {
+        exprs.push(expr)
+        if (expr === buildYanhuCollectorScript()) {
+          return { url: 'https://xgfw.cdut.edu.cn/x', title: '学生请假', elements }
+        }
+        if (expr.includes('editableInput')) {
+          return { ok: true, editable: true, readOnly: true, tag: 'input', type: 'text', role: 'textbox' }
+        }
+        return { ok: true }
+      }
+      yanhuExpressManager.getFullAXTree = async () => []
+      yanhuExpressManager.awaitStable = async () => ({
+        settled: true,
+        timedOut: false,
+        elapsedMs: 0,
+        inflight: 0,
+        frames: 0,
+        mutations: 0,
+        lastActivityAt: 0,
+      })
+      yanhuExpressManager.dispatchHumanTextInput = async () => {
+        textInputCalls += 1
+      }
+
+      const tools = buildYanhuBrowserTools(() => 'tab-fill-readonly')
+      await tools.find((t) => t.definition.name === 'yanhu_read_page')!.execute({})
+      const res = await tools.find((t) => t.definition.name === 'yanhu_fill')!.execute({
+        bid: 1,
+        value: '2026-10-17 08:00',
+      })
+
+      expect(res.isError).toBeFalsy()
+      // 关键：不做注定失败的物理输入
+      expect(textInputCalls).toBe(0)
+      // 确实走了 JS 降级通道（脚本内含解封辅助）
+      expect(exprs.some((expr) => expr.includes('__unseal'))).toBe(true)
+      // 回执如实说明走了哪条通道，并给出「仍不生效时的替代路径」
+      expect(res.content).toContain('只读控件')
+    } finally {
+      yanhuExpressManager.evalInPage = originalEval
+      yanhuExpressManager.getFullAXTree = originalAx
+      yanhuExpressManager.awaitStable = originalStable
+      yanhuExpressManager.dispatchHumanTextInput = originalTextInput
+    }
+  })
+})
+
+/**
+ * 选中后校验（杜绝「虚假成功」）。
+ *
+ * 真实事故：出校去向的树形选择器，工具连续多轮回报「已选择 -> 香港特别行政区」，
+ * 而控件显示始终是「请选择...」——模型据此反复重试、最后撞熔断。根因是把
+ * 「点中了文本相同的元素」当成了「目标控件的值被设置」。
+ */
+describe('yanhu_select 选中后校验', () => {
+  test('Given 点选了选项但控件显示毫无变化 When 选择 Then 如实报错，绝不谎报成功', async () => {
+    const originalEval = yanhuExpressManager.evalInPage
+    const originalAx = yanhuExpressManager.getFullAXTree
+    const originalStable = yanhuExpressManager.awaitStable
+    try {
+      const elements = [
+        {
+          tag: 'div',
+          role: 'tree',
+          name: '出校去向',
+          bounds: { x: 10, y: 20, width: 200, height: 32 },
+          visible: true,
+          ariaHidden: false,
+          occluded: false,
+          region: '业务表单',
+          actionable: true,
+        },
+      ]
+      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) => {
+        if (expr === buildYanhuCollectorScript()) return { url: 'https://x/y', title: 't', elements }
+        if (expr.includes('isNativeSelect')) {
+          return { ok: false, isNativeSelect: false, reason: 'not-native-select', tag: 'div' }
+        }
+        // 面板里确实匹配到了「香港特别行政区」并点击成功……
+        if (expr.includes('selectors =')) return { ok: true, matched: 2, text: '香港特别行政区' }
+        // ……但控件显示始终停在占位符（模拟树形选择器不接受模拟点选）
+        if (expr.includes('__yanhuOwnText')) return { ok: true, text: '请选择...' }
+        return { ok: true }
+      }
+      yanhuExpressManager.getFullAXTree = async () => []
+      yanhuExpressManager.awaitStable = async () => ({
+        settled: true,
+        timedOut: false,
+        elapsedMs: 0,
+        inflight: 0,
+        frames: 0,
+        mutations: 0,
+        lastActivityAt: 0,
+      })
+
+      const tools = buildYanhuBrowserTools(() => 'tab-select-verify')
+      await tools.find((t) => t.definition.name === 'yanhu_read_page')!.execute({})
+      const res = await tools.find((t) => t.definition.name === 'yanhu_select')!.execute({
+        bid: 1,
+        valueOrText: '香港特别行政区',
+      })
+
+      expect(res.isError).toBe(true)
+      expect(res.content).toContain('目标控件显示未发生变化')
+      expect(res.content).toContain('请选择...')
+      // 明确告知模型不要反复重试同一路径
+      expect(res.content).toContain('不要反复重试')
+    } finally {
+      yanhuExpressManager.evalInPage = originalEval
+      yanhuExpressManager.getFullAXTree = originalAx
+      yanhuExpressManager.awaitStable = originalStable
+    }
+  })
+  test('Given 合成事件被控件拒绝 When 选择 Then 自动升级为 CDP 硬件级真实点击并如实说明', async () => {
+    const originalEval = yanhuExpressManager.evalInPage
+    const originalAx = yanhuExpressManager.getFullAXTree
+    const originalStable = yanhuExpressManager.awaitStable
+    const originalHumanClick = yanhuExpressManager.dispatchHumanClick
+    let humanClicks = 0
+    try {
+      const elements = [
+        {
+          tag: 'div',
+          role: 'tree',
+          name: '出校去向',
+          bounds: { x: 10, y: 20, width: 200, height: 32 },
+          visible: true,
+          ariaHidden: false,
+          occluded: false,
+          region: '业务表单',
+          actionable: true,
+        },
+      ]
+      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) => {
+        if (expr === buildYanhuCollectorScript()) return { url: 'https://x/y', title: 't', elements }
+        if (expr.includes('isNativeSelect')) {
+          return { ok: false, isNativeSelect: false, reason: 'not-native-select', tag: 'div' }
+        }
+        if (expr.includes('selectors =')) {
+          return { ok: true, matched: 2, text: '香港特别行政区', x: 480, y: 300 }
+        }
+        // 合成事件阶段控件毫无反应；只有 CDP 真实点击之后显示文本才更新
+        if (expr.includes('__yanhuOwnText')) {
+          return { ok: true, text: humanClicks > 0 ? '香港特别行政区' : '请选择...' }
+        }
+        return { ok: true }
+      }
+      yanhuExpressManager.getFullAXTree = async () => []
+      yanhuExpressManager.awaitStable = async () => ({
+        settled: true,
+        timedOut: false,
+        elapsedMs: 0,
+        inflight: 0,
+        frames: 0,
+        mutations: 0,
+        lastActivityAt: 0,
+      })
+      yanhuExpressManager.dispatchHumanClick = async () => {
+        humanClicks += 1
+      }
+
+      const tools = buildYanhuBrowserTools(() => 'tab-select-escalate')
+      await tools.find((t) => t.definition.name === 'yanhu_read_page')!.execute({})
+      const res = await tools.find((t) => t.definition.name === 'yanhu_select')!.execute({
+        bid: 1,
+        valueOrText: '香港特别行政区',
+      })
+
+      expect(res.isError).toBeFalsy()
+      expect(humanClicks).toBe(1)
+      expect(res.content).toContain('香港特别行政区')
+      expect(res.content).toContain('已自动升级至 CDP 硬件级点击')
+    } finally {
+      yanhuExpressManager.evalInPage = originalEval
+      yanhuExpressManager.getFullAXTree = originalAx
+      yanhuExpressManager.awaitStable = originalStable
+      yanhuExpressManager.dispatchHumanClick = originalHumanClick
+    }
+  })
+})
+
+/**
+ * EMAP / JQWidgets 树形 / 级联选择器极速通道。
+ *
+ * 历史事故：「出校去向」是 jqxDropDownButton + jqxTree，不属于单级 jqxDropDownList，
+ * 旧实现只能退化为脆弱的 DOM 点选 —— 合成事件被忽略、CDP 点击也不生效，
+ * 且即使点中也不会同步隐藏域与 EMAP 表单模型，校验始终报「出校去向不能为空」。
+ */
+describe('EMAP 树形选择器极速通道', () => {
+  test('Given 树形选择器 When 生成极速通道脚本 Then 覆盖原生 API 全链路', () => {
+    const record = {
+      bid: 24,
+      tag: 'div',
+      role: 'combobox',
+      name: '出校去向',
+      bounds: { x: 10, y: 20, width: 200, height: 32 },
+      visible: true,
+      ariaHidden: false,
+      occluded: false,
+      region: '业务表单',
+      actionable: true,
+    } as unknown as YanhuBidNode
+    const script = buildEmapTreeSelectScript(record, '香港特别行政区')
+    expect(script).toContain("jqxTree('getItems')")
+    expect(script).toContain("jqxTree('selectItem'")
+    expect(script).toContain("jqxDropDownButton('setContent'")
+    expect(script).toContain("jqxDropDownButton('close')")
+    expect(script).toContain("emapForm('setValue'")
+    expect(script).toContain('input[type="hidden"]')
+    expect(script).toContain(JSON.stringify('香港特别行政区'))
+    // 点击收口脚本同样必须触发 select 并收起浮层
+    const commit = buildTreeItemCommitScript(record)
+    expect(commit).toContain("trigger('select'")
+    expect(commit).toContain("jqxDropDownButton('close')")
+  })
+
+  test('Given 树形选择器 When 选择 Then 走 EMAP 极速通道，且必须通过选中后校验才算成功', async () => {
+    const originalEval = yanhuExpressManager.evalInPage
+    const originalAx = yanhuExpressManager.getFullAXTree
+    const originalStable = yanhuExpressManager.awaitStable
+    let treeCalls = 0
+    try {
+      const elements = [
+        {
+          tag: 'div',
+          role: 'combobox',
+          name: '出校去向',
+          bounds: { x: 10, y: 20, width: 200, height: 32 },
+          visible: true,
+          ariaHidden: false,
+          occluded: false,
+          region: '业务表单',
+          actionable: true,
+        },
+      ]
+      yanhuExpressManager.evalInPage = async (_tabId: string | undefined, expr: string) => {
+        if (expr === buildYanhuCollectorScript()) return { url: 'https://x/y', title: 't', elements }
+        if (expr.includes('isNativeSelect')) {
+          return { ok: false, isNativeSelect: false, reason: 'not-native-select', tag: 'div' }
+        }
+        // 极速通道：走控件原生 API（必须显式回传 via 标记才算命中）
+        if (expr.includes('emap-tree-api')) {
+          treeCalls += 1
+          return { ok: true, via: 'emap-tree-api', text: '香港特别行政区', value: 'HK' }
+        }
+        if (expr.includes('__yanhuOwnText')) {
+          return { ok: true, text: treeCalls > 0 ? '香港特别行政区' : '请选择...' }
+        }
+        return { ok: true }
+      }
+      yanhuExpressManager.getFullAXTree = async () => []
+      yanhuExpressManager.awaitStable = async () => ({
+        settled: true,
+        timedOut: false,
+        elapsedMs: 0,
+        inflight: 0,
+        frames: 0,
+        mutations: 0,
+        lastActivityAt: 0,
+      })
+
+      const tools = buildYanhuBrowserTools(() => 'tab-tree-select')
+      await tools.find((t) => t.definition.name === 'yanhu_read_page')!.execute({})
+      const res = await tools.find((t) => t.definition.name === 'yanhu_select')!.execute({
+        bid: 1,
+        valueOrText: '香港特别行政区',
+      })
+
+      expect(treeCalls).toBe(1)
+      expect(res.isError).toBeFalsy()
+      expect(res.content).toContain('树形极速通道')
+      expect(res.content).toContain('香港特别行政区')
+    } finally {
+      yanhuExpressManager.evalInPage = originalEval
+      yanhuExpressManager.getFullAXTree = originalAx
+      yanhuExpressManager.awaitStable = originalStable
+    }
+  })
+})
+
+describe('入参净化（stripDecorators / asInt）', () => {
+  test('Given 整串被反引号包裹的 URL When 净化 Then 剥掉反引号与首尾空白', () => {
+    expect(stripDecorators('`https://xgfw.cdut.edu.cn/xsfw/sys/emappagelog/index.do`')).toBe(
+      'https://xgfw.cdut.edu.cn/xsfw/sys/emappagelog/index.do',
+    )
+    expect(stripDecorators('  https://a.cn/b  ')).toBe('https://a.cn/b')
+  })
+
+  test('Given 额外指定引号符号 When 净化 Then 成对的直引号 / 弯引号同样被剥离', () => {
+    expect(stripDecorators('"https://a.cn/b"', URL_DECORATORS)).toBe('https://a.cn/b')
+    expect(stripDecorators('“https://a.cn/b”', URL_DECORATORS)).toBe('https://a.cn/b')
+  })
+
+  test('Given 合法内容内部含引号 When 净化 Then 不做任何改动（绝不误伤）', () => {
+    expect(stripDecorators('他说“好”', URL_DECORATORS)).toBe('他说“好”')
+    expect(stripDecorators('a`b`c')).toBe('a`b`c')
+  })
+
+  test('Given 模型把 BID 写成带装饰符的字符串 When asInt Then 正确解析出整数', () => {
+    expect(asInt('`87`')).toBe(87)
+    expect(asInt('"88"')).toBe(88)
+    expect(asInt(89)).toBe(89)
+  })
+
+  test('Given 缺参 When asInt Then 仍返回调用方给定的兜底值（不因净化而丢默认值）', () => {
+    expect(asInt(undefined, 120)).toBe(120)
+    expect(asInt(null, 120)).toBe(120)
+    expect(asInt('', 120)).toBe(120)
+    expect(asInt('abc', 120)).toBe(120)
+  })
+})
+
+describe('BID 自愈重定位（relocateBySemantics）', () => {
+  function collect(names: Array<{ name: string; role: string; tag: string; x: number }>): YanhuCollectedPage {
+    return {
+      url: 'https://xgfw.cdut.edu.cn/xsfw/sys/emappagelog/index.do',
+      title: '学生请假',
+      elements: names.map((item) => ({
+        tag: item.tag,
+        role: item.role,
+        name: item.name,
+        bounds: { x: item.x, y: 0, width: 40, height: 20 },
+        visible: true,
+        ariaHidden: false,
+        occluded: false,
+        region: '业务表单',
+        actionable: true,
+      })),
+    }
+  }
+
+  test('Given 同名控件在新台账中已换号 When 重定位 Then 按旧坐标取最近者并返回新 BID', () => {
+    const tabId = `tab-relocate-${Date.now()}`
+    yanhuDomDistillationEngine.distill(
+      tabId,
+      collect([
+        { name: '请假开始时间', role: 'textbox', tag: 'input', x: 0 },
+        { name: '请假开始时间', role: 'textbox', tag: 'input', x: 500 },
+        { name: '请假事由', role: 'textbox', tag: 'input', x: 0 },
+      ]),
+    )
+    // 旧台账中位于页面右侧的那一个（模拟改版前的 BID 已失效）
+    const relocated = relocateBySemantics(tabId, {
+      bid: 9999,
+      role: 'textbox',
+      tag: 'input',
+      name: '请假开始时间',
+      bounds: { x: 490, y: 0, width: 40, height: 20 },
+    })
+    expect(relocated).not.toBeNull()
+    expect(relocated?.bid).toBe(2)
+  })
+
+  test('Given 页面已无同名同角色控件 When 重定位 Then 返回 null 而非盲猜坐标最近者', () => {
+    const tabId = `tab-relocate-none-${Date.now()}`
+    yanhuDomDistillationEngine.distill(
+      tabId,
+      collect([{ name: '其它字段', role: 'textbox', tag: 'input', x: 10 }]),
+    )
+    const relocated = relocateBySemantics(tabId, {
+      bid: 1,
+      role: 'textbox',
+      tag: 'input',
+      name: '请假开始时间',
+      bounds: { x: 10, y: 0, width: 40, height: 20 },
+    })
+    expect(relocated).toBeNull()
   })
 });

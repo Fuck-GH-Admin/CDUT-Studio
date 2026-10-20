@@ -260,6 +260,51 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(updated.sdkSessionId).toBe('pi-session-id')
     expect(updated.forkSourceSdkSessionId).toBeUndefined()
   })
+
+  test('Given an entry missing from primary transcript When rewindPiSession is called Then it gracefully rewinds without throwing', async () => {
+    const meta = sessions.createAgentSession('rewind missing entry test', undefined, undefined, undefined, 'pi')
+    const primaryFile = writePiTranscript('primary-session', false)
+    sessions.updateAgentSessionMeta(meta.id, {
+      piSessionFile: primaryFile,
+      sdkSessionId: 'primary-session',
+      piEntryBindings: {
+        'msg-uuid-user-1': 'entry-u1',
+        'msg-uuid-assistant-1': 'missing-entry-d2f8eb3e',
+      },
+    })
+
+    sessions.appendSDKMessages(meta.id, [
+      {
+        type: 'user',
+        uuid: 'msg-uuid-user-1',
+        message: { content: [{ type: 'text', text: 'First user prompt' }] },
+        parent_tool_use_id: null,
+        _createdAt: Date.now() - 2000,
+      } as any,
+      {
+        type: 'assistant',
+        uuid: 'msg-uuid-assistant-1',
+        message: { content: [{ type: 'text', text: 'First assistant response' }] },
+        parent_tool_use_id: null,
+        _createdAt: Date.now() - 1000,
+      } as any,
+      {
+        type: 'user',
+        uuid: 'msg-uuid-user-2',
+        message: { content: [{ type: 'text', text: 'Second user prompt to rewind' }] },
+        parent_tool_use_id: null,
+        _createdAt: Date.now(),
+      } as any,
+    ])
+
+    // 撤销第二轮提问（应保留第一轮消息，但由于 entry 缺失不应再 throw）
+    const result = await sessions.rewindPiSession(meta.id, 'msg-uuid-user-2')
+    expect(result.undoneUserText).toBe('Second user prompt to rewind')
+    expect(result.remainingMessages).toBe(2)
+
+    const remaining = sessions.getAgentSessionSDKMessages(meta.id)
+    expect(remaining.length).toBe(2)
+  })
 })
 
 // 回归：一次最终失败的传输错误曾经在写入/读取时被静默丢弃，

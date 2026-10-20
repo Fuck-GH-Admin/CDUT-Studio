@@ -128,6 +128,7 @@ import { describeCdutMutation, executeDomainTool, isCdutMutationAction } from '.
 import { requestCdutMutationConfirm } from '../cdut/cdut-mutation-guard'
 import { cdutDemoService } from '../cdut/cdut-demo/demo-service'
 import { buildPiStudyTools } from '../study/study-tools'
+import { buildPiCsLabTools } from './pi-cslab-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -145,6 +146,8 @@ export interface PiBuiltinToolsContext {
   /** 是否为 AI 速课堂专属会话；仅此时注册速课堂学习工具（资料查阅 / 学生认知档案）。 */
   isStudyClass?: boolean
   permissionMode?: ProferPermissionMode
+  /** 执行期动态读取当前会话权限模式（用于 CSLab 工具审计记账）。 */
+  getPermissionMode?: () => ProferPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation' | 'goal'
   /** 当前 Agent 工作目录；用于解析生图产物、参考图和本地网页预览的相对路径。 */
   agentCwd?: string
@@ -1616,6 +1619,7 @@ function buildProferCloudTools(sdk: PiSdk, _ctx: PiBuiltinToolsContext): ToolDef
 const CDUT_TOOL_LABELS: Record<string, string> = {
   cdut_academic_profile: 'CDUT 学籍与个人档案',
   cdut_schedule: 'CDUT 课表与作息日程',
+  cdut_query_other_class_schedule: 'CDUT 全校班级课表查询',
   cdut_grades_assessment: 'CDUT 成绩与考核评定',
   cdut_exam_affairs: 'CDUT 考务安排与报名',
   cdut_classroom_resource: 'CDUT 教室资源与自习雷达',
@@ -1717,16 +1721,32 @@ export function buildPiCdutTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
       name: 'cdut_schedule',
       label: 'CDUT 课表与作息日程',
       description:
-        'Retrieve the weekly timetable of the current semester at 成都理工大学 (CDUT) (courses, teachers, classrooms, class periods, odd/even weeks); you may also search other university timetables by class, teacher, or classroom.',
+        'Retrieve the personal weekly timetable (courses, teachers, classrooms, class periods, odd/even weeks) at 成都理工大学 (CDUT), with strict week filtering and optional ongoing/next-course live radar marking when the queried week is the current week.',
       parameters: Type.Object({
-        action: Type.Union([Type.Literal('get_my_schedule'), Type.Literal('query_other_schedule')]),
+        action: Type.Literal('get_my_schedule'),
         semester: Type.Optional(Type.String()),
         week: Type.Optional(Type.Integer({ minimum: 1, maximum: 30 })),
-        queryType: Type.Optional(Type.Union([Type.Literal('class'), Type.Literal('teacher'), Type.Literal('classroom')])),
-        queryKeyword: Type.Optional(Type.String()),
+        isCurrentWeek: Type.Optional(Type.Boolean()),
       }),
       async execute(_toolCallId, params) {
         return await runCdutDomain('schedule', 'cdut_schedule', params as unknown as CdutToolParamsMap['schedule'])
+      },
+    }),
+    sdk.defineTool({
+      name: 'cdut_query_other_class_schedule',
+      label: 'CDUT 全校班级课表查询',
+      description:
+        'Query the timetable of ANY other class at 成都理工大学 (CDUT) by fuzzy class name (e.g. "智能2班") or class code (e.g. "2025191101"), returning normalized course entries (name, code, credit, teachers, rooms, class group, campus, remarks). Only class timetables are exposed; teacher and classroom timetables are intentionally NOT provided.',
+      parameters: Type.Object({
+        className: Type.Optional(Type.String({ description: '班级名称或班号（支持模糊匹配），与 classId 二选一' })),
+        classId: Type.Optional(Type.String({ description: '教务系统内部班级 ID（xx04id），优先于 className' })),
+        semester: Type.Optional(Type.String({ description: '学期代码，如 "2025-2026-1"，留空默认当前学期' })),
+      }),
+      async execute(_toolCallId, params) {
+        return await runCdutDomain('schedule', 'cdut_query_other_class_schedule', {
+          action: 'query_other_schedule',
+          ...params,
+        } as unknown as CdutToolParamsMap['schedule'])
       },
     }),
     sdk.defineTool({
@@ -2212,6 +2232,13 @@ export async function buildPiBuiltinTools(
     } catch (error) {
       console.error('[Pi 桥接] 注入 AI 速课堂学习工具失败:', error)
     }
+  }
+
+  // 15. CSLab 自定义科研工具（仅会话绑定 cslabLabId 时注入，禁止全局 activeLabId）
+  try {
+    tools.push(...buildPiCsLabTools(sdk, { sessionId: ctx.sessionId, getPermissionMode: ctx.getPermissionMode }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 CSLab 科研工具失败:', error)
   }
 
   const cloudTools = buildProferCloudTools(sdk, ctx)

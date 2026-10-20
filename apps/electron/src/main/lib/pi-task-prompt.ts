@@ -27,10 +27,17 @@ interface PromptSection {
   rest: string
 }
 
-function removeSection(prompt: string, startMarker: string, endMarker: string): PromptSection | undefined {
+function removeSection(prompt: string, startMarker: string, endMarker: string | string[]): PromptSection | undefined {
   const start = prompt.indexOf(startMarker)
   if (start < 0) return undefined
-  const end = prompt.indexOf(endMarker, start + startMarker.length)
+  const markers = Array.isArray(endMarker) ? endMarker : [endMarker]
+  let end = -1
+  for (const marker of markers) {
+    const idx = prompt.indexOf(marker, start + startMarker.length)
+    if (idx >= 0 && (end === -1 || idx < end)) {
+      end = idx
+    }
+  }
   if (end < 0) return undefined
   return {
     text: prompt.slice(start, end).trim(),
@@ -38,13 +45,13 @@ function removeSection(prompt: string, startMarker: string, endMarker: string): 
   }
 }
 
-/** 只取当前段落及其子标题；下一个 ## 标题后的常驻规则必须保留。 */
+/** 只取当前段落及其子标题；下一个 ## 标题或关闭标签后的常驻规则必须保留。 */
 function removeHeadingSection(prompt: string, startMarker: string): PromptSection | undefined {
   const start = prompt.indexOf(startMarker)
   if (start < 0) return undefined
   const contentStart = start + startMarker.length
-  const nextHeading = prompt.slice(contentStart).search(/^## /m)
-  const end = nextHeading < 0 ? prompt.length : contentStart + nextHeading
+  const nextBoundary = prompt.slice(contentStart).search(/^(?:## |<\/[a-z_]+>)/m)
+  const end = nextBoundary < 0 ? prompt.length : contentStart + nextBoundary
   return {
     text: prompt.slice(start, end).trim(),
     rest: `${prompt.slice(0, start)}${prompt.slice(end)}`,
@@ -68,7 +75,7 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
   const lowFrequency: string[] = []
   let prompt = options.basePrompt
 
-  const collaboration = removeSection(prompt, '## SubAgent Delegation Policy', '## Pi Agent Runtime')
+  const collaboration = removeSection(prompt, '## SubAgent Delegation Policy', ['</subagents>', '## Pi Agent Runtime'])
   if (collaboration) {
     prompt = collaboration.rest
     if (hasAnyTool(tools, (name) => name.startsWith('mcp__collaboration__'))) lowFrequency.push(collaboration.text)
@@ -104,7 +111,7 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     if (hasAutomationTool || options.forceAutomation === true) lowFrequency.push(automation.text)
   }
 
-  const delivery = removeSection(prompt, '8. **Sending existing local images**', '## CDUT Studio Managed Browser')
+  const delivery = removeSection(prompt, '8. **Sending existing local images**', ['## CDUT Studio Managed Browser', '</guidelines>'])
   if (delivery) {
     prompt = delivery.rest
     const hasImageOutput = tools.has('send_local_image')
@@ -127,5 +134,13 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     if (hasAnyTool(tools, (name) => name.startsWith('Browser'))) lowFrequency.push(browser.text)
   }
 
-  return lowFrequency.length > 0 ? `${prompt.trim()}\n\n${lowFrequency.join('\n\n')}` : prompt.trim()
+  if (lowFrequency.length > 0) {
+    const recencyMarker = '> **CRITICAL EXECUTION REMINDER**:'
+    const reminderIdx = prompt.lastIndexOf(recencyMarker)
+    if (reminderIdx >= 0) {
+      return `${prompt.slice(0, reminderIdx).trim()}\n\n${lowFrequency.join('\n\n')}\n\n${prompt.slice(reminderIdx).trim()}`
+    }
+    return `${prompt.trim()}\n\n${lowFrequency.join('\n\n')}`
+  }
+  return prompt.trim()
 }

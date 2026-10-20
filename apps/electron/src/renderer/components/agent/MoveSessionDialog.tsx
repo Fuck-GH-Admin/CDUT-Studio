@@ -52,11 +52,25 @@ export function MoveSessionDialog({
     [sdkTasks]
   )
 
-  // 过滤掉当前工作区
-  const availableWorkspaces = React.useMemo(
-    () => getVisibleAgentWorkspaces(workspaces).filter((ws) => ws.id !== currentWorkspaceId),
-    [workspaces, currentWorkspaceId]
+  const defaultWorkspace = React.useMemo(
+    () => workspaces.find((ws) => ws.slug === 'default'),
+    [workspaces]
   )
+
+  // 过滤掉当前工作区；如果当前在项目中，额外提供移入“独立会话（默认工作区）”选项
+  const availableWorkspaces = React.useMemo(() => {
+    const visible = getVisibleAgentWorkspaces(workspaces).filter((ws) => ws.id !== currentWorkspaceId)
+    if (defaultWorkspace && currentWorkspaceId && currentWorkspaceId !== defaultWorkspace.id) {
+      return [
+        {
+          ...defaultWorkspace,
+          name: '独立会话（移出项目）',
+        },
+        ...visible,
+      ]
+    }
+    return visible
+  }, [workspaces, currentWorkspaceId, defaultWorkspace])
 
   // 打开时重置选择
   React.useEffect(() => {

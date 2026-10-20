@@ -56,7 +56,7 @@ interface CdutQuickBarProps {
 
 export function CdutQuickBar({ onSelect }: CdutQuickBarProps): React.ReactElement {
   return (
-    <div className="flex flex-wrap items-center justify-center gap-3">
+    <div data-tour="cdut-quickbar" className="flex flex-wrap items-center justify-center gap-3">
       {CDUT_QUICK_FEATURES.map((feature) => (
         <button
           key={feature.id}

@@ -434,6 +434,15 @@ const MAX_REVIEW_XLSX_SHEETS = 8
 const MAX_REVIEW_XLSX_ROWS_PER_SHEET = 100
 const MAX_REVIEW_XLSX_COLUMNS = 40
 
+/**
+ * @xmldom/xmldom 0.9 的 Document/Element 类型不实现 DOM lib 的 EventTarget 成员
+ * （addEventListener 等），但本文件只用 childNodes/nodeType/getAttribute 这类
+ * 两者共有的结构。这里做一次显式类型桥接，避免 0.9 类型与 DOM lib 冲突。
+ */
+function asXmlNode(value: unknown): Node {
+  return value as Node
+}
+
 function xlsxElements(root: Node, localName: string): Element[] {
   const result: Element[] = []
   const visit = (node: Node): void => {
@@ -486,7 +495,7 @@ function xlsxRelationships(zip: AdmZip): Map<string, string> {
   if (!xml) return new Map()
   const doc = new DOMParser().parseFromString(xml, 'application/xml')
   const relationships = new Map<string, string>()
-  for (const node of xlsxElements(doc, 'Relationship')) {
+  for (const node of xlsxElements(asXmlNode(doc), 'Relationship')) {
     const id = node.getAttribute('Id')
     const target = node.getAttribute('Target')
     const resolved = target ? xlsxRelationshipPath('xl', target) : undefined
@@ -526,10 +535,10 @@ export function extractXlsxReviewContent(filePath: string): XlsxReviewContent {
   const relationships = xlsxRelationships(zip)
   const sharedStringsXml = xlsxZipText(zip, 'xl/sharedStrings.xml')
   const sharedStrings = sharedStringsXml
-    ? xlsxElements(new DOMParser().parseFromString(sharedStringsXml, 'application/xml'), 'si')
+    ? xlsxElements(asXmlNode(new DOMParser().parseFromString(sharedStringsXml, 'application/xml')), 'si')
       .map((item) => xlsxElements(item, 't').map((text) => text.textContent ?? '').join(''))
     : []
-  const sheetNodes = xlsxElements(workbook, 'sheet')
+  const sheetNodes = xlsxElements(asXmlNode(workbook), 'sheet')
   const blocks: XlsxReviewBlock[] = []
   const warnings: string[] = []
   if (sheetNodes.length > MAX_REVIEW_XLSX_SHEETS) warnings.push(`仅解析前 ${MAX_REVIEW_XLSX_SHEETS} 个工作表，其余工作表需人工核对`)
@@ -544,7 +553,7 @@ export function extractXlsxReviewContent(filePath: string): XlsxReviewContent {
       continue
     }
     const sheetDoc = new DOMParser().parseFromString(sheetXml, 'application/xml')
-    const rows = xlsxElements(sheetDoc, 'row')
+    const rows = xlsxElements(asXmlNode(sheetDoc), 'row')
     if (rows.length > MAX_REVIEW_XLSX_ROWS_PER_SHEET) warnings.push(`工作表「${sheetName}」仅解析前 ${MAX_REVIEW_XLSX_ROWS_PER_SHEET} 行`)
     for (const [rowIndex, rowNode] of rows.slice(0, MAX_REVIEW_XLSX_ROWS_PER_SHEET).entries()) {
       const fallbackRow = Number(rowNode.getAttribute('r')) || rowIndex + 1

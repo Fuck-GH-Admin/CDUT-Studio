@@ -14,7 +14,8 @@ import type { ContinuationMessage, ToolResult } from '@profer/core'
 export const PRUNE_KEEP_STEPS = 2
 
 /** 旧步骤工具结果的压缩占位文本 */
-const PRUNED_READ_PAGE = '[前序页面观察记录已由最新一步结果继承更新]'
+const PRUNED_READ_PAGE =
+  '[较早的页面观察记录已压缩。当前有效的 [BID] 台账以「最近一次 yanhu_read_page」的结果为准；若上方已找不到该结果，请重新调用 yanhu_read_page。]'
 const PRUNED_LOGS = '[前序日志已压缩]'
 const PRUNED_GENERIC = '[前序结果已折叠]'
 /** 通用结果保留前缀长度 */
@@ -22,10 +23,27 @@ const PRUNED_PREFIX_CHARS = 80
 /** 旧步骤错误回执保留的诊断前缀长度（保留首段定位，便于模型自我纠偏） */
 const PRUNED_ERROR_CHARS = 60
 
+/**
+ * 观测类工具：其**最近一次**结果必须原样保留，无论它距今多少步。
+ *
+ * 不变式（历史缺陷根因）：模型后续的点击 / 填写 / 选择全部依赖最近一次 read_page 给出的
+ * [BID] 台账，视觉点击依赖最近一次 capture_visual 给出的地标标定表。若连这一份也压缩成
+ * 占位符，模型就彻底失去台账——表现为「读到了占位符 → 以为台账被继承 → 只能凭记忆猜编号、
+ * 猜像素坐标」，在一轮里烧掉大量 Token 与时间却寸步难行。
+ */
+const OBSERVATION_TOOLS = new Set(['yanhu_read_page', 'yanhu_capture_visual'])
+
 // ===== 跨轮次历史脱敏瘦身（History Slimming）：把落盘的巨型中间结果压为单行摘要 =====
 
 /** 历史中单条通用工具结果保留的最大字符数 */
 export const HISTORY_RESULT_MAX_CHARS = 200
+/**
+ * 历史中单条**错误**工具结果保留的最大字符数。
+ *
+ * 远大于通用结果上限：错误回执里往往是「为什么失败 + 下一步怎么改」的完整诊断
+ * （熔断提示、只读控件提示、已渲染选项清单等），截断它等于让模型失去自愈依据。
+ */
+export const HISTORY_ERROR_MAX_CHARS = 600
 
 /** 从巨型 PageDigest 文本中提取页面标题（`=== [PageDigest: 标题] ===`） */
 function extractPageDigestTitle(text: string): string | null {
@@ -40,7 +58,16 @@ function extractPageDigestTitle(text: string): string | null {
  * 巨型 PageDigest / network_logs 原始文本会被替换为一句话摘要，
  * 使下一轮加载历史上下文时前几轮的上下文占用从数万 Token 骤降至数百 Token。
  */
-export function slimYanhuToolResultForHistory(toolName: string, result: unknown): unknown {
+export function slimYanhuToolResultForHistory(toolName: string, result: unknown, isError = false): unknown {
+  // 错误回执绝不套用「成功态」的摘要模板。
+  //
+  // 历史事故：read_page 的熔断 / 失败诊断不含 `=== [PageDigest: 标题] ===` 头，
+  // 于是被压成 `[已读取页面]`——模型重启后从历史里只看到这一句废话，既不知道发生过熔断，
+  // 也不知道为什么读不到页面，只能靠猜（真实事故：模型看到 `[已读取页面]` 后盲目重复点击）。
+  // 错误信息是排查与自愈的唯一线索，一律原样保留（仅做长度截断）。
+  if (typeof result === 'string' && isError) {
+    return result.length > HISTORY_ERROR_MAX_CHARS ? `${result.slice(0, HISTORY_ERROR_MAX_CHARS)}…` : result
+  }
   if (toolName === 'yanhu_read_page') {
     const text = typeof result === 'string' ? result : ''
     if (text.includes('页面无变化')) return '[已读取页面: 无变化]'
@@ -82,6 +109,16 @@ export function pruneYanhuContinuationMessages(
   }
   if (totalSteps <= keepSteps) return [...messages]
 
+  // 最近一次观测结果（read_page 台账 / capture_visual 标定表）逐字保留，见 OBSERVATION_TOOLS 说明。
+  const latestObservationId = new Map<string, string>()
+  for (const message of messages) {
+    if (!isToolStep(message)) continue
+    for (const call of message.toolCalls) {
+      if (OBSERVATION_TOOLS.has(call.name)) latestObservationId.set(call.name, call.id)
+    }
+  }
+  const preserved = new Set(latestObservationId.values())
+
   const out: ContinuationMessage[] = []
   let stepIndex = -1
   for (const message of messages) {
@@ -96,6 +133,7 @@ export function pruneYanhuContinuationMessages(
       continue
     }
     const results: ToolResult[] = message.results.map((result) => {
+      if (preserved.has(result.toolCallId)) return result
       const name = nameById.get(result.toolCallId) ?? ''
       let content: string
       if (name === 'yanhu_read_page') content = PRUNED_READ_PAGE

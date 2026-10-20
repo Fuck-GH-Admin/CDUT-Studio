@@ -10,8 +10,97 @@ import { IPC_CHANNELS, REVIEW_IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANN
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
-import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
+import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
 import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
+import {
+  CSLAB_IPC_CHANNELS,
+  type CsLabAuthStatus,
+  type CsLabAuthResult,
+  type CsLabTelemetry,
+  type CsLabNode,
+  type CsLabLogEntry,
+  type CsLabLab,
+  type CsLabCreateLabInput,
+  type CsLabLabSnapshot,
+  type CsLabIngestRequest,
+  type CsLabIngestResult,
+  type CsLabIngestProgress,
+  type CsLabAssetSummary,
+  type CsLabTablePayload,
+  type CsLabCellValue,
+  type CsLabManuscript,
+  type CsLabManuscriptSummary,
+  type CsLabSaveManuscriptInput,
+  type CsLabSaveManuscriptAsIpcInput,
+  type CsLabSaveManuscriptAsResult,
+  type CsLabSaveFileDialogOptions,
+  type CsLabSaveFileDialogResult,
+  type CsLabDocxImportResult,
+  type CsLabDocxSyncInput,
+  type CsLabDocxSyncResult,
+  type CsLabCapsule,
+  type CsLabCapsuleLineage,
+  type CsLabPythonCapability,
+  type CsLabAssetChangedEvent,
+  type CsLabCapsuleStaleEvent,
+  type CsLabToolRuntimeStatus,
+  type CsLabToolDepsProgress,
+  type CsLabInstallToolDepsInput,
+  type CsLabZoteroStatus,
+  type CsLabZoteroDiscovery,
+  type CsLabZoteroSyncResult,
+  type CsLabZoteroBridgeStatus,
+  type CsLabZoteroAnnotation,
+  type CsLabLiteratureItem,
+  type CsLabLiteratureSearchResult,
+  type CsLabPlotDigitizeInput,
+  type CsLabPlotDigitizeResult,
+  type CsLabDigitizedFigureInput,
+  type CsLabDigitizedFigureResult,
+  type CsLabFormulaVerifyInput,
+  type CsLabFormulaVerifyResult,
+  type CsLabFormulaOcrResult,
+  type CsLabZoteroSyncedEvent,
+  type CsLabZoteroStatusEvent,
+  type CsLabProtocol,
+  type CsLabRun,
+  type CsLabCreateProtocolInput,
+  type CsLabUpdateProtocolInput,
+  type CsLabCreateRunInput,
+  type CsLabUpdateRunInput,
+  type CsLabVaultNoteSummary,
+  type CsLabVaultReadResult,
+  type CsLabVaultIndexStatus,
+  type CsLabVaultIndexResult,
+  type CsLabVaultChangedEvent,
+  type CsLabCanvasSummary,
+  type CsLabCanvasReadResult,
+  type CsLabCanvasCreateResult,
+  type CsLabCanvasWriteInput,
+  type CsLabCanvasWriteResult,
+  type CsLabCustomToolScan,
+  type CsLabCustomToolRunInput,
+  type CsLabCustomToolRunResult,
+  type CsLabUvEnsureResult,
+  type CsLabSessionLabBinding,
+  type CsLabDagJobsCancelledEvent,
+  type CsLabShareSourceSummary,
+  type CsLabShareSourceInput,
+  type CsLabShareCandidate,
+  type CsLabShareScanResult,
+  type CsLabShareStatusEvent,
+  type CsLabHpcProfileSummary,
+  type CsLabHpcProfileInput,
+  type CsLabHpcJob,
+  type CsLabComputeContract,
+  type CsLabHpcTestResult,
+  type CsLabHpcMfaRequest,
+  type CsLabHpcJobEvent,
+  type CsLabMolAsset,
+  type CsLabTableSeries,
+  type CsLabReviewRequest,
+  type CsLabReviewResult,
+} from '@profer/shared'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -1581,6 +1670,228 @@ export interface ElectronAPI {
     gatekeeperRespond: (decision: CdutGatekeeperDecision) => Promise<{ handled: boolean }>
     /** 调用 8 大业务域工具（支持在线抓取与高仿真离线演示数据回退） */
     callDomainTool: (params: CdutToolInvokeParams) => Promise<CdutDomainToolResult>
+    /** 读取业务域离线缓存（SWR 秒开渲染；无缓存返回 null） */
+    readDomainCache: (name: CdutDomainCacheName) => Promise<unknown>
+    /** 写入业务域离线缓存（网络成功后原子落盘） */
+    writeDomainCache: (input: { name: CdutDomainCacheName; payload: unknown }) => Promise<{ success: boolean }>
+  }
+
+  // ===== CDUT Science (CSLab) 专区 =====
+  cslab: {
+    verifyKey: (password: string) => Promise<CsLabAuthResult>
+    getAuthStatus: () => Promise<CsLabAuthStatus>
+    initPassword: (password: string) => Promise<CsLabAuthResult>
+    verifyPassword: (password: string) => Promise<CsLabAuthResult>
+    lockSession: () => Promise<void>
+    getTelemetry: () => Promise<CsLabTelemetry>
+    getNodes: () => Promise<CsLabNode[]>
+    getLogs: () => Promise<CsLabLogEntry[]>
+    ping: () => Promise<{ timestamp: number; latencyMs: number }>
+
+    /** 实验室沙箱 */
+    listLabs: () => Promise<CsLabLab[]>
+    createLab: (input: CsLabCreateLabInput) => Promise<CsLabLab>
+    openLab: (labId: string) => Promise<CsLabLabSnapshot>
+    getLabSnapshot: (labId: string) => Promise<CsLabLabSnapshot>
+
+    /** 数据铁笼 */
+    ingestFiles: (input: CsLabIngestRequest) => Promise<CsLabIngestResult[]>
+    listAssets: (labId: string) => Promise<CsLabAssetSummary[]>
+    getAssetTable: (input: { labId: string; uri: string }) => Promise<CsLabTablePayload | null>
+    getTableCell: (input: {
+      labId: string
+      tableUri: string
+      column: string
+      rowIndex: number
+    }) => Promise<CsLabCellValue>
+
+    /** 论文与活体胶囊 */
+    listManuscripts: (labId: string) => Promise<CsLabManuscriptSummary[]>
+    createManuscript: (input: { labId: string; title?: string }) => Promise<CsLabManuscript>
+    getManuscript: (input: { labId: string; uri: string }) => Promise<CsLabManuscript | null>
+    saveManuscript: (input: CsLabSaveManuscriptInput) => Promise<CsLabManuscript>
+    saveManuscriptAs: (input: CsLabSaveManuscriptAsIpcInput) => Promise<CsLabSaveManuscriptAsResult>
+    showSaveFileDialog: (options?: CsLabSaveFileDialogOptions) => Promise<CsLabSaveFileDialogResult | null>
+    exportDocx: (input: { labId: string; manuscriptUri: string }) => Promise<CsLabDocxSyncResult>
+    syncDocx: (input: CsLabDocxSyncInput) => Promise<CsLabDocxSyncResult>
+    importDocx: (input: { labId: string; docxPath: string; title?: string }) => Promise<CsLabDocxImportResult>
+    updateCapsule: (input: { labId: string; capsuleId: string }) => Promise<CsLabCapsule>
+    getCapsuleLineage: (input: {
+      labId: string
+      capsuleId: string
+    }) => Promise<CsLabCapsuleLineage | null>
+
+    /** 环境能力 */
+    getPythonCapability: () => Promise<CsLabPythonCapability>
+    getToolRuntime: (labId: string) => Promise<CsLabToolRuntimeStatus>
+    installToolDeps: (input: CsLabInstallToolDepsInput) => Promise<CsLabToolRuntimeStatus>
+
+    /** Zotero 文献同步 */
+    getZoteroStatus: (labId: string) => Promise<CsLabZoteroStatus>
+    discoverZotero: (input: { labId: string; dataDir?: string }) => Promise<CsLabZoteroDiscovery>
+    setZoteroDataDir: (input: { labId: string; dataDir: string }) => Promise<CsLabZoteroDiscovery>
+    syncZotero: (input: {
+      labId: string
+      dataDir?: string
+      forceFull?: boolean
+    }) => Promise<CsLabZoteroSyncResult>
+    listZoteroLiterature: (labId: string) => Promise<CsLabLiteratureItem[]>
+    listZoteroAnnotations: (input: {
+      labId: string
+      literatureUri: string
+    }) => Promise<CsLabZoteroAnnotation[]>
+    startZoteroWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
+    stopZoteroWatch: (labId: string) => Promise<{ watching: boolean }>
+    getZoteroBridgeStatus: () => Promise<CsLabZoteroBridgeStatus>
+
+    /** 文献阅读 */
+    getLiteratureItem: (input: {
+      labId: string
+      uri: string
+    }) => Promise<CsLabLiteratureItem | null>
+    getLiteratureUrl: (input: {
+      labId: string
+      uri: string
+    }) => Promise<{ url: string; name: string; pageCount?: number }>
+
+    /** 图表逆向数字化 */
+    digitizePlot: (input: CsLabPlotDigitizeInput) => Promise<CsLabPlotDigitizeResult>
+    saveDigitizedFigure: (
+      input: CsLabDigitizedFigureInput,
+    ) => Promise<CsLabDigitizedFigureResult>
+
+    /** 公式识别与验算 */
+    ocrFormula: (input: { labId: string; imageDataUrl: string }) => Promise<CsLabFormulaOcrResult>
+    verifyFormula: (input: CsLabFormulaVerifyInput) => Promise<CsLabFormulaVerifyResult>
+
+    /** 跨文献 GraphRAG */
+    buildLiteratureIndex: (input: {
+      labId: string
+      force?: boolean
+    }) => Promise<CsLabLiteratureSearchResult>
+    searchLiterature: (input: {
+      labId: string
+      query: string
+      topK?: number
+      literatureUri?: string
+    }) => Promise<CsLabLiteratureSearchResult>
+
+    /** 实验规程与批次 */
+    listProtocols: (labId: string) => Promise<CsLabProtocol[]>
+    createProtocol: (input: CsLabCreateProtocolInput) => Promise<CsLabProtocol>
+    updateProtocol: (input: CsLabUpdateProtocolInput) => Promise<CsLabProtocol>
+    listRuns: (input: { labId: string; protocolUri?: string }) => Promise<CsLabRun[]>
+    createRun: (input: CsLabCreateRunInput) => Promise<CsLabRun>
+    updateRun: (input: CsLabUpdateRunInput) => Promise<CsLabRun>
+    linkRunAsset: (input: {
+      labId: string
+      runUri: string
+      assetUri: string
+      relation: 'consumes' | 'produces'
+    }) => Promise<CsLabRun>
+    unlinkRunAsset: (input: {
+      labId: string
+      runUri: string
+      assetUri: string
+      relation: 'consumes' | 'produces'
+    }) => Promise<CsLabRun>
+
+    /** Vault 笔记与 Canvas */
+    listVaultNotes: (labId: string) => Promise<CsLabVaultNoteSummary[]>
+    readVaultNote: (input: { labId: string; relPath: string }) => Promise<CsLabVaultReadResult>
+    searchVaultNotes: (input: {
+      labId: string
+      query: string
+      limit?: number
+    }) => Promise<CsLabVaultNoteSummary[]>
+    getNoteBacklinks: (input: {
+      labId: string
+      relPath: string
+    }) => Promise<CsLabVaultNoteSummary[]>
+    getVaultIndexStatus: (labId: string) => Promise<CsLabVaultIndexStatus>
+    rebuildVaultIndex: (input: { labId: string; force?: boolean }) => Promise<CsLabVaultIndexResult>
+    startVaultWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
+    stopVaultWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
+    listCanvases: (labId: string) => Promise<CsLabCanvasSummary[]>
+    createCanvas: (input: { labId: string; title: string }) => Promise<CsLabCanvasCreateResult>
+    readCanvas: (input: { labId: string; relPath: string }) => Promise<CsLabCanvasReadResult>
+    writeCanvas: (input: CsLabCanvasWriteInput) => Promise<CsLabCanvasWriteResult>
+
+    /** 自定义科研工具与 uv */
+    listCustomTools: (labId: string) => Promise<CsLabCustomToolScan>
+    refreshCustomTools: (labId: string) => Promise<CsLabCustomToolScan>
+    runCustomTool: (input: CsLabCustomToolRunInput) => Promise<CsLabCustomToolRunResult>
+    startCustomToolWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
+    stopCustomToolWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
+    getToolTrust: (sessionId: string) => Promise<boolean>
+    ensureUv: (labId: string) => Promise<CsLabUvEnsureResult>
+
+    /** 会话级实验室绑定 */
+    bindSessionLab: (input: { sessionId: string; labId: string }) => Promise<CsLabSessionLabBinding>
+    unbindSessionLab: (input: { sessionId: string }) => Promise<CsLabSessionLabBinding>
+
+    /** 局域网仪器共享盘 */
+    listShareSources: (labId: string) => Promise<CsLabShareSourceSummary[]>
+    addShareSource: (input: CsLabShareSourceInput) => Promise<CsLabShareSourceSummary>
+    removeShareSource: (input: { labId: string; sourceId: string }) => Promise<{ ok: boolean }>
+    testShareSource: (input: { labId: string; sourceId: string }) => Promise<CsLabShareScanResult>
+    scanShareNow: (input: { labId: string; sourceId?: string }) => Promise<CsLabShareScanResult>
+    startShareWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
+    stopShareWatch: (input: {
+      labId: string
+      sourceId?: string
+    }) => Promise<{ watching: boolean; message: string }>
+    listShareCandidates: (input: {
+      labId: string
+      sourceId?: string
+    }) => Promise<CsLabShareCandidate[]>
+
+    /** 远程学术算力网关 */
+    listHpcProfiles: (labId: string) => Promise<CsLabHpcProfileSummary[]>
+    saveHpcProfile: (input: CsLabHpcProfileInput) => Promise<CsLabHpcProfileSummary>
+    deleteHpcProfile: (input: {
+      labId: string
+      profileId: string
+    }) => Promise<{ ok: boolean }>
+    testHpcConnection: (input: {
+      labId: string
+      profileId: string
+    }) => Promise<CsLabHpcTestResult>
+    submitHpcJob: (input: CsLabComputeContract) => Promise<CsLabHpcJob>
+    listHpcJobs: (labId: string) => Promise<CsLabHpcJob[]>
+    cancelHpcJob: (input: { labId: string; key: string }) => Promise<CsLabHpcJob>
+    refreshHpcJob: (input: { labId: string; key: string }) => Promise<CsLabHpcJob>
+    harvestHpcJob: (input: { labId: string; key: string }) => Promise<CsLabHpcJob>
+    rehydrateHpcJobs: (labId: string) => Promise<CsLabHpcJob[]>
+    answerHpcMfa: (input: {
+      requestId: string
+      value: string
+    }) => Promise<{ ok: boolean }>
+
+    /** 晶体结构与谱图 */
+    getMolAsset: (input: { labId: string; uri: string }) => Promise<CsLabMolAsset | null>
+    getTableSeries: (input: {
+      labId: string
+      tableUri: string
+      maxPoints?: number
+    }) => Promise<CsLabTableSeries | null>
+
+    /** 学术审稿 */
+    reviewManuscript: (input: CsLabReviewRequest) => Promise<CsLabReviewResult>
+
+    /** 事件订阅（返回取消函数） */
+    onIngestProgress: (handler: (progress: CsLabIngestProgress) => void) => () => void
+    onAssetChanged: (handler: (event: CsLabAssetChangedEvent) => void) => () => void
+    onCapsuleStale: (handler: (event: CsLabCapsuleStaleEvent) => void) => () => void
+    onZoteroSynced: (handler: (event: CsLabZoteroSyncedEvent) => void) => () => void
+    onZoteroStatus: (handler: (event: CsLabZoteroStatusEvent) => void) => () => void
+    onToolDepsProgress: (handler: (progress: CsLabToolDepsProgress) => void) => () => void
+    onVaultChanged: (handler: (event: CsLabVaultChangedEvent) => void) => () => void
+    onDagJobsCancelled: (handler: (event: CsLabDagJobsCancelledEvent) => void) => () => void
+    onToolsChanged: (handler: (event: { labId: string; scan: CsLabCustomToolScan }) => void) => () => void
+    onShareStatus: (handler: (event: CsLabShareStatusEvent) => void) => () => void
+    onHpcJob: (handler: (event: CsLabHpcJobEvent) => void) => () => void
+    onHpcMfa: (handler: (event: CsLabHpcMfaRequest) => void) => () => void
   }
 
   // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
@@ -1672,6 +1983,7 @@ export interface ElectronAPI {
     // 测验与 FIM
     getQuiz: (input: { sessionId: string; quizId?: string }) => Promise<QuizSession | null>
     submitQuizAnswer: (input: StudyQuizAnswerInput) => Promise<QuizSession | null>
+    resetQuiz: (input: { sessionId: string; quizId: string }) => Promise<QuizSession | null>
     // 双轨联动生成
     generateArtifact: (input: StudyGenerateArtifactInput) => Promise<StudyGenerateArtifactResult>
     // 已生成成果总览（右侧工作台常驻列表）
@@ -3747,6 +4059,299 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.GATEKEEPER_RESPOND, decision),
     callDomainTool: (params: CdutToolInvokeParams) =>
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.CALL_DOMAIN_TOOL, params),
+    readDomainCache: (name: CdutDomainCacheName) =>
+      ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.READ_DOMAIN_CACHE, name),
+    writeDomainCache: (input: { name: CdutDomainCacheName; payload: unknown }) =>
+      ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.WRITE_DOMAIN_CACHE, input),
+  },
+
+  // ===== CDUT Science (CSLab) 专区 =====
+  cslab: {
+    verifyKey: (password: string) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VERIFY_KEY, password),
+    getAuthStatus: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_AUTH_STATUS),
+    initPassword: (password: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.INIT_PASSWORD, password),
+    verifyPassword: (password: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VERIFY_PASSWORD, password),
+    lockSession: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.LOCK_SESSION),
+    getTelemetry: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_TELEMETRY),
+    getNodes: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_NODES),
+    getLogs: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LOGS),
+    ping: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.PING),
+
+    listLabs: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.LIST_LABS),
+    createLab: (input: CsLabCreateLabInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CREATE_LAB, input),
+    openLab: (labId: string) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OPEN_LAB, labId),
+    getLabSnapshot: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LAB_SNAPSHOT, labId),
+
+    ingestFiles: (input: CsLabIngestRequest) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.INGEST_FILES, input),
+    listAssets: (labId: string) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.LIST_ASSETS, labId),
+    getAssetTable: (input: { labId: string; uri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_ASSET_TABLE, input),
+    getTableCell: (input: { labId: string; tableUri: string; column: string; rowIndex: number }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_TABLE_CELL, input),
+
+    listManuscripts: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.LIST_MANUSCRIPTS, labId),
+    createManuscript: (input: { labId: string; title?: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CREATE_MANUSCRIPT, input),
+    getManuscript: (input: { labId: string; uri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_MANUSCRIPT, input),
+    saveManuscript: (input: CsLabSaveManuscriptInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SAVE_MANUSCRIPT, input),
+    saveManuscriptAs: (input: CsLabSaveManuscriptAsIpcInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SAVE_MANUSCRIPT_AS, input),
+    showSaveFileDialog: (options?: CsLabSaveFileDialogOptions) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHOW_SAVE_FILE_DIALOG, options),
+    exportDocx: (input: { labId: string; manuscriptUri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.EXPORT_DOCX, input),
+    syncDocx: (input: CsLabDocxSyncInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SYNC_DOCX, input),
+    importDocx: (input: { labId: string; docxPath: string; title?: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.IMPORT_DOCX, input),
+    updateCapsule: (input: { labId: string; capsuleId: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.UPDATE_CAPSULE, input),
+    getCapsuleLineage: (input: { labId: string; capsuleId: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_CAPSULE_LINEAGE, input),
+
+    getPythonCapability: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_PYTHON_CAPABILITY),
+    getToolRuntime: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_TOOL_RUNTIME, labId),
+    installToolDeps: (input: CsLabInstallToolDepsInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.INSTALL_TOOL_DEPS, input),
+
+    getZoteroStatus: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_GET_STATUS, labId),
+    discoverZotero: (input: { labId: string; dataDir?: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_DISCOVER, input),
+    setZoteroDataDir: (input: { labId: string; dataDir: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_SET_DATA_DIR, input),
+    syncZotero: (input: { labId: string; dataDir?: string; forceFull?: boolean }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_SYNC, input),
+    listZoteroLiterature: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_LIST_LITERATURE, labId),
+    listZoteroAnnotations: (input: { labId: string; literatureUri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_LIST_ANNOTATIONS, input),
+    startZoteroWatch: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_START_WATCH, labId),
+    stopZoteroWatch: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_STOP_WATCH, labId),
+    getZoteroBridgeStatus: () =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_GET_BRIDGE_STATUS),
+
+    getLiteratureItem: (input: { labId: string; uri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_ITEM, input),
+    getLiteratureUrl: (input: { labId: string; uri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_URL, input),
+
+    digitizePlot: (input: CsLabPlotDigitizeInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.DIGITIZE_PLOT, input),
+    saveDigitizedFigure: (input: CsLabDigitizedFigureInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SAVE_DIGITIZED_FIGURE, input),
+
+    ocrFormula: (input: { labId: string; imageDataUrl: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OCR_FORMULA, input),
+    verifyFormula: (input: CsLabFormulaVerifyInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VERIFY_FORMULA, input),
+
+    buildLiteratureIndex: (input: { labId: string; force?: boolean }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.BUILD_LITERATURE_INDEX, input),
+    searchLiterature: (input: {
+      labId: string
+      query: string
+      topK?: number
+      literatureUri?: string
+    }) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SEARCH_LITERATURE, input),
+
+    listProtocols: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_LIST_PROTOCOLS, labId),
+    createProtocol: (input: CsLabCreateProtocolInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_CREATE_PROTOCOL, input),
+    updateProtocol: (input: CsLabUpdateProtocolInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_UPDATE_PROTOCOL, input),
+    listRuns: (input: { labId: string; protocolUri?: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_LIST, input),
+    createRun: (input: CsLabCreateRunInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_CREATE, input),
+    updateRun: (input: CsLabUpdateRunInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_UPDATE, input),
+    linkRunAsset: (input: {
+      labId: string
+      runUri: string
+      assetUri: string
+      relation: 'consumes' | 'produces'
+    }) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_LINK_ASSET, input),
+    unlinkRunAsset: (input: {
+      labId: string
+      runUri: string
+      assetUri: string
+      relation: 'consumes' | 'produces'
+    }) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_UNLINK_ASSET, input),
+
+    listVaultNotes: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_LIST_NOTES, labId),
+    readVaultNote: (input: { labId: string; relPath: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_READ_NOTE, input),
+    searchVaultNotes: (input: { labId: string; query: string; limit?: number }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_SEARCH, input),
+    getNoteBacklinks: (input: { labId: string; relPath: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_BACKLINKS, input),
+    getVaultIndexStatus: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_INDEX_STATUS, labId),
+    rebuildVaultIndex: (input: { labId: string; force?: boolean }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_REBUILD_INDEX, input),
+    startVaultWatch: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_START_WATCH, labId),
+    stopVaultWatch: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_STOP_WATCH, labId),
+    listCanvases: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CANVAS_LIST, labId),
+    createCanvas: (input: { labId: string; title: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CANVAS_CREATE, input),
+    readCanvas: (input: { labId: string; relPath: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CANVAS_READ, input),
+    writeCanvas: (input: CsLabCanvasWriteInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CANVAS_WRITE, input),
+
+    listCustomTools: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CUSTOM_TOOL_LIST, labId),
+    refreshCustomTools: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CUSTOM_TOOL_REFRESH, labId),
+    runCustomTool: (input: CsLabCustomToolRunInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CUSTOM_TOOL_RUN, input),
+    startCustomToolWatch: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CUSTOM_TOOL_START_WATCH, labId),
+    stopCustomToolWatch: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CUSTOM_TOOL_STOP_WATCH, labId),
+    getToolTrust: (sessionId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_TOOL_TRUST, sessionId),
+    ensureUv: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ENSURE_UV, labId),
+
+    bindSessionLab: (input: { sessionId: string; labId: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.BIND_SESSION_LAB, input),
+    unbindSessionLab: (input: { sessionId: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.UNBIND_SESSION_LAB, input),
+
+    // ===== 局域网仪器共享盘 =====
+    listShareSources: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHARE_LIST_SOURCES, labId),
+    addShareSource: (input: CsLabShareSourceInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHARE_ADD_SOURCE, input),
+    removeShareSource: (input: { labId: string; sourceId: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHARE_REMOVE_SOURCE, input),
+    testShareSource: (input: { labId: string; sourceId: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHARE_TEST_SOURCE, input),
+    scanShareNow: (input: { labId: string; sourceId?: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHARE_SCAN_NOW, input),
+    startShareWatch: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHARE_START_WATCH, labId),
+    stopShareWatch: (input: { labId: string; sourceId?: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHARE_STOP_WATCH, input),
+    listShareCandidates: (input: { labId: string; sourceId?: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SHARE_LIST_CANDIDATES, input),
+
+    // ===== 远程学术算力网关 =====
+    listHpcProfiles: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_LIST_PROFILES, labId),
+    saveHpcProfile: (input: CsLabHpcProfileInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_SAVE_PROFILE, input),
+    deleteHpcProfile: (input: { labId: string; profileId: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_DELETE_PROFILE, input),
+    testHpcConnection: (input: { labId: string; profileId: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_TEST_CONNECTION, input),
+    submitHpcJob: (input: CsLabComputeContract) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_SUBMIT_JOB, input),
+    listHpcJobs: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_LIST_JOBS, labId),
+    cancelHpcJob: (input: { labId: string; key: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_CANCEL_JOB, input),
+    refreshHpcJob: (input: { labId: string; key: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_REFRESH_JOB, input),
+    harvestHpcJob: (input: { labId: string; key: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_HARVEST_JOB, input),
+    rehydrateHpcJobs: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_REHYDRATE, labId),
+    answerHpcMfa: (input: { requestId: string; value: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.HPC_ANSWER_MFA, input),
+
+    // ===== 晶体结构与谱图 =====
+    getMolAsset: (input: { labId: string; uri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_MOL_ASSET, input),
+    getTableSeries: (input: { labId: string; tableUri: string; maxPoints?: number }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_TABLE_SERIES, input),
+
+    // ===== 学术审稿 =====
+    reviewManuscript: (input: CsLabReviewRequest) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.REVIEW_SUGGEST, input),
+
+    onIngestProgress: (handler: (progress: CsLabIngestProgress) => void) => {
+      const listener = (_event: unknown, payload: CsLabIngestProgress): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_INGEST_PROGRESS, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_INGEST_PROGRESS, listener)
+    },
+    onAssetChanged: (handler: (event: CsLabAssetChangedEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabAssetChangedEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_ASSET_CHANGED, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_ASSET_CHANGED, listener)
+    },
+    onCapsuleStale: (handler: (event: CsLabCapsuleStaleEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabCapsuleStaleEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_CAPSULE_STALE, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_CAPSULE_STALE, listener)
+    },
+    onZoteroSynced: (handler: (event: CsLabZoteroSyncedEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabZoteroSyncedEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_ZOTERO_SYNCED, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_ZOTERO_SYNCED, listener)
+    },
+    onZoteroStatus: (handler: (event: CsLabZoteroStatusEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabZoteroStatusEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_ZOTERO_STATUS, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_ZOTERO_STATUS, listener)
+    },
+    onToolDepsProgress: (handler: (progress: CsLabToolDepsProgress) => void) => {
+      const listener = (_event: unknown, payload: CsLabToolDepsProgress): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_TOOL_DEPS_PROGRESS, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_TOOL_DEPS_PROGRESS, listener)
+    },
+    onVaultChanged: (handler: (event: CsLabVaultChangedEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabVaultChangedEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_VAULT_CHANGED, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_VAULT_CHANGED, listener)
+    },
+    onDagJobsCancelled: (handler: (event: CsLabDagJobsCancelledEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabDagJobsCancelledEvent): void =>
+        handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_DAG_JOBS_CANCELLED, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_DAG_JOBS_CANCELLED, listener)
+    },
+    onToolsChanged: (handler: (event: { labId: string; scan: CsLabCustomToolScan }) => void) => {
+      const listener = (
+        _event: unknown,
+        payload: { labId: string; scan: CsLabCustomToolScan },
+      ): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_TOOLS_CHANGED, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_TOOLS_CHANGED, listener)
+    },
+    onShareStatus: (handler: (event: CsLabShareStatusEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabShareStatusEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_SHARE_STATUS, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_SHARE_STATUS, listener)
+    },
+    onHpcJob: (handler: (event: CsLabHpcJobEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabHpcJobEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_HPC_JOB, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_HPC_JOB, listener)
+    },
+    onHpcMfa: (handler: (event: CsLabHpcMfaRequest) => void) => {
+      const listener = (_event: unknown, payload: CsLabHpcMfaRequest): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_HPC_MFA, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_HPC_MFA, listener)
+    },
   },
 
   // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
@@ -3876,6 +4481,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.GET_QUIZ, input),
     submitQuizAnswer: (input: StudyQuizAnswerInput) =>
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.SUBMIT_QUIZ_ANSWER, input),
+    resetQuiz: (input: { sessionId: string; quizId: string }) =>
+      ipcRenderer.invoke(STUDY_IPC_CHANNELS.RESET_QUIZ, input),
     // 双轨联动生成
     generateArtifact: (input: StudyGenerateArtifactInput) =>
       ipcRenderer.invoke(STUDY_IPC_CHANNELS.GENERATE_ARTIFACT, input),

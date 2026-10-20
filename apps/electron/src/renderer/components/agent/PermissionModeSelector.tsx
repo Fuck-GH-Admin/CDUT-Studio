@@ -26,6 +26,7 @@ import {
   AgentComposerToolTrigger,
 } from '@/components/ai-elements/composer/ComposerTool'
 import { Popover, PopoverAnchor, PopoverContent } from '@profer/ui/primitives/popover'
+import { ConfirmDialog } from '@profer/ui/primitives/confirm-dialog'
 import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom, sessionExistsAtom, agentPlanModeSessionsAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import type { ProferPermissionMode } from '@profer/shared'
 import { PROFER_PERMISSION_MODE_CONFIG } from '@profer/shared'
@@ -73,6 +74,7 @@ export function PermissionModeSelector({
   const persistedSessionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
   const sessionExistsInList = useAtomValue(sessionExistsAtom(sessionId))
   const [open, setOpen] = React.useState(false)
+  const [confirmBypassOpen, setConfirmBypassOpen] = React.useState(false)
   const latestLocalRequestRef = React.useRef(0)
 
   // 预设上限：预设显式声明 > 全局默认（完全自动）。
@@ -107,26 +109,13 @@ export function PermissionModeSelector({
   )
 
   /**
-   * 切换到指定模式（弹层选择后触发）。
-   *
-   * 门禁有两层：菜单项 disabled（正常路径），以及这里的防御性检查 + toast 兜底
-   * （菜单被程序化触发或上限变化时仍不能把更宽松的模式写回会话 meta）。
+   * 真正执行模式切换（已通过前置校验）。
    */
-  const selectMode = React.useCallback(async (nextMode: ProferPermissionMode) => {
+  const applyMode = React.useCallback(async (nextMode: ProferPermissionMode) => {
     const prevRequested = modeMap.get(sessionId) ?? persistedSessionMode
-    setOpen(false)
 
     const requestSequence = latestLocalRequestRef.current + 1
     latestLocalRequestRef.current = requestSequence
-    if (nextMode === mode) {
-      focusComposerInput()
-      return
-    }
-    if (!canSelectMode(nextMode)) {
-      toast.info(describePermissionModeRestriction(presetCapMode))
-      focusComposerInput()
-      return
-    }
 
     // 乐观更新当前 session 的模式
     setModeMap((prev: Map<string, ProferPermissionMode>) => {
@@ -162,8 +151,31 @@ export function PermissionModeSelector({
       },
       onError: (error) => console.error('[PermissionModeSelector] 运行中切换权限模式失败，回滚 UI:', error),
     }, persistedRevision)
+  }, [mutate, persistedRevision, presetCapMode, sessionId, setAgentSessions, setModeMap, setPlanModeSessions, persistedSessionMode, modeMap])
+
+  /**
+   * 切换到指定模式（弹层选择后触发）。
+   *
+   * bypassPermissions 需要先经过风险确认；其余模式直接切换。
+   */
+  const selectMode = React.useCallback((nextMode: ProferPermissionMode) => {
+    setOpen(false)
+    if (nextMode === mode) {
+      focusComposerInput()
+      return
+    }
+    if (!canSelectMode(nextMode)) {
+      toast.info(describePermissionModeRestriction(presetCapMode))
+      focusComposerInput()
+      return
+    }
+    if (nextMode === 'bypassPermissions') {
+      setConfirmBypassOpen(true)
+      return
+    }
+    void applyMode(nextMode)
     focusComposerInput()
-  }, [mode, mutate, pending, persistedRevision, presetCapMode, sessionId, setAgentSessions, setModeMap, setPlanModeSessions, persistedSessionMode, modeMap, canSelectMode])
+  }, [mode, canSelectMode, presetCapMode, applyMode])
 
   const config = PROFER_PERMISSION_MODE_CONFIG[mode]
   const capConfig = PROFER_PERMISSION_MODE_CONFIG[presetCapMode]
@@ -208,47 +220,71 @@ export function PermissionModeSelector({
     </div>
   )
 
+  // 开启免审批前必须完成一次显式风险确认，避免顺手切换造成长期无感提权。
+  const bypassConfirm = (
+    <ConfirmDialog
+      open={confirmBypassOpen}
+      onOpenChange={setConfirmBypassOpen}
+      title="开启免审批全自动模式？"
+      description="您正在开启免审批全自动执行，Agent 将有权直接执行工具与命令；实验室会话中还可直接调用全部自定义 Python 代码。"
+      confirmLabel="确认开启"
+      cancelLabel="取消"
+      variant="destructive"
+      onConfirm={() => {
+        setConfirmBypassOpen(false)
+        void applyMode('bypassPermissions')
+        focusComposerInput()
+      }}
+    />
+  )
+
   if (composerTool) {
     return (
-      <AgentComposerToolPopover
-        open={open}
-        onOpenChange={setOpen}
-        tooltip={tooltip}
-        className="w-40"
-        trigger={
-          <AgentComposerToolTrigger label={triggerLabel}>
-            <Icon className="size-5" />
-          </AgentComposerToolTrigger>
-        }
-      >
-        {menu}
-      </AgentComposerToolPopover>
+      <>
+        <AgentComposerToolPopover
+          open={open}
+          onOpenChange={setOpen}
+          tooltip={tooltip}
+          className="w-40"
+          trigger={
+            <AgentComposerToolTrigger label={triggerLabel}>
+              <Icon className="size-5" />
+            </AgentComposerToolTrigger>
+          }
+        >
+          {menu}
+        </AgentComposerToolPopover>
+        {bypassConfirm}
+      </>
     )
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverAnchor asChild>
-        <button
-          type="button"
-          aria-label={triggerLabel}
-          title={triggerLabel}
-          onClick={() => setOpen((value) => !value)}
-          className="size-[36px] rounded-full text-foreground/60 hover:text-foreground"
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverAnchor asChild>
+          <button
+            type="button"
+            aria-label={triggerLabel}
+            title={triggerLabel}
+            onClick={() => setOpen((value) => !value)}
+            className="size-[36px] rounded-full text-foreground/60 hover:text-foreground"
+          >
+            <Icon className="size-5" />
+          </button>
+        </PopoverAnchor>
+        <PopoverContent
+          side="top"
+          align="center"
+          sideOffset={8}
+          className="w-40 p-1"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
         >
-          <Icon className="size-5" />
-        </button>
-      </PopoverAnchor>
-      <PopoverContent
-        side="top"
-        align="center"
-        sideOffset={8}
-        className="w-40 p-1"
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        onCloseAutoFocus={(event) => event.preventDefault()}
-      >
-        {menu}
-      </PopoverContent>
-    </Popover>
+          {menu}
+        </PopoverContent>
+      </Popover>
+      {bypassConfirm}
+    </>
   )
 }

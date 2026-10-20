@@ -122,6 +122,28 @@ export default {
           DEFAULT: 'hsl(var(--info) / <alpha-value>)',
           foreground: 'hsl(var(--info-foreground) / <alpha-value>)',
         },
+        // CDUT Science（CSLab）专用暖调编辑风格色板：
+        // 羊皮纸底色 + 赤陶强调 + 微暖墨黑，不参与全局主题切换。
+        claude: {
+          bg: '#FAF9F5',
+          surface: '#F3F1EC',
+          border: '#E8E5DF',
+          text: '#242220',
+          muted: '#7A7672',
+          accent: '#D97757',
+          accentHover: '#C46344',
+        },
+        // 规范 Token（UI_cdut_science.md）：新组件统一使用 cslab-*。
+        cslab: {
+          bg: '#FAF9F5',
+          surface: '#F3F1EC',
+          elevated: '#FFFFFF',
+          border: '#E8E5DF',
+          text: '#242220',
+          muted: '#7A7672',
+          accent: '#D97757',
+          accentHover: '#C46344',
+        },
       },
       // ===== 字体栈：Inter Variable 优先，回退 SF Pro Text / 系统中文字体 =====
       fontFamily: {
@@ -136,6 +158,20 @@ export default {
           'Microsoft YaHei',
           'system-ui',
           'sans-serif',
+        ],
+        // 编辑风格衬线栈：优先使用系统内置衬线字体，保证离线可用。
+        serif: [
+          'Newsreader',
+          'Source Serif 4',
+          'Iowan Old Style',
+          'Palatino Linotype',
+          'Songti SC',
+          'Noto Serif SC',
+          'Source Han Serif SC',
+          'STSong',
+          'SimSun',
+          'Georgia',
+          'serif',
         ],
       },
       // ===== 圆角：覆写 shadcn 标准三档，全部由 --radius 派生 =====
@@ -158,6 +194,8 @@ export default {
         lg: 'var(--shadow-lg)',
         xl: 'var(--shadow-xl)',
         '2xl': 'var(--shadow-xl)',
+        // 社论式极简专用微弱浮层，禁止在 cslab 新组件中使用 lg/2xl。
+        subtle: '0 2px 12px rgba(0, 0, 0, 0.04)',
       },
       keyframes: {
         'slide-in-from-top': {

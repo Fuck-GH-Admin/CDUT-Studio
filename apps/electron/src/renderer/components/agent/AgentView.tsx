@@ -24,10 +24,12 @@ import { GoalStatusBar } from './GoalStatusBar'
 import { agentGoalAtomFamily, getGoalActions, GOAL_STATUS_LABELS, goalEditorAtomFamily, goalReplacementAtomFamily, startGoalWithReplacement } from '@/atoms/goal-atoms'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { ContextMemoryToggleButton } from './ContextMemoryToggleButton'
+import { ContextModeToggleButton } from './ContextModeToggleButton'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from '@/lib/agent-channel-selection'
 import { PermissionBanner } from './PermissionBanner'
+import { CsLabToolTrustBadge } from './CsLabToolTrustBadge'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { BackgroundTaskControls } from './BackgroundTaskControls'
 import { PermissionModeSelector } from './PermissionModeSelector'
@@ -79,6 +81,7 @@ import {
   agentSessionModelMapAtom,
   currentAgentWorkspaceIdAtom,
   agentPendingPromptAtom,
+  agentComposerInjectionAtom,
   agentPendingFilesAtomFamily,
   agentWorkspacesAtom,
   agentStreamErrorsAtom,
@@ -114,6 +117,7 @@ import {
   finalizeStreamingActivities,
   workspaceCapabilitiesVersionAtom,
   sessionMemoryDisabledMapAtom,
+  sessionContextModeMapAtom,
 } from '@/atoms/agent-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import { generateSummary } from '@profer/project-core'
@@ -134,7 +138,7 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { ExplorationBranchBar } from './ExplorationBranchBar'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
+import type { AgentRuntime, AgentSendInput, AgentPendingFile, AgentContextMode, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
 
 /** 桌面端 Agent 会话懒加载单页消息数（与 main/agent-session-manager 的 DESKTOP_AGENT_PAGE_SIZE 同步） */
 const DESKTOP_AGENT_PAGE_SIZE = 60
@@ -840,6 +844,21 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       return map
     })
   }, [sessionId, setDraftHtmlMap])
+
+  // 新手引导一次性注入：把外部请求的文本写入当前会话输入框草稿，并清掉旧 HTML 草稿，
+  // 让受控值按 Markdown 重建编辑器内容；随后聚焦输入框，用户可直接回车发送。
+  const [composerInjection, setComposerInjection] = useAtom(agentComposerInjectionAtom)
+  React.useEffect(() => {
+    if (!composerInjection || composerInjection.sessionId !== sessionId) return
+    const injectedText = composerInjection.text
+    setComposerInjection(null)
+    setInputContent(injectedText)
+    setInputHtmlContent('')
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus()
+    })
+  }, [composerInjection, sessionId, setComposerInjection, setInputContent, setInputHtmlContent])
+
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
   const setSessionPathMap = useSetAtom(agentSessionPathMapAtom)
   const sessionPath = sessionPathMap.get(sessionId) ?? null
@@ -1005,6 +1024,44 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       [sessionId]: !(prev[sessionId] ?? false),
     }))
   }, [sessionId, setSessionMemoryDisabledMap])
+
+  // 会话级上下文模式：经典 = resume 全量历史；索引 = 只做会话历史 RAG。
+  const [sessionContextModeMap, setSessionContextModeMap] = useAtom(sessionContextModeMapAtom)
+  const sessionContextMode: AgentContextMode = sessionContextModeMap[sessionId] ?? 'classic'
+  const [globalContextIndexEnabled, setGlobalContextIndexEnabled] = React.useState(false)
+
+  React.useEffect(() => {
+    void window.electronAPI
+      .getSettings()
+      .then((settings) => setGlobalContextIndexEnabled(settings.agentContextIndexGlobal === true))
+      .catch(() => {
+        // 读取失败保持默认关闭，不影响输入栏使用
+      })
+  }, [])
+
+  // 单轮聚焦优先；其次全局索引开关；最后才是会话选择。
+  const effectiveContextMode: AgentContextMode = sessionMemoryDisabled
+    ? 'classic'
+    : globalContextIndexEnabled
+      ? 'index'
+      : sessionContextMode
+
+  const handleContextModeChange = React.useCallback((mode: AgentContextMode) => {
+    setSessionContextModeMap((prev) => ({ ...prev, [sessionId]: mode }))
+  }, [sessionId, setSessionContextModeMap])
+
+  const handleGlobalContextIndexChange = React.useCallback(async (enabled: boolean) => {
+    const previous = globalContextIndexEnabled
+    setGlobalContextIndexEnabled(enabled)
+    try {
+      const settings = await window.electronAPI.updateSettings({ agentContextIndexGlobal: enabled })
+      setGlobalContextIndexEnabled(settings.agentContextIndexGlobal === true)
+      toast.success(enabled ? '全部会话已切换为索引模式' : '全部会话已恢复会话级上下文模式')
+    } catch (error) {
+      setGlobalContextIndexEnabled(previous)
+      toast.error('上下文模式设置保存失败', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }, [globalContextIndexEnabled])
 
   const [presetMenuOpen, setPresetMenuOpen] = React.useState(false)
   const openWorkspacePresets = React.useCallback(() => {
@@ -2063,6 +2120,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
           uuid: message.id,
           permissionModeOverride: permissionMode,
           disableContextMemory: sessionMemoryDisabled,
+          contextMode: effectiveContextMode,
           ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
           ...(payload.mentions.mentionedSkills.length > 0 && { mentionedSkills: payload.mentions.mentionedSkills }),
           ...(payload.mentions.mentionedMcpServers.length > 0 && { mentionedMcpServers: payload.mentions.mentionedMcpServers }),
@@ -2096,7 +2154,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     await startNewRun()
   }, [
     agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime,
-    streaming, backgroundWaiting, permissionMode, sessionMemoryDisabled, attachedDirs, attachedFileDirectories,
+    streaming, backgroundWaiting, permissionMode, sessionMemoryDisabled, effectiveContextMode, attachedDirs, attachedFileDirectories,
     clearStoppedByUser, queueMessageIntoActiveAgent, appendOptimisticPersistedMessage,
     revealRendererDraft, sessionId, setStreamingStates, consumeAgentInterruptionBlock,
   ])
@@ -2397,6 +2455,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       uuid: messageUuid,
       permissionModeOverride: permissionMode,
       disableContextMemory: sessionMemoryDisabled,
+      contextMode: effectiveContextMode,
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
       ...(() => {
@@ -2490,7 +2549,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
         return map
       })
     })
-  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, sessionMemoryDisabled, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement])
+  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, sessionMemoryDisabled, effectiveContextMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)
@@ -2943,8 +3002,8 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
   const [graphDialogOpen, setGraphDialogOpen] = React.useState(false)
   const [graphRefreshVersion, setGraphRefreshVersion] = React.useState(0)
 
-  const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
-    setRewindTargetUuid(assistantMessageUuid)
+  const handleRewindRequest = React.useCallback((targetMessageUuid: string): void => {
+    setRewindTargetUuid(targetMessageUuid)
   }, [])
 
   const handleRewindConfirm = React.useCallback(async (): Promise<void> => {
@@ -2955,6 +3014,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     try {
       const result = await window.electronAPI.rewindSession({
         sessionId,
+        targetMessageUuid: targetUuid,
         assistantMessageUuid: targetUuid,
       })
 
@@ -2970,40 +3030,51 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
         const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
       })
 
+      // 自动回填撤销的用户提问文本并聚焦
+      if (result.undoneUserText !== undefined) {
+        setInputContent(result.undoneUserText)
+        setInputHtmlContent('')
+        setTimeout(() => {
+          const conversation = document.querySelector<HTMLElement>(`[data-agent-session-id="${sessionId}"]`)
+          conversation?.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus()
+        }, 50)
+      }
+
       if (result.fileRewind?.canRewind) {
         const fileCount = result.fileRewind.filesChanged?.length ?? 0
-        // 被浏览器/数据库等进程占用的文件无法进入快照，回退时必须明确告知，
-        // 否则用户会误以为工作区已完全回到该时刻
         const skippedCount = result.fileRewind.skippedFiles?.length ?? 0
         const incomplete = result.fileRewind.incomplete === true
         if (skippedCount > 0 || incomplete) {
           const details = [
-            `${fileCount} 个文件已恢复`,
-            ...(skippedCount > 0 ? [`${skippedCount} 个文件被占用或过大而未回退`] : []),
+            `${fileCount} 个文件已恢复到提问前`,
+            ...(skippedCount > 0 ? [`${skippedCount} 个文件被占用或过大而未恢复`] : []),
             ...(incomplete ? ['基线不完整，未确认的新增文件已保留'] : []),
+            ...(result.undoneUserText ? ['提问已回填到输入框'] : []),
           ]
-          toast.warning('已回退到此处', {
+          toast.warning('已撤销本轮对话', {
             description: details.join('；'),
           })
         } else {
-          toast.success('已回退到此处', {
-            description: fileCount > 0 ? `${fileCount} 个文件已恢复` : '文件无变化',
+          toast.success('已撤销本轮对话', {
+            description: fileCount > 0 ? `${fileCount} 个文件已恢复至提问前，内容已回填至输入框` : '已恢复至提问前，内容已回填至输入框',
           })
         }
       } else if (result.fileRewind?.error) {
-        toast.warning('已回退对话', {
-          description: `文件恢复不可用：${result.fileRewind.error}`,
+        toast.warning('已撤销本轮对话', {
+          description: `文件恢复不可用：${result.fileRewind.error}。提问已回填至输入框。`,
         })
       } else {
-        toast.success('已回退到此处')
+        toast.success('已撤销本轮对话', {
+          description: '提问已回填至输入框',
+        })
       }
     } catch (error) {
-      console.error('[AgentView] 回退失败:', error)
-      toast.error('回退失败', {
+      console.error('[AgentView] 撤销失败:', error)
+      toast.error('撤销失败', {
         description: error instanceof Error ? error.message : '未知错误',
       })
     }
-  }, [rewindTargetUuid, sessionId, store])
+  }, [rewindTargetUuid, sessionId, store, setInputContent, setInputHtmlContent])
 
   // 父会话与右侧探索分支会同时挂载；快捷键只归当前可见工作面，避免一次停止两个并行 run。
   React.useEffect(() => {
@@ -3124,6 +3195,24 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     },
     // Fast Mode 保留会话/请求层能力，但不在输入工具栏暴露切换入口。
     {
+      key: 'context-mode',
+      node: (
+        <ContextModeToggleButton
+          mode={effectiveContextMode}
+          onChange={handleContextModeChange}
+          disabled={sessionMemoryDisabled || globalContextIndexEnabled}
+          disabledReason={
+            sessionMemoryDisabled
+              ? '记忆关闭时为单轮聚焦，不加载历史，无需选择上下文模式。'
+              : globalContextIndexEnabled
+                ? '已由「全部会话使用索引」全局开关强制启用索引模式。'
+                : undefined
+          }
+          isProcessing={streaming || backgroundWaiting}
+        />
+      ),
+    },
+    {
       key: 'memory-toggle',
       node: (
         <ContextMemoryToggleButton
@@ -3149,6 +3238,10 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
           sessionId={sessionId}
           onCompact={handleCompact}
           composerTool
+          contextMode={effectiveContextMode}
+          memoryDisabled={sessionMemoryDisabled}
+          globalIndexEnabled={globalContextIndexEnabled}
+          onGlobalIndexChange={handleGlobalContextIndexChange}
         />
       ),
     },
@@ -3191,6 +3284,10 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     taskGraphEnabled,
     sessionMemoryDisabled,
     handleToggleSessionMemory,
+    effectiveContextMode,
+    handleContextModeChange,
+    globalContextIndexEnabled,
+    handleGlobalContextIndexChange,
   ])
 
   const inputTrailingNode = (streaming || streamState?.stopping) ? (
@@ -3295,6 +3392,14 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
 
         {/* 权限请求横幅 */}
         <div className="shrink-0">
+          {sessionMeta?.cslabLabId && (
+            <CsLabToolTrustBadge
+              sessionId={sessionId}
+              labId={sessionMeta.cslabLabId}
+              permissionMode={permissionMode}
+              revision={sessionMeta.revision}
+            />
+          )}
           <PermissionBanner sessionId={sessionId} onRequestStop={handleStop} />
 
           {/* AskUserQuestion 交互式问答横幅 */}
@@ -3497,18 +3602,16 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       </DialogContent>
     </Dialog>
 
-    {/* 回退确认弹窗 */}
+    {/* 撤销本轮确认弹窗 */}
     <AlertDialog
       open={rewindTargetUuid !== null}
       onOpenChange={(v) => { if (!v) setRewindTargetUuid(null) }}
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>确认回退</AlertDialogTitle>
+          <AlertDialogTitle>确认撤销本轮对话</AlertDialogTitle>
           <AlertDialogDescription>
-            {sessionAgentRuntime === 'pi'
-              ? '回退将截断该消息之后的所有对话（Pi 会话不支持文件恢复，工作区文件不会被改动）。此操作不可撤销，确定要回退吗？'
-              : '回退将截断该消息之后的所有对话，并恢复文件到该时刻的状态。此操作不可撤销，确定要回退吗？'}
+            撤销将删除本轮提问及其之后的所有对话，并恢复工作区文件至本轮发起前的状态。被撤销的提问内容将自动回填至输入框。此操作不可逆，确定要撤销吗？
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -3517,7 +3620,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
             onClick={handleRewindConfirm}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            回退
+            撤销本轮
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

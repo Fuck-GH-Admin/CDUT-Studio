@@ -24,6 +24,7 @@ import { UserAvatar } from '@/components/shared/UserAvatar'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { coachTourOpenAtom } from '@/atoms/coach-tour-atoms'
+import { replayIntroOpenAtom } from '@/atoms/intro-atoms'
 import { Button } from '@profer/ui/primitives/button'
 import { cn } from '@/lib/utils'
 
@@ -39,7 +40,9 @@ interface EmojiMartEmoji {
 export function GeneralSettings(): React.ReactElement {
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const setCoachTourOpen = useSetAtom(coachTourOpenAtom)
+  const setReplayIntroOpen = useSetAtom(replayIntroOpenAtom)
   const replayPendingRef = React.useRef(false)
+  const replayIntroPendingRef = React.useRef(false)
   const [autoLaunch, setAutoLaunch] = React.useState(false)
   const [autoLaunchBusy, setAutoLaunchBusy] = React.useState(true)
   const [browserHomeUrl, setBrowserHomeUrl] = React.useState('')
@@ -255,6 +258,28 @@ export function GeneralSettings(): React.ReactElement {
                 window.setTimeout(() => {
                   setCoachTourOpen(true)
                   window.setTimeout(() => { replayPendingRef.current = false }, 500)
+                }, 200)
+              }}
+            >
+              重新播放
+            </Button>
+          </SettingsRow>
+          <SettingsRow
+            label="首次欢迎导览"
+            description="重放开屏水波纹与首次欢迎导览（欢迎 / 功能导览 / 导入数据 / 欢迎页），不改变已完成的引导状态"
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (replayIntroPendingRef.current) return
+                replayIntroPendingRef.current = true
+                // 先关设置：全屏欢迎导览会接管整屏，避免结束后设置对话框突兀弹出
+                setSettingsOpen(false)
+                window.setTimeout(() => {
+                  setReplayIntroOpen(true)
+                  window.setTimeout(() => { replayIntroPendingRef.current = false }, 500)
                 }, 200)
               }}
             >

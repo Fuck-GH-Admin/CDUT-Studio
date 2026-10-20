@@ -106,3 +106,6 @@ export * from './review-v3-execution'
 
 // Review V3 C-owned durable Run evidence snapshot; not a Decision/Gold ACK.
 export * from './review-v3-run'
+
+// CDUT Science (CSLab) 相关类型
+export * from './cslab'

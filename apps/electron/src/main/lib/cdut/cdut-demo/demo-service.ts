@@ -18,18 +18,25 @@ import type {
 } from '@profer/shared'
 import { buildDemoProfile, DEMO_CREDENTIALS } from './demo-account'
 import {
-  DEMO_CLASSROOM_QUERY,
   DEMO_CONTACT_INFO,
-  DEMO_EMPTY_CLASSROOMS,
   DEMO_EXAMS,
   DEMO_GRADES,
   DEMO_LEVEL_EXAMS,
   DEMO_NO_DATA_TEXT,
   DEMO_NOTICES,
+  DEMO_OTHER_CLASS_COURSES,
   DEMO_SCHEDULE,
   DEMO_SCHEDULE_SEMESTER,
   DEMO_STUDENT_INFO,
 } from './demo-fixtures'
+import {
+  buildGpaTracks,
+  computeCurrentWeek,
+  markOngoingAndNext,
+  parseWeekSpecification,
+  type GradeRecord,
+  type ScheduleCourse,
+} from '../cdut-jw-client'
 
 /** 星期标签（索引 1-7，0 占位） */
 const WEEKDAY_LABELS = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'] as const
@@ -101,7 +108,7 @@ class CdutDemoService {
       case 'exams':
         return this.executeExams(action)
       case 'classrooms':
-        return this.executeClassrooms(action)
+        return this.executeClassrooms(action, params)
       case 'curriculum':
         return this.executeCurriculum(action)
       case 'selection':
@@ -166,41 +173,116 @@ class CdutDemoService {
   }
 
   private executeSchedule(action: string): CdutDomainToolResult {
-    const rows = DEMO_SCHEDULE
+    // 全校班级课表：输出 OtherClassCourse 契约，供前端班级课表 Tab 正常渲染
+    if (action === 'query_other_schedule') {
+      const rows = DEMO_OTHER_CLASS_COURSES.map((c) => [
+        c.name,
+        c.code,
+        c.credit,
+        c.teachers.join('、') || '—',
+        c.rooms.join('；') || '—',
+        c.classNames.join('、') || '—',
+      ])
+      const table = mdTable(['课程名称', '课程代码', '学分', '授课教师', '上课地点', '教学班'], rows)
+      return buildResult(`### 全校班级课表（演示数据 · ${DEMO_SCHEDULE_SEMESTER}）\n\n${table}`, {
+        classQuery: '演示班级',
+        matchedClassName: '演示班级',
+        semester: DEMO_SCHEDULE_SEMESTER,
+        courseCount: DEMO_OTHER_CLASS_COURSES.length,
+        courses: DEMO_OTHER_CLASS_COURSES,
+      })
+    }
+
+    // 个人课表：严格对齐真实链路 JSON 契约（courses / weekList / currentWeek / isOngoing / isNext）
+    const courses: ScheduleCourse[] = DEMO_SCHEDULE.map((e) => {
+      const weeks = e.weeks.replace(/第/g, '')
+      return {
+        name: e.courseName,
+        dayOfWeek: e.weekday,
+        startSection: e.period,
+        endSection: e.period,
+        location: e.classroom,
+        teacher: e.teacher || '待定',
+        weeks: e.weeks,
+        weekList: parseWeekSpecification(weeks),
+      }
+    })
+    // 复用真实 24h 雷达：演示态也能正确高亮「正在上课 / 下节课预告」
+    markOngoingAndNext(courses)
+
+    const rows = courses
       .slice()
-      .sort((a, b) => a.weekday - b.weekday || a.period - b.period)
-      .map((e) => [
-        WEEKDAY_LABELS[e.weekday] ?? String(e.weekday),
-        `第${e.period}节`,
-        e.courseName,
-        e.teacher || '—',
-        e.classroom,
-        e.weeks,
+      .sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.startSection - b.startSection)
+      .map((c) => [
+        WEEKDAY_LABELS[c.dayOfWeek] ?? String(c.dayOfWeek),
+        `第${c.startSection}节`,
+        c.name,
+        c.teacher || '—',
+        c.location,
+        c.weeks,
       ])
     const table = mdTable(['星期', '节次', '课程', '教师', '教室', '上课周次'], rows)
-    const header =
-      action === 'query_other_schedule'
-        ? `### 课表查询（演示态仅提供本人课表）\n\n**学期：${DEMO_SCHEDULE_SEMESTER}**`
-        : `### 本学期课表\n\n**学期：${DEMO_SCHEDULE_SEMESTER}**`
-    return buildResult(`${header}\n\n${table}`, { semester: DEMO_SCHEDULE_SEMESTER, entries: DEMO_SCHEDULE })
+    return buildResult(`### 本学期课表（演示数据）\n\n**学期：${DEMO_SCHEDULE_SEMESTER}**\n\n${table}`, {
+      semester: DEMO_SCHEDULE_SEMESTER,
+      week: null,
+      currentWeek: computeCurrentWeek(),
+      courseCount: courses.length,
+      courses,
+    })
   }
 
   private executeGrades(action: string): CdutDomainToolResult {
     if (action === 'query_grades') {
-      const rows = DEMO_GRADES.map((g) => [
-        g.courseName,
-        g.courseType,
-        String(g.credit),
-        String(g.score),
-        String(g.gradePoint),
+      // 严格对齐真实链路 JSON 契约（latest / highest / records）
+      const records: GradeRecord[] = DEMO_GRADES.map((g) => ({
+        semester: DEMO_SCHEDULE_SEMESTER,
+        courseCode: '',
+        courseName: g.courseName,
+        score: String(g.score),
+        scoreNumber: g.score,
+        scoreLabel: '',
+        credit: g.credit,
+        gp: g.gradePoint,
+        makeupSemester: '',
+        assessMode: g.courseType,
+        examNature: '',
+        courseAttr: '必修',
+        courseNature: '',
+        electiveCategory: '',
+      }))
+      const tracks = buildGpaTracks(records)
+      const rows = records.map((r) => [
+        r.courseName,
+        r.courseAttr,
+        String(r.credit),
+        r.score,
+        r.gp !== undefined ? String(r.gp) : '—',
       ])
       const table = mdTable(['课程名称', '课程性质', '学分', '综合分', '绩点'], rows)
-      const graded = DEMO_GRADES.filter((g) => g.credit > 0)
-      const totalCredit = graded.reduce((sum, g) => sum + g.credit, 0)
-      const weighted = graded.reduce((sum, g) => sum + g.credit * g.gradePoint, 0)
-      const gpa = totalCredit > 0 ? weighted / totalCredit : 0
-      const summary = `**已修学分：${totalCredit}** ｜ **加权平均绩点：${gpa.toFixed(2)}**`
-      return buildResult(`${summary}\n\n${table}`, { gpa: Number(gpa.toFixed(2)), totalCredit, courses: DEMO_GRADES })
+      const summary = [
+        `**最新成绩轨**：修读 ${tracks.latest.courseCount} 门 | 总学分 ${tracks.latest.totalCredits} | 加权平均分 ${tracks.latest.weightedAverage} | 加权绩点 **${tracks.latest.weightedGpa}**`,
+        `**最高成绩轨**：修读 ${tracks.highest.courseCount} 门 | 总学分 ${tracks.highest.totalCredits} | 加权平均分 ${tracks.highest.weightedAverage} | 加权绩点 **${tracks.highest.weightedGpa}**`,
+      ].join('\n')
+      return buildResult(`${summary}\n\n${table}`, {
+        semester: DEMO_SCHEDULE_SEMESTER,
+        latest: {
+          courseCount: tracks.latest.courseCount,
+          totalCredits: tracks.latest.totalCredits,
+          requiredCredits: tracks.latest.requiredCredits,
+          weightedAverage: tracks.latest.weightedAverage,
+          weightedGpa: tracks.latest.weightedGpa,
+          failed: tracks.latest.failed,
+        },
+        highest: {
+          courseCount: tracks.highest.courseCount,
+          totalCredits: tracks.highest.totalCredits,
+          requiredCredits: tracks.highest.requiredCredits,
+          weightedAverage: tracks.highest.weightedAverage,
+          weightedGpa: tracks.highest.weightedGpa,
+          failed: tracks.highest.failed,
+        },
+        records,
+      })
     }
     if (action === 'query_level_exams') {
       const rows = DEMO_LEVEL_EXAMS.map((e) => [e.examName, String(e.score), e.passed ? '通过' : '未通过'])
@@ -247,18 +329,31 @@ class CdutDemoService {
     return buildResult('近期无考试安排。', { exams: [] })
   }
 
-  private executeClassrooms(action: string): CdutDomainToolResult {
-    if (action === 'query_empty_classrooms') {
-      const q = DEMO_CLASSROOM_QUERY
-      const summary = `**校区：${q.campus}** ｜ 教学楼：${q.building} ｜ 第${q.week}周 ${WEEKDAY_LABELS[q.dayOfWeek] ?? ''} ${q.timeSlots} ｜ 最少座位数：${q.minSeats}`
-      const table = mdTable(['空闲教室'], DEMO_EMPTY_CLASSROOMS.map((r) => [r]))
-      return buildResult(`### 空闲自习教室\n\n${summary}\n\n${table}`, {
-        query: q,
-        classrooms: DEMO_EMPTY_CLASSROOMS,
-      })
-    }
-    if (action === 'query_room_occupancy') {
-      return buildResult('演示账户暂无教室占用详情。', { rooms: [] })
+  private executeClassrooms(
+    action: string,
+    params?: CdutToolParamsMap[CdutToolDomain],
+  ): CdutDomainToolResult {
+    if (action === 'query_empty_classrooms' || action === 'query_room_occupancy') {
+      const p = (params ?? {}) as { campus?: string; building?: string }
+      const campusIsYibin = p.campus === 'yibin'
+      const building = (p.building ?? '').trim()
+      const scope = building ? `【${building}】` : ''
+      // 自习空教室涉及真实物理座位资源，演示态一律不编造任何虚拟教室/楼宇数据，
+      // 只如实告知「演示态无数据，请登录特区账户查询真实空教室」。
+      return buildResult(
+        [
+          `### ${campusIsYibin ? '宜宾校区' : '成都校区'}${scope}空闲自习教室`,
+          '',
+          `> ${DEMO_NO_DATA_TEXT}演示态不提供任何虚拟教室数据（楼宇与座位均为真实物理资源，不可编造），请登录特区账户后查询真实空教室。`,
+        ].join('\n'),
+        {
+          campus: p.campus ?? 'chengdu',
+          building,
+          semester: DEMO_SCHEDULE_SEMESTER,
+          buildings: [],
+          emptyRooms: [],
+        },
+      )
     }
     return buildResult(DEMO_NO_DATA_TEXT)
   }

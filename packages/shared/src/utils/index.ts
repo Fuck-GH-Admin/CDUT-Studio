@@ -67,10 +67,12 @@ export type {
 } from './automation-schedule'
 export { pruneToolOutputByEntropy } from './context-entropy-pruner'
 export type { EntropyPruneOptions } from './context-entropy-pruner'
-// 思维导图引擎（双曲 Poincaré 布局 / 贝塞尔连线 / OPML 2.0 导出），主进程与渲染进程共用
+// 思维导图引擎（径向整齐树布局 / 贝塞尔连线 / OPML 2.0 导出），主进程与渲染进程共用
 export {
   layoutMindMap,
+  estimateMindMapNodeSize,
   buildBezierPath,
+  computeAnchorZoomPan,
   flattenMindMap,
   buildNodeStudyPrompt,
   mindMapToOpml,
@@ -80,3 +82,79 @@ export {
 export type { MindMapPoint, MindMapLayoutOptions } from './mindmap-engine'
 // FIM 潜伏认知能力评级映射（测验与学情展示共用）
 export { describeTheta } from './fim-engine'
+// CSLab 图表数字化标定与磁性吸附（主进程 / 渲染进程共用）
+export {
+  fitAxisScale,
+  mapPixelToValue,
+  projectPointOnSegment,
+  snapPointToPolyline,
+  polygonArea,
+} from './cslab-plot'
+export type {
+  CsLabPoint,
+  CsLabSegmentProjection,
+  CsLabAxisScaleFit,
+} from './cslab-plot'
+// Zotero 批注四向仿射（主进程与渲染进程共用纯函数）
+export {
+  normalizeRotation,
+  parseZoteroAnnotationPosition,
+  zoteroRectToViewport,
+} from './cslab-zotero'
+export type {
+  ZoteroAnnotationPosition,
+  ZoteroRect,
+  ZoteroRotation,
+  ZoteroViewportRect,
+} from './cslab-zotero'
+// CSLab JSON Canvas 无损读写与 Vault 语法（主进程 / 渲染进程共用）
+export {
+  applyDagEvaluation,
+  buildConflictRelPath,
+  canvasTitleFromRelPath,
+  canvasToDagGraph,
+  createEmptyCanvasDocument,
+  mergeCanvasScienceMeta,
+  parseCanvasDocument,
+  serializeCanvasDocument,
+} from './cslab-canvas'
+export type { CanvasMetaMergeResult } from './cslab-canvas'
+// CSLab Prove2Me DAG 推演引擎
+export {
+  evaluateDag,
+  findCanvasCycleIds,
+  flattenCycleIds,
+  topologicalOrder,
+  wouldCreateCycle,
+} from './cslab-dag'
+// CSLab 晶体学数学（CIF 晶胞 / 晶面间距 / 倒易法向量 / 2θ 反查）
+export {
+  CSLAB_XRAY_WAVELENGTHS,
+  assignReflections,
+  buildMillerPlane,
+  cellCenter,
+  cellMaxLength,
+  cellVolume,
+  dSpacing,
+  parseCifLattice,
+  planeBasis,
+  reciprocalNormal,
+  twoThetaFromD,
+} from './cslab-crystal'
+export type { AssignReflectionsOptions } from './cslab-crystal'
+// CSLab 审稿旁注一维避障排程
+export { buildConnectorPath, calculateMarginaliaLayout } from './cslab-marginalia'
+export type {
+  CsLabCommentAnchor,
+  CsLabPositionedComment,
+} from './cslab-marginalia'
+// CSLab 审稿建议跨块切片计划
+export {
+  describeSuggestionPlanFailure,
+  planSuggestionApplication,
+} from './cslab-track-changes'
+export type {
+  CsLabDocBlock,
+  CsLabSuggestionPlan,
+  CsLabSuggestionSlice,
+} from './cslab-track-changes'

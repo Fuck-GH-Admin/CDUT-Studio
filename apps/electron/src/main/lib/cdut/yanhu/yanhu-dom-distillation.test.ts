@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { YanhuDistilledPage } from '@profer/shared'
+import type { YanhuBidNode, YanhuDistilledPage } from '@profer/shared'
 import {
   assignBids,
   buildYanhuCollectorScript,
@@ -15,10 +15,12 @@ import {
   filterActionableElements,
   NAV_REGION_FOLD_THRESHOLD,
   serializePageDigest,
+  YANHU_ACCESSIBLE_NAME_SNIPPET,
   YanhuDomDistillationEngine,
   type YanhuCollectedPage,
   type YanhuRawElement,
 } from './yanhu-dom-distillation'
+import { buildHardwareClickTargetScript } from './yanhu-browser-tools'
 
 function makeElement(overrides: Partial<YanhuRawElement> = {}): YanhuRawElement {
   return {
@@ -48,7 +50,7 @@ describe('filterActionableElements（第二级布局与可视性剪枝）', () =
     expect(result[0]?.name).toBe('可见')
   })
 
-  test('有名称且可交互的折叠元素被保留（collapsed）', () => {
+  test('未渲染元素一律不进入 BID 台账（渲染红线）', () => {
     const elements: YanhuRawElement[] = [
       makeElement({
         name: '教务管理系统',
@@ -57,9 +59,9 @@ describe('filterActionableElements（第二级布局与可视性剪枝）', () =
         collapsed: true,
       }),
     ]
-    const result = filterActionableElements(elements)
-    expect(result).toHaveLength(1)
-    expect(result[0]?.collapsed).toBe(true)
+    // 未渲染控件点击必被网页驳回（No-Op），还会因「解封」打乱页面状态，故绝不分配 BID。
+    // 其存在改由 unrendered 汇总在 PageDigest 中以纯文本提示。
+    expect(filterActionableElements(elements)).toHaveLength(0)
   })
 
   test('仅保留具备交互能力的元素', () => {
@@ -124,22 +126,415 @@ describe('serializePageDigest（第四级 Region 分块序列化）', () => {
     expect(digest).toContain('[Occluded]')
   })
 
-  test('折叠节点标注 [Collapsed]', () => {
-    const records = assignBids([
-      makeElement({
-        name: '教务管理系统',
-        role: 'link',
-        collapsed: true,
-        bounds: { x: 0, y: 0, width: 0, height: 0 },
-      }),
-    ])
+  test('未渲染元素只做汇总提示，不占用任何 BID', () => {
+    const records = assignBids([makeElement({ name: '执行查询' })])
+    const digest = serializePageDigest({
+      url: 'u',
+      title: 't',
+      records,
+      unrendered: { count: 37, regions: ['业务表单', '导航菜单'] },
+    })
+    expect(digest).toContain('未渲染元素 37 个')
+    expect(digest).toContain('业务表单、导航菜单')
+    expect(digest).not.toContain('[Collapsed]')
+    // 未渲染元素不参与双射编号，可用 BID 数量仍等于真实渲染元素数
+    expect(digest).toContain('BIDs: 1')
+  })
+
+  test('无未渲染元素时不输出汇总行（不制造噪音）', () => {
+    const records = assignBids([makeElement({ name: '执行查询' })])
     const digest = serializePageDigest({ url: 'u', title: 't', records })
-    expect(digest).toContain('[Collapsed]')
+    expect(digest).not.toContain('未渲染元素')
   })
 
   test('空页面给出提示', () => {
     const digest = serializePageDigest({ url: 'u', title: 't', records: [] })
     expect(digest).toContain('暂无可交互控件')
+  })
+})
+
+/**
+ * 企业级表单封装的容器级标签（data-caption）。
+ *
+ * 锁死致命故障：EMAP「请假开始时间 / 请假结束时间」这类日期时间控件，其 <input> 自身没有
+ * 任何 ARIA / label / title / placeholder，中文标签挂在祖先 div 的 data-caption 上。
+ * 采集端靠「空间近邻猜测」拿到了名字，而定位端没有该能力 → 名称恒不匹配 →
+ * 点击与填写双双报「未能在页面中定位」，模型转去猜像素坐标。
+ */
+describe('容器级标签载体（data-caption）与两端名称推导一致性', () => {
+  function deriveName(el: Record<string, unknown>, doc: Record<string, unknown> = {}): string {
+    const runner = new Function('el', 'doc', `${YANHU_ACCESSIBLE_NAME_SNIPPET}\nreturn __yanhuDeriveName(el, doc);`)
+    return String(runner(el, doc))
+  }
+
+  function plainNode(tag: string, attrs: Record<string, string>, parent: unknown = null): Record<string, unknown> {
+    return {
+      nodeType: 1,
+      tagName: tag,
+      getAttribute: (n: string) => attrs[n] ?? '',
+      innerText: attrs.__text ?? '',
+      textContent: attrs.__text ?? '',
+      id: attrs.id ?? '',
+      closest: () => null,
+      parentElement: parent,
+    }
+  }
+
+  test('Given 输入框自身无任何标签 When 祖先容器带 data-caption Then 推导出该中文标签', () => {
+    // 模拟 <div xtype="datetime" data-caption="请假开始时间"><input type="text"></div>
+    const holder = plainNode('DIV', { 'data-caption': '请假开始时间' })
+    const input = plainNode('INPUT', { type: 'text' }, holder)
+    expect(deriveName(input)).toBe('请假开始时间')
+  })
+
+  test('Given 输入框自身有 placeholder When 祖先也有 data-caption Then 以更精确的 placeholder 为准', () => {
+    const holder = plainNode('DIV', { 'data-caption': '请假开始时间' })
+    const input = plainNode('INPUT', { type: 'text', placeholder: '请选择开始时间' }, holder)
+    expect(deriveName(input)).toBe('请选择开始时间')
+  })
+
+  test('Given 按钮自带内联文本 When 处于带 caption 的容器内 Then 不覆盖按钮自身文本', () => {
+    const holder = plainNode('DIV', { 'data-caption': '请假开始时间' })
+    const button = plainNode('BUTTON', { __text: '选择时间' }, holder)
+    expect(deriveName(button)).toBe('选择时间')
+  })
+
+  test('Given 定位端脚本 When 构建 Then 同样注入该名称推导（两端同源，杜绝名称不匹配）', () => {
+    const record: YanhuBidNode = {
+      bid: 8,
+      role: 'textbox',
+      tag: 'input',
+      name: '请假开始时间',
+      bounds: { x: 480, y: 300, width: 220, height: 30 },
+    }
+    const finderScript = buildHardwareClickTargetScript(record)
+    expect(finderScript).toContain('data-caption')
+    expect(finderScript).toContain('__yanhuDeriveName')
+  })
+})
+
+/**
+ * 语义区域归属（Region4Web 解构）。
+ *
+ * 锁死历史故障：企业级表单惯用 <table> 做栅格布局，若一律标成「数据表格」，
+ * 模型会把表单字段误判为列表筛选器而不敢操作；同理 listBox / gridCell 这类
+ * 表单控件内部命名被裸子串命中也会造成同一误判。
+ */
+describe('语义区域归属（布局表格 vs 数据表格）', () => {
+  /** 在指定容器内放一个可见文本输入框，返回采集结果的 region */
+  function regionOfInputInside(container: Record<string, unknown>): string {
+    const cell: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: 'TD',
+      className: '',
+      id: '',
+      getAttribute: () => '',
+      querySelector: () => null,
+      parentElement: container,
+    }
+    const input: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: 'INPUT',
+      getAttribute: (n: string) => (n === 'type' ? 'text' : ''),
+      getBoundingClientRect: () => ({ left: 480, top: 300, width: 200, height: 30 }),
+      getClientRects: () => [{ width: 200, height: 30 }],
+      innerText: '',
+      textContent: '',
+      className: '',
+      id: '',
+      parentElement: cell,
+      onclick: null,
+      labels: undefined,
+    }
+    const doc = {
+      body: { querySelectorAll: () => [input] },
+      querySelectorAll: () => [],
+      title: 'region',
+      defaultView: {
+        getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1', cursor: 'auto' }),
+        innerWidth: 1200,
+        innerHeight: 800,
+      },
+    }
+    const script = buildYanhuCollectorScript()
+    const runner = new Function('document', 'window', 'location', `return ${script}`)
+    const result = runner(doc, doc.defaultView, { href: 'https://xgfw.cdut.edu.cn/x' })
+    return String(result.elements[0]?.region ?? '')
+  }
+
+  function tableWith(fieldTypes: string[], className = 'jqx-grid-table'): Record<string, unknown> {
+    return {
+      nodeType: 1,
+      tagName: 'TABLE',
+      className,
+      id: '',
+      getAttribute: () => '',
+      querySelector: () => null,
+      querySelectorAll: (sel: string) =>
+        String(sel).indexOf('input') >= 0
+          ? fieldTypes.map((t) => ({
+              nodeType: 1,
+              // select / textarea 对应真实标签名，其余按 input 处理（type 即传入值）
+              tagName: t === 'select' ? 'SELECT' : t === 'textarea' ? 'TEXTAREA' : 'INPUT',
+              getAttribute: (n: string) => (n === 'type' ? t : ''),
+            }))
+          : [],
+      parentElement: null,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 900, height: 300 }),
+    }
+  }
+
+  test('Given 表格内含文本输入框 When 归属区域 Then 判为表单区（而非数据表格）', () => {
+    expect(regionOfInputInside(tableWith(['text']))).toBe('表单区')
+  })
+
+  test('Given 表格内含 select / textarea When 归属区域 Then 同样判为表单区', () => {
+    expect(regionOfInputInside(tableWith(['select']))).toBe('表单区')
+    expect(regionOfInputInside(tableWith(['textarea']))).toBe('表单区')
+  })
+
+  test('Given 表格内只有文本与链接（无输入控件）When 归属区域 Then 仍判为数据表格', () => {
+    expect(regionOfInputInside(tableWith([]))).toBe('数据表格')
+  })
+
+  test('Given 表格内只有 type=hidden 的输入 When 归属区域 Then 不误判为表单区', () => {
+    expect(regionOfInputInside(tableWith(['hidden', 'hidden']))).toBe('数据表格')
+  })
+
+  test('Given 表格内只有 EMAP 组件线索（无原生控件）When 归属区域 Then 仍判为表单区', () => {
+    const withClue = (clue: string): Record<string, unknown> => {
+      const table = tableWith([])
+      table.querySelector = (sel: string) => (String(sel).indexOf(clue) >= 0 ? { nodeType: 1 } : null)
+      return table
+    }
+    // 金智 EMAP 栅格表格里往往只有 div 组件 + hidden，若只看原生控件会被误判成「数据表格」
+    expect(regionOfInputInside(withClue('[data-caption]'))).toBe('表单区')
+    expect(regionOfInputInside(withClue('[xtype]'))).toBe('表单区')
+    expect(regionOfInputInside(withClue('[role="tree"]'))).toBe('表单区')
+    expect(regionOfInputInside(withClue('.bh-form-group'))).toBe('表单区')
+  })
+
+  test('Given 容器类名是 listBox / gridCell（表单控件内部命名）When 归属区域 Then 不误判为数据表格', () => {
+    const listBox = {
+      nodeType: 1,
+      tagName: 'DIV',
+      className: 'jqx-listBox gridCell',
+      id: '',
+      getAttribute: () => '',
+      querySelector: () => null,
+      parentElement: null,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 300, height: 200 }),
+    }
+    expect(regionOfInputInside(listBox)).toBe('主要内容')
+  })
+
+  test('Given 容器类名确为数据列表 When 归属区域 Then 判为数据表格', () => {
+    const dataTable = {
+      nodeType: 1,
+      tagName: 'DIV',
+      className: 'data-table',
+      id: '',
+      getAttribute: () => '',
+      querySelector: () => null,
+      parentElement: null,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 900, height: 300 }),
+    }
+    expect(regionOfInputInside(dataTable)).toBe('数据表格')
+  })
+})
+
+/**
+ * 显示文本口径（#1 取值 / #3 命名）与浮层叶子选项纳管（#2）。
+ *
+ * 锁死历史事故：容器名曾是「全部子孙文本拼接」（模型花大量推理去猜它是什么）；
+ * 非输入型控件（自定义下拉 / 树选择）的当前选中值从未进入台账，模型无法核对选区是否写入。
+ */
+describe('显示文本口径与浮层选项纳管', () => {
+  /** 构造最小元素桩：支持「自身直接文本」与「子元素」两种来源 */
+  function node(
+    tag: string,
+    text = '',
+    children: Array<Record<string, unknown>> = [],
+    attrs: Record<string, string> = {},
+  ): Record<string, unknown> {
+    const descendants: Array<Record<string, unknown>> = []
+    const walk = (list: Array<Record<string, unknown>>): void => {
+      for (const child of list) {
+        descendants.push(child)
+        walk((child.children as Array<Record<string, unknown>>) ?? [])
+      }
+    }
+    walk(children)
+    const isDescendantOf = (candidate: Record<string, unknown>, ancestor: Record<string, unknown>): boolean => {
+      let cur: Record<string, unknown> | null = candidate
+      while (cur) {
+        if (cur === ancestor) return true
+        cur = (cur.parentElement as Record<string, unknown> | null) ?? null
+      }
+      return false
+    }
+    const self: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: tag,
+      getAttribute: (n: string) => attrs[n] ?? '',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 120, height: 28 }),
+      getClientRects: () => [{ width: 120, height: 28 }],
+      // 浮层选择器匹配：由桩数据显式声明命中的选择器（逗号拼接的选择器串按子串判定）
+      matches: (sel: string) => {
+        const declared = attrs.__match ?? ''
+        if (!declared) return false
+        return declared.split('|').some((one) => one && String(sel).indexOf(one) >= 0)
+      },
+      contains: (other: unknown) => isDescendantOf(other as Record<string, unknown>, self),
+      className: attrs.class ?? '',
+      onclick: null,
+      id: attrs.id ?? '',
+      closest: () => null,
+      parentElement: null,
+      children,
+      childNodes: [...(text ? [{ nodeType: 3, nodeValue: text }] : []), ...children],
+      querySelectorAll: (sel: string) => (sel === '*' ? descendants : []),
+      innerText: text,
+      textContent: `${text} ${children.map((c) => String(c.textContent ?? '')).join(' ')}`.trim(),
+    }
+    // 补齐父链：浮层判定（popupRootOf / contains）需要真实的祖先关系
+    for (const child of children) {
+      if (child.parentElement == null) child.parentElement = self
+    }
+    return self
+  }
+
+  function deriveName(el: Record<string, unknown>): string {
+    const runner = new Function('el', 'doc', `${YANHU_ACCESSIBLE_NAME_SNIPPET}\nreturn __yanhuDeriveName(el, doc);`)
+    return String(runner(el, {}))
+  }
+
+  /** 运行采集脚本：主台账元素 + 可选的若干可见浮层 */
+  function collect(
+    target: Record<string, unknown>,
+    popup?: Record<string, unknown> | Array<Record<string, unknown>>,
+  ) {
+    const popups = Array.isArray(popup) ? popup : popup ? [popup] : []
+    const doc = {
+      body: { querySelectorAll: () => [target, ...popups] },
+      querySelectorAll: (sel: string) => (popups.length > 0 && String(sel).indexOf('.jqx-listbox') >= 0 ? popups : []),
+      title: 'render-gate',
+      defaultView: {
+        getComputedStyle: (node: Record<string, unknown>) => ({
+          display: node.__display ?? 'block',
+          visibility: 'visible',
+          opacity: '1',
+          cursor: node.__cursor ?? 'auto',
+        }),
+        innerWidth: 1200,
+        innerHeight: 800,
+      },
+    }
+    const script = buildYanhuCollectorScript()
+    const runner = new Function('document', 'window', 'location', `return ${script}`)
+    return runner(doc, doc.defaultView, { href: 'https://xgfw.cdut.edu.cn/x' }) as {
+      elements: Array<{ role: string; name: string; value?: string; region?: string }>
+    }
+  }
+
+  test('Given 容器有自身直接文本 When 推导名字 Then 只取该短文本（不拼接子孙）', () => {
+    const container = node('DIV', '请选择...', [node('SPAN', '吉林省'), node('SPAN', '贵州省')])
+    expect(deriveName(container)).toBe('请选择...')
+  })
+
+  test('Given 容器自身无文本（a/i/span 结构）When 推导名字 Then 回退首个带文本的叶子后代', () => {
+    const link = node('A', '', [node('I', ''), node('SPAN', '我要请假')], { href: '#' })
+    expect(deriveName(link)).toBe('我要请假')
+  })
+
+  test('Given 祖先有 data-caption 且控件自身有显示文本 When 推导名字 Then 以显示文本为准（不回归）', () => {
+    const holder = node('DIV', '', [node('INPUT', '', [], { 'data-caption': '请假开始时间' })], {})
+    const input = (holder.children as Array<Record<string, unknown>>)[0]!
+    input.nodeType = 1
+    expect(deriveName(input)).toBe('请假开始时间')
+  })
+
+  test('Given 非输入型控件（自定义下拉）When 采集 Then 补上当前显示值，供模型核对选区', () => {
+    const select = node('DIV', '香港特别行政区', [node('SPAN', '')], { 'aria-label': '出校去向' })
+    select.__cursor = 'pointer'
+    const result = collect(select)
+    expect(result.elements[0]?.name).toBe('出校去向')
+    expect(result.elements[0]?.value).toBe('香港特别行政区')
+  })
+
+  test('Given 显示值与名字相同 When 采集 Then 不重复投递 value（避免台账噪音）', () => {
+    const trigger = node('BUTTON', '我要请假', [])
+    trigger.__cursor = 'pointer'
+    const result = collect(trigger)
+    expect(result.elements[0]?.name).toBe('我要请假')
+    expect(result.elements[0]?.value).toBeUndefined()
+  })
+
+  test('Given 控件只有泛化占位符且祖辈有 data-caption When 采集 Then 业务标签作名、占位符退化为当前值', () => {
+    const holder = node('DIV', '', [node('DIV', '请选择...', [], {})], { 'data-caption': '出校去向' })
+    const widget = (holder.children as Array<Record<string, unknown>>)[0]!
+    widget.__cursor = 'pointer'
+    const result = collect(widget)
+    // 页面上十几个未填写的下拉文本都是「请选择...」：若让它当名字，模型只能盲猜 [BID]
+    expect(result.elements[0]?.name).toBe('出校去向')
+    expect(result.elements[0]?.value).toBe('请选择...')
+  })
+
+  test('Given 占位符含具体字段名词（请选择日期）When 采集 Then 保留 placeholder 不回退标签', () => {
+    const holder = node('DIV', '', [node('INPUT', '', [], { placeholder: '请选择日期' })], {
+      'data-caption': '申请日期',
+    })
+    const input = (holder.children as Array<Record<string, unknown>>)[0]!
+    expect(deriveName(input)).toBe('请选择日期')
+  })
+
+  test('Given 浮层嵌套（外层弹窗含内层列表容器）When 采集 Then 选项只出现一份', () => {
+    const optionA = node('DIV', '吉林省')
+    const optionB = node('DIV', '贵州省')
+    const inner = node('DIV', '', [optionA, optionB], { __match: '[id*="innerListBox"]' })
+    const outer = node('DIV', '', [inner], { __match: '.jqx-dropdownlist-popup' })
+    const trigger = node('BUTTON', '选择省份', [])
+    trigger.__cursor = 'pointer'
+    const result = collect(trigger, [outer, inner])
+    const names = result.elements.map((item) => item.name)
+    // 历史事故：同一份省份被采集两遍，第二份还撞上限被腰斩，模型误以为是「两级级联」
+    expect(names.filter((name) => name === '吉林省').length).toBe(1)
+    expect(names.filter((name) => name === '贵州省').length).toBe(1)
+  })
+
+  test('Given 控件自身就命中浮层选择器（如 .bh-select-dropdown 触发器）When 采集 Then 它必须仍在主台账拿到 [BID]', () => {
+    // 历史事故：`jqx-dropdownlist-state-normal` 这类控件自身类名就含 "dropdown"，
+    // 旧判定让触发器自己成了「浮层根」，而浮层端只发后代不发根 → 触发器凭空消失。
+    // 实测后果：出校去向 / 请假类型 / 冲突课程集体失去 [BID]，台账从 50 项腰斩到 22 项。
+    const trigger = node('DIV', '请选择...', [], {
+      __match: '.bh-select-dropdown',
+      'data-caption': '出校去向',
+      role: 'button',
+    })
+    trigger.__cursor = 'pointer'
+    const result = collect(trigger)
+    expect(result.elements.length).toBe(1)
+    expect(result.elements[0]?.role).toBe('button')
+    expect(result.elements[0]?.name).toBe('出校去向')
+  })
+
+  test('Given 浮层内有叶子选项 When 采集 Then 追加为可点 [BID]，且既有元素编号不变', () => {
+    const trigger = node('BUTTON', '我要请假', [])
+    trigger.__cursor = 'pointer'
+    const optionA = node('DIV', '吉林省')
+    const optionB = node('DIV', '贵州省')
+    const popup = node('DIV', '', [optionA, optionB], { __match: '.jqx-listbox' })
+    popup.__cursor = 'auto'
+    const result = collect(trigger, popup)
+    const names = result.elements.map((item) => `${item.role}:${item.name}`)
+
+    // 既有元素编号完全不变（浮层选项一律追加在末尾，绝不插队）
+    expect(result.elements[0]?.name).toBe('我要请假')
+    expect(names).toContain('option:吉林省')
+    expect(names).toContain('option:贵州省')
+    expect(result.elements.findIndex((item) => item.role === 'option')).toBeGreaterThan(0)
+    // 聚合容器本身不应被投递成「名字=子孙拼接」的 BID
+    expect(names.some((entry) => entry.includes('吉林省 贵州省'))).toBe(false)
   })
 })
 
@@ -469,8 +864,25 @@ describe('匿名 <frameset> 三级鲁棒穿透', () => {
   })
 })
 
-describe('折叠 / 后台隐藏元素限量采集', () => {
-  test('display:none 的有名可交互链接被采集并标记 collapsed', () => {
+describe('未渲染元素不再分配 BID（渲染红线）', () => {
+  /** 构造单元素文档桩（隐藏元素的采集行为验证） */
+  function singleElementDoc(
+    el: Record<string, unknown>,
+    style: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      body: { querySelectorAll: () => [el] },
+      querySelectorAll: () => [],
+      title: 'render-gate',
+      defaultView: {
+        getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1', cursor: 'auto', ...style }),
+        innerWidth: 1200,
+        innerHeight: 800,
+      },
+    }
+  }
+
+  test('display:none 的有名可交互链接不被采集，仅计入未渲染汇总', () => {
     const hiddenEl = {
       nodeType: 1,
       tagName: 'A',
@@ -482,27 +894,41 @@ describe('折叠 / 后台隐藏元素限量采集', () => {
       parentElement: null,
       onclick: null,
     }
-    const doc = {
-      body: { querySelectorAll: () => [hiddenEl] },
-      querySelectorAll: () => [],
-      title: 'collapsed',
-      defaultView: {
-        getComputedStyle: () => ({ display: 'none', visibility: 'visible', opacity: '1', cursor: 'auto' }),
-        innerWidth: 1200,
-        innerHeight: 800,
-      },
-    }
+    const doc = singleElementDoc(hiddenEl, { display: 'none' })
     const script = buildYanhuCollectorScript()
     const runner = new Function('document', 'window', 'location', `return ${script}`)
     const result = runner(doc, doc.defaultView, { href: 'https://jw.cdut.edu.cn/x' })
 
-    expect(result.elements).toHaveLength(1)
-    expect(result.elements[0].collapsed).toBe(true)
-    expect(result.elements[0].name).toBe('教务管理系统')
-    expect(result.elements[0].visible).toBe(false)
+    expect(result.elements).toHaveLength(0)
+    expect(result.unrendered.count).toBe(1)
+    expect(Array.isArray(result.unrendered.regions)).toBe(true)
   })
 
-  test('无名称的隐藏元素不被采集', () => {
+  test('content-visibility:hidden 子树内的元素（无布局盒）不被采集', () => {
+    // 该元素自身计算样式完全正常、尺寸也非零，唯独 getClientRects() 为空——
+    // 这正是 content-visibility:hidden / 未挂载子树在浏览器中的真实表现。
+    const ghostEl = {
+      nodeType: 1,
+      tagName: 'A',
+      getAttribute: (n: string) => (n === 'href' ? '#' : ''),
+      getBoundingClientRect: () => ({ left: 10, top: 10, width: 80, height: 24 }),
+      getClientRects: () => [],
+      innerText: '未渲染的入口',
+      className: '',
+      id: '',
+      parentElement: null,
+      onclick: null,
+    }
+    const doc = singleElementDoc(ghostEl, {})
+    const script = buildYanhuCollectorScript()
+    const runner = new Function('document', 'window', 'location', `return ${script}`)
+    const result = runner(doc, doc.defaultView, { href: 'https://jw.cdut.edu.cn/x' })
+
+    expect(result.elements).toHaveLength(0)
+    expect(result.unrendered.count).toBe(1)
+  })
+
+  test('无名称的隐藏元素既不被采集，也不计入未渲染汇总（避免噪音计数）', () => {
     const hiddenEl = {
       nodeType: 1,
       tagName: 'A',
@@ -514,19 +940,145 @@ describe('折叠 / 后台隐藏元素限量采集', () => {
       parentElement: null,
       onclick: null,
     }
-    const doc = {
-      body: { querySelectorAll: () => [hiddenEl] },
-      querySelectorAll: () => [],
-      title: 'collapsed-unnamed',
-      defaultView: {
-        getComputedStyle: () => ({ display: 'none', visibility: 'visible', opacity: '1', cursor: 'auto' }),
-        innerWidth: 1200,
-        innerHeight: 800,
-      },
-    }
+    const doc = singleElementDoc(hiddenEl, { display: 'none' })
     const script = buildYanhuCollectorScript()
     const runner = new Function('document', 'window', 'location', `return ${script}`)
     const result = runner(doc, doc.defaultView, { href: 'https://jw.cdut.edu.cn/x' })
+
+    expect(result.elements).toHaveLength(0)
+    expect(result.unrendered.count).toBe(0)
+  })
+
+  test('真实渲染的可见元素仍被正常采集（红线不误杀）', () => {
+    const visibleEl = {
+      nodeType: 1,
+      tagName: 'A',
+      getAttribute: (n: string) => (n === 'href' ? '#' : ''),
+      getBoundingClientRect: () => ({ left: 10, top: 20, width: 90, height: 28 }),
+      getClientRects: () => [{ width: 90, height: 28 }],
+      innerText: '我要请假',
+      className: '',
+      id: '',
+      parentElement: null,
+      onclick: null,
+    }
+    const doc = singleElementDoc(visibleEl, {})
+    const script = buildYanhuCollectorScript()
+    const runner = new Function('document', 'window', 'location', `return ${script}`)
+    const result = runner(doc, doc.defaultView, { href: 'https://jw.cdut.edu.cn/x' })
+
+    expect(result.elements).toHaveLength(1)
+    expect(result.elements[0].name).toBe('我要请假')
+    expect(result.elements[0].collapsed).toBeUndefined()
+    expect(result.unrendered.count).toBe(0)
+  })
+
+  test('视觉隐藏的原生单选改绑到可见 <label> 上（因私请假 / 是否出校 能被 DOM 命中）', () => {
+    // 自定义单选：原生 input 被隐藏成 0×0，真正承载视觉与交互的是外层 <label>。
+    const labelNode: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: 'LABEL',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 480, top: 268, width: 120, height: 20 }),
+      innerText: '因私请假',
+      textContent: '因私请假',
+      className: '',
+      id: '',
+      parentElement: null,
+    }
+    const hiddenRadio: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: 'INPUT',
+      getAttribute: (n: string) => (n === 'type' ? 'radio' : ''),
+      getBoundingClientRect: () => ({ left: 484, top: 270, width: 0, height: 0 }),
+      getClientRects: () => [],
+      innerText: '',
+      textContent: '',
+      className: '',
+      id: '',
+      parentElement: labelNode,
+      onclick: null,
+      labels: undefined,
+    }
+    const doc = singleElementDoc(hiddenRadio, {})
+    const script = buildYanhuCollectorScript()
+    const runner = new Function('document', 'window', 'location', `return ${script}`)
+    const result = runner(doc, doc.defaultView, { href: 'https://xgfw.cdut.edu.cn/x' })
+
+    expect(result.elements).toHaveLength(1)
+    expect(result.elements[0].role).toBe('radio')
+    expect(result.elements[0].name).toBe('因私请假')
+    expect(result.elements[0].tag).toBe('label')
+    // 几何取「可见代理」，因此点击目标是一个真实渲染在屏幕上的 120×20 盒子
+    expect(result.elements[0].bounds).toEqual({ x: 480, y: 268, width: 120, height: 20 })
+    expect(result.elements[0].visible).toBe(true)
+  })
+
+  test('祖先只有面板级大容器时不做代理重绑定（宁可不采，也不把 BID 绑到容器上）', () => {
+    const bigWrapper: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: 'DIV',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 1200, height: 600 }),
+      innerText: '请假信息',
+      textContent: '请假信息',
+      className: '',
+      id: '',
+      parentElement: null,
+    }
+    const hiddenRadio: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: 'INPUT',
+      getAttribute: (n: string) => (n === 'type' ? 'radio' : ''),
+      getBoundingClientRect: () => ({ left: 10, top: 10, width: 0, height: 0 }),
+      getClientRects: () => [],
+      innerText: '',
+      textContent: '',
+      className: '',
+      id: '',
+      parentElement: bigWrapper,
+      onclick: null,
+      labels: undefined,
+    }
+    const doc = singleElementDoc(hiddenRadio, {})
+    const script = buildYanhuCollectorScript()
+    const runner = new Function('document', 'window', 'location', `return ${script}`)
+    const result = runner(doc, doc.defaultView, { href: 'https://xgfw.cdut.edu.cn/x' })
+
+    expect(result.elements).toHaveLength(0)
+    expect(result.unrendered.count).toBe(1)
+  })
+
+  test('原生 type=hidden 的控件不参与代理重绑定（避免 CSRF 隐藏域等噪音）', () => {
+    const labelNode: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: 'LABEL',
+      getAttribute: () => '',
+      getBoundingClientRect: () => ({ left: 480, top: 268, width: 120, height: 20 }),
+      innerText: '隐藏域',
+      textContent: '隐藏域',
+      className: '',
+      id: '',
+      parentElement: null,
+    }
+    const hiddenField: Record<string, unknown> = {
+      nodeType: 1,
+      tagName: 'INPUT',
+      getAttribute: (n: string) => (n === 'type' ? 'hidden' : ''),
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
+      getClientRects: () => [],
+      innerText: '',
+      textContent: '',
+      className: '',
+      id: '',
+      parentElement: labelNode,
+      onclick: null,
+      labels: undefined,
+    }
+    const doc = singleElementDoc(hiddenField, {})
+    const script = buildYanhuCollectorScript()
+    const runner = new Function('document', 'window', 'location', `return ${script}`)
+    const result = runner(doc, doc.defaultView, { href: 'https://xgfw.cdut.edu.cn/x' })
 
     expect(result.elements).toHaveLength(0)
   })

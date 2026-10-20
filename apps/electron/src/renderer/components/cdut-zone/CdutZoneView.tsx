@@ -520,7 +520,7 @@ export function CdutZoneView(): React.ReactElement {
                   </div>
                 ) : null}
 
-                <div className="relative rounded-2xl border border-border/80 bg-card p-7 shadow-xl shadow-primary/5">
+                <div data-tour="cdut-login-card" className="relative rounded-2xl border border-border/80 bg-card p-7 shadow-xl shadow-primary/5">
                   <div className="mb-6 space-y-1">
                     <h3 className="text-lg font-semibold text-foreground">连接内网统一身份认证</h3>
                     <p className="text-xs text-muted-foreground">
@@ -542,6 +542,7 @@ export function CdutZoneView(): React.ReactElement {
                         <User className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
                         <Input
                           type="text"
+                          data-tour="cdut-login-username"
                           placeholder="请输入学工号 / 账号"
                           className="h-9 pl-9 text-xs"
                           value={username}
@@ -557,6 +558,7 @@ export function CdutZoneView(): React.ReactElement {
                         <Lock className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
                         <Input
                           type={showPassword ? 'text' : 'password'}
+                          data-tour="cdut-login-password"
                           placeholder="请输入登录密码"
                           className="h-9 pl-9 pr-9 text-xs"
                           value={password}

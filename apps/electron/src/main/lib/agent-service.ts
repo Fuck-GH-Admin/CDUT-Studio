@@ -612,9 +612,9 @@ export function endAgentSessionDeletion(sessionId: string): void {
  */
 export async function rewindAgentSession(
   sessionId: string,
-  assistantMessageUuid: string,
+  targetMessageUuid: string,
 ): Promise<import('@profer/shared').RewindSessionResult> {
-  return orchestrator.rewindSession(sessionId, assistantMessageUuid)
+  return orchestrator.rewindSession(sessionId, targetMessageUuid)
 }
 
 /**

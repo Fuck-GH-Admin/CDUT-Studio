@@ -1,26 +1,34 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(scriptDir, '..')
+// 通过 Node 标准解析定位 @silurus/ooxml 的 dist 目录，
+// 兼容 bun hoisted 布局在根 node_modules 与嵌套 node_modules 两种形态。
+const require = createRequire(path.join(appRoot, 'package.json'))
+const sourceDir = path.dirname(require.resolve('@silurus/ooxml'))
 const publicDir = path.join(appRoot, 'src', 'renderer', 'public', 'vendor', 'ooxml')
 
-// Bun workspace 会把依赖装到 monorepo 顶层 node_modules，不能只查 apps/electron/node_modules。
-const checked = []
-let from = appRoot
-let sourceDir
-for (;;) {
-  const dist = path.join(from, 'node_modules', '@silurus', 'ooxml', 'dist')
-  checked.push(dist)
-  if (fs.existsSync(dist)) { sourceDir = dist; break }
-  const parent = path.dirname(from)
-  if (parent === from) break
-  from = parent
-}
-if (!sourceDir) {
-  throw new Error(`@silurus/ooxml dist directory does not exist; tried:\\n${checked.join('\\n')}`)
+// 解析失败时回退到逐级向上查找（Bun workspace 会把依赖 hoist 到 monorepo 顶层）。
+if (!fs.existsSync(sourceDir)) {
+  const checked = []
+  let from = appRoot
+  let found
+  for (;;) {
+    const dist = path.join(from, 'node_modules', '@silurus', 'ooxml', 'dist')
+    checked.push(dist)
+    if (fs.existsSync(dist)) { found = dist; break }
+    const parent = path.dirname(from)
+    if (parent === from) break
+    from = parent
+  }
+  if (!found) {
+    throw new Error(`@silurus/ooxml dist 目录不存在；已尝试：\\n${checked.join('\\n')}`)
+  }
+  sourceDir = found
 }
 
 fs.rmSync(publicDir, { recursive: true, force: true })

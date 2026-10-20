@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, SDKBackgroundTaskSummary, UnstagedChangesResult, AgentImageGenerationCard } from '@profer/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, SDKBackgroundTaskSummary, UnstagedChangesResult, AgentImageGenerationCard, AgentContextMode } from '@profer/shared'
 import { PROFER_DEFAULT_PERMISSION_MODE } from '@profer/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
@@ -280,6 +280,20 @@ export const liveMessagesAtomFamily = atomFamily((sessionId: string) =>
 )
 
 export const agentPendingPromptAtom = atom<AgentPendingPrompt | null>(null)
+
+/**
+ * 外部一次性注入输入框文本的请求（新手引导/演示用）。
+ * 由 CoachTour 等外部组件写入，当前会话的 AgentView 消费后立即置空——
+ * 复用 setInputContent 写草稿，确保「有内容」标记同步刷新，发送按钮即时可用。
+ * nonce 保证重复注入同一段文本也能各触发一次。
+ */
+export interface AgentComposerInjection {
+  sessionId: string
+  text: string
+  nonce: number
+}
+
+export const agentComposerInjectionAtom = atom<AgentComposerInjection | null>(null)
 
 /**
  * Agent 待发送文件列表 Map — 以 sessionId 为 key
@@ -1233,5 +1247,21 @@ export const sessionMemoryDisabledMapAtom = atom<Record<string, boolean>>({})
 /** 派生指定会话的上下文记忆开关状态（未设置时默认开启，即 false）。 */
 export const sessionMemoryDisabledAtom = atomFamily((sessionId: string) =>
   atom((get) => get(sessionMemoryDisabledMapAtom)[sessionId] ?? false),
+)
+
+// ===== 会话级上下文模式（经典 / 索引） =====
+
+/**
+ * 按 sessionId 记录上下文模式，默认 classic。
+ * 使用 atomWithStorage 持久化，避免重启后用户选择丢失；会话之间互不影响。
+ */
+export const sessionContextModeMapAtom = atomWithStorage<Record<string, AgentContextMode>>(
+  'cdut-agent-context-mode',
+  {},
+)
+
+/** 派生指定会话的上下文模式（未设置时默认 classic）。 */
+export const sessionContextModeAtom = atomFamily((sessionId: string) =>
+  atom((get) => get(sessionContextModeMapAtom)[sessionId] ?? 'classic'),
 )
 

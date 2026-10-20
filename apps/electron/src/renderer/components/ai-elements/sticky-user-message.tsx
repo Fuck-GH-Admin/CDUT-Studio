@@ -19,7 +19,6 @@ import { userProfileAtom } from '@/atoms/user-profile'
 import { stickyUserMessageEnabledAtom } from '@/atoms/ui-preferences'
 import { MessageResponse, remarkMentions } from './message'
 import type { RemarkPluginFn } from './message'
-import { cn } from '@/lib/utils'
 
 /** 悬浮条专用 remark 插件（仅 mention，不保留换行） */
 const STICKY_REMARK_PLUGINS: RemarkPluginFn[] = [remarkMentions]
@@ -44,7 +43,7 @@ interface StickyUserMessageProps {
   userMessages: UserMessageData[]
 }
 
-export function StickyUserMessage({ userMessages }: StickyUserMessageProps): React.ReactElement {
+export function StickyUserMessage({ userMessages }: StickyUserMessageProps): React.ReactElement | null {
   const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
   const userProfile = useAtomValue(userProfileAtom)
   const stickyEnabled = useAtomValue(stickyUserMessageEnabledAtom)
@@ -135,18 +134,13 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
   const isSticky = stickyMessage !== null
   const hasContent = stickyMessage && (stickyMessage.text || stickyMessage.attachments.length > 0)
 
-  if (!stickyEnabled) return <></>
-  if (!hasContent && !isSticky) return <></>
+  // 未置顶吸附时彻底从 DOM 树卸载：严禁保留 opacity-0 幽灵节点，
+  // 否则其文本会被纳入用户原生选区，Ctrl+C 复制出与视觉不符的内容
+  if (!stickyEnabled) return null
+  if (!hasContent || !isSticky) return null
 
   return (
-    <div
-      className={cn(
-        'absolute left-0 right-0 top-0 z-20 transition-all duration-150 ease-out',
-        isSticky
-          ? 'opacity-100 translate-y-0 pointer-events-auto'
-          : 'opacity-0 -translate-y-2 pointer-events-none'
-      )}
-    >
+    <div className="pointer-events-auto absolute left-0 right-0 top-0 z-20 translate-y-0 opacity-100 select-none">
       {/* 复用 ConversationContent(px-8) + Message(px-2.5) 的 padding 链，保证与内容区等宽 */}
       <div className="mx-8 px-2.5 pt-2">
         <div

@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, normalize, resolve, parse } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync } from 'node:fs'
 import type {
   AgentSendInput,
   AgentMessage,
@@ -52,6 +52,7 @@ import {
   createEffectiveAgentPresetPolicy,
   withLoadedMcpServerNames,
   isEffectiveAgentPresetMcpServerAllowed,
+  isCsLabExecutionTool,
 } from '@profer/shared'
 import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest, EffectiveAgentPresetPolicy } from '@profer/shared'
 import { buildStudyOutlineForPrompt, describeCognitionForPrompt, readStudentCognition } from './study/study-document-indexer'
@@ -167,6 +168,7 @@ import {
 import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
 import { buildAttachedDocumentsContext } from './document-parse-tools'
 import { buildDocumentEvidenceForMessage } from './rag/workspace-rag-service'
+import { buildIndexedContextPrompt } from './context-rag/conversation-retrieval'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getOrCreateShellSnapshot } from './shell-snapshot'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
@@ -194,6 +196,11 @@ import { EMPTY_OUTPUT_ERROR_MESSAGE, hasTerminalErrorWithContent, stripErrorFrom
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { buildPiAdditionalDirectoriesPrompt } from './pi-additional-directories-prompt'
 import { detectAttachedDirectoryProjects } from './attached-directory-project-detector'
+import {
+  decideCsLabToolGate,
+  isCsLabToolTrusted,
+  resolveRootSessionId,
+} from './cslab/cslab-tool-trust'
 
 // ===== 类型定义 =====
 
@@ -903,6 +910,8 @@ export class AgentOrchestrator {
     // Pi/Claude 的错误结构和可恢复语义不同；Router 必须按本次请求 runtime 提供 helper。
     const errorHelpers = this.adapter.getErrorHelpers?.(agentRuntime) ?? this.adapter.errorHelpers
     const stderrChunks: string[] = []
+    // 索引模式每轮新建临时 Pi session；回合结束后统一删除，防止 sdk sessions 目录无限膨胀。
+    const ephemeralPiSessionFiles = new Set<string>()
 
     // 0. 并发保护
     // 在任意 await 前原子占用会话，商业渠道认证刷新也不得留下并发窗口。
@@ -1187,6 +1196,16 @@ export class AgentOrchestrator {
     // Goal 只使用自己的 runtime session；普通会话的 SDK session 不得作为 resume 来源。
     let existingSdkSessionId = input.isolatedRuntimeSession ? input.runtimeSessionId : sessionMeta?.sdkSessionId
 
+    // 上下文模式优先级：单轮聚焦 > 全局索引开关 > 会话选择 > 经典。
+    // 索引模式必须禁用 Pi resume，否则 Pi 内核仍会把完整 transcript 带给模型。
+    const globalContextIndexEnabled = getSettings().agentContextIndexGlobal === true
+    const requestedContextMode = input.contextMode ?? 'classic'
+    const indexMode =
+      input.disableContextMemory !== true
+      && !input.isolatedRuntimeSession
+      && (globalContextIndexEnabled || requestedContextMode === 'index')
+    const lastContextMode = sessionMeta?.lastContextMode
+
     // 单轮聚焦（关闭上下文记忆）：捕获本轮之前已保存的 SDK session id。
     // 该 id 必须保留，待用户重新开启记忆后仍可续接原多轮链；本轮新 SDK 会话不入库。
     const memoryOffPreserveSdkSessionId =
@@ -1194,8 +1213,32 @@ export class AgentOrchestrator {
         ? sessionMeta?.sdkSessionId
         : undefined
 
-    // 当开启单轮聚焦（关闭上下文记忆）时，不加载前序 SDK 会话历史，强制开启干净单轮
-    if (input.disableContextMemory === true) {
+    if (indexMode) {
+      console.log(`[上下文索引] 会话 ${sessionId} 启用索引模式，跳过 Pi transcript resume`)
+      existingSdkSessionId = undefined
+      if (lastContextMode !== 'index') {
+        try {
+          updateAgentSessionMeta(sessionId, { lastContextMode: 'index' })
+        } catch (error) {
+          console.warn(`[上下文索引] 记录模式失败 (${sessionId}):`, error)
+        }
+      }
+    } else if (lastContextMode === 'index' && input.disableContextMemory !== true) {
+      // index → classic：旧 Pi transcript 不包含索引模式轮次，恢复它会造成上下文缺口。
+      // 清空 canonical 链，让本轮走最近轮次回填并重新建立经典 transcript。
+      console.log('[上下文索引] 检测到 索引→经典，重置经典会话链，下一轮使用最近轮次回填')
+      existingSdkSessionId = undefined
+      try {
+        updateAgentSessionMeta(sessionId, {
+          sdkSessionId: undefined,
+          piSessionFile: undefined,
+          piEntryBindings: {},
+          lastContextMode: 'classic',
+        })
+      } catch (error) {
+        console.warn(`[上下文索引] 重置经典会话链失败 (${sessionId}):`, error)
+      }
+    } else if (input.disableContextMemory === true) {
       console.log(`[Agent 编排] 会话 ${sessionId} 启用了单轮聚焦模式，跳过恢复 SDK 历史: ${existingSdkSessionId}`)
       existingSdkSessionId = undefined
     }
@@ -1207,6 +1250,11 @@ export class AgentOrchestrator {
       // 消费一次后清除
       updateAgentSessionMeta(sessionId, { resumeAtMessageUuid: undefined })
       console.log(`[Agent 编排] 检测到回退 resume: resumeSessionAt=${rewindResumeAt}`)
+    }
+    if (rewindResumeAt && indexMode) {
+      // 索引模式没有可裁剪的 Pi transcript；文件检查点回退仍可单独使用。
+      rewindResumeAt = undefined
+      console.log('[上下文索引] 索引模式不支持 transcript 回退，已忽略 resumeAtMessageUuid')
     }
 
     console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, proma sessionId=${sessionId}`)
@@ -1249,7 +1297,8 @@ export class AgentOrchestrator {
           console.log(`[Agent 编排] 无 sdkSessionId，将作为新会话启动（回填历史上下文）`)
         }
       } else {
-        agentCwd = homedir()
+        // 安全红线：默认工作区初始化失败时必须中止，严禁回退到用户主目录或进程目录
+        throw new Error('[Agent 编排] 无法初始化默认工作区，已拒绝回退到用户主目录')
       }
 
       const effectiveWorkspaceId = targetWorkspaceId ?? workspace?.id
@@ -1429,20 +1478,38 @@ export class AgentOrchestrator {
         }
       }
 
-      // Context Sandwich 动态后缀：动态环境块追加在当轮最新用户消息末尾，绝不污染历史前缀。
-      let contextualMessage = `${enrichedMessage}
+      // Context Sandwich 动态环境与用户请求封包：
+      // 动态环境块（时间戳、当前工作区、MCP、浏览器视口）通过 <ADDITIONAL_METADATA> 封装；
+      // 用户问题通过 <USER_REQUEST> 封包，契合 Antigravity 架构规范并确保回退时精准无损解包。
+      const nowIso = new Date().toISOString()
+      const metadataItems = [
+        `The current time is ${nowIso}.`,
+        dynamicCtx?.trim(),
+      ].filter(Boolean)
+      const metadataBlock = metadataItems.length > 0
+        ? `<ADDITIONAL_METADATA>\n${metadataItems.join('\n\n')}\n</ADDITIONAL_METADATA>`
+        : ''
 
-${dynamicCtx}`
+      let contextualMessage = metadataBlock
+        ? `${metadataBlock}\n\n<USER_REQUEST>\n${enrichedMessage}\n</USER_REQUEST>`
+        : `<USER_REQUEST>\n${enrichedMessage}\n</USER_REQUEST>`
 
       const isCompactCommand = runtimeUserMessage.trim() === '/compact'
       const isSingleTurnFocus = input.disableContextMemory === true
       let finalPrompt = isCompactCommand
         ? '/compact'
-        : existingSdkSessionId
-          ? contextualMessage
-          : goalIsolated || isSingleTurnFocus
+        : indexMode
+          ? buildIndexedContextPrompt({
+              sessionId,
+              currentMessage: contextualMessage,
+              query: runtimeUserMessage,
+              agentCwd,
+            })
+          : existingSdkSessionId
             ? contextualMessage
-            : buildContextPrompt(sessionId, contextualMessage, { agentCwd }, runtimeUserMessage)
+            : goalIsolated || isSingleTurnFocus
+              ? contextualMessage
+              : buildContextPrompt(sessionId, contextualMessage, { agentCwd }, runtimeUserMessage)
 
       if (existingSdkSessionId) {
         console.log(`[Agent 编排] 使用 resume 模式，SDK session ID: ${existingSdkSessionId}`)
@@ -1526,6 +1593,8 @@ ${dynamicCtx}`
                 this.eventBus.emit(sessionId, { kind: 'profer_event', event: previewEvent })
               }),
               permissionMode: initialPermissionMode,
+              // 执行期动态读取，供 CSLab 工具审计记录真实模式。
+              getPermissionMode: () => this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode,
               triggeredBy: input.triggeredBy,
               goalIteration: input.goalIteration,
               reportGoalResult: input.reportGoalResult,
@@ -1673,6 +1742,8 @@ ${dynamicCtx}`
       }
 
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
+      // canUseTool 的 input 是工具参数，需提前捕获本次运行来源。
+      const isAutomationRun = input.triggeredBy === 'automation'
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
         const currentMode = getPermissionMode()
 
@@ -1762,6 +1833,32 @@ ${dynamicCtx}`
           return decision.behavior === 'allow'
             ? { behavior: 'allow' as const, updatedInput: input }
             : { behavior: 'deny' as const, message: decision.message ?? '计划模式下不允许进行网页交互。' }
+        }
+
+        // ── CSLab 自定义 Python 工具：双轨审批门禁 ──
+        // plan 继续走下面的计划模式分支；其余模式按「显式内存信任 / 无交互通道 / 单次审批」判定。
+        // bypassPermissions 在未获得显式信任时不再直接放行，避免默认 bypass 变成无感提权。
+        if (isCsLabExecutionTool(toolName) && currentMode !== 'plan') {
+          const labId = sessionMeta?.cslabLabId
+          const rootSessionId = resolveRootSessionId(sessionId)
+          const trusted = Boolean(labId) && isCsLabToolTrusted(rootSessionId, labId)
+          const nonInteractive =
+            Boolean(options.agentID) ||
+            Boolean(sessionMeta?.parentSessionId) ||
+            isAutomationRun
+          const decision = decideCsLabToolGate({ mode: currentMode, trusted, nonInteractive })
+          if (decision === 'allow') {
+            return { behavior: 'allow' as const, updatedInput: input }
+          }
+          if (decision === 'deny') {
+            return {
+              behavior: 'deny' as const,
+              message: 'Custom Python tool execution is disabled in non-interactive subagent channels.',
+              interrupt: true,
+            }
+          }
+          // prompt：绕过 bypass 的自动 allow，复用统一单次审批通道。
+          return autoCanUseTool(toolName, input, options)
         }
 
         // ── 普通工具的权限分派 ──
@@ -1902,6 +1999,8 @@ ${dynamicCtx}`
         // 速课堂专用：真实注入资料大纲向导与学生认知档案（仅速课堂会话）
         studyOutline: isStudyClass ? buildStudyOutlineForPrompt(sessionId) : undefined,
         studyCognition: isStudyClass ? describeCognitionForPrompt(readStudentCognition(sessionId)) : undefined,
+        // 索引模式使用 <conversation_memory> 替代 transcript 路径
+        contextMode: indexMode ? 'index' : 'classic',
         })
       // Pi 没有 Claude preset；普通任务只携带核心规则，低频 SOP 按任务与实际工具恢复。
       // 必须先压缩纯基础 Prompt，再追加附加目录和 preset 自定义段，避免标题截取误删后置上下文。
@@ -1928,8 +2027,9 @@ ${dynamicCtx}`
         const norm = normalize(resolve(dir))
         return norm === normalize(resolve(homedir())) || norm === normalize(resolve(parse(norm).root))
       }
-      if (agentRuntime === 'pi' && !isCriticalHostDirectory(agentCwd)) {
+      if (agentRuntime === 'pi' && !indexMode && !isCriticalHostDirectory(agentCwd)) {
         // 文件回退是增强能力，绝不能因为权限、磁盘或第三方锁导致本轮模型请求失败。
+        // 索引模式每轮都是临时 Pi session，无法建立稳定的 entry 绑定，因此跳过检查点。
         try {
           piCheckpointRoot = getPiCheckpointsDir()
           piTurnCheckpoint = createPiFileCheckpoint(sessionId, agentCwd!, piCheckpointRoot)
@@ -2007,6 +2107,8 @@ ${dynamicCtx}`
         // Pi 使用 permissionMode/canUseTool；不再传 Claude SDK 专属权限字段。
         canUseTool,
         systemPrompt: piSystemPrompt,
+        // 供 Pi 适配器安装索引模式历史检索护栏
+        contextMode: indexMode ? 'index' : 'classic',
         resumeSessionId: existingSdkSessionId,
         onRuntimeMessage: input.onRuntimeMessage,
         ...(input.isolatedRuntimeSession && {
@@ -2022,8 +2124,8 @@ ${dynamicCtx}`
         ...(allAdditionalDirectories.length > 0 && {
           additionalDirectories: allAdditionalDirectories,
         }),
-        // 启用文件检查点，支持 rewindFiles 回退
-        enableFileCheckpointing: true,
+        // 启用文件检查点，支持 rewindFiles 回退；索引模式没有稳定 Pi entry 绑定，跳过
+        enableFileCheckpointing: !indexMode,
         // SDK 0.2.52+ 新增选项（从 settings 读取）
         ...(appSettings.agentThinking && {
           thinking: appSettings.agentThinking,
@@ -2050,13 +2152,20 @@ ${dynamicCtx}`
           // 视为替换，此时旧 entry bindings 属于另一棵 Pi tree，必须原子替换而非合并。
           const artifactReplaced = !!piSessionFile && latestSessionMeta?.piSessionFile !== piSessionFile
           capturedSdkSessionId = sdkSessionId
+          if (indexMode && piSessionFile) {
+            ephemeralPiSessionFiles.add(piSessionFile)
+          }
           if (input.isolatedRuntimeSession && isNewSessionId) {
             input.onRuntimeSessionId?.(sdkSessionId, piSessionFile)
           }
           if (!input.isolatedRuntimeSession && (isNewSessionId || artifactReplaced)) {
-            if (memoryOffPreserveSdkSessionId) {
-              // 单轮聚焦：保留原 sdkSessionId，本轮新 SDK 会话不覆盖，避免破坏多轮链
-              console.log(`[Agent 编排] 单轮聚焦模式：保留原 sdkSessionId=${memoryOffPreserveSdkSessionId}，本轮新会话 ${sdkSessionId} 不入库`)
+            if (memoryOffPreserveSdkSessionId || indexMode) {
+              // 单轮聚焦 / 索引模式：保留原 sdkSessionId，本轮临时会话不覆盖，避免破坏经典链
+              console.log(
+                indexMode
+                  ? `[上下文索引] 索引模式：本轮临时 Pi 会话 ${sdkSessionId} 不入库`
+                  : `[Agent 编排] 单轮聚焦模式：保留原 sdkSessionId=${memoryOffPreserveSdkSessionId}，本轮新会话 ${sdkSessionId} 不入库`,
+              )
             } else {
               try {
                 updateAgentSessionMeta(sessionId, {
@@ -2100,6 +2209,8 @@ ${dynamicCtx}`
         },
         // Pi 会话分叉/回退依赖 assistant UUID → Pi entry ID 映射；每轮落盘后合并增量映射。
         onPiEntryBindings: (bindings: Record<string, string>) => {
+          // 索引模式的临时 session 回合结束即删除，写入 entry 绑定只会留下失效引用。
+          if (indexMode) return
           const latest = getAgentSessionMeta(sessionId)
           const checkpoints = { ...(latest?.piFileCheckpoints ?? {}) }
           if (piTurnCheckpoint) {
@@ -3297,6 +3408,21 @@ ${dynamicCtx}`
       runEndedWithError = true
       throw error
     } finally {
+      // 索引模式的临时 Pi session 仅服务当前回合，结束后立即清理。
+      if (ephemeralPiSessionFiles.size > 0) {
+        const piSessionDirFragment = join('sessions', 'pi')
+        for (const file of ephemeralPiSessionFiles) {
+          try {
+            // 只删除 sdk sessions/pi 目录下的文件，绝不误删 canonical 会话或用户数据。
+            if (file.includes(piSessionDirFragment) && file.endsWith('.jsonl')) {
+              rmSync(file, { force: true })
+            }
+          } catch (error) {
+            console.warn(`[上下文索引] 清理临时 Pi 会话失败 (${file}):`, error)
+          }
+        }
+        ephemeralPiSessionFiles.clear()
+      }
       // 凭证仅存在于 queryOptions.env；这里只清理本轮运行态。
       if (piHarnessScope && !harnessStopped) {
         try {
@@ -3524,7 +3650,7 @@ ${dynamicCtx}`
    * 文件恢复通过解析 SDK JSONL 中的快照完成，无需运行中的 Query。
    * 文件恢复失败时仍然截断对话（优雅降级）。
    */
-  async rewindSession(sessionId: string, assistantMessageUuid: string): Promise<RewindSessionResult> {
+  async rewindSession(sessionId: string, targetMessageUuid: string): Promise<RewindSessionResult> {
     // 0. 阻止运行中会话回退（JSONL 并发写入会损坏文件）
     if (this.activeSessions.has(sessionId)) {
       throw new Error('会话正在运行中，请停止后再回退')
@@ -3538,7 +3664,7 @@ ${dynamicCtx}`
     // Pi 使用自己的 session artifact + entry binding，不依赖 Claude SDK session ID。
     // 旧会话若尚未生成映射，会在 rewindPiSession 内返回可操作的恢复提示。
     if (isPiSession) {
-      return rewindPiSession(sessionId, assistantMessageUuid, sessionMeta)
+      return rewindPiSession(sessionId, targetMessageUuid, sessionMeta)
     }
     if (!sessionMeta.sdkSessionId) {
       throw new Error('Claude 会话没有 SDK session ID，无法回退；请先继续一次对话生成可恢复的 SDK 会话')
@@ -3553,6 +3679,7 @@ ${dynamicCtx}`
         projectDir = getAgentSessionWorkspacePath(ws.slug, sessionMeta.id)
       }
     }
+    const assistantMessageUuid = targetMessageUuid
     const userMessageUuid = resolveUserUuidFromSDK(sessionMeta.sdkSessionId, assistantMessageUuid, projectDir, sessionMeta.forkSourceSdkSessionId)
     console.log(
       `[Agent 编排] 回退: 解析 user uuid=${userMessageUuid || '未找到'} (assistant uuid=${assistantMessageUuid}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'})`,
@@ -3574,26 +3701,29 @@ ${dynamicCtx}`
       fileRewindResult = { canRewind: true, filesChanged: [] }
     } else if (userMessageUuid) {
       try {
-        // 确定 cwd（文件的基准路径）
-        let cwd = homedir()
-        if (projectDir) cwd = projectDir
-        // 收集附加目录（必须与 sendMessage 中传给 SDK 的 additionalDirectories 一致，
-        // 否则会话级 attachedDirectories 内的文件会因路径越界检查被静默跳过）
-        const rewindAttachedDirs = collectAttachedDirectories({
-          sessionMeta,
-          workspaceSlug,
-        })
-        console.log(
-          `[Agent 编排] 回退: 直接从 snapshot 恢复文件 (cwd=${cwd}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'}, attachedDirs=${rewindAttachedDirs.length})`,
-        )
-        fileRewindResult = rewindFilesFromSnapshot(
-          sessionMeta.sdkSessionId,
-          userMessageUuid,
-          cwd,
-          projectDir,
-          sessionMeta.forkSourceSdkSessionId,
-          rewindAttachedDirs,
-        )
+        // 安全红线：没有会话工作区时拒绝文件回退，严禁使用用户主目录
+        if (!projectDir) {
+          fileRewindResult = { canRewind: false, error: '该会话没有工作区，已拒绝文件回退' }
+        } else {
+          const cwd = projectDir
+          // 收集附加目录（必须与 sendMessage 中传给 SDK 的 additionalDirectories 一致，
+          // 否则会话级 attachedDirectories 内的文件会因路径越界检查被静默跳过）
+          const rewindAttachedDirs = collectAttachedDirectories({
+            sessionMeta,
+            workspaceSlug,
+          })
+          console.log(
+            `[Agent 编排] 回退: 直接从 snapshot 恢复文件 (cwd=${cwd}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'}, attachedDirs=${rewindAttachedDirs.length})`,
+          )
+          fileRewindResult = rewindFilesFromSnapshot(
+            sessionMeta.sdkSessionId,
+            userMessageUuid,
+            cwd,
+            projectDir,
+            sessionMeta.forkSourceSdkSessionId,
+            rewindAttachedDirs,
+          )
+        }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         console.warn('[Agent 编排] 文件恢复失败，继续截断对话:', errMsg)
@@ -3693,9 +3823,7 @@ ${dynamicCtx}`
     }
     const activePolicy = this.activePresetPolicies.get(sessionId)
     const userBrowserContext = browserController.getUserContext(sessionId)
-    let enrichedText = userBrowserContext
-      ? `${text}\n\n${buildDynamicContext({ userBrowserContext, mcpServerNames: activePolicy?.loadedMcpServerNames ? [...activePolicy.loadedMcpServerNames] : undefined, disabledToolGroups: activePolicy ? [...activePolicy.disabledToolGroups] : undefined, disabledTools: activePolicy?.disabledTools })}`
-      : text
+    let enrichedText = text
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
     if (referencedSessionsBlock) {
       enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
@@ -3714,10 +3842,31 @@ ${dynamicCtx}`
       enrichedText = `<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
     }
 
+    const nowIso = new Date().toISOString()
+    const queueDynamicCtx = userBrowserContext
+      ? buildDynamicContext({
+          userBrowserContext,
+          mcpServerNames: activePolicy?.loadedMcpServerNames ? [...activePolicy.loadedMcpServerNames] : undefined,
+          disabledToolGroups: activePolicy ? [...activePolicy.disabledToolGroups] : undefined,
+          disabledTools: activePolicy?.disabledTools,
+        })
+      : ''
+    const queueMetadataItems = [
+      `The current time is ${nowIso}.`,
+      queueDynamicCtx?.trim(),
+    ].filter(Boolean)
+    const queueMetadataBlock = queueMetadataItems.length > 0
+      ? `<ADDITIONAL_METADATA>\n${queueMetadataItems.join('\n\n')}\n</ADDITIONAL_METADATA>`
+      : ''
+
+    const packagedText = queueMetadataBlock
+      ? `${queueMetadataBlock}\n\n<USER_REQUEST>\n${enrichedText}\n</USER_REQUEST>`
+      : `<USER_REQUEST>\n${enrichedText}\n</USER_REQUEST>`
+
     // 构造 SDKUserMessage 并注入（'next' 优先级 = 等当前 turn 完成再处理）
     const sdkMessage = {
       type: 'user' as const,
-      message: { role: 'user' as const, content: enrichedText },
+      message: { role: 'user' as const, content: packagedText },
       parent_tool_use_id: null,
       priority: 'next' as const,
       uuid,

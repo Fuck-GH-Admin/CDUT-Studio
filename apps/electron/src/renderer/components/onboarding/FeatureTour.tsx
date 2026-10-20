@@ -26,12 +26,12 @@ const TOUR_INTERVAL_MS = 4000
 const TOUR_TRANSITION_MS = 600
 
 const FEATURE_TOUR_SLIDES: FeatureSlide[] = [
-  { title: 'Agent 对话', summary: '问问题，也能完成任务。', example: '把这段话改成正式邮件' },
-  { title: 'Agent', summary: '把事情交给它。', example: '分析 @销售.xlsx，给我一份报告' },
-  { title: '工作区', summary: '让文件成为上下文。', example: '按模板重写 @报告.md' },
-  { title: 'Skills', summary: '把重复工作留下来。', example: '创建一个写周报的 Skill' },
-  { title: '自动化', summary: '让任务自己发生。', example: '每周一整理项目进展并提醒我' },
-  { title: '材料审核', summary: '把规则和材料放在一起核对。', example: '对照评分细则检查申报材料，并定位问题出处' },
+  { title: 'Pi 全能 Agent', summary: '问问题，也能完成任务。', example: '分析 @销售.xlsx，给我一份报告' },
+  { title: 'CDUT 校园特区', summary: '登录特区账户，直连校内事务。', example: '查我这周还剩哪些空教室' },
+  { title: '智联万站与内置浏览器', summary: '让 Agent 自己上网办事。', example: '在内置浏览器访问知网、B 站和抖音，告诉我各自的特色' },
+  { title: '材料审核专区', summary: '把规则和材料放在一起核对。', example: '对照评分细则检查申报材料，并定位问题出处' },
+  { title: '规划与自动化', summary: '让任务自己发生。', example: '每周一整理项目进展并提醒我' },
+  { title: '技能与工作区', summary: '沉淀重复工作，让文件成为上下文。', example: '创建一个写周报的 Skill' },
 ]
 
 interface FeatureTourProps {

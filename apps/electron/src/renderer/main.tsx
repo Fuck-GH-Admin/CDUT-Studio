@@ -809,6 +809,10 @@ function TabStatePersistenceInitializer(): null {
       const visibleWorkspaceIds = new Set(
         getVisibleAgentWorkspaces(agentWorkspaces).map((workspace) => workspace.id),
       )
+      // 融合上游修复：默认沙箱工作区对产品入口不可见（isAgentWorkspaceVisible 恒 false），
+      // 但其中承载的是「无工作区会话」这一最常用场景，刷新后仍必须能恢复对应 Tab。
+      const defaultWorkspaceId = agentWorkspaces.find((workspace) => workspace.slug === 'default')?.id
+      if (defaultWorkspaceId) visibleWorkspaceIds.add(defaultWorkspaceId)
       const validTabs = selectRestorableAgentTabs(tabState.tabs, agentSessions, visibleWorkspaceIds)
       if (validTabs.length === 0) {
         restoredRef.current = true

@@ -5,7 +5,9 @@
  */
 
 import * as React from 'react'
-import { PanelLeftOpen, Bot, Plus, Search, CalendarDays, Blocks } from 'lucide-react'
+import { PanelLeftOpen, Bot, Plus, Search, CalendarDays, Blocks, Atom } from 'lucide-react'
+import { useSetAtom } from 'jotai'
+import { activeViewAtom } from '@/atoms/active-view'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { CollapsedWorkspacePopover } from '@/components/agent/CollapsedWorkspacePopover'
@@ -31,6 +33,7 @@ export function SidebarRail({ s }: { s: SidebarModel }): React.ReactElement {
     userProfile,
     hasEnvironmentIssues,
   } = s
+  const setActiveView = useSetAtom(activeViewAtom)
 
   return (
     <div className="relative h-full flex flex-col items-center px-2">
@@ -172,6 +175,31 @@ export function SidebarRail({ s }: { s: SidebarModel }): React.ReactElement {
               <TooltipContent side="right">Agent 技能</TooltipContent>
             </Tooltip>
           )}
+
+          {/* CDUT Science 入口 */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="CDUT Science"
+                data-profer-navigation-item="cdut-science"
+                onClick={() => {
+                  if (activeView !== 'cdut-science') {
+                    setActiveView('cdut-science')
+                  }
+                }}
+                className={cn(
+                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
+                  activeView === 'cdut-science'
+                    ? 'border-primary/80 bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border/45 bg-foreground/[0.025] text-foreground/45 hover:border-border/70 hover:bg-foreground/[0.045] hover:text-primary',
+                )}
+              >
+                <Atom size={16} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">CDUT Science</TooltipContent>
+          </Tooltip>
         </div>
 
         <div className="my-3 h-px w-8 bg-border/70" />

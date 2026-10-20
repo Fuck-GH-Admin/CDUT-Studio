@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@profer/shared'
-import { groupIntoTurns, getGroupPreview, parseAttachedFiles, buildHistoricalTaskSubjects, type MessageGroup } from './SDKMessageRenderer'
+import { groupIntoTurns, getGroupPreview, parseAttachedFiles, buildHistoricalTaskSubjects, extractTurnUsage, type MessageGroup } from './SDKMessageRenderer'
 
 function userText(text: string): SDKMessage {
   return {
@@ -60,6 +60,49 @@ describe('system 消息渲染分组', () => {
       assistantText('验证通过'),
     ])
     expect(groups.map((group) => group.type)).toEqual(['user', 'assistant-turn', 'system', 'assistant-turn'])
+  })
+
+  test('压缩分界之后的 result 回填给压缩前的 turn，耗时与 token 用量不丢失', () => {
+    const result = {
+      type: 'result',
+      subtype: 'success',
+      usage: { input_tokens: 100, output_tokens: 42, cache_read_input_tokens: 10, cache_creation_input_tokens: 5 },
+      _durationMs: 1234,
+    } as unknown as SDKMessage
+    const groups = groupIntoTurns([
+      userText('继续'),
+      assistantText('完成'),
+      systemMessage('compacting'),
+      systemMessage('compact_boundary'),
+      result,
+    ])
+
+    expect(groups.map((group) => group.type)).toEqual(['user', 'assistant-turn', 'system', 'system'])
+    const turn = groups[1] as Extract<MessageGroup, { type: 'assistant-turn' }>
+    expect(turn.turnMessages).toContain(result)
+    const extracted = extractTurnUsage(turn.turnMessages)
+    expect(extracted.durationMs).toBe(1234)
+    expect(extracted.usage?.outputTokens).toBe(42)
+  })
+
+  test('手动 /compact 自身的 result 不会被回填到上一轮', () => {
+    const userMessage = userText('问题')
+    const answer = assistantText('回答')
+    const compactResult = {
+      type: 'result',
+      subtype: 'success',
+      usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    } as unknown as SDKMessage
+    const groups = groupIntoTurns([
+      userMessage,
+      answer,
+      userText('/compact'),
+      systemMessage('compact_boundary'),
+      compactResult,
+    ])
+
+    const turn = groups[1] as Extract<MessageGroup, { type: 'assistant-turn' }>
+    expect(turn.turnMessages).not.toContain(compactResult)
   })
 })
 
