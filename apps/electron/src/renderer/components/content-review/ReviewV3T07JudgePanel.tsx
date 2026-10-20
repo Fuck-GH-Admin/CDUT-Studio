@@ -236,6 +236,15 @@ function T07OrganizerDesk({ view, busy, onSubmit }: {
                   onClick={() => void onSubmit({ type: 'mark-missing', assignmentId: a.id, reason: reasons[a.id]! })}>标缺评</Button>
               </>
             )}
+            {!frozen && a.status === 'submitted' && (
+              <>
+                <input aria-label={'退回改分原因 ' + a.id} value={reasons[a.id] ?? ''}
+                  onChange={(e) => setReasons((v) => ({ ...v, [a.id]: e.target.value }))}
+                  placeholder="重评原因" className="h-8 min-w-32 flex-1 rounded-md border bg-background px-2" />
+                <Button type="button" size="sm" variant="outline" disabled={busy || !reasons[a.id]?.trim()}
+                  onClick={() => void onSubmit({ type: 'request-revision', assignmentId: a.id, reason: reasons[a.id]! })}>退回改分</Button>
+              </>
+            )}
           </div>
         ))}
       </div>
