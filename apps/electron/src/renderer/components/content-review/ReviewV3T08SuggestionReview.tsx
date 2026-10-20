@@ -101,12 +101,13 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
           }
         </label>
         <div className="rounded bg-background p-2">对比：{showT08FieldValue(target.before)} → <strong>{draft || '待填写'}</strong></div>
+        {target.field.kind !== 'text' && <p className="text-amber-700">可以审阅新值，但当前 Main 仅能安全保存文本字段。数字、日期等需要 L 线接入模板类型事务后才能应用；不会将类型错误写入案卷。</p>}
         <label className="flex items-start gap-2">
           <input type="checkbox" className="mt-1" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
           <span>我已核对原件和模板，确认仅修改选定字段；这不是自动采纳模型意见，也不是校方审批。修改后原 Run 保留、需重新检查。</span>
         </label>
         <button type="button" className="rounded bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50"
-          disabled={stale || busy || !draft.trim() || !confirmed} onClick={() => void apply()}>
+          disabled={stale || busy || !draft.trim() || !confirmed || target.field.kind !== 'text'} onClick={() => void apply()}>
           {busy ? '正在保存…' : '人工确认并保存至案卷'}
         </button>
       </div>}
