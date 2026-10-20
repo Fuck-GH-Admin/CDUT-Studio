@@ -29,7 +29,7 @@ function locationLabel(ref: SourceRef): string {
   const location = ref.location
   switch (location.kind) {
     case 'pdf-rect': return '第 ' + location.page + ' 页'
-    case 'paragraph': return '段落 ' + (location.index + 1)
+    case 'paragraph': return '段落索引 ' + location.index
     case 'sheet-cell': return location.sheet + '!' + location.column + location.row
     case 'text-range': return '字符 ' + location.start + '–' + location.end
     case 'file': return '文件级引用（未提供具体位置）'
@@ -47,7 +47,13 @@ export function resolveT08Source(ref: SourceRef, aggregate: CaseAggregateV2): T0
   const match = doc.blocks.find((block, index) => {
     if (ref.location.kind === 'file') return false
     if (ref.location.kind === 'paragraph') return index === ref.location.index
-    if (ref.location.kind === 'pdf-rect') return block.location?.kind === 'pdf-rect' && block.location.page === ref.location.page
+    if (ref.location.kind === 'pdf-rect') {
+      if (block.location?.kind !== 'pdf-rect' || block.location.page !== ref.location.page) return false
+      const a = ref.location.rect
+      const b = block.location.rect
+      // Page number alone does not justify pointing to an arbitrary block.
+      return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    }
     if (ref.location.kind === 'sheet-cell') {
       return block.location?.kind === 'sheet-cell' && block.location.sheet === ref.location.sheet &&
         block.location.row === ref.location.row && block.location.column === ref.location.column
