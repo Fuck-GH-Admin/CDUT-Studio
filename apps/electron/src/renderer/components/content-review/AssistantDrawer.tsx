@@ -19,7 +19,7 @@ import { Textarea } from '@profer/ui/primitives/textarea'
 import type { CaseAggregateV2, ReviewAssistantMessage, SourceRef } from '@profer/shared'
 import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
 import { ReviewV3T08ReportPanel } from './ReviewV3T08ReportPanel'
-import { resolveT08Source, type T08ResolvedSource } from './review-v3-t08-case-report'
+import { resolveT08Source, t08AssistantContext, type T08ResolvedSource } from './review-v3-t08-case-report'
 import {
   reviewAssistantOpenAtom,
   reviewAssistantPendingAtom,
@@ -140,7 +140,12 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
     // 先乐观写入用户消息（线程按案卷隔离），再请求回答
     setThreads((previous) => ({ ...previous, [caseId]: nextHistory }))
     setDraft('')
-    await actions.assistantChat(nextHistory)
+    // Only the API request gets the source-grounded V3 run context; the visible user
+    // message remains the question. The Main gateway still owns model dispatch.
+    const modelHistory = aggregate && currentRun && !workspaceRunStale
+      ? [...nextHistory.slice(0, -1), { ...userMessage, content: t08AssistantContext(aggregate, currentRun, content) }]
+      : nextHistory
+    await actions.assistantChat(modelHistory)
   }
 
   if (!open) return <div aria-hidden="true" className="hidden" />
@@ -185,13 +190,14 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto scrollbar-thin px-4 py-3">
         {tab === 'chat' && messages.length === 0 && (
           <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            我会基于本案卷的规则、申报与证明回答你的问题，并标注引用出处；没有依据时会明说无法确定。
+            问答通过现有模型出口执行；当前 V3 Run 的检查与来源会作为只读上下文提供。无法核验的回答不代表审核决定，来源请以“检查与来源”页为准。
           </p>
         )}
         {tab === 'chat' && messages.map((message) => (
           <MessageBubble
             key={message.id}
             message={message}
+            extraReferences={currentRun ? [...currentRun.checks.map((x) => x.checkId), ...opinions.map((x) => x.id)].filter((id) => message.role === 'assistant' && message.content.includes(id)).slice(0, 12) : []}
             onReference={(id) => { const ref = resolveReference(id); if (ref) void openSource(ref) }}
             canLocate={(id) => !!resolveReference(id)}
           />
@@ -301,8 +307,9 @@ function SourceLink({ refItem, aggregate, onOpen }: {
     {located?.label ?? refItem.documentVersionId} {located?.state === 'file-only' ? '（仅文件）' : ''}
   </button>
 }
-function MessageBubble({ message, onReference, canLocate }: {
+function MessageBubble({ message, extraReferences, onReference, canLocate }: {
   message: ReviewAssistantMessage
+  extraReferences: string[]
   onReference(id: string): void
   canLocate(id: string): boolean
 }): React.ReactElement {
@@ -324,9 +331,9 @@ function MessageBubble({ message, onReference, canLocate }: {
         {message.content}
       </div>
       {/* 引用出处徽标 */}
-      {message.references && message.references.length > 0 && (
+      {((message.references?.length ?? 0) > 0 || extraReferences.length > 0) && (
         <div className="flex flex-wrap justify-end gap-1">
-          {message.references.map((reference) => (
+          {[...new Set([...(message.references ?? []), ...extraReferences])].map((reference) => (
             <button
               type="button"
               key={reference}
