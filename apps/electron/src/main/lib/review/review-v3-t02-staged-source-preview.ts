@@ -100,3 +100,37 @@ export async function previewT02StagedSource(
     await rm(temporaryRoot, { recursive: true, force: true })
   }
 }
+
+/**
+ * Main-scoped complete staged inventory: lists every ZIP entry and image, not
+ * a renderer-selected subset. A partial/failed item remains visible.
+ */
+export async function previewT02StagedInventory(
+  ctx: B2MainContext,
+  staging: ReviewB2StagingService,
+): Promise<{
+  schemaVersion: 'review-v3-t02-staged-inventory/1'
+  candidateOnly: true
+  checkpoint: 'staging-only'
+  total: number
+  parsed: number
+  partial: number
+  failed: number
+  imagesAwaitingInspection: number
+  sources: T02StagedSourcePreview[]
+}> {
+  const ids = staging.listScopedCandidateIds(ctx)
+  const sources: T02StagedSourcePreview[] = []
+  for (const id of ids) sources.push(await previewT02StagedSource(ctx, staging, id))
+  staging.assertStillGranted(ctx)
+  return {
+    schemaVersion: 'review-v3-t02-staged-inventory/1',
+    candidateOnly: true, checkpoint: 'staging-only',
+    total: sources.length,
+    parsed: sources.filter((s) => s.parseStatus === 'parsed').length,
+    partial: sources.filter((s) => s.parseStatus === 'partial').length,
+    failed: sources.filter((s) => s.parseStatus === 'failed').length,
+    imagesAwaitingInspection: sources.reduce((n, s) => n + s.imageBlocksAwaitingInspection, 0),
+    sources,
+  }
+}
