@@ -24,7 +24,7 @@
 | 线 | 来源固定 SHA | 合入方式 | 状态 | 生产消费者 / 缺口 |
 |---|---|---|---|---|
 | T01 | `ac2947fc6` | `ecc00e66b` | **WIRED** | `TemplateWizardPanel`（条件编辑、试跑、导入导出） |
-| T02 | `36687a952` | `1babad8e7` | **BLOCKED_BRIDGE** | `ReviewV3T02MaterialCoveragePanel` 无生产引用；缺 Main 派生 `B2MainContext` 的只读 IPC（`previewT02StagedSource/Inventory` 需要 staging 服务单例 + 按 sender 派生 ctx） |
+| T02 | `36687a952` | `1babad8e7` + 桥接 `49576336c` | **JOURNEY_VERIFIED** | 复用 `review-v3-main-local-product-intake` 已由 Main 派生 B2 ctx 的生产链，新增只读 `T02_STAGED_INVENTORY_V3`；`V2CasePanel` → `ReviewV3T02CoverageSection` → 覆盖面板。真机 total 2 / parsed 1 / partial 1 / 块 6+9 |
 | T03 | `28528b02b` | `fae977a17` + 接线 `4bf3d4404` | **WIRED** | `V2CasePanel` → `ReviewV3T03FactWorkbench`（与观察项面板同案卷上下文） |
 | T04 | `54678e8ee` | `5df23c6da` | **BLOCKED_OWNER** | `evaluateT04Plan` 需要 `CanonicalPlan` + 每 binding 的 `RuleSpec`。但 A15 模板绑定路径（T01/T10）**不产生 CanonicalPlan**；B1 候选路径虽有 CanonicalPlan，其 `modules[].checks[]` 只有 `requirement` 而无 `RuleSpec`（无 execution/policyVersionId/targetScope）。缺的是 B1-check→RuleSpec 合同，属 Owner 决策，L 线不自行发明业务语义 |
 | T05 | `41c3f2fa9` | B2 合入 | **WIRED** | `V2CasePanel` → `ReviewV3T05HumanWorkflow` + `RunDecision`（替换旧 `BusinessFlowSection`） |
