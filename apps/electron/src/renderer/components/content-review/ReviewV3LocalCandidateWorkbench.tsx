@@ -288,7 +288,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       />}
     </div>}
     <ReviewV3LocalManualItem key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
-    <ReviewV3LocalPiControls key={localCaseId} caseId={localCaseId} />
+    <ReviewV3LocalPiControls key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
     <ReviewV3AuthorWizard key={key} initialDraft={loaded?.document??emptyB1AuthorDocument()}
       initialRevision={loaded?.revision??0}
       onSaveDraft={(document,expectedRevision)=>
