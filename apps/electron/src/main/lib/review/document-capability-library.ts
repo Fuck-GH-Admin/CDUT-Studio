@@ -259,6 +259,9 @@ export class DocumentCapabilityLibrary {
       ? document.blocks.find((candidate) => candidate.blockId === blockId && candidate.kind === 'image')
       : undefined
     if (!document || !block) return
+    // A layout-only image without original bytes cannot be claimed inspected.
+    // The caller must obtain the registered image asset through loadImage first.
+    if (!block.imageAssetPath) throw new Error(`图像块尚无可核验原件: ${blockId}`)
     this.recordRead(document, [blockId])
     this.options.onActivity?.({ capability: 'inspect_document_image', summary: `视觉核对 ${document.fileName}（${block.location?.kind === 'pdf-rect' ? `第 ${block.location.page} 页` : blockId}）` })
   }
