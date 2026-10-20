@@ -81,9 +81,7 @@ function SupplementCard({
   const alreadyAtRequest = new Set(request.documentVersionIdsAtRequest ?? [])
   const newDocuments = activeDocuments.filter((document) => !alreadyAtRequest.has(document.versionId))
   const canReply = ['open', 'responded', 'insufficient'].includes(request.status)
-  const canResolve = request.status === 'responded'
-    || request.status === 'open'
-    || request.status === 'insufficient'
+  const canResolve = request.status === 'responded' || request.status === 'open'
 
   const execute = async (action: () => Promise<ReviewCommandResult | undefined>): Promise<void> => {
     setError('')
@@ -137,7 +135,7 @@ function SupplementCard({
       ))}
       {canReply && (
         <div className="space-y-1 border-t pt-2">
-          <p className="font-medium">提交方回复（说明或已登记的新材料）</p>
+          <p className="font-medium">提交方回复（本地模式：说明或补交材料）</p>
           <textarea className="w-full rounded border bg-background p-2" rows={2} placeholder="写明补交内容和材料变更" value={reply} onChange={(event) => setReply(event.target.value)} />
           <div className="flex flex-wrap gap-2">
             {newDocuments.map((document) => (
@@ -149,6 +147,7 @@ function SupplementCard({
               </label>
             ))}
           </div>
+          {!request.documentVersionIdsAtRequest && <p className="text-muted-foreground">历史阶段补件未记录请求时的材料版本清单，以下展示案卷当前有效材料；请核对版本是否真正为新补材料。</p>}
           {newDocuments.length === 0 && <p className="text-muted-foreground">没有新登记的材料版本；可以先说明情况，或先在材料区上传清晰原件。</p>}
           <Button size="sm" variant="outline" disabled={busy || (!reply.trim() && attachments.length === 0)}
             onClick={() => void execute(() => window.reviewAPI.respondSupplementV2({
@@ -212,8 +211,8 @@ export function ReviewV3T05HumanWorkflow({
   }, [aggregate.decisions])
   const latestFinal = effectiveDecisions.find((decision) => decision.finality === 'final')
   const activeDocuments = aggregate.caseV2.documents.filter((document) => document.active !== false)
-  const chosenAppeal = aggregate.appeals.find((appeal) => appeal.id === appealReviewId)
-    ?? aggregate.appeals.find((appeal) => appeal.status === 'submitted' || appeal.status === 'in-review')
+  const pendingAppeals = aggregate.appeals.filter((appeal) => appeal.status === 'submitted' || appeal.status === 'in-review')
+  const chosenAppeal = pendingAppeals.find((appeal) => appeal.id === appealReviewId) ?? pendingAppeals[0]
   const technicalPreReview = Boolean(aggregate.d2RuntimePlan || aggregate.canonicalPlan)
   const stageDisabled = technicalPreReview || unresolvedSupplements.length > 0 || !task
 
