@@ -25,7 +25,10 @@ describe('T01 configurable business templates',()=>{
     expect(template.objectType).toBe('organization')
     expect(template.fields.some(f=>f.key==='academicYear')).toBe(false)
     expect(template.rubric).toBeUndefined()
-    expect(template.fields.find(f=>f.key==='peopleCount')).toMatchObject({kind:'number',min:1,max:undefined})
+    // 人数上限已是负责人确认的业务规则，表单层不得再用 max 拦截（21 人必须能建案）
+    const peopleCount = template.fields.find(f=>f.key==='peopleCount')
+    expect(peopleCount).toMatchObject({kind:'number',min:1})
+    expect(peopleCount && 'max' in peopleCount).toBe(false)
     expect(template.stages.map(s=>s.kind)).toEqual(['auto-check','manual-review','manual-review'])
     expect(template.stages.map(s=>s.nextStageId)).toEqual(['first-review','final-review',undefined])
     expect(template.materialSlots.map(s=>s.id)).toContain('plan')

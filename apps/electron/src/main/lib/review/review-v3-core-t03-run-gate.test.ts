@@ -124,7 +124,9 @@ describe('V3 R01 T03 Run evidence gate (pure business contract)', () => {
 
   test('full snapshot validation is Main-owned: observation, field, parse revisions also stale Run', () => {
     expect(gate('stage-pass', run(), aggregate(), evidence({ inputSnapshotFresh: false })).allowed).toBe(false)
-    expect(gate('stage-pass', run(), aggregate(), undefined).allowed).toBe(false)
+    // 显式 undefined 会被默认参数替换，因此直接调用被测函数来表达「Main 没有提供输入快照」
+    expect(assessT03RunAction({ aggregate: aggregate(), run: run(), action: 'stage-pass', evidence: undefined }).allowed).toBe(false)
+    expect(assessT03RunAction({ aggregate: aggregate(), run: run(), action: 'stage-pass' }).allowed).toBe(false)
   })
 
   test('Run identity and template version must agree with case', () => {
@@ -192,9 +194,12 @@ describe('V3 R01 T03 Run evidence gate (pure business contract)', () => {
   })
 
   test('missing first Run permits a supplement request, not approval or final rejection', () => {
-    expect(gate('return-for-supplement', undefined, aggregate(), undefined).allowed).toBe(true)
-    expect(gate('stage-pass', undefined, aggregate(), undefined).allowed).toBe(false)
-    expect(gate('final-reject', undefined, aggregate(), undefined).allowed).toBe(false)
+    // 同上：默认参数会把 undefined 变成 run()，直接调用才能表达「还没有第一次 Run」
+    const noRun = (action: 'stage-pass' | 'final-reject' | 'return-for-supplement' | 'return-to-previous-stage') =>
+      assessT03RunAction({ aggregate: aggregate(), run: undefined, action })
+    expect(noRun('return-for-supplement').allowed).toBe(true)
+    expect(noRun('stage-pass').allowed).toBe(false)
+    expect(noRun('final-reject').allowed).toBe(false)
   })
 
   test('input order alone is irrelevant; full version/hash set is authoritative', () => {

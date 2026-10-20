@@ -195,7 +195,7 @@ export function assessT03RunAction(input: {
     blockers.push('Run 身份或案卷模板版本不匹配')
   }
   if (!evidence.inputSnapshotFresh || !documentVersionsMatch(aggregate, run)) {
-    blockers.push('Run 输入已过期或不能证明当前材料版本一致')
+    blockers.push('Run 输入已过期：当前原件版本或内容哈希与运行快照不一致')
   }
   const plan = aggregate.canonicalPlan
   if (plan) {
