@@ -95,9 +95,40 @@ describe('T02 actual OCR port reuse, never fabricated verdicts', () => {
     const hypothesis = result.source.blocks.find(b => b.text === '实验室使用许可')
     expect(hypothesis?.page).toBe(1)
     expect(hypothesis?.confidence).toBeCloseTo(0.91)
+    expect(hypothesis?.bbox).toEqual([0.1, 0.125, 0.6, 0.375])
+    expect(hypothesis?.imageAssetPath).toBe('source-docs/证明.png')
     expect(hypothesis?.id).toContain('-ocr-001')
     expect(result.source.parseError).toContain('待人工确认')
   })
+  test('PPTX OCR points back to its real media but does not invent slide geometry', async () => {
+    const original = join(root, '图片页来源.pptx')
+    writeFileSync(original, await examplePptx())
+    const ocr: OcrPort = {
+      available: true,
+      async recognize() {
+        return {
+          engine: 'test-ocr-port', engineVersion: 'test',
+          imageWidth: 100, imageHeight: 80,
+          blocks: [{ text: '来自幻灯片媒体', confidence: 0.9,
+            rect: { x: 10, y: 10, w: 50, h: 20 } }],
+        }
+      },
+    }
+    const outcome = await parseT02VisualMaterialWithOcr({
+      filePath: original, fileName: '图片页来源.pptx', role: 'evidence',
+      assetRelativePath: 'source-docs/图片页来源.pptx', assetDirectory: root, ocr,
+    })
+    const hypotheses = outcome.source.blocks.filter(b => b.text === '来自幻灯片媒体')
+    expect(hypotheses).toHaveLength(2)
+    expect(hypotheses.map(b => b.page)).toEqual([1, 2])
+    for (const hypothesis of hypotheses) {
+      expect(hypothesis.imageAssetPath).toContain('t02-ppt-slide-')
+      expect(hypothesis.bbox).toBeUndefined()
+      expect(hypothesis.confidence).toBe(0.9)
+    }
+    expect(outcome.source.parseStatus).toBe('partial')
+  })
+
   test('unavailable OCR leaves the original readable only as an image, not as text', async () => {
     const original = join(root, '未识别.png')
     writeFileSync(original, PNG)
