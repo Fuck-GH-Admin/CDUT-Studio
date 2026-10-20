@@ -192,6 +192,54 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
 
   const current = aggregate
 
+  // ===== T05 可信阶段端口（CR-T05-04）=====
+  // 渲染层只声明角色；actor、Run 与规则准备度全部由 Main 重核。
+  const [localStageRole, setLocalStageRole] = useState<'reviewer' | 'teacher'>('reviewer')
+  const [stageCapability, setStageCapability] = useState<{
+    mode: 'local-business'; actorLabel: string; actorRole: 'reviewer' | 'teacher'
+    eligibleTaskIds: string[]; hasCurrentRun: boolean
+  } | undefined>(undefined)
+
+  useEffect(() => {
+    let cancelled = false
+    const caseId = current?.caseV2.id
+    if (!caseId) { setStageCapability(undefined); return }
+    void window.reviewAPI.getT05StageCapability({ caseId, claim: { role: localStageRole } })
+      .then((value) => { if (!cancelled) setStageCapability(value) })
+      // 技术预审与 CanonicalPlan 案卷按设计不可办理业务阶段：不展示能力，也不伪造
+      .catch(() => { if (!cancelled) setStageCapability(undefined) })
+    return () => { cancelled = true }
+  }, [current?.caseV2.id, current?.caseV2.revision, localStageRole])
+
+  const recordTrustedStageDecision = useCallback(async (input: {
+    caseId: string; templateId: string; version: number; expectedRevision: number
+    taskId: string; action: string; reason: string
+    supplementRequiredElements?: string[]; supplementReason?: string
+  }) => {
+    try {
+      const result = await window.reviewAPI.recordT05StageDecision({
+        ...input,
+        requestId: `t05-stage-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        claim: { role: localStageRole },
+      })
+      // 写入后重新读取案卷：回执与聚合都以唯一权威状态为准，不用前端拼接
+      const refreshed = await window.reviewAPI.getAggregateV2(input.caseId)
+      if (!refreshed) return undefined
+      store.set(reviewV2AggregateAtom, refreshed)
+      const receipt = refreshed.receiptLog.at(-1)
+      if (!receipt) return undefined
+      return { ok: true as const, receipt, aggregate: refreshed, entity: { ...result } }
+    } catch (cause) {
+      // 可信 Main 的拒绝原因原样回传，界面不得改写成「已完成」
+      return {
+        ok: false as const,
+        code: 'INVALID_TRANSITION' as const,
+        message: cause instanceof Error ? cause.message : String(cause),
+      }
+    }
+  }, [localStageRole, store])
+
+
   const [slotId, setSlotId] = useState('')
   const [runNonce, setRunNonce] = useState(0)
   const currentTemplate = templates.find((template) => template.templateId === current?.caseV2.templateId && template.version === current?.caseV2.templateVersion)
@@ -374,7 +422,12 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
                 <Button size="sm" onClick={submitCase}>{current.caseV2.stage === 'draft' ? '提交案卷' : '恢复审核任务'}</Button>
               )}
             </div>
-            <ReviewV3T05HumanWorkflow aggregate={current} onResult={applyResult} />
+            <ReviewV3T05HumanWorkflow
+              aggregate={current}
+              onResult={applyResult}
+              stageCapability={stageCapability}
+              recordTrustedStageDecision={recordTrustedStageDecision}
+            />
             <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
             <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />

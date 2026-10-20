@@ -602,6 +602,10 @@ export const REVIEW_IPC_CHANNELS = {
   T07_APPLY_ACTION: 'review-v3:t07-apply-action',
   /** T07 建立评分轮次（仅组织者、仅首次） */
   T07_INIT_STATE: 'review-v3:t07-init-state',
+  /** T05 可信阶段能力投影（只读；不构成授权） */
+  T05_STAGE_CAPABILITY: 'review-v3:t05-stage-capability',
+  /** T05 可信阶段决定（Main 重核身份/Run/准备度后原子写入） */
+  T05_RECORD_STAGE_DECISION: 'review-v3:t05-record-stage-decision',
   /** T02 暂存来源只读预览（Main 派生 B2 ctx；不产生 DocumentVersion） */
   T02_STAGED_INVENTORY_V3: 'review-v3:t02-staged-inventory',
   /** T09 签发学生离线应答包 */

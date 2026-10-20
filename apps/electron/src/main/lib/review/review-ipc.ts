@@ -832,6 +832,36 @@ export function registerReviewIpc(): void {
     })
     return result
   })
+  // ===== T05 可信阶段事务（Local-L04 R02，CR-T05-04）=====
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T05_STAGE_CAPABILITY, (event, input: {
+    caseId: string; claim?: { role?: string }
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId) throw new Error('参数 caseId 非法')
+    const { readT05StageCapability } = require('./review-v3-t05-main-service') as typeof import('./review-v3-t05-main-service')
+    return readT05StageCapability(input.caseId, input.claim)
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T05_RECORD_STAGE_DECISION, (event, input: {
+    caseId: string; templateId: string; version: number; expectedRevision: number
+    taskId: string; action: string; reason: string
+    supplementRequiredElements?: string[]; supplementReason?: string
+    requestId: string; claim?: { role?: string }
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId || !input.templateId || !input.taskId) throw new Error('参数非法')
+    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) throw new Error('参数 expectedRevision 非法')
+    if (!input.reason?.trim()) throw new Error('阶段决定必须填写理由')
+    const { recordT05StageDecision } = require('./review-v3-t05-main-service') as typeof import('./review-v3-t05-main-service')
+    return recordT05StageDecision({
+      caseId: input.caseId, templateId: input.templateId, version: input.version,
+      expectedRevision: input.expectedRevision, taskId: input.taskId,
+      action: input.action as import('./review-v3-t05-local-stage-plan').T05LocalStageAction,
+      reason: input.reason,
+      ...(input.supplementRequiredElements ? { supplementRequiredElements: input.supplementRequiredElements } : {}),
+      ...(input.supplementReason ? { supplementReason: input.supplementReason } : {}),
+      requestId: input.requestId, claim: input.claim,
+    })
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_SUBJECT_ADJUDICATION_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { recordWorkspaceSubjectAdjudicationV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return recordWorkspaceSubjectAdjudicationV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordWorkspaceSubjectAdjudicationV2>[1])

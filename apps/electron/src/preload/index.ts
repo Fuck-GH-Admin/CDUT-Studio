@@ -4719,6 +4719,21 @@ const reviewAPI = {
     updatedAt: string
     view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
   }>,
+  /** T05 可信阶段能力投影（只读；渲染层只展示，不构成授权） */
+  getT05StageCapability: (input: { caseId: string; claim?: { role?: string } }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T05_STAGE_CAPABILITY, input) as Promise<{
+      mode: 'local-business'; actorLabel: string; actorRole: 'reviewer' | 'teacher'
+      eligibleTaskIds: string[]; hasCurrentRun: boolean
+    }>,
+  /** T05 可信阶段决定（Main 重核身份/Run/准备度后原子写入） */
+  recordT05StageDecision: (input: {
+    caseId: string; templateId: string; version: number; expectedRevision: number
+    taskId: string; action: string; reason: string
+    supplementRequiredElements?: string[]; supplementReason?: string
+    requestId: string; claim?: { role?: string }
+  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T05_RECORD_STAGE_DECISION, input) as Promise<{
+    ok: true; revision: number; decisionId?: string; nextTaskId?: string; supplementId?: string
+  }>,
   /** T02 暂存来源只读预览（Main 派生 B2 ctx；不产生 DocumentVersion） */
   getT02StagedInventory: (caseId: string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T02_STAGED_INVENTORY_V3, caseId) as Promise<{
