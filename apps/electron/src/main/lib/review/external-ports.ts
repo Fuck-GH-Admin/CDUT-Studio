@@ -141,6 +141,8 @@ export class MockSchoolAdapter implements SchoolReadPort {
  * returned acknowledgement imported with confirm(). Both survive restart.
  */
 export interface OfflinePortAcknowledgement {
+  /** Generic handoff importer also checks this revision when supplied. */
+  externalRevision?: number
   actionId: string
   caseId: string
   requestHash: string
@@ -220,6 +222,7 @@ export class LocalPackageAdapter implements SchoolPort {
     return exportHandoffPackage({
       actionId: parsed.payload.actionId, caseId: parsed.payload.caseId,
       requestHash: request.contentHash, baseExternalRevision: parsed.payload.baseExternalRevision,
+      externalRevision: parsed.payload.externalRevision,
       accepted, note,
     })
   }
