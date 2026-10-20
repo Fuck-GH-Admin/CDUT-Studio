@@ -197,7 +197,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
           <MessageBubble
             key={message.id}
             message={message}
-            extraReferences={currentRun ? [...currentRun.checks.map((x) => x.checkId), ...opinions.map((x) => x.id)].filter((id) => message.role === 'assistant' && message.content.includes(id)).slice(0, 12) : []}
+            extraReferences={currentRun ? [...currentRun.checks.map((x) => x.checkId), ...opinions.map((x) => x.id)].filter((id) => message.role === 'assistant' && message.content.split(/[^\p{L}\p{N}_.:-]+/gu).includes(id)).slice(0, 12) : []}
             onReference={(id) => { const ref = resolveReference(id); if (ref) void openSource(ref) }}
             canLocate={(id) => !!resolveReference(id)}
           />
