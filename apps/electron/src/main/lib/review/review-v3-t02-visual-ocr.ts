@@ -23,7 +23,8 @@ export interface T02OcrInput {
   assetRelativePath?: string
   assetDirectory?: string
   ocr: OcrPort
-  /** Opt-in PDF page rendering even when a text layer exists. */
+  /** Explicitly skip PDF page rendering; by default, visual OCR checks ALL pages
+   * up to maxPdfPages, including mixed text/scanned PDFs. */
   inspectPdfPages?: boolean
   /** Explicit work bound for long PDFs; remaining pages are reported partial. */
   maxPdfPages?: number
@@ -130,7 +131,7 @@ export async function parseT02VisualMaterialWithOcr(input: T02OcrInput): Promise
   )
   const warnings: string[] = []
   const ext = extname(input.fileName).toLowerCase()
-  const shouldRasterize = ext === '.pdf' && (input.inspectPdfPages || source.parseStatus !== 'parsed')
+  const shouldRasterize = ext === '.pdf' && input.inspectPdfPages !== false
   let engine: string | null = null
   let inspectedImages = 0
   let imagesAwaitingInspection = 0
