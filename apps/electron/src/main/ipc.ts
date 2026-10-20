@@ -146,6 +146,7 @@ import { CHANGELOG_IPC_CHANNELS, type ChangelogEntry } from '@profer/shared'
 import { getChangelog } from './lib/changelog-service'
 import { registerReviewIpc } from './lib/review/review-ipc'
 import { registerCsLabIpc } from './lib/cslab'
+import { grantCsLabToolTrust, revokeCsLabToolTrust } from './lib/cslab/cslab-tool-trust'
 import { cdutAuthManager, CDUT_AUTH_PARTITION } from './lib/cdut/cdut-auth-manager'
 import { executeDomainTool } from './lib/cdut/cdut-jw-client'
 import { cdutDemoService } from './lib/cdut/cdut-demo/demo-service'
@@ -3985,10 +3986,23 @@ export function registerIpcHandlers(): void {
         throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
       }
       const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
+      // 显式切换到免审批才授予 CSLab Python 工具信任；切回 auto/plan 立即撤销。
+      if (mode === 'bypassPermissions') {
+        grantCsLabToolTrust(sessionId, current.cslabLabId)
+      } else {
+        revokeCsLabToolTrust(sessionId)
+      }
       // 若 session 正在跑，同步热切换运行时模式；失败时广播回滚后的权威状态。
       if (isAgentSessionActive(sessionId)) {
+        const previousMode = current.permissionMode ?? 'bypassPermissions'
         await updateAgentPermissionMode(sessionId, mode).catch((err) => {
           const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode })
+          // 热切换失败时同步回滚内存信任，避免权限与信任状态脱节。
+          if (previousMode === 'bypassPermissions') {
+            grantCsLabToolTrust(sessionId, current.cslabLabId)
+          } else {
+            revokeCsLabToolTrust(sessionId)
+          }
           publishAgentSessionProjection(restored)
           throw err
         })
@@ -4231,6 +4245,12 @@ export function registerIpcHandlers(): void {
           if (meta) {
             try {
               const updated = updateAgentSessionMeta(sessionId, { permissionMode: targetMode })
+              // 计划审批选择"完全自动"属于显式授权；选择其他模式则撤销 CSLab 工具信任。
+              if (targetMode === 'bypassPermissions') {
+                grantCsLabToolTrust(sessionId, meta.cslabLabId)
+              } else {
+                revokeCsLabToolTrust(sessionId)
+              }
               publishAgentSessionProjection(updated)
             } catch (err) {
               console.warn(`[IPC] ExitPlanMode 持久化 session 权限模式失败: sessionId=${sessionId}`, err)

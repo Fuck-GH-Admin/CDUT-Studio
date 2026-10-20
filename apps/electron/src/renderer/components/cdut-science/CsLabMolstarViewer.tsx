@@ -1,0 +1,566 @@
+/**
+ * CsLabMolstarViewer — 3D 分子/晶体表征（Mol* PluginContext）
+ *
+ * 设计红线：
+ * - 直接使用 PluginContext（无默认 UI），背景硬编码社论暖白 #FAF9F5；
+ * - 卸载三部曲强杀 WebGL 上下文，避免 Electron 上下文上限崩溃；
+ * - 所有 Mol* 深路径 API 收敛在 cslab-molstar-state.ts；
+ * - XRD 峰 -> 晶面、原子 -> 谱带均为「可解释的启发式联动」，失败必须明确提示。
+ */
+
+import * as React from 'react'
+import 'molstar/build/viewer/molstar.css'
+import { PluginContext } from 'molstar/lib/mol-plugin/context'
+import { PluginCommands } from 'molstar/lib/mol-plugin/commands'
+import { Color } from 'molstar/lib/mol-util/color'
+import { Vec3 } from 'molstar/lib/mol-math/linear-algebra'
+import { Asset } from 'molstar/lib/mol-util/assets'
+import { StructureElement, StructureProperties } from 'molstar/lib/mol-model/structure'
+import {
+  CSLAB_XRAY_WAVELENGTHS,
+  assignReflections,
+  buildMillerPlane,
+  cellCenter,
+  cellMaxLength,
+  parseCifLattice,
+  type CsLabAssetSummary,
+  type CsLabAtomSiteSelection,
+  type CsLabCrystalCell,
+  type CsLabMillerPlane,
+  type CsLabMolAsset,
+  type CsLabTableSeries,
+} from '@profer/shared'
+import { cn } from '@/lib/utils'
+import { Atom as AtomIcon, Box, Loader2, Ruler, Triangle } from 'lucide-react'
+import { CsLabSpectrumStrip } from './CsLabSpectrumStrip'
+import { findVibrationalBands } from './cslab-vibrational'
+import { buildPluginSpec, DrawMillerPlane } from './cslab-molstar-state'
+
+interface CsLabMolstarViewerProps {
+  labId: string
+  asset: CsLabMolAsset
+  onToast: (kind: 'info' | 'success' | 'error', text: string) => void
+  onAtomSelection?: (selection: CsLabAtomSiteSelection) => void
+}
+
+type LoadState = 'idle' | 'loading' | 'ready' | 'error'
+
+const WAVELENGTH_OPTIONS = [
+  { id: 'Cu-Kα', label: 'Cu Kα', value: CSLAB_XRAY_WAVELENGTHS['Cu-Kα'] },
+  { id: 'Co-Kα', label: 'Co Kα', value: CSLAB_XRAY_WAVELENGTHS['Co-Kα'] },
+  { id: 'Mo-Kα', label: 'Mo Kα', value: CSLAB_XRAY_WAVELENGTHS['Mo-Kα'] },
+] as const
+
+export function CsLabMolstarViewer({
+  labId,
+  asset,
+  onToast,
+  onAtomSelection,
+}: CsLabMolstarViewerProps): React.ReactElement {
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
+  const pluginRef = React.useRef<PluginContext | null>(null)
+  const planeRef = React.useRef<string | null>(null)
+  const [ready, setReady] = React.useState(false)
+  const [state, setState] = React.useState<LoadState>('idle')
+  const [supercell, setSupercell] = React.useState(true)
+  const [atomCount, setAtomCount] = React.useState(0)
+  const [performanceMode, setPerformanceMode] = React.useState(false)
+  const [selection, setSelection] = React.useState<CsLabAtomSiteSelection | null>(null)
+  const [plane, setPlane] = React.useState<CsLabMillerPlane | null>(null)
+  const [wavelengthId, setWavelengthId] =
+    React.useState<(typeof WAVELENGTH_OPTIONS)[number]['id']>('Cu-Kα')
+
+  const [tables, setTables] = React.useState<CsLabAssetSummary[]>([])
+  const [tableUri, setTableUri] = React.useState('')
+  const [series, setSeries] = React.useState<CsLabTableSeries | null>(null)
+  const [seriesLoading, setSeriesLoading] = React.useState(false)
+  const [pickedX, setPickedX] = React.useState<number | undefined>(undefined)
+
+  const cell = React.useMemo<CsLabCrystalCell | null>(
+    () => (asset.format === 'cif' ? parseCifLattice(asset.text) : null),
+    [asset.format, asset.text],
+  )
+
+  const bands = React.useMemo(
+    () => (selection ? findVibrationalBands(selection.element) : []),
+    [selection],
+  )
+
+  // ===== 初始化 / 销毁 =====
+  React.useEffect(() => {
+    let disposed = false
+    const container = containerRef.current
+    if (!container) return
+
+    const init = async (): Promise<void> => {
+      try {
+        const plugin = new PluginContext(buildPluginSpec())
+        pluginRef.current = plugin
+        await plugin.init()
+        if (disposed) {
+          plugin.dispose()
+          return
+        }
+        const canvas = document.createElement('canvas')
+        canvas.style.width = '100%'
+        canvas.style.height = '100%'
+        container.appendChild(canvas)
+        const ok = await plugin.initViewerAsync(canvas, container)
+        if (!ok) throw new Error('WebGL 画布初始化失败')
+
+        try {
+          const renderer = plugin.canvas3d?.props.renderer
+          if (renderer) {
+            await PluginCommands.Canvas3D.SetSettings(plugin, {
+              settings: {
+                renderer: {
+                  ...renderer,
+                  backgroundColor: Color(0xfaf9f5),
+                },
+              },
+            })
+          }
+        } catch (error) {
+          console.warn('[CSLab Mol*] 背景色设置失败:', error)
+        }
+
+        if (!disposed) setReady(true)
+      } catch (error) {
+        console.error('[CSLab Mol*] 初始化失败:', error)
+        if (!disposed) {
+          setState('error')
+          onToast('error', error instanceof Error ? error.message : '3D 视图初始化失败')
+        }
+      }
+    }
+
+    void init()
+
+    return () => {
+      disposed = true
+      setReady(false)
+      const plugin = pluginRef.current
+      pluginRef.current = null
+      planeRef.current = null
+      if (!plugin) return
+      const canvas = container.querySelector('canvas')
+      // 卸载三部曲：先释放 canvas3d，再 dispose 插件，最后显式丢弃 WebGL 上下文。
+      try {
+        plugin.canvas3d?.dispose()
+      } catch {
+        // 可能已释放。
+      }
+      try {
+        plugin.dispose()
+      } catch {
+        // 可能已释放。
+      }
+      try {
+        const gl =
+          canvas?.getContext('webgl2') ?? canvas?.getContext('webgl')
+        gl?.getExtension('WEBGL_lose_context')?.loseContext()
+      } catch {
+        // 上下文可能已丢失。
+      }
+      if (canvas) {
+        canvas.width = 0
+        canvas.height = 0
+        canvas.remove()
+      }
+    }
+  }, [onToast])
+
+  // ===== 结构载入 =====
+  React.useEffect(() => {
+    if (!ready) return
+    const plugin = pluginRef.current
+    if (!plugin) return
+    let cancelled = false
+
+    const load = async (): Promise<void> => {
+      setState('loading')
+      setAtomCount(0)
+      setPlane(null)
+      setSelection(null)
+      planeRef.current = null
+      try {
+        await plugin.clear()
+        const file = Asset.File(
+          new File([asset.text], asset.title || `structure.${asset.format}`, {
+            type: 'text/plain',
+          }),
+        )
+        const { data: dataRef } = await plugin.builders.data.readFile({
+          file,
+          isBinary: false,
+        })
+
+        // CIF 走 cifCore（小分子晶体学字典），失败再回退 mmcif；PDB 直接 pdb。
+        const formatCandidates: Array<'pdb' | 'cifCore' | 'mmcif'> =
+          asset.format === 'pdb' ? ['pdb'] : ['cifCore', 'mmcif']
+        let trajectory: Awaited<
+          ReturnType<typeof plugin.builders.structure.parseTrajectory>
+        > | null = null
+        let parseError: unknown = null
+        for (const format of formatCandidates) {
+          try {
+            trajectory = await plugin.builders.structure.parseTrajectory(dataRef, format)
+            break
+          } catch (error) {
+            parseError = error
+          }
+        }
+        if (!trajectory) {
+          throw parseError instanceof Error
+            ? parseError
+            : new Error('未能解析结构文件（CIF/PDB）')
+        }
+
+        const model = await plugin.builders.structure.createModel(trajectory)
+
+        // v5 的超晶胞通过 RootStructureDefinition 的 symmetry 参数展开。
+        const structure = await plugin.builders.structure.createStructure(
+          model,
+          supercell
+            ? {
+                name: 'symmetry',
+                params: {
+                  ijkMin: Vec3.create(0, 0, 0),
+                  ijkMax: Vec3.create(1, 1, 1),
+                  mergeBySymmetry: true,
+                  dynamicBonds: undefined,
+                },
+              }
+            : undefined,
+        )
+        if (cancelled) return
+
+        // 单胞虚线框挂在原始 Model 上，避免超晶胞重复画框。
+        await plugin.builders.structure.tryCreateUnitcell(model)
+
+        const count = Number(structure.data?.elementCount ?? 0)
+        setAtomCount(count)
+        const heavy = count > 500_000
+        setPerformanceMode(heavy)
+
+        await plugin.builders.structure.representation.addRepresentation(structure, {
+          type: heavy ? 'point' : count > 200_000 ? 'spacefill' : 'ball-and-stick',
+          color: 'element-symbol',
+        })
+
+        if (heavy) {
+          try {
+            await PluginCommands.Canvas3D.SetSettings(plugin, {
+              settings: {
+                postprocessing: { occlusion: { name: 'off', params: {} } },
+              } as never,
+            })
+          } catch (error) {
+            console.warn('[CSLab Mol*] 关闭 SSAO 失败:', error)
+          }
+        }
+
+        await PluginCommands.Camera.Reset(plugin, {})
+        if (!cancelled) setState('ready')
+      } catch (error) {
+        console.error('[CSLab Mol*] 结构载入失败:', error)
+        if (!cancelled) {
+          setState('error')
+          onToast(
+            'error',
+            error instanceof Error ? `结构载入失败：${error.message}` : '结构载入失败',
+          )
+        }
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [ready, asset.uri, asset.text, asset.format, asset.title, supercell, onToast])
+
+  // ===== 原子拾取（逆向联动） =====
+  React.useEffect(() => {
+    const plugin = pluginRef.current
+    if (!ready || !plugin) return
+
+    const subscription = plugin.behaviors.interaction.click.subscribe((event) => {
+      const loci = event.current.loci
+      if (!StructureElement.Loci.is(loci)) return
+      const location = StructureElement.Location.create()
+      StructureElement.Loci.getFirstLocation(loci, location)
+      if (!location) return
+
+      let element = ''
+      try {
+        element = StructureProperties.atom.type_symbol(location)
+      } catch {
+        element = ''
+      }
+      if (!element) return
+
+      let chain = ''
+      let residue = ''
+      try {
+        chain = String(StructureProperties.chain.auth_asym_id(location) ?? '')
+        residue = String(StructureProperties.residue.auth_seq_id(location) ?? '')
+      } catch {
+        // PDB/CIF 缺字段时忽略。
+      }
+
+      const payload: CsLabAtomSiteSelection = {
+        element,
+        siteId: chain || residue ? `${chain}-${residue}` : undefined,
+        symmetryLabel: chain || undefined,
+      }
+      setSelection(payload)
+      onAtomSelection?.(payload)
+
+      const matched = findVibrationalBands(element)
+      if (matched.length === 0) {
+        onToast('info', `元素 ${element} 暂无内置振动参考区间（不伪造谱带）`)
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [ready, onAtomSelection, onToast])
+
+  // ===== Miller 晶面（正向联动） =====
+  React.useEffect(() => {
+    const plugin = pluginRef.current
+    if (!ready || !plugin) return
+    let cancelled = false
+
+    const apply = async (): Promise<void> => {
+      try {
+        const update = plugin.state.data.build()
+        if (planeRef.current) update.delete(planeRef.current)
+        let nextRef: string | null = null
+        if (plane) {
+          const center = cell ? cellCenter(cell) : [0, 0, 0]
+          const size = cell ? cellMaxLength(cell) * 2.4 : 20
+          const node = update.toRoot().apply(DrawMillerPlane, {
+            h: plane.h,
+            k: plane.k,
+            l: plane.l,
+            nx: plane.normal[0],
+            ny: plane.normal[1],
+            nz: plane.normal[2],
+            cx: center[0]!,
+            cy: center[1]!,
+            cz: center[2]!,
+            size,
+          })
+          nextRef = node.ref
+        }
+        await update.commit()
+        if (!cancelled) planeRef.current = nextRef
+      } catch (error) {
+        console.error('[CSLab Mol*] 晶面绘制失败:', error)
+        if (!cancelled) {
+          onToast(
+            'error',
+            error instanceof Error ? `晶面绘制失败：${error.message}` : '晶面绘制失败',
+          )
+        }
+      }
+    }
+
+    void apply()
+    return () => {
+      cancelled = true
+    }
+  }, [ready, plane, cell, onToast])
+
+  // ===== 谱图数据 =====
+  React.useEffect(() => {
+    let cancelled = false
+    const loadTables = async (): Promise<void> => {
+      try {
+        const assets = await window.electronAPI.cslab.listAssets(labId)
+        if (cancelled) return
+        const next = assets.filter((item) => item.layerType === 'table')
+        setTables(next)
+        setTableUri((previous) => previous || next[0]?.uri || '')
+      } catch (error) {
+        console.warn('[CSLab Mol*] 数据表列表读取失败:', error)
+      }
+    }
+    void loadTables()
+    return () => {
+      cancelled = true
+    }
+  }, [labId])
+
+  React.useEffect(() => {
+    if (!tableUri) {
+      setSeries(null)
+      return
+    }
+    let cancelled = false
+    setSeriesLoading(true)
+    void window.electronAPI.cslab
+      .getTableSeries({ labId, tableUri, maxPoints: 3000 })
+      .then((next) => {
+        if (!cancelled) setSeries(next)
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          onToast('error', error instanceof Error ? error.message : '谱图读取失败')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSeriesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [labId, tableUri, onToast])
+
+  const handlePick = (x: number): void => {
+    setPickedX(x)
+    if (asset.format !== 'cif' || !cell) {
+      onToast('info', '该结构没有可用晶胞参数，无法由 2θ 反算晶面')
+      return
+    }
+    const wavelength = WAVELENGTH_OPTIONS.find((item) => item.id === wavelengthId)?.value
+    const matches = assignReflections(x, cell, {
+      maxIndex: 6,
+      toleranceDeg: 0.35,
+      wavelengthAngstrom: wavelength,
+    })
+    if (matches.length === 0) {
+      onToast('info', `2θ = ${x.toFixed(2)}° 与当前晶胞/波长无匹配晶面`)
+      return
+    }
+    const best = matches[0]!
+    const next = buildMillerPlane(cell, best.h, best.k, best.l, wavelength)
+    if (!next) {
+      onToast('error', '晶面法向量计算失败')
+      return
+    }
+    setPlane(next)
+    onToast(
+      'success',
+      `(${best.h}${best.k}${best.l}) · d = ${best.d.toFixed(3)} Å · 2θ = ${best.twoTheta.toFixed(2)}°`,
+    )
+  }
+
+  const handleTableChange = (uri: string): void => {
+    setTableUri(uri)
+    setPlane(null)
+    setPickedX(undefined)
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-cslab-bg">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-cslab-border px-2.5">
+        <AtomIcon size={11} className="shrink-0 text-cslab-muted" />
+        <span className="text-[10px] text-cslab-muted">
+          {asset.format.toUpperCase()}
+          {cell ? ` · ${cell.a.toFixed(2)}×${cell.b.toFixed(2)}×${cell.c.toFixed(2)} Å` : ' · 无晶胞参数'}
+        </span>
+        {atomCount > 0 && (
+          <span className="text-[10px] tabular-nums text-cslab-muted">
+            · {atomCount.toLocaleString()} 原子
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setSupercell((value) => !value)}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] transition-colors',
+              supercell
+                ? 'border-cslab-accent/40 bg-cslab-accent/10 text-cslab-accent'
+                : 'border-cslab-border text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+            )}
+            title="切换 2×2×2 超晶胞"
+          >
+            <Box size={9} />
+            {supercell ? '2×2×2' : '单胞'}
+          </button>
+          {performanceMode && (
+            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] text-amber-700">
+              性能模式（已关 SSAO）
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="relative min-h-0 flex-1">
+        <div ref={containerRef} className="absolute inset-0" />
+        {state !== 'ready' && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-cslab-bg/70">
+            <div className="flex items-center gap-2 text-[11px] text-cslab-muted">
+              {state === 'error' ? (
+                <Triangle size={13} className="text-red-500" />
+              ) : (
+                <Loader2 size={13} className="animate-spin" />
+              )}
+              {state === 'error' ? '3D 视图不可用' : '正在构建 3D 结构…'}
+            </div>
+          </div>
+        )}
+        {selection && (
+          <div className="pointer-events-none absolute bottom-2 left-2 rounded-md border border-cslab-border bg-cslab-elevated/95 px-2 py-1 text-[10px] text-cslab-muted shadow-subtle">
+            已选 <span className="font-mono text-cslab-text">{selection.element}</span>
+            {selection.siteId && <span className="ml-1 font-mono">({selection.siteId})</span>}
+            {bands.length > 0 && (
+              <span className="ml-1 text-cslab-accent">{bands.map((band) => band.label).join(' / ')}</span>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 space-y-1 border-t border-cslab-border px-2 py-1.5">
+        <div className="flex items-center gap-1.5">
+          <Ruler size={10} className="text-cslab-muted" />
+          <span className="text-[10px] text-cslab-muted">关联谱图</span>
+          <select
+            value={tableUri}
+            onChange={(event) => handleTableChange(event.target.value)}
+            className="min-w-0 flex-1 rounded border border-cslab-border bg-cslab-elevated px-1.5 py-0.5 text-[10px] text-cslab-text focus:outline-none"
+          >
+            <option value="">未选择</option>
+            {tables.map((table) => (
+              <option key={table.uri} value={table.uri}>
+                {table.title}
+              </option>
+            ))}
+          </select>
+          <select
+            value={wavelengthId}
+            onChange={(event) =>
+              setWavelengthId(event.target.value as (typeof WAVELENGTH_OPTIONS)[number]['id'])
+            }
+            className="rounded border border-cslab-border bg-cslab-elevated px-1.5 py-0.5 text-[10px] text-cslab-text focus:outline-none"
+            title="X 射线波长（用于 2θ ↔ d 换算）"
+          >
+            {WAVELENGTH_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <CsLabSpectrumStrip
+          series={series}
+          highlights={bands}
+          selectedX={pickedX}
+          loading={seriesLoading}
+          onPick={handlePick}
+        />
+        {plane && (
+          <p className="text-[9px] text-cslab-muted">
+            Miller 晶面 ({plane.h}
+            {plane.k}
+            {plane.l}) · d = {plane.d.toFixed(3)} Å
+            {plane.twoTheta ? ` · 2θ = ${plane.twoTheta.toFixed(2)}°` : ''}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}

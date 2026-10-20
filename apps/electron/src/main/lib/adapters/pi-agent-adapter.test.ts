@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 
 // 只验证 Pi 侧 AskUserQuestion 工具注册契约与权限包装闭环，不启动真实 Pi SDK。
-const { buildPromaProductToolDefinitions, shouldBlockToolForAskUserQuestion, mapSDKErrorToTypedError } = await import('./pi-agent-adapter')
+const {
+  buildPromaProductToolDefinitions,
+  shouldBlockToolForAskUserQuestion,
+  mapSDKErrorToTypedError,
+  isConversationHistoryLookupCommand,
+  isConversationHistoryLookupToolCall,
+} = await import('./pi-agent-adapter')
 
 interface CapturedTool {
   name: string
@@ -122,5 +128,44 @@ describe('mapSDKErrorToTypedError 覆盖中转 5xx / 瞬时文案（回归：曾
   test('Given 认证失败 Then 仍不误判为 5xx 可重试', () => {
     const typed = mapSDKErrorToTypedError('invalid_api_key', 'invalid api key', 'invalid api key')
     expect(typed.code).toBe('invalid_api_key')
+  })
+})
+
+describe('索引模式历史检索护栏', () => {
+  test('Given transcript / agent-sessions 历史路径 When 判断 shell 命令 Then 命中', () => {
+    expect(isConversationHistoryLookupCommand(
+      'grep -r Isomorphic ~/.cdutai/brain/session-1/.system_generated/logs/transcript.jsonl',
+    )).toBe(true)
+    expect(isConversationHistoryLookupCommand(
+      'Select-String -Path "~/.cdutai/agent-sessions/session-1.jsonl" -Pattern Isomorphic',
+    )).toBe(true)
+    expect(isConversationHistoryLookupCommand(
+      'Get-Content ~/.cdutai/brain/session-1/.system_generated/logs/transcript_full.jsonl',
+    )).toBe(true)
+  })
+
+  test('Given 正常源码搜索 When 判断 shell 命令 Then 不误伤', () => {
+    expect(isConversationHistoryLookupCommand('Get-ChildItem src')).toBe(false)
+    expect(isConversationHistoryLookupCommand('grep -r "transcript" src/components')).toBe(false)
+    expect(isConversationHistoryLookupCommand('bun test apps/electron')).toBe(false)
+  })
+
+  test('Given 文件读取工具命中历史路径 When 判断工具调用 Then 命中', () => {
+    expect(isConversationHistoryLookupToolCall('read', {
+      file_path: '~/.cdutai/brain/session-1/.system_generated/logs/transcript_full.jsonl',
+    })).toBe(true)
+    expect(isConversationHistoryLookupToolCall('grep', {
+      path: '~/.cdutai/agent-sessions/session-1.jsonl',
+      pattern: 'Isomorphic',
+    })).toBe(true)
+    expect(isConversationHistoryLookupToolCall('powershell', {
+      command: 'Get-Content C:\\Users\\me\\.cdutai\\agent-sessions\\s1.jsonl',
+    })).toBe(true)
+  })
+
+  test('Given 普通工作区文件 When 判断工具调用 Then 不拦截', () => {
+    expect(isConversationHistoryLookupToolCall('read', { file_path: 'src/index.ts' })).toBe(false)
+    expect(isConversationHistoryLookupToolCall('glob', { pattern: '**/*.ts' })).toBe(false)
+    expect(isConversationHistoryLookupToolCall('bash', { command: 'git status --short' })).toBe(false)
   })
 })

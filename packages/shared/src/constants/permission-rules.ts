@@ -16,6 +16,15 @@ export function isCanonicalAgentTool(toolName: string, canonicalName: string): b
   return canonicalAgentToolName(toolName) === canonicalName
 }
 
+/**
+ * CSLab 实验室 Python 工具由 pi-cslab-tools 动态装配。
+ * 执行类工具必须逐次确认；只读的 cslab_list_lab_tools 不在此列。
+ */
+export function isCsLabExecutionTool(toolName: string): boolean {
+  const name = toolName.trim()
+  return name.startsWith('cslab_') && name !== 'cslab_list_lab_tools'
+}
+
 /** 始终安全的工具（免询问） */
 export const SAFE_TOOLS: readonly string[] = [
   'Read',            // 文件读取

@@ -1,165 +1,214 @@
 /**
- * CsLabAuthGate — CDUT Science 独立权限门禁与密钥填写组件
+ * CsLabAuthGate — CDUT Science 本机访问密码门禁
  *
- * 架构设计重点（模块化）：
- * 1. 业务完全解耦：独立封装授权认证逻辑与双语告示卡片，未来可一键剥离或设置 bypassAuth，直接进入内部业务界面。
- * 2. 字体生态：完全采用客户端原生态系统字体（font-sans），杜绝生硬简陋的等宽字体。
- * 3. 安全规范：明文密钥绝不落盘，仅通过 Web Crypto API 计算 SHA-256 单向散列后持久化。
+ * 双态渲染：
+ *   1. 首次启用：设置本机访问密码（两次确认，≥6 位）；
+ *   2. 日常进入：输入访问密码解锁。
+ *
+ * 验证与凭据存储全部在主进程完成；渲染层只提交密码并接收结果，不接触密文。
+ * 视觉遵循暖调编辑式极简（羊皮纸底 + 赤陶强调 + 发丝边框）。
  */
 
 import * as React from 'react'
 import { useAtom } from 'jotai'
-import {
-  KeyRound,
-  ShieldCheck,
-  Eye,
-  EyeOff,
-  AlertTriangle,
-  CheckCircle2,
-} from 'lucide-react'
+import { AlertTriangle, Eye, EyeOff, KeyRound, ShieldCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import {
-  cslabAuthAtom,
-  hashKeyClient,
-  CSLAB_TARGET_HASH,
-} from '@/atoms/cslab-atoms'
+import { cslabAuthAtom } from '@/atoms/cslab-atoms'
 
-export interface CsLabAuthGateProps {
-  /** 认证通过后（或门禁移除后）呈现的核心业务视图 */
-  children: React.ReactNode
-  /**
-   * 旁路开关：设为 true 时直接跳过密钥校验进入业务界面。
-   * 未来移除门禁时，可直接开启此开关或将本组件从上层树中摘除。
-   */
-  bypassAuth?: boolean
+const MIN_PASSWORD_LENGTH = 6
+
+interface PasswordFieldProps {
+  id: string
+  label: string
+  value: string
+  placeholder: string
+  disabled: boolean
+  show: boolean
+  onChange: (value: string) => void
+  onToggleShow: () => void
+  autoComplete?: string
 }
 
-export function CsLabAuthGate({
-  children,
-  bypassAuth = false,
-}: CsLabAuthGateProps): React.ReactElement {
+function PasswordField({
+  id,
+  label,
+  value,
+  placeholder,
+  disabled,
+  show,
+  onChange,
+  onToggleShow,
+  autoComplete = 'off',
+}: PasswordFieldProps): React.ReactElement {
+  return (
+    <div className="space-y-2">
+      <label
+        htmlFor={id}
+        className="block text-[10px] font-medium uppercase tracking-[0.22em] text-claude-muted"
+      >
+        {label}
+      </label>
+      <div className="flex items-center gap-2.5 rounded-xl border border-claude-border bg-white/80 px-4 py-2.5 transition-all focus-within:border-claude-accent/50 focus-within:ring-2 focus-within:ring-claude-accent/10">
+        <KeyRound size={15} className="shrink-0 text-claude-muted" />
+        <input
+          id={id}
+          type={show ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          autoComplete={autoComplete}
+          className="w-full bg-transparent text-sm text-claude-text placeholder:text-claude-muted/70 focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={onToggleShow}
+          className="ml-1 shrink-0 text-claude-muted transition-colors hover:text-claude-text"
+          title={show ? '隐藏密码' : '显示密码'}
+          aria-label={show ? '隐藏密码' : '显示密码'}
+        >
+          {show ? <EyeOff size={15} /> : <Eye size={15} />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export function CsLabAuthGate(): React.ReactElement {
   const [auth, setAuth] = useAtom(cslabAuthAtom)
 
-  const [inputKey, setInputKey] = React.useState('')
-  const [showKey, setShowKey] = React.useState(false)
-  const [verifying, setVerifying] = React.useState(false)
+  const isInitializing = !auth.isInitialized
+  const [password, setPassword] = React.useState('')
+  const [confirmPassword, setConfirmPassword] = React.useState('')
+  const [showPassword, setShowPassword] = React.useState(false)
+  const [submitting, setSubmitting] = React.useState(false)
   const [errorStatus, setErrorStatus] = React.useState<string | null>(null)
-  const [successNotice, setSuccessNotice] = React.useState(false)
 
-  // 处理密钥校验
-  const handleVerify = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault()
-    if (!inputKey.trim() || verifying) return
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (submitting) return
 
-    setVerifying(true)
     setErrorStatus(null)
 
+    if (isInitializing) {
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        setErrorStatus(`访问密码至少需要 ${MIN_PASSWORD_LENGTH} 位`)
+        return
+      }
+      if (password !== confirmPassword) {
+        setErrorStatus('两次输入的密码不一致')
+        return
+      }
+    } else if (!password) {
+      setErrorStatus('请输入访问密码')
+      return
+    }
+
+    setSubmitting(true)
     try {
-      const computedHash = await hashKeyClient(inputKey)
-      let backendValid = false
-
-      if (window.electronAPI?.cslab) {
-        const res = await window.electronAPI.cslab.verifyKey(inputKey)
-        backendValid = res.success
-      } else {
-        backendValid = computedHash === CSLAB_TARGET_HASH
+      const api = window.electronAPI?.cslab
+      if (!api) {
+        setErrorStatus('门禁服务不可用，请重启应用后重试')
+        return
       }
 
-      if (computedHash === CSLAB_TARGET_HASH && (backendValid || !window.electronAPI?.cslab)) {
-        setAuth({
-          isVerified: true,
-          keyHash: computedHash,
-          verifiedAt: Date.now(),
-          clearanceLevel: 'LEVEL-OMEGA',
-        })
-        setInputKey('')
-        setSuccessNotice(true)
-        setTimeout(() => setSuccessNotice(false), 2000)
-      } else {
-        setErrorStatus('访问密钥校验未通过，请核对后重试')
+      const result = isInitializing
+        ? await api.initPassword(password)
+        : await api.verifyPassword(password)
+
+      if (!result.success) {
+        setErrorStatus(
+          result.message ?? (isInitializing ? '密码设置失败，请重试' : '密码不正确，请重新输入'),
+        )
+        return
       }
+
+      setPassword('')
+      setConfirmPassword('')
+      setAuth({ isInitialized: true, isVerified: true, hydrated: true })
     } catch {
-      setErrorStatus('安全散列计算出现异常')
+      setErrorStatus(isInitializing ? '密码设置失败，请重试' : '密码校验失败，请重试')
     } finally {
-      setVerifying(false)
+      setSubmitting(false)
     }
   }
 
-  // 若已旁路授权或本地已持久化有效授权，直接呈现业务界面
-  if (bypassAuth || auth.isVerified) {
-    return <>{children}</>
-  }
+  const title = isInitializing ? '设置访问密码' : '输入访问密码'
+  const subtitle = isInitializing
+    ? '首次启用 CDUT Science，请为本台设备设置专属访问密码，数据将使用系统级安全密钥加密存储。'
+    : '请输入本台设备设置的 CDUT Science 访问密码以解锁科研工作台。'
+  const submitLabel = isInitializing ? '设置并进入' : '验证并进入'
+  const canSubmit = isInitializing
+    ? password.length >= MIN_PASSWORD_LENGTH && confirmPassword.length > 0 && !submitting
+    : password.length > 0 && !submitting
 
   return (
-    <div className="w-full max-w-xl flex flex-col items-center text-center font-sans">
-      {/* ===== 授权认证卡片组件 ===== */}
-      <div className="w-full max-w-md mb-8">
-        <div className="relative rounded-2xl border border-black/[0.08] bg-white/75 p-5 backdrop-blur-2xl shadow-[0_20px_50px_rgba(0,0,0,0.06),0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-cyan-500/30">
-          <form onSubmit={handleVerify} className="space-y-3.5">
-            <div className="relative flex items-center rounded-xl border border-slate-200/90 bg-white/90 px-3.5 py-2.5 transition-all focus-within:border-cyan-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-cyan-500/20 shadow-sm">
-              <KeyRound size={16} className="text-cyan-600 mr-2.5 shrink-0" />
-              <input
-                type={showKey ? 'text' : 'password'}
-                value={inputKey}
-                onChange={(e) => setInputKey(e.target.value)}
-                placeholder="请输入访问密钥..."
-                disabled={verifying}
-                className="w-full bg-transparent text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => setShowKey(!showKey)}
-                className="ml-2 text-slate-400 hover:text-slate-700 transition-colors"
-                title={showKey ? '隐藏密钥' : '显示密钥'}
-              >
-                {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
+    <div className="w-full max-w-md font-sans">
+      <div className="rounded-2xl border border-claude-border bg-white/70 p-8 shadow-subtle backdrop-blur-sm">
+        <div className="flex items-center gap-2 text-claude-accent">
+          <KeyRound size={14} />
+          <span className="text-[10px] font-medium uppercase tracking-[0.24em]">
+            CSLab · Local Access
+          </span>
+        </div>
+
+        <h2 className="mt-4 font-serif text-2xl font-medium tracking-tight text-claude-text">
+          {title}
+        </h2>
+        <p className="mt-2 text-sm leading-relaxed text-claude-muted">{subtitle}</p>
+
+        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          <PasswordField
+            id="cslab-access-password"
+            label={isInitializing ? '新密码' : '访问密码'}
+            value={password}
+            placeholder={isInitializing ? `至少 ${MIN_PASSWORD_LENGTH} 位` : '请输入访问密码'}
+            disabled={submitting}
+            show={showPassword}
+            onChange={setPassword}
+            onToggleShow={() => setShowPassword((prev) => !prev)}
+            autoComplete={isInitializing ? 'new-password' : 'current-password'}
+          />
+
+          {isInitializing && (
+            <PasswordField
+              id="cslab-access-password-confirm"
+              label="确认密码"
+              value={confirmPassword}
+              placeholder="请再次输入密码"
+              disabled={submitting}
+              show={showPassword}
+              onChange={setConfirmPassword}
+              onToggleShow={() => setShowPassword((prev) => !prev)}
+              autoComplete="new-password"
+            />
+          )}
+
+          {errorStatus && (
+            <div className="flex items-center gap-1.5 text-xs text-[#B4472F]">
+              <AlertTriangle size={13} className="shrink-0" />
+              <span>{errorStatus}</span>
             </div>
+          )}
 
-            {errorStatus && (
-              <div className="flex items-center justify-center gap-1.5 text-xs text-rose-500 py-0.5">
-                <AlertTriangle size={14} className="shrink-0" />
-                <span>{errorStatus}</span>
-              </div>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className={cn(
+              'flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium tracking-wide transition-colors duration-200',
+              canSubmit
+                ? 'cursor-pointer bg-claude-accent text-white hover:bg-claude-accentHover'
+                : 'cursor-not-allowed border border-claude-border bg-claude-surface text-claude-muted',
             )}
+          >
+            <ShieldCheck size={15} />
+            <span>{submitting ? '正在处理…' : submitLabel}</span>
+          </button>
+        </form>
 
-            {successNotice && (
-              <div className="flex items-center justify-center gap-1.5 text-xs text-emerald-600 py-0.5">
-                <CheckCircle2 size={14} className="shrink-0" />
-                <span>验证成功，正在进入业务界面...</span>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={verifying || !inputKey.trim()}
-              className={cn(
-                'w-full flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium tracking-wide transition-all duration-200 shadow-sm',
-                inputKey.trim() && !verifying
-                  ? 'bg-slate-900 text-white hover:bg-slate-800 shadow-[0_4px_14px_rgba(0,0,0,0.12)] cursor-pointer'
-                  : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200/60',
-              )}
-            >
-              <ShieldCheck size={15} />
-              <span>{verifying ? '正在校验...' : '验证并进入'}</span>
-            </button>
-          </form>
-        </div>
-      </div>
-
-      {/* ===== Bilingual Teaser & Status Notice (规范双语告示卡片) ===== */}
-      <div className="w-full max-w-lg">
-        <div className="relative rounded-2xl border border-black/[0.06] bg-white/70 p-5 backdrop-blur-2xl shadow-[0_16px_36px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.02)]">
-          {/* 中文在顶 */}
-          <div className="text-sm sm:text-base font-normal tracking-wide text-slate-800 leading-relaxed">
-            雫窝中央实验室已接管 CDUT Science 开发，敬请期待！
-          </div>
-
-          {/* 英文在底：严格遵循 Google 紧凑系统风格，is not available 保持完整绝不缩写 */}
-          <div className="mt-3 pt-3 border-t border-slate-200/70 text-xs sm:text-sm text-slate-500 leading-relaxed tracking-normal">
-            CDUT Science is not available right now. Nya-Home Central Laboratory has taken over development. Stay tuned!
-          </div>
-        </div>
+        <p className="mt-5 border-t border-claude-border/70 pt-4 text-[11px] leading-relaxed text-claude-muted">
+          访问密码仅保存在本机，由操作系统安全存储或本地 AES-256-GCM 加密，绝不明文写入磁盘。
+        </p>
       </div>
     </div>
   )

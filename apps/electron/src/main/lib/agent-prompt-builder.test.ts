@@ -61,6 +61,38 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('pretend a unique answer exists')
   })
 
+  test('索引模式使用 conversation_memory 并移除 transcript 路径与 grep 指引', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      contextMode: 'index',
+    })
+
+    expect(prompt).toContain('<conversation_memory>')
+    expect(prompt).toContain('<conversation_evidence>')
+    expect(prompt).toContain('<recent_context>')
+    expect(prompt).not.toContain('<conversation_transcript>')
+    expect(prompt).not.toContain('Transcripts are located directly at')
+    expect(prompt).not.toContain('.system_generated/logs/transcript.jsonl')
+    expect(prompt).not.toContain('Search subagents by grepping')
+  })
+
+  test('经典模式保留 conversation_transcript 与原有 transcript 检索指引', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      contextMode: 'classic',
+    })
+
+    expect(prompt).toContain('<conversation_transcript>')
+    expect(prompt).toContain('transcript.jsonl')
+    expect(prompt).not.toContain('<conversation_memory>')
+  })
+
   test('开放认识论允许暂定与创作自由，但必须表态且不放宽执行真实性', () => {
     const prompt = buildSystemPrompt({
       workspaceName: 'Demo',

@@ -14,6 +14,8 @@ import * as React from 'react'
 import { Loader2, Minimize2, RefreshCw } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@profer/ui/primitives/popover'
+import { Switch } from '@profer/ui/primitives/switch'
+import type { AgentContextMode } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@profer/shared'
@@ -54,6 +56,14 @@ interface ContextUsageBadgeProps {
   sessionId?: string
   /** Agent Composer 传入时，使用统一触发器的 hover/focus/尺寸外壳。 */
   composerTool?: boolean
+  /** 当前会话上下文模式；未传入时不渲染模式区块。 */
+  contextMode?: AgentContextMode
+  /** 记忆关闭（单轮聚焦）时，模式选择不可用。 */
+  memoryDisabled?: boolean
+  /** 全局索引开关：开启后所有会话强制索引模式。 */
+  globalIndexEnabled?: boolean
+  /** 切换全局索引开关。 */
+  onGlobalIndexChange?: (enabled: boolean) => void
 }
 
 /** 格式化 token 数为可读字符串（如 1234 → "1.2k"） */
@@ -194,6 +204,10 @@ export function ContextUsageBadge({
   planQuotaChannelId,
   sessionId,
   composerTool = false,
+  contextMode,
+  memoryDisabled = false,
+  globalIndexEnabled = false,
+  onGlobalIndexChange,
 }: ContextUsageBadgeProps): React.ReactElement | null {
   // 订阅 Plan 额度状态：数据与刷新状态跨入口共享（usePlanQuota + planQuotaStateAtomFamily），
   // 挂载预取、hover 补查、手动刷新统一由 hook 处理，refreshing 反映任何来源的请求在飞。
@@ -353,7 +367,13 @@ export function ContextUsageBadge({
       <PopoverTrigger asChild>
         {composerTool ? (
           <AgentComposerToolTrigger
-            label={percent != null ? `上下文使用量：${percent}%` : '上下文使用量'}
+            label={
+              contextMode
+                ? `上下文使用量${percent != null ? `：${percent}%` : ''} · ${contextMode === 'index' ? '索引模式' : '经典模式'}`
+                : percent != null
+                  ? `上下文使用量：${percent}%`
+                  : '上下文使用量'
+            }
             state={isWarning ? 'warning' : 'default'}
             onMouseEnter={() => { cancelClose(); setOpen(true) }}
             onMouseLeave={scheduleClose}
@@ -386,6 +406,38 @@ export function ContextUsageBadge({
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col gap-1.5">
+          {contextMode !== undefined ? (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-medium text-foreground/80">上下文模式</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {memoryDisabled ? '单轮聚焦' : globalIndexEnabled ? '全局索引' : contextMode === 'index' ? '索引' : '经典'}
+                  </span>
+                </div>
+                <div className="text-[10px] leading-4 text-muted-foreground">
+                  {memoryDisabled
+                    ? '记忆关闭时为单轮聚焦，不加载历史'
+                    : globalIndexEnabled
+                      ? '已由全局开关对全部会话启用'
+                      : contextMode === 'index'
+                        ? '仅检索相关历史，不上传完整前序对话'
+                        : '续接完整前序对话'}
+                </div>
+                <div className="flex items-center justify-between gap-4 pt-0.5">
+                  <span className="text-[11px] text-foreground/70">全部会话使用索引</span>
+                  <Switch
+                    checked={globalIndexEnabled}
+                    onCheckedChange={(checked) => onGlobalIndexChange?.(checked)}
+                    disabled={!onGlobalIndexChange}
+                    className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
+                  />
+                </div>
+              </div>
+              <div className="h-px bg-border my-0.5" />
+            </>
+          ) : null}
+
           {hasUsage ? (
             <>
               {pureInput > 0 && <DetailRow label="输入" value={pureInput.toLocaleString()} />}

@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, SDKBackgroundTaskSummary, UnstagedChangesResult, AgentImageGenerationCard } from '@profer/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, SDKBackgroundTaskSummary, UnstagedChangesResult, AgentImageGenerationCard, AgentContextMode } from '@profer/shared'
 import { PROFER_DEFAULT_PERMISSION_MODE } from '@profer/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
@@ -1247,5 +1247,21 @@ export const sessionMemoryDisabledMapAtom = atom<Record<string, boolean>>({})
 /** 派生指定会话的上下文记忆开关状态（未设置时默认开启，即 false）。 */
 export const sessionMemoryDisabledAtom = atomFamily((sessionId: string) =>
   atom((get) => get(sessionMemoryDisabledMapAtom)[sessionId] ?? false),
+)
+
+// ===== 会话级上下文模式（经典 / 索引） =====
+
+/**
+ * 按 sessionId 记录上下文模式，默认 classic。
+ * 使用 atomWithStorage 持久化，避免重启后用户选择丢失；会话之间互不影响。
+ */
+export const sessionContextModeMapAtom = atomWithStorage<Record<string, AgentContextMode>>(
+  'cdut-agent-context-mode',
+  {},
+)
+
+/** 派生指定会话的上下文模式（未设置时默认 classic）。 */
+export const sessionContextModeAtom = atomFamily((sessionId: string) =>
+  atom((get) => get(sessionContextModeMapAtom)[sessionId] ?? 'classic'),
 )
 

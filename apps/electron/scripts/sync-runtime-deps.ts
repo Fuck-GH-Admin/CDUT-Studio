@@ -50,6 +50,9 @@ export const EXTERNAL_RUNTIME_PACKAGES: readonly string[] = [
   // 必须随 appDir node_modules 同步，否则 electron-builder 的生产依赖收集会中断打包。
   '@silurus/ooxml',
   'pdfjs-dist',
+  // 主进程 esbuild 将 ssh2 设为 external（原生/可选依赖不能安全内联），
+  // 必须把其依赖闭包同步到 appDir，否则打包后 require('ssh2') 直接失败。
+  'ssh2',
 ]
 
 const appDir = resolve(import.meta.dir, '..')

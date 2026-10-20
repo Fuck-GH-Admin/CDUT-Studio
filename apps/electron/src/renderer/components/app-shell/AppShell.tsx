@@ -21,7 +21,9 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
-import { detectIsWindows } from '@profer/ui'
+import { cslabAuthAtom } from '@/atoms/cslab-atoms'
+import { detectIsMac, detectIsWindows } from '@profer/ui'
+import { MacTrafficLights } from './MacTrafficLights'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { usePanelAutoLayout } from '@/hooks/usePanelAutoLayout'
 import { cn } from '@/lib/utils'
@@ -77,12 +79,16 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const isTeamWorkspace = false // 团队工作区已下线（原 TEAM_WORKSPACE_UI_ENABLED 分支移除）
   // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
   const activeView = useAtomValue(activeViewAtom)
+  const cslabVerified = useAtomValue(cslabAuthAtom).isVerified
+  // CDUT Science 验密通过后进入实验室选择页，完全隐藏左侧主侧边栏
+  const isCsLabImmersive = activeView === 'cdut-science' && cslabVerified
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView === 'conversations'
   // 文件面板/浏览器仅在 agent 个人视图参与布局判定（团队/规划/自动化表单时右侧面板不渲染）
   const filePanelActive = !isTeamWorkspace && showRightPanel
   // 统一自适应可见性：窗口 resize 监听 + 浏览器/文件面板可见性计算（挂载于此布局容器）
   usePanelAutoLayout({ filePanelActive })
   const isWindows = React.useMemo(() => detectIsWindows(), [])
+  const isMac = React.useMemo(() => detectIsMac(), [])
 
   // 窗口标题设为用户名
   React.useEffect(() => {
@@ -222,7 +228,8 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       />
 
       <div className="shell-bg h-screen w-screen flex overflow-clip bg-surface-shell">
-        {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
+        {/* 左侧边栏：可折叠，可拖拽调整宽度；CSLab 授权后完全隐藏 */}
+        {!isCsLabImmersive && (
         <div
           className={cn(
             isClassic ? 'p-2 pr-0' : '',
@@ -243,9 +250,17 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             />
           )}
         </div>
+        )}
+
+        {/* macOS 红绿灯原本挂在侧栏内：CSLab 沉浸态隐藏侧栏后由这里接管 */}
+        {isCsLabImmersive && isMac && (
+          <div className="fixed left-0 top-0 z-[999] h-0 w-0">
+            <MacTrafficLights />
+          </div>
+        )}
 
         {/* 中间容器 */}
-        <div className={`main-area-glass-host flex-1 min-w-0 p-2 relative ${Z_LAYER.shellContent}`}>
+        <div className={cn('main-area-glass-host flex-1 min-w-0 relative', isCsLabImmersive ? 'p-0' : 'p-2', Z_LAYER.shellContent)}>
           <MainArea />
         </div>
 

@@ -27,6 +27,7 @@ import { CdutZoneView } from '@/components/cdut-zone/CdutZoneView'
 import { CdutScienceView } from '@/components/cdut-science/CdutScienceView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { cslabAuthAtom } from '@/atoms/cslab-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { cn } from '@/lib/utils'
 import { resolveContentTabId, shouldShowWelcomeLauncher } from '@/lib/active-tab-content'
@@ -59,6 +60,9 @@ export function MainArea(): React.ReactElement {
   const tabGroup = findTabGroup(tabGroups, activeTabId)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
+  const cslabVerified = useAtomValue(cslabAuthAtom).isVerified
+  // CSLab 沉浸态：授权后的实验室选择页铺满整个主内容区（去掉圆角卡片外观）
+  const isCsLabImmersive = activeView === 'cdut-science' && cslabVerified
   const appMode = useAtomValue(appModeAtom)
   const store = useStore()
 
@@ -295,7 +299,10 @@ export function MainArea(): React.ReactElement {
     <div className="relative flex h-full min-w-0">
       <Panel
         variant="grow"
-        className="main-content-panel relative rounded-2xl shadow-xl dark:shadow-sm"
+        className={cn(
+          'main-content-panel relative',
+          isCsLabImmersive ? 'rounded-none shadow-none' : 'rounded-2xl shadow-xl dark:shadow-sm',
+        )}
       >
         {/* 通用兜底宿主：凡是 TabBar 不持有窗口按钮的分支（定时任务表单、无 Tab
             空态、以及所有全屏视图）都必须能提供按钮；页面自己声明的宿主
@@ -326,7 +333,7 @@ export function MainArea(): React.ReactElement {
           // CDUT 专区：全屏视图（特区账户登录 + 专区内容）
           <CdutZoneView />
         ) : activeView === 'cdut-science' ? (
-          // CDUT Science 专区：全屏赛博科幻独立视图（雫窝中央实验室接管）
+          // CDUT Science 专区：全屏独立视图
           <CdutScienceView />
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">

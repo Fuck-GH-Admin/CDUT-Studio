@@ -24,10 +24,12 @@ import { GoalStatusBar } from './GoalStatusBar'
 import { agentGoalAtomFamily, getGoalActions, GOAL_STATUS_LABELS, goalEditorAtomFamily, goalReplacementAtomFamily, startGoalWithReplacement } from '@/atoms/goal-atoms'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { ContextMemoryToggleButton } from './ContextMemoryToggleButton'
+import { ContextModeToggleButton } from './ContextModeToggleButton'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from '@/lib/agent-channel-selection'
 import { PermissionBanner } from './PermissionBanner'
+import { CsLabToolTrustBadge } from './CsLabToolTrustBadge'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { BackgroundTaskControls } from './BackgroundTaskControls'
 import { PermissionModeSelector } from './PermissionModeSelector'
@@ -115,6 +117,7 @@ import {
   finalizeStreamingActivities,
   workspaceCapabilitiesVersionAtom,
   sessionMemoryDisabledMapAtom,
+  sessionContextModeMapAtom,
 } from '@/atoms/agent-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import { generateSummary } from '@profer/project-core'
@@ -135,7 +138,7 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { ExplorationBranchBar } from './ExplorationBranchBar'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
+import type { AgentRuntime, AgentSendInput, AgentPendingFile, AgentContextMode, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
 
 /** 桌面端 Agent 会话懒加载单页消息数（与 main/agent-session-manager 的 DESKTOP_AGENT_PAGE_SIZE 同步） */
 const DESKTOP_AGENT_PAGE_SIZE = 60
@@ -1021,6 +1024,44 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       [sessionId]: !(prev[sessionId] ?? false),
     }))
   }, [sessionId, setSessionMemoryDisabledMap])
+
+  // 会话级上下文模式：经典 = resume 全量历史；索引 = 只做会话历史 RAG。
+  const [sessionContextModeMap, setSessionContextModeMap] = useAtom(sessionContextModeMapAtom)
+  const sessionContextMode: AgentContextMode = sessionContextModeMap[sessionId] ?? 'classic'
+  const [globalContextIndexEnabled, setGlobalContextIndexEnabled] = React.useState(false)
+
+  React.useEffect(() => {
+    void window.electronAPI
+      .getSettings()
+      .then((settings) => setGlobalContextIndexEnabled(settings.agentContextIndexGlobal === true))
+      .catch(() => {
+        // 读取失败保持默认关闭，不影响输入栏使用
+      })
+  }, [])
+
+  // 单轮聚焦优先；其次全局索引开关；最后才是会话选择。
+  const effectiveContextMode: AgentContextMode = sessionMemoryDisabled
+    ? 'classic'
+    : globalContextIndexEnabled
+      ? 'index'
+      : sessionContextMode
+
+  const handleContextModeChange = React.useCallback((mode: AgentContextMode) => {
+    setSessionContextModeMap((prev) => ({ ...prev, [sessionId]: mode }))
+  }, [sessionId, setSessionContextModeMap])
+
+  const handleGlobalContextIndexChange = React.useCallback(async (enabled: boolean) => {
+    const previous = globalContextIndexEnabled
+    setGlobalContextIndexEnabled(enabled)
+    try {
+      const settings = await window.electronAPI.updateSettings({ agentContextIndexGlobal: enabled })
+      setGlobalContextIndexEnabled(settings.agentContextIndexGlobal === true)
+      toast.success(enabled ? '全部会话已切换为索引模式' : '全部会话已恢复会话级上下文模式')
+    } catch (error) {
+      setGlobalContextIndexEnabled(previous)
+      toast.error('上下文模式设置保存失败', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }, [globalContextIndexEnabled])
 
   const [presetMenuOpen, setPresetMenuOpen] = React.useState(false)
   const openWorkspacePresets = React.useCallback(() => {
@@ -2079,6 +2120,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
           uuid: message.id,
           permissionModeOverride: permissionMode,
           disableContextMemory: sessionMemoryDisabled,
+          contextMode: effectiveContextMode,
           ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
           ...(payload.mentions.mentionedSkills.length > 0 && { mentionedSkills: payload.mentions.mentionedSkills }),
           ...(payload.mentions.mentionedMcpServers.length > 0 && { mentionedMcpServers: payload.mentions.mentionedMcpServers }),
@@ -2112,7 +2154,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     await startNewRun()
   }, [
     agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime,
-    streaming, backgroundWaiting, permissionMode, sessionMemoryDisabled, attachedDirs, attachedFileDirectories,
+    streaming, backgroundWaiting, permissionMode, sessionMemoryDisabled, effectiveContextMode, attachedDirs, attachedFileDirectories,
     clearStoppedByUser, queueMessageIntoActiveAgent, appendOptimisticPersistedMessage,
     revealRendererDraft, sessionId, setStreamingStates, consumeAgentInterruptionBlock,
   ])
@@ -2413,6 +2455,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       uuid: messageUuid,
       permissionModeOverride: permissionMode,
       disableContextMemory: sessionMemoryDisabled,
+      contextMode: effectiveContextMode,
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
       ...(() => {
@@ -2506,7 +2549,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
         return map
       })
     })
-  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, sessionMemoryDisabled, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement])
+  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, sessionMemoryDisabled, effectiveContextMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)
@@ -3152,6 +3195,24 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     },
     // Fast Mode 保留会话/请求层能力，但不在输入工具栏暴露切换入口。
     {
+      key: 'context-mode',
+      node: (
+        <ContextModeToggleButton
+          mode={effectiveContextMode}
+          onChange={handleContextModeChange}
+          disabled={sessionMemoryDisabled || globalContextIndexEnabled}
+          disabledReason={
+            sessionMemoryDisabled
+              ? '记忆关闭时为单轮聚焦，不加载历史，无需选择上下文模式。'
+              : globalContextIndexEnabled
+                ? '已由「全部会话使用索引」全局开关强制启用索引模式。'
+                : undefined
+          }
+          isProcessing={streaming || backgroundWaiting}
+        />
+      ),
+    },
+    {
       key: 'memory-toggle',
       node: (
         <ContextMemoryToggleButton
@@ -3177,6 +3238,10 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
           sessionId={sessionId}
           onCompact={handleCompact}
           composerTool
+          contextMode={effectiveContextMode}
+          memoryDisabled={sessionMemoryDisabled}
+          globalIndexEnabled={globalContextIndexEnabled}
+          onGlobalIndexChange={handleGlobalContextIndexChange}
         />
       ),
     },
@@ -3219,6 +3284,10 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     taskGraphEnabled,
     sessionMemoryDisabled,
     handleToggleSessionMemory,
+    effectiveContextMode,
+    handleContextModeChange,
+    globalContextIndexEnabled,
+    handleGlobalContextIndexChange,
   ])
 
   const inputTrailingNode = (streaming || streamState?.stopping) ? (
@@ -3323,6 +3392,14 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
 
         {/* 权限请求横幅 */}
         <div className="shrink-0">
+          {sessionMeta?.cslabLabId && (
+            <CsLabToolTrustBadge
+              sessionId={sessionId}
+              labId={sessionMeta.cslabLabId}
+              permissionMode={permissionMode}
+              revision={sessionMeta.revision}
+            />
+          )}
           <PermissionBanner sessionId={sessionId} onRequestStop={handleStop} />
 
           {/* AskUserQuestion 交互式问答横幅 */}
