@@ -902,6 +902,7 @@ async function bootstrap(): Promise<void> {
   installC11LocalAuthorWorkbench()
   installC11LocalNativeProductIntake()
   installC11NativeD4TechnicalPlan()
+  installC11NativeB1TechnicalPlan()
 
   // 远程服务（remote-service）：显式启动参数 PROFER_REMOTE=1 兼容保留；
   // 设置页开启「启用移动端连接」后，下次启动自动恢复监听（正式版与开发版一致）。
