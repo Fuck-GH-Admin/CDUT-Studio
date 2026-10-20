@@ -15,6 +15,8 @@ const button='rounded border border-border px-3 py-1 text-sm disabled:opacity-40
 export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactElement {
   const [state,setState]=React.useState<ReviewBackgroundPiRunState|null>(null)
   const [run,setRun]=React.useState<ReviewRunV2|null>(null)
+  const [history,setHistory]=React.useState<ReviewRunV2[]>([])
+  const [inspectedRunId,setInspectedRunId]=React.useState('')
   const [busy,setBusy]=React.useState(false)
   const [error,setError]=React.useState('')
   const [notice,setNotice]=React.useState('')
@@ -24,7 +26,10 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
   const refresh=React.useCallback(async():Promise<void>=>{
     if(!caseId)return
     const currentGeneration=generation.current
-    const next=await window.reviewAPI.getBackgroundPiReviewStateV2(caseId)
+    const [next,runs]=await Promise.all([
+      window.reviewAPI.getBackgroundPiReviewStateV2(caseId),
+      window.reviewAPI.listRunsV2(caseId),
+    ])
     if(next.caseId!==caseId)throw new Error('MAIN_PI_CASE_SCOPE_MISMATCH')
     const actual=next.runId
       ? await window.reviewAPI.getRunV2(caseId,next.runId) : undefined
@@ -33,12 +38,13 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
     if(currentGeneration!==generation.current)return
     setState(next)
     setRun(actual??null)
+    setHistory(runs.filter(item=>item.caseId===caseId))
   },[caseId])
 
   React.useEffect(()=>{
     generation.current+=1
     let live=true
-    setState(null);setRun(null);setShowAll(false);setError('');setNotice('')
+    setState(null);setRun(null);setHistory([]);setInspectedRunId('');setShowAll(false);setError('');setNotice('')
     if(!caseId)return()=>{live=false;generation.current+=1}
     void refresh().catch(e=>{
       if(live)setError(e instanceof Error?e.message:String(e))
@@ -63,6 +69,7 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
     setBusy(true);setError('');setNotice('')
     try{
       if(kind==='start'){
+        setInspectedRunId('')
         const next=await window.reviewAPI.startBackgroundPiReviewV2({caseId})
         if(next.caseId!==caseId)throw new Error('MAIN_PI_START_CASE_SCOPE_MISMATCH')
         setNotice('已提交真实 Pi 审核；下方只显示 Main 持久运行记录，不代表审核通过')
@@ -76,8 +83,9 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
-  const items=run?.checks??[]
-  const opinions=run?.opinions??[]
+  const viewed=inspectedRunId?history.find(item=>item.id===inspectedRunId)??run:run
+  const items=viewed?.checks??[]
+  const opinions=viewed?.opinions??[]
   const shown=showAll?items:items.slice(0,30)
   return <section className="space-y-3 rounded border border-border p-3" data-testid="review-v3-local-pi-ledger">
     <h3 className="text-sm font-semibold">真实 Pi 后台审核与结果账本</h3>
@@ -94,12 +102,22 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
       <button type="button" className={button} disabled={!caseId||busy}
         onClick={()=>void execute('refresh')}>刷新运行与检查结果</button>
     </div>
-    {run&&<div className="space-y-3 rounded border border-border/70 p-3">
-      <p className="text-sm font-medium">真实运行 {run.id} · 模板 {run.templateId}@{run.templateVersion}</p>
-      <p className="text-xs">检查计划 {run.coverage.plannedChecks} 项 · 已完成 {run.coverage.completedChecks} 项
-        {' · '}有效判断 {run.coverage.effectiveVerdicts} 项 · 待处理 {run.coverage.pendingChecks} 项
+    {history.length>0&&<label className="block space-y-1 text-xs">
+      <span>查看本案历史运行（实时刷新保留，选择不会改变 Main 当前运行）</span>
+      <select className="w-full rounded border border-border bg-background p-2"
+        value={inspectedRunId} onChange={e=>{setInspectedRunId(e.target.value);setShowAll(false)}}>
+        <option value="">当前最新运行{state?.runId?' · '+state.runId:''}</option>
+        {history.map(item=><option key={item.id} value={item.id}>
+          {item.startedAt} · {item.status} · {item.id} · 检查 {item.coverage.completedChecks}/{item.coverage.plannedChecks}
+        </option>)}
+      </select>
+    </label>}
+    {viewed&&<div className="space-y-3 rounded border border-border/70 p-3">
+      <p className="text-sm font-medium">真实运行 {viewed.id} · 模板 {viewed.templateId}@{viewed.templateVersion}</p>
+      <p className="text-xs">检查计划 {viewed.coverage.plannedChecks} 项 · 已完成 {viewed.coverage.completedChecks} 项
+        {' · '}有效判断 {viewed.coverage.effectiveVerdicts} 项 · 待处理 {viewed.coverage.pendingChecks} 项
         {' · '}模型意见 {opinions.length} 条</p>
-      {run.error&&<p role="alert" className="text-xs text-red-600">执行异常：{run.error}</p>}
+      {viewed.error&&<p role="alert" className="text-xs text-red-600">执行异常：{viewed.error}</p>}
       {items.length===0?<p className="text-xs text-muted-foreground">Main 当前未持久化检查结果；执行中或待补充材料。</p>:
         <div className="space-y-2">
           <h4 className="text-sm font-medium">逐项检查结果（来自 Run 账本）</h4>
