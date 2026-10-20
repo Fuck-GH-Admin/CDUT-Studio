@@ -381,9 +381,10 @@ export async function handleCMainB20NativeArchiveRepick(
     return refuse('B20_REPICK_TEMPLATE_OR_ARCHIVE_INVALID')
   const templateId=data.templateId, archiveId=data.archiveId
   const installed=b20ReadInstallation
-  if(!installed || typeof installed.source.repickNativeArchive!=='function')
-    return refuse('B20_NATIVE_PICKER_NOT_INSTALLED')
+  if(!installed)return refuse('B20_NATIVE_PICKER_NOT_INSTALLED')
   const src=installed.source
+  const performRepick=src.repickNativeArchive
+  if(typeof performRepick!=='function')return refuse('B20_NATIVE_PICKER_NOT_INSTALLED')
   const current=()=>{
     if(b20ReadInstallation!==installed)refuse('B20_SOURCE_INSTALLATION_REVOKED')
     const frame=liveFrame(event)
@@ -412,7 +413,7 @@ export async function handleCMainB20NativeArchiveRepick(
      !Number.isSafeInteger(numeric.senderId)||numeric.senderId<0||
      typeof numeric.frameId!=='number'||!Number.isSafeInteger(numeric.frameId)||numeric.frameId<0)
     return refuse('B20_NATIVE_PICKER_NUMERIC_FRAME_MISSING')
-  await src.repickNativeArchive(observed.pin,observed.id,
+  await performRepick(observed.pin,observed.id,
     {senderId:numeric.senderId,frameId:numeric.frameId},archiveId)
   if(JSON.stringify(current())!==JSON.stringify(observed))
     return refuse('B20_MAIN_REVOKED_DURING_NATIVE_PICK')
