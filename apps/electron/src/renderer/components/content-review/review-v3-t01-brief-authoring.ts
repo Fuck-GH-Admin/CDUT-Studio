@@ -22,7 +22,7 @@ const scenarios: Array<[RegExp, T01ScenarioId]> = [
   [/评委|竞赛评审|项目评分/, 'judging'],
   [/报销|经费报账|票据核对/, 'expense'],
   [/协议|合同审查|条款审查/, 'agreement'],
-  [/活动申请|活动审批|场地活动/, 'activity'],
+  [/活动申请|活动审批|场地活动|社团活动|活动安排/, 'activity'],
 ]
 const objects: Array<[RegExp, TemplateVersion['objectType']]> = [
   [/组织|社团|协会/, 'organization'], [/项目|作品|团队/, 'project'],
@@ -49,7 +49,9 @@ const pick = (text: string, label: string): string | undefined => {
   const line = text.split(/\r?\n/).find(s => new RegExp('^\\s*(?:' + label + ')\\s*[:：]').test(s))
   return line?.replace(new RegExp('^\\s*(?:' + label + ')\\s*[:：]\\s*'), '').trim()
 }
-const tokens = (text: string): string[] => text.split(/[、，,；;]+/).map(clean).filter(Boolean)
+const tokens = (text: string): string[] => text
+  .replace(/和(?=(?:预算|名单|材料|负责人|联系人|参加人数|参与人数|使用日期|使用时段|用途|金额|活动名称|组织名称))/g, '、')
+  .split(/[、，,；;]+/).map(clean).filter(Boolean)
 function sourceKey(label: string, used: Set<string>): string {
   const known = fieldKeys.find(([re]) => re.test(label))?.[1]
   const base = known ?? 'field'
@@ -118,12 +120,16 @@ export function draftT01FromBrief(raw: string, templateId: string, createdAt: st
   const objectType = explicitObject
     ? (objects.find(([re]) => re.test(explicitObject))?.[1] ?? 'custom')
     : (scenario ? seed.objectType : 'custom')
-  const fieldsLine = pick(text, '字段|填写字段|申请字段|需要填写')
+  const fieldsLine = pick(text, '字段|填写字段|申请字段|需要填写') ??
+    text.match(/(?:申请人|负责人|用户|提交者)?(?:需要|应|须)?(?:填写|填报)(?:以下)?(?:字段|信息)?[：:\s]*([^。；\n]+)/)?.[1]
   const used = new Set<string>()
   const suppliedFields = fieldsLine ? tokens(fieldsLine).map(s => explicitField(s, used)) : []
-  const materialsLine = pick(text, '材料|必交材料|上传材料|附件')
+  const materialsLine = pick(text, '材料|必交材料|上传材料|附件') ??
+    text.match(/(?:必须|需要|应当|须)(?:提交|上传|提供)(?:以下)?(?:的)?(?:材料|附件|文件)?[：:\s]*([^。；\n]+)/)?.[1]
   const suppliedSlots = materialsLine ? tokens(materialsLine).map(toSlot) : []
-  const flowLine = pick(text, '流程|审核流程|处理流程')
+  const proseStages=text.match(/(?:先由|先)([^。；\n]+?)(?:再由|然后)([^。；\n]+)/)
+  const flowLine = pick(text, '流程|审核流程|处理流程') ??
+    (proseStages ? proseStages[1] + '→' + proseStages[2] : undefined)
   const suppliedStages = flowLine ? stagePlan(flowLine) : []
   const extracted: string[] = [], questions: string[] = []
   if (title) extracted.push('模板名称：' + description)
