@@ -81,7 +81,9 @@ describe('T03 real fact/evidence review', () => {
       operationId: 'split-request-1', subjectId: 'alice', now: '2026-10-21',
       parts: [
         { id: 'alice-award', title: '获奖事项', fieldKeys: ['score'], evidenceLinkIds: ['a1'] },
-        { id: 'alice-other', title: '其他事项', fieldKeys: [], evidenceLinkIds: [] },
+        { id: 'alice-other', title: '其他事项', fieldKeys: [], evidenceLinkIds: [], sourceRefs: [
+          { caseId: 'case1', documentVersionId: 'notice', parseRevision: 1, location: { kind: 'file' } },
+        ] },
       ],
     })
     expect(split.blockedReasons).toEqual([])
