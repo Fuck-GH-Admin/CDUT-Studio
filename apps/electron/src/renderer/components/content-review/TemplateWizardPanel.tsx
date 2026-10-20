@@ -12,6 +12,8 @@ import { T01_SCENARIOS, createT01Scenario, type T01ScenarioId } from './review-v
 import { ReviewV3T01TrialPanel } from './ReviewV3T01TrialPanel'
 import { ReviewV3T01AuthoringLaunchpad } from './ReviewV3T01AuthoringLaunchpad'
 import { ReviewV3T01ConditionEditor } from './ReviewV3T01ConditionEditor'
+import { ReviewV3T01NumberRuleEditor } from './ReviewV3T01NumberRuleEditor'
+import { readT01NumberLimit, validateT01TypedCriteria, type T01CriterionWithConstraint } from './review-v3-t01-typed-criteria'
 import { exportT01Template, importT01Template } from './review-v3-t01-template-portability'
 
 type EditableFieldKind = 'text' | 'number' | 'date' | 'boolean' | 'enum'
@@ -109,7 +111,7 @@ function normalizeOrder(sections: TemplateSectionSpec[]): TemplateSectionSpec[] 
   return sections.map((section, order) => ({ ...section, order }))
 }
 
-function validateEditor(template: TemplateVersion): string[] {
+function validateEditor(template: TemplateVersion, forPublish = false): string[] {
   const issues: string[] = []
   if (!template.name.trim()) issues.push('请填写模板名称')
   const keys = template.fields.map((field) => field.key.trim())
@@ -120,6 +122,7 @@ function validateEditor(template: TemplateVersion): string[] {
   if (template.sections?.some((section) => section.criteria.some((criterion) => !criterion.title.trim() || !criterion.requirement.trim()))) issues.push('审核标准的名称和具体要求不能为空')
   if (template.materialSlots.some((slot) => !slot.id.trim() || !slot.name.trim())) issues.push('材料槽编号和名称不能为空')
   if (template.stages.length === 0) issues.push('至少保留一个审核流程节点')
+  if (forPublish) issues.push(...validateT01TypedCriteria(template))
   return issues
 }
 
@@ -260,7 +263,7 @@ export function TemplateWizardPanel(): JSX.Element {
 
   const publish = async (): Promise<void> => {
     if (!editing) return
-    const problems = validateEditor(editing)
+    const problems = validateEditor(editing, true)
     if (problems.length > 0) { setMessage(problems); return }
     setLoading(true)
     store.set(reviewV2BusyAtom, true)
@@ -528,7 +531,11 @@ export function TemplateWizardPanel(): JSX.Element {
                           <input aria-label="标准名称" className="rounded border bg-background px-2 py-1 text-xs" placeholder="标准名称，如等级核对" value={criterion.title} onChange={(event) => updateTemplate((current) => ({ ...current, sections: (current.sections ?? []).map((item, i) => i === sectionIndex ? { ...item, criteria: item.criteria.map((entry, j) => j === criterionIndex ? { ...entry, title: event.target.value } : entry) } : item) }))} />
                           <select aria-label="执行方式" className="rounded border bg-background px-2 py-1 text-xs" value={criterion.execution} onChange={(event) => {
                             const execution = event.target.value as TemplateCriterionSpec['execution']
-                            updateCriterion(sectionIndex, criterionIndex, (entry) => ({ ...entry, execution, ...(execution === 'deterministic' ? { dataCheck: entry.dataCheck ?? { kind: 'sheet-sum-match', materialSlotId: editing.materialSlots[0]?.id ?? '', firstDataRow: 2, labelColumn: 'A', valueColumn: 'B', stopLabels: ['合计'] } } : { dataCheck: undefined }) }))
+                            updateCriterion(sectionIndex, criterionIndex, (entry) => {
+                               if (execution === 'deterministic') return { ...entry, execution, ...(readT01NumberLimit(entry) ? { dataCheck: undefined } : { dataCheck: entry.dataCheck ?? { kind: 'sheet-sum-match', materialSlotId: editing.materialSlots[0]?.id ?? '', firstDataRow: 2, labelColumn: 'A', valueColumn: 'B', stopLabels: ['合计'] } }) }
+                               const { deterministicConstraint: _old, ...rest } = entry as T01CriterionWithConstraint
+                               return { ...rest, execution, dataCheck: undefined }
+                             })
                           }}>
                             <option value="semantic">Agent 核对</option><option value="manual">人工确认</option><option value="deterministic">程序计算</option>
                           </select>
@@ -542,6 +549,22 @@ export function TemplateWizardPanel(): JSX.Element {
                           </div>
                         </div>
                         <textarea className="mt-2 w-full rounded border bg-background px-2 py-1.5 text-xs" rows={2} placeholder="写清审核要求与判定边界；按本单位、本年度正式依据填写。" value={criterion.requirement} onChange={(event) => updateTemplate((current) => ({ ...current, sections: (current.sections ?? []).map((item, i) => i === sectionIndex ? { ...item, criteria: item.criteria.map((entry, j) => j === criterionIndex ? { ...entry, requirement: event.target.value } : entry) } : item) }))} />
+                        {criterion.execution === 'deterministic' && (
+                          <div className="mt-2">
+                            <ReviewV3T01NumberRuleEditor criterion={criterion} fields={editing.fields}
+                              onChange={next => updateCriterion(sectionIndex, criterionIndex, () => next)}/>
+                            {readT01NumberLimit(criterion) && (
+                              <button type="button" className="mt-2 rounded border px-2 py-1 text-xs"
+                                onClick={() => updateCriterion(sectionIndex, criterionIndex, entry => {
+                                  const { deterministicConstraint: _old, ...rest } = entry as T01CriterionWithConstraint
+                                  return { ...rest, dataCheck: {
+                                    kind: 'sheet-sum-match', materialSlotId: editing.materialSlots[0]?.id ?? '',
+                                    firstDataRow: 2, labelColumn: 'A', valueColumn: 'B', stopLabels: ['合计'],
+                                  } }
+                                })}>改回工作簿核对</button>
+                            )}
+                          </div>
+                        )}
                         {criterion.execution === 'deterministic' && criterion.dataCheck && (
                           <div className="mt-2 grid gap-2 rounded border bg-background p-2 text-xs md:grid-cols-3">
                             <label>表格检查
