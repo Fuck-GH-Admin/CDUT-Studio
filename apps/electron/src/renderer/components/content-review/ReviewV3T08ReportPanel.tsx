@@ -2,6 +2,7 @@
 import * as React from 'react'
 import type { CaseAggregateV2, ReviewRunV2, TemplateVersion } from '@profer/shared'
 import { makeT08CaseReport, t08ReportTable, type T08Audience } from './review-v3-t08-case-report'
+import { renderT08ReportPdf } from './review-v3-t08-pdf'
 
 interface Props {
   aggregate: CaseAggregateV2 | null
@@ -34,7 +35,7 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
   const [runs, setRuns] = React.useState<ReviewRunV2[]>([])
   const [selectedId, setSelectedId] = React.useState('')
   const [audience, setAudience] = React.useState<T08Audience>('student')
-  const [format, setFormat] = React.useState<'md' | 'json' | 'xlsx' | 'html'>('md')
+  const [format, setFormat] = React.useState<'md' | 'json' | 'xlsx' | 'html' | 'pdf'>('md')
   const [busy, setBusy] = React.useState(false)
   const [notice, setNotice] = React.useState('')
   const caseId = aggregate?.caseV2.id ?? ''
@@ -68,7 +69,12 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
     setNotice('')
     try {
       const filename = safeFilename(report.caseId + '-' + report.runId + '-' + audience)
-      if (format === 'xlsx') {
+      if (format === 'pdf') {
+        const pdf = renderT08ReportPdf(report.markdown, '审核报告 · ' + report.runId)
+        const buffer = new ArrayBuffer(pdf.length)
+        new Uint8Array(buffer).set(pdf)
+        saveBlob(new Blob([buffer], { type: 'application/pdf' }), filename + '.pdf')
+      } else if (format === 'xlsx') {
         const XLSX = await import('xlsx')
         const book = XLSX.utils.book_new()
         const sheet = XLSX.utils.aoa_to_sheet(t08ReportTable(report))
@@ -80,7 +86,8 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
         const mime = format === 'json' ? 'application/json' : format === 'html' ? 'text/html' : 'text/markdown'
         saveBlob(new Blob([text], { type: mime + ';charset=utf-8' }), filename + '.' + format)
       }
-      setNotice(format === 'html' ? '已请求保存可打印 HTML；在浏览器中打开后可打印为 PDF。' : '已向系统提交文件下载，请确认保存结果。')
+      setNotice(format === 'pdf' ? '已生成真实 PDF 文件并请求下载。此版本以图片页保留中文，不支持选中文字；请确认文件保存。' :
+        format === 'html' ? '已请求保存可打印 HTML；在浏览器中打开后可打印为 PDF。' : '已向系统提交文件下载，请确认保存结果。')
     } catch (error) {
       setNotice('导出未完成：' + (error instanceof Error ? error.message : String(error)))
     } finally { setBusy(false) }
@@ -120,6 +127,7 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
             <option value="json">JSON 结构化交接</option>
             <option value="xlsx">XLSX 检查与来源表</option>
             <option value="html">HTML 打印版（可打印为 PDF）</option>
+            <option value="pdf">PDF 文件（A4 分页，中文图片页）</option>
           </select>
         </div>
         <div className="flex gap-2">

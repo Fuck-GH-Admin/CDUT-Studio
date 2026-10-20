@@ -19,6 +19,7 @@ import { Textarea } from '@profer/ui/primitives/textarea'
 import type { CaseAggregateV2, ReviewAssistantMessage, SourceRef } from '@profer/shared'
 import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
 import { ReviewV3T08ReportPanel } from './ReviewV3T08ReportPanel'
+import { ReviewV3T08SuggestionReview } from './ReviewV3T08SuggestionReview'
 import { resolveT08Source, t08AssistantContext, type T08ResolvedSource } from './review-v3-t08-case-report'
 import {
   reviewAssistantOpenAtom,
@@ -68,7 +69,6 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
   const [preview, setPreview] = React.useState<{ path: string; fileName: string } | null>(null)
   const [sourceNotice, setSourceNotice] = React.useState('')
   const [draftOpinionId, setDraftOpinionId] = React.useState<string | null>(null)
-  const [proposal, setProposal] = React.useState('')
   const [draft, setDraft] = React.useState('')
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -82,7 +82,6 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
     setInspected(null)
     setPreview(null)
     setDraftOpinionId(null)
-    setProposal('')
     setSourceNotice('')
   }, [caseId, currentRun?.id])
 
@@ -258,17 +257,19 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
               <p className="my-1 whitespace-pre-wrap">{opinion.detail}</p>
               <p className="mb-1 text-muted-foreground">AI 建议（并非已执行的修改）：{opinion.suggestionText}</p>
               {opinion.sourceRefs.map((ref, idx) => <SourceLink key={idx} refItem={ref} aggregate={aggregate} onOpen={openSource} />)}
-              <button type="button" className="mt-2 rounded border border-border px-2 py-1" onClick={() => {setDraftOpinionId(opinion.id);setProposal(opinion.suggestionText);}}>审阅修改草案</button>
+              <button type="button" className="mt-2 rounded border border-border px-2 py-1" onClick={() => setDraftOpinionId(opinion.id)}>审阅修改草案</button>
             </article>)}
             {!currentRun.checks.length && !opinions.length && <p>该 Run 无检查/建议记录，不能制造问题卡。</p>}
           </div>}
-          {draftOpinion && <div className="rounded border border-primary/30 p-2 text-xs">
-            <p className="mb-1 font-medium">待确认草案 · {draftOpinion.title}</p>
-            <textarea aria-label="编辑待确认建议" className="h-24 w-full resize-y rounded border border-border bg-background p-2" value={proposal} onChange={(event) => setProposal(event.target.value)} />
-            <p className="mb-2 text-muted-foreground">仅为可审阅草案，未改变任何案卷字段或原件；正式应用须经具名用户的 Main 写入操作。</p>
-            <button type="button" className="mr-2 rounded border px-2 py-1" onClick={() => void navigator.clipboard.writeText(proposal).then(() => setSourceNotice('草案已复制；可在相应人工处理页面确认应用。')).catch((error) => setSourceNotice('复制失败：' + error))}>复制草案</button>
-            <button type="button" className="rounded border px-2 py-1" onClick={() => { setTab('chat'); setActivePane('right') }}>查看审核员待办</button>
-          </div>}
+          {draftOpinion && currentRun && aggregate && <ReviewV3T08SuggestionReview
+            key={draftOpinion.id + ':' + currentRun.id}
+            aggregate={aggregate}
+            run={currentRun}
+            template={workspaceTemplate}
+            opinion={draftOpinion}
+            stale={workspaceRunStale}
+            onClose={() => setDraftOpinionId(null)}
+          />}
         </>}
         {tab === 'reports' && <ReviewV3T08ReportPanel aggregate={aggregate} currentRun={currentRun} currentStale={workspaceRunStale} template={workspaceTemplate} />}
         {tab === 'chat' && pending && (
