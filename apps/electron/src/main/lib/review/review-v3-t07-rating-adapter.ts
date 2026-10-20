@@ -15,10 +15,10 @@ export function fromLegacyJudgeAssignments(assignments: JudgeAssignment[]): T07A
     reason: a.recuseReason,
   }))
 }
-export function toLegacyJudgeRating(vote: T07Vote): JudgeRating {
+export function toLegacyJudgeRating(vote: T07Vote, rubricVersion: number): JudgeRating {
   return {
     assignmentId: vote.assignmentId, reviewerId: vote.reviewerId, caseId: vote.caseId,
-    rubricVersion: 0, // Caller MUST replace with its locked rubricVersion before persistence.
+    rubricVersion,
     scores: vote.scores.map((s) => ({ ...s })),
     publicFeedback: vote.publicFeedback, internalNotes: vote.internalNotes,
     submittedAt: vote.submittedAt,
