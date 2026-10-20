@@ -21,7 +21,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ReviewDocumentBlock, SourceDocument } from '@profer/shared'
-import { parseFileIntoSourceDocument, parseTextIntoBlocks, slugifyFileName } from './document-service'
+import { parseCsvIntoCellBlocks, parseFileIntoSourceDocument, parseTextIntoBlocks, slugifyFileName } from './document-service'
 
 /** 测试用临时目录根：仓库 work/tmp/（严禁落到系统 /tmp） */
 const workTmpRoot = join(import.meta.dir, '../../../../../../work/tmp')
@@ -194,10 +194,10 @@ describe('parseFileIntoSourceDocument / 文本类文件入口（行为不回归�
     expect(document.parseStatus).toBe('parsed')
     expect(document.mimeType).toBe('text/csv')
     expect(document.blocks.map((block: ReviewDocumentBlock) => block.kind)).toEqual([
-      'heading',
-      'table-cell',
-      'table-cell',
+      'heading', 'heading', 'table-cell', 'table-cell', 'table-cell', 'table-cell',
     ])
+    expect(document.blocks[2]?.table).toEqual({ sheet: 'CSV', row: 2, column: 1 })
+    expect(document.blocks[3]?.table).toEqual({ sheet: 'CSV', row: 2, column: 2 })
   })
 
   test('Given HTML 申报材料 When 导入 Then 提取可读正文和实体字符并忽略脚本', async () => {
@@ -244,6 +244,42 @@ describe('parseFileIntoSourceDocument / 文本类文件入口（行为不回归�
     expect(extracted).toContain('Subject: 补充文件')
     expect(extracted).toContain('请补交完整证书。')
     expect(extracted).not.toContain('备用 HTML 正文')
+  })
+})
+
+describe('T02 / imported original version and CSV source precision', () => {
+  test('quoted newlines, doubled quotes and numeric-looking IDs remain in their actual CSV cells', async () => {
+    const content = '学号,项目,备注\r\n0000123,"成果\r\n二等奖","他说""已获奖"""\r\n0000124,普通,完整'
+    const blocks = parseCsvIntoCellBlocks('成绩.csv', content)
+    expect(blocks).toHaveLength(9)
+    expect(blocks.find((b) => b.table?.row === 2 && b.table.column === 1)?.text).toBe('0000123')
+    expect(blocks.find((b) => b.table?.row === 2 && b.table.column === 2)?.text).toBe('成果\r\n二等奖')
+    expect(blocks.find((b) => b.table?.row === 2 && b.table.column === 3)?.text).toBe('他说"已获奖"')
+    expect(blocks.find((b) => b.table?.row === 3 && b.table.column === 1)?.text).toBe('0000124')
+  })
+
+  test('two physical originals with identical names must not share document or source block identity', async () => {
+    const firstPath = join(testRoot, '同名原件-A.txt')
+    const secondPath = join(testRoot, '同名原件-B.txt')
+    writeFileSync(firstPath, '第一份独立原件')
+    writeFileSync(secondPath, '第二份独立原件')
+    const [first, second] = await Promise.all([
+      parseFileIntoSourceDocument(firstPath, '证书.txt', 'evidence'),
+      parseFileIntoSourceDocument(secondPath, '证书.txt', 'evidence'),
+    ])
+    expect(first.id).not.toBe(second.id)
+    expect(first.blocks[0]?.id).not.toBe(second.blocks[0]?.id)
+    expect(first.blocks[0]?.text).toContain('第一份')
+    expect(second.blocks[0]?.text).toContain('第二份')
+  })
+
+  test('an empty CSV cannot claim it was fully parsed', async () => {
+    const path = join(testRoot, '空白表.csv')
+    writeFileSync(path, '\r\n\r\n')
+    const parsed = await parseFileIntoSourceDocument(path, '空白表.csv', 'evidence')
+    expect(parsed.parseStatus).toBe('partial')
+    expect(parsed.blocks).toHaveLength(0)
+    expect(parsed.parseError).toContain('可用单元格')
   })
 })
 
