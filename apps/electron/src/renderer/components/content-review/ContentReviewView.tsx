@@ -28,7 +28,6 @@ import {
   Gavel,
   Layers,
   MessageCircle,
-  RotateCcw,
 } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { isEditableTarget } from '@/lib/navigation-controller'
@@ -52,6 +51,7 @@ import { CenterPanel } from './CenterPanel'
 import { LeftPanel } from './LeftPanel'
 import { RightPanel } from './RightPanel'
 import { reviewV2AggregateAtom, V2CasePanel } from './V2CasePanel'
+import { ReviewV3T10WorkspaceOverview } from './ReviewV3T10WorkspaceOverview'
 import { TemplateWizardPanel } from './TemplateWizardPanel'
 import { ReviewV3LocalCandidateWorkbench } from './ReviewV3LocalCandidateWorkbench'
 import { BatchPanel } from './BatchPanel'
@@ -84,6 +84,25 @@ export function ContentReviewView(): React.ReactElement {
     () => typeof window !== 'undefined' && window.innerWidth < NARROW_BREAKPOINT_PX,
   )
   const [exporting, setExporting] = React.useState(false)
+
+  // 与独立的 V2 办理模块共用同一份真实案卷；只读取现有 Main 聚合。
+  const openBusinessCase = React.useCallback(async (): Promise<void> => {
+    if (reviewCase) {
+      try {
+        const aggregate = await window.reviewAPI.openAggregateV2(reviewCase.id)
+        if (aggregate) setV2Aggregate(aggregate)
+        else toast.error('当前案卷的业务记录暂不可读取')
+      } catch (error) {
+        toast.error(`读取案卷办理记录失败：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    setSection('case-v2')
+  }, [reviewCase, setSection, setV2Aggregate])
+
+  const openPane = React.useCallback((pane: Pane): void => {
+    setActivePane(pane)
+    setSection('workbench')
+  }, [setActivePane, setSection])
 
   const handleExport = async (): Promise<void> => {
     setExporting(true)
@@ -136,19 +155,18 @@ export function ContentReviewView(): React.ReactElement {
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <nav aria-label="审核工作页" className="flex shrink-0 flex-wrap items-center gap-1">
             {([
-              ['workbench', '预审工作台'],
-              ['case-v2', 'V2 案卷'],
-              ['templates', '模板编排'],
-              ['local-candidates', '本地候选模板'],
+              ['workbench', '审核工作台'],
+              ['case-v2', '案卷办理'],
+              ['templates', '审核模板'],
               ['batches', '批次管理'],
             ] as Array<[ReviewWorkspaceSection, string]>).map(([id, label]) => (
               <Button
                 key={id}
                 size="sm"
-                variant={section === id ? 'secondary' : 'ghost'}
+                variant={(id === 'templates' ? section === 'templates' || section === 'local-candidates' : section === id) ? 'secondary' : 'ghost'}
                 className="h-7 px-2.5 text-xs font-medium"
-                aria-pressed={section === id}
-                onClick={() => setSection(id)}
+                aria-pressed={id === 'templates' ? section === 'templates' || section === 'local-candidates' : section === id}
+                onClick={() => id === 'case-v2' ? void openBusinessCase() : setSection(id)}
               >
                 {label}
               </Button>
@@ -158,8 +176,8 @@ export function ContentReviewView(): React.ReactElement {
           {reviewCase && (
             <div className="flex min-w-0 items-center gap-1.5 rounded-md bg-foreground/[0.04] px-2 py-1 text-xs text-muted-foreground">
               <FileText size={12} className="shrink-0 text-foreground/60" />
-              <span className="max-w-[200px] truncate" title={reviewCase.title}>
-                {reviewCase.applicant} · {reviewCase.academicYear}
+              <span className="max-w-[260px] truncate" title={reviewCase.title}>
+                {reviewCase.title}{reviewCase.applicant ? ` · ${reviewCase.applicant}` : ''}
               </span>
             </div>
           )}
@@ -168,16 +186,6 @@ export function ContentReviewView(): React.ReactElement {
         {/* 右侧：出口状态徽标 + 业务操作按钮 */}
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <GatewayBadge status={gatewayStatus} />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1.5 px-2.5 text-xs"
-            onClick={() => void actions.loadDemoCase()}
-          >
-            <RotateCcw size={12} />
-            <span>载入演示案卷</span>
-          </Button>
           <Button
             type="button"
             variant="outline"
@@ -202,6 +210,22 @@ export function ContentReviewView(): React.ReactElement {
           </Button>
         </div>
       </header>
+
+      <ReviewV3T10WorkspaceOverview
+        onOpenReview={() => setSection('workbench')}
+        onOpenMaterials={() => openPane('center')}
+        onOpenTasks={() => openPane('right')}
+        onOpenTemplates={() => setSection('templates')}
+        onOpenBusiness={() => void openBusinessCase()}
+      />
+
+      {(section === 'templates' || section === 'local-candidates') && (
+        <nav aria-label="模板工作区" className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card/40 px-4 py-1.5 titlebar-no-drag">
+          <Button type="button" size="sm" variant={section === 'templates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('templates')}>模板库与业务配置</Button>
+          <Button type="button" size="sm" variant={section === 'local-candidates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('local-candidates')}>候选方案与技术试跑</Button>
+          <span className="text-[11px] text-muted-foreground">候选技术方案并非已发布的正式业务模板</span>
+        </nav>
+      )}
 
       {/* ===== 窄屏：顶部三按钮切换栏 ===== */}
       {narrow && section === 'workbench' && (
@@ -241,8 +265,8 @@ export function ContentReviewView(): React.ReactElement {
         </PaneWrapper>
       </main>
 
-      <section aria-label="V2 案卷管理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'case-v2' && 'hidden')}>
-        <V2CasePanel />
+      <section aria-label="当前案卷业务办理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'case-v2' && 'hidden')}>
+        <V2CasePanel onCaseOpened={(caseId) => { void actions.selectCase(caseId) }} />
       </section>
       <section aria-label="审核模板编排" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'templates' && 'hidden')}>
         <TemplateWizardPanel />
@@ -257,6 +281,7 @@ export function ContentReviewView(): React.ReactElement {
             const aggregate = await window.reviewAPI.openAggregateV2(caseId)
             if (aggregate) {
               setV2Aggregate(aggregate)
+              void actions.selectCase(caseId)
               setSection('case-v2')
               return true
             }
