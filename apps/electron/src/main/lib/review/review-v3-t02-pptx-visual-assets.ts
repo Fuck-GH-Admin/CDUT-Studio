@@ -63,7 +63,10 @@ async function orderedSlideParts(zip: JSZip): Promise<string[]> {
       .flatMap(id => {
         const target = id ? refs.get(id)?.target : undefined
         if (!target) return []
-        const normalized = posix.normalize(posix.join('ppt', target.replace(/\\/g, '/').replace(/^\//, '')))
+        const fixedTarget = target.replace(/\\/g, '/')
+        const normalized = posix.normalize(fixedTarget.startsWith('/')
+          ? fixedTarget.slice(1)
+          : posix.join('ppt', fixedTarget))
         return normalized.startsWith('ppt/slides/') && zip.file(normalized) ? [normalized] : []
       })
     if (parts.length > 0) return parts
