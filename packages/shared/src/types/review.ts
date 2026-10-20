@@ -602,6 +602,12 @@ export const REVIEW_IPC_CHANNELS = {
   T07_APPLY_ACTION: 'review-v3:t07-apply-action',
   /** T07 建立评分轮次（仅组织者、仅首次） */
   T07_INIT_STATE: 'review-v3:t07-init-state',
+  /** T09 签发学生离线应答包 */
+  T09_ISSUE_STUDENT: 'review-v3:t09-issue-student',
+  /** T09 预览离线回件（只校验不写入） */
+  T09_PREVIEW_REPLY: 'review-v3:t09-preview-reply',
+  /** T09 导入离线回件（附件先登记原件，再原子答复补件） */
+  T09_IMPORT_REPLY: 'review-v3:t09-import-reply',
   RUN_BATCH_V2: 'review-v2:run-batch',
   SUBMIT_APPEAL_V2: 'review-v2:submit-appeal',
   RESOLVE_APPEAL_V2: 'review-v2:resolve-appeal',

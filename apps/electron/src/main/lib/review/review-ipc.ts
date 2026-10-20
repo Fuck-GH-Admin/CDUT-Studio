@@ -761,6 +761,77 @@ export function registerReviewIpc(): void {
     const { initT07MainState } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
     return initT07MainState({ batchId: input.batchId, claim: input.claim, state: input.state })
   })
+  // ===== T09 离线包（Local-L04 桥接：签发 / 预览 / 幂等导入） =====
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T09_ISSUE_STUDENT, (event, input: {
+    caseId: string; supplementId: string; recipientId: string
+    fieldVisibility?: Record<string, 'public' | 'internal'>
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId || !input.supplementId || !input.recipientId) throw new Error('参数非法')
+    const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+    const aggregate = getCaseV2Aggregate(input.caseId)
+    if (!aggregate) throw new Error('案卷不存在')
+    const { issueT09StudentPackage } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
+    return issueT09StudentPackage({
+      aggregate, supplementId: input.supplementId, recipientId: input.recipientId,
+      ...(input.fieldVisibility ? { fieldVisibility: input.fieldVisibility } : {}),
+    })
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T09_PREVIEW_REPLY, (event, input: {
+    caseId: string; packageJson: string
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId || typeof input.packageJson !== 'string') throw new Error('参数非法')
+    const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+    const aggregate = getCaseV2Aggregate(input.caseId)
+    if (!aggregate) throw new Error('案卷不存在')
+    const { previewT09Package } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
+    const { task, ...rest } = previewT09Package({ aggregate, packageJson: input.packageJson })
+    return rest
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T09_IMPORT_REPLY, async (event, input: {
+    caseId: string; packageJson: string
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId || typeof input.packageJson !== 'string') throw new Error('参数非法')
+    const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+    const { registerNativeWorkspaceMaterialV3 } = require('./native-workspace-case-v3') as typeof import('./native-workspace-case-v3')
+    const { respondSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
+    const { importT09Package, t09AssetTempRoot } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
+    const { writeFileSync } = require('node:fs') as typeof import('node:fs')
+    const { join } = require('node:path') as typeof import('node:path')
+    const { randomUUID } = require('node:crypto') as typeof import('node:crypto')
+    const result = await importT09Package({
+      caseId: input.caseId, packageJson: input.packageJson,
+      deps: {
+        readAggregate: (caseId) => getCaseV2Aggregate(caseId),
+        registerAsset: async (caseId, name, _mimeType, bytes) => {
+          // 附件必须成为真实原件：先落临时文件，再走原生材料登记
+          const safeName = String(name).replace(/[^A-Za-z0-9._-]/g, '_').slice(-120) || 'offline-asset.bin'
+          const path = join(t09AssetTempRoot(), `${randomUUID()}-${safeName}`)
+          writeFileSync(path, bytes)
+          const document = await registerNativeWorkspaceMaterialV3(caseId, path, 'evidence', undefined,
+            () => assertC0ReviewMainSender(event))
+          // SourceDocument 只给 documentId；真实版本号以案卷聚合为准
+          const after = getCaseV2Aggregate(caseId)
+          const version = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
+          if (!version) throw new Error('附件已登记但找不到对应原件版本')
+          return version.versionId
+        },
+        respondSupplement: async (caseId, supplementId, note, documentVersionIds, expectedRevision) => {
+          const aggregate = getCaseV2Aggregate(caseId)
+          if (!aggregate) return { ok: false, message: '案卷不存在' }
+          const written = await respondSupplementV2(caseId, {
+            requestId: `t09-${supplementId}-${Date.now()}`, actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            expectedRevision: aggregate.caseV2.revision,
+            payload: { supplementId, note, documentVersionIds },
+          })
+          return { ok: written.ok, message: written.ok ? undefined : `${written.code}: ${written.message}` }
+        },
+      },
+    })
+    return result
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_SUBJECT_ADJUDICATION_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { recordWorkspaceSubjectAdjudicationV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return recordWorkspaceSubjectAdjudicationV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordWorkspaceSubjectAdjudicationV2>[1])

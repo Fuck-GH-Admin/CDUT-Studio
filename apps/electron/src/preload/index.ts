@@ -4719,6 +4719,24 @@ const reviewAPI = {
     updatedAt: string
     view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
   }>,
+  /** T09 签发学生离线应答包 */
+  issueT09StudentPackage: (input: {
+    caseId: string; supplementId: string; recipientId: string
+    fieldVisibility?: Record<string, 'public' | 'internal'>
+  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T09_ISSUE_STUDENT, input) as Promise<{
+    packageId: string; actionId: string; json: string
+  }>,
+  /** T09 预览离线回件（只校验不写入） */
+  previewT09Package: (input: { caseId: string; packageJson: string }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T09_PREVIEW_REPLY, input) as Promise<{
+      preview: import('../main/lib/review/review-v3-t09-offline-codec').T09Preview
+    }>,
+  /** T09 导入离线回件（附件先登记原件，再原子答复补件；actionId 幂等） */
+  importT09Package: (input: { caseId: string; packageJson: string }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T09_IMPORT_REPLY, input) as Promise<
+      | { status: 'accepted' | 'duplicate'; receipt: import('../main/lib/review/review-v3-t09-offline-codec').T09Receipt }
+      | { status: 'conflict' | 'rejected'; preview: import('../main/lib/review/review-v3-t09-offline-codec').T09Preview }
+    >,
   /** T07 建立评分轮次（仅组织者、仅首次） */
   initT07State: (input: {
     batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
