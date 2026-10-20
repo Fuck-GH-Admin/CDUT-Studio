@@ -107,3 +107,21 @@ test('T06 does not report a successful batch when no file was imported', async (
   expect(result.cases[0]?.documents).toEqual([])
   expect(result.cases[0]?.status).toBe('failed')
 })
+
+test('T06 CSV roster only suggests unique external IDs, never infers from applicant names', async () => {
+  const { suggestT06PhysicalManifest } = await import('./review-v3-t06-physical-manifest')
+  const preview = previewT06PhysicalImport(selected)
+  const matches = suggestT06PhysicalManifest(preview, [
+    { line: 2, externalId: '申报甲', caseId: '', applicant: '甲组织', title: '计划甲', files: '' },
+    { line: 3, externalId: '申报乙', caseId: '', applicant: '乙组织', title: '计划乙', files: '' },
+  ], [])
+  expect(matches.ambiguous).toEqual([])
+  expect(matches.unmatched).toEqual([])
+  expect(matches.suggestions['group:申报甲']).toEqual({ action: 'create', title: '计划甲', applicant: '甲组织' })
+  const ambiguous = suggestT06PhysicalManifest(preview, [
+    { line: 2, externalId: '申报甲', caseId: '', applicant: '甲组织', title: '甲', files: '' },
+    { line: 3, externalId: '申报甲', caseId: '', applicant: '另一个申请', title: '同编号', files: '' },
+  ], [])
+  expect(ambiguous.ambiguous).toContain('申报甲')
+  expect(ambiguous.suggestions['group:申报甲']).toBeUndefined()
+})
