@@ -1637,6 +1637,140 @@ const scenarios = {
     `)
   },
 
+  /**
+   * A15 S3 真实 Run 路径：A15 案卷 → 填字段 → 按槽位导入 DOCX → 真实审核 →
+   * 人工处置待确认项 → 准备度 ready → 初审 stage-pass 生成 teacher 终审任务。
+   */
+  async 'flow-a15-s3-run'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+      const templateId = 'a15-lab-application'
+      const now = new Date().toISOString()
+
+      // 自举 A15 模板（与 S1 同一形状）
+      let existing = null
+      try { existing = await api.getTemplateV2(templateId, 1) } catch {}
+      if (!existing || existing.status !== 'published') {
+        await api.saveTemplateDraftV2({
+          templateId, version: 1, schemaVersion: 2,
+          name: '实验室使用申请（A15）', displayName: { template: '{{organizationName}} 实验室使用申请' },
+          objectType: 'organization', status: 'draft', createdAt: now,
+          fields: [
+            { key: 'organizationName', label: '组织名称', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'responsiblePerson', label: '负责人', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'applicantCount', label: '使用人数', kind: 'number', required: true, visibility: 'public', scope: 'case', min: 1, max: 20 },
+            { key: 'usageDate', label: '使用日期', kind: 'date', required: true, visibility: 'public', scope: 'case' },
+            { key: 'usageTime', label: '使用时段', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'purpose', label: '用途', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          ],
+          sections: [{ id: 'lab', name: '实验室使用', order: 0, required: true, criteria: [
+            { id: 'headcount', title: '人数不超上限', requirement: '使用人数不得超过 20 人', execution: 'deterministic', targetScope: 'case' },
+            { id: 'plan', title: '计划书齐备', requirement: '必须提交实验室使用计划书', execution: 'semantic', targetScope: 'case' },
+          ] }],
+          materialSlots: [{ id: 'lab-use-plan', name: '实验室使用计划书', minCount: 1, requiredAt: 'submission' }],
+          policyVersionIds: [], policyRefs: [],
+          stages: [
+            { id: 'initial-review', name: '初审', kind: 'manual-review', executorRole: 'reviewer', nextStageId: 'final-review' },
+            { id: 'final-review', name: '终审', kind: 'manual-review', executorRole: 'teacher' },
+          ],
+          outputs: [{ id: 'feedback', kind: 'item-feedback', audience: 'reviewer' }],
+        })
+        await api.publishTemplateV2(templateId, 1)
+      }
+
+      const created = await api.createCase({ title: 'A15 S3 真实案卷', type: '自定义审核', applicant: 'E2E',
+        domainPackId: 'contract-review', reviewTemplate: { templateId, version: 1 } })
+      const caseId = created.id
+      out.caseId = caseId
+
+      // 填字段（18 人，未超限）
+      try {
+        const agg0 = await api.getAggregateV2(caseId)
+        await api.updateFieldsV2({ caseId, command: {
+          requestId: 's3-fields-' + Date.now(), expectedRevision: agg0.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'UpdateFields',
+          payload: { caseFieldValues: {
+            organizationName: '地球物理学院', responsiblePerson: '张老师', applicantCount: 18,
+            usageDate: '2026-11-05', usageTime: '14:00-16:00', purpose: '课程实验',
+          } },
+        }})
+        step('fields', { ok: true })
+      } catch (e) { step('fields', { ok: false, error: String(e?.message ?? e) }) }
+
+      // 按槽位导入真实 DOCX
+      try {
+        await api.registerMaterialPathV2({ caseId, sourcePath: __DOCX__, role: 'evidence', materialSlotId: 'lab-use-plan' })
+        step('material', { ok: true })
+      } catch (e) { step('material', { ok: false, error: String(e?.message ?? e) }) }
+
+      // 真实审核
+      try { await api.startBackgroundPiReviewV2({ caseId }) } catch (e) { step('startRun', { ok: false, error: String(e?.message ?? e) }) }
+      const deadline = Date.now() + Number(__POLL__ ?? 900000)
+      let last = null
+      while (Date.now() < deadline) {
+        try { last = await api.getBackgroundPiReviewStateV2(caseId) } catch {}
+        const p = last?.phase
+        if (p && ['completed','failed','incomplete','stopped','cancelled','error'].includes(p)) break
+        await new Promise(r => setTimeout(r, 3000))
+      }
+      const runs = await api.listRunsV2(caseId)
+      const run = runs[0]
+      step('run', { phase: last?.phase ?? null, status: run?.status ?? null, checks: run?.checks?.length ?? 0,
+        pending: (run?.checks ?? []).filter(c => c.status === 'awaiting-confirmation' || c.status === 'awaiting-supplement').length })
+      if (!run) return out
+
+      // 人工处置所有待确认项（确认合规）
+      const agg1 = await api.getAggregateV2(caseId)
+      const pendingChecks = (run.checks ?? []).filter(c => c.status === 'awaiting-confirmation' || c.status === 'awaiting-supplement')
+      let revision = agg1.caseV2.revision
+      let disposed = 0
+      for (const check of pendingChecks) {
+        try {
+          const current = await api.getAggregateV2(caseId)
+          await api.recordWorkspaceDispositionV2({ caseId, command: {
+            requestId: 's3-disp-' + check.checkId, expectedRevision: current.caseV2.revision,
+            target: { kind: 'case', id: caseId },
+            actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            type: 'RecordWorkspaceFindingDisposition',
+            payload: { findingKey: check.checkId, disposition: 'human-confirmed-compliant',
+              reason: '人工核对原件后确认满足要求', runId: run.id, inputHash: run.inputManifest?.hash },
+          }})
+          disposed += 1
+          revision = (await api.getAggregateV2(caseId)).caseV2.revision
+        } catch (e) { step('dispose', { ok: false, checkId: check.checkId, error: String(e?.message ?? e).slice(0, 100) }) }
+      }
+      step('disposed', { count: disposed, of: pendingChecks.length })
+
+      // 提交并初审
+      try { await api.submitCaseV2(caseId) } catch (e) { step('submit', { ok: false, error: String(e?.message ?? e) }) }
+      const agg2 = await api.getAggregateV2(caseId)
+      const openTask = (agg2?.tasks ?? []).find(t => t.status === 'open' && t.stageId === 'initial-review')
+      step('openTask', { id: openTask?.id ?? null, role: openTask?.assigneeRole ?? null })
+
+      if (openTask) {
+        try {
+          const r = await api.recordT05StageDecision({ caseId, claim: { role: 'reviewer' },
+            templateId, version: 1, expectedRevision: (await api.getAggregateV2(caseId)).caseV2.revision,
+            taskId: openTask.id, action: 'stage-pass', reason: '人数 18 未超限、计划书齐备、待确认项已人工核对',
+            requestId: 's3-pass-' + Date.now() })
+          const after = await api.getAggregateV2(caseId)
+          step('initialPass', { ok: true, revision: r.revision, stage: after?.caseV2?.stage,
+            finality: r.proposal?.decisionFinality ?? null,
+            openTasks: (after?.tasks ?? []).filter(t => t.status === 'open').map(t => ({ stage: t.stageId, role: t.assigneeRole })),
+            decisions: (after?.decisions ?? []).map(d => ({ result: d.result, finality: d.finality, actor: d.actor?.role })) })
+        } catch (e) { step('initialPass', { ok: false, error: String(e?.message ?? e).slice(0, 200) }) }
+      }
+
+      return out
+    `
+      .replace('__DOCX__', JSON.stringify(process.env.E2E_A15_DOCX ?? ''))
+      .replace('__POLL__', JSON.stringify(process.env.E2E_POLL_MS ?? '900000')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

@@ -57,6 +57,32 @@ describe('T05 可信阶段边界', () => {
     expect(r.blockers.join()).toContain('补件')
   })
 
+  test('有效人工处置可结掉待确认项，但待补件与执行失败仍阻断', () => {
+    const run = { id: 'run-1', status: 'completed', checks: [
+      { checkId: 'c1', status: 'awaiting-confirmation' },
+      { checkId: 'c2', status: 'awaiting-supplement' },
+      { checkId: 'c3', status: 'execution-failed' },
+    ] }
+    // c1 已人工确认合规，c2 只请求了补件（仍在等材料），c3 执行失败
+    const aggregateWithDispositions = aggregate({ dispositions: [
+      { findingKey: 'c1', disposition: 'human-confirmed-compliant', actor: 'local-reviewer', reason: '已核对', at: '' },
+      { findingKey: 'c2', disposition: 'supplement-requested', actor: 'local-reviewer', reason: '等材料', at: '' },
+    ] })
+    const r = t05DecisionReadiness(aggregateWithDispositions, run as never)
+    expect(r.readiness).toBe('blocked')
+    // 仍有一项待补件、一项执行失败
+    expect(r.blockers.join()).toContain('待确认或待补件')
+    expect(r.blockers.join()).toContain('执行失败')
+  })
+
+  test('旧 Run 的处置不得沿用到新 Run', () => {
+    const run = { id: 'run-new', status: 'completed', checks: [{ checkId: 'c1', status: 'awaiting-confirmation' }] }
+    const stale = aggregate({ dispositions: [
+      { findingKey: 'c1', disposition: 'human-confirmed-compliant', actor: 'local-reviewer', reason: '旧', at: '', runId: 'run-old' },
+    ] })
+    expect(t05DecisionReadiness(stale, run as never).readiness).toBe('blocked')
+  })
+
   test('全部检查通过且无未结束补件时准备度为 ready', () => {
     const run = { id: 'run-1', status: 'completed', checks: [{ checkId: 'c1', status: 'compliant' }] }
     expect(t05DecisionReadiness(aggregate() as never, run as never).readiness).toBe('ready')

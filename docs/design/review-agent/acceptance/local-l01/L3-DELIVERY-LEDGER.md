@@ -1,3 +1,59 @@
+## 架构收口 R01（Main 侧第一阶段）
+
+**裁决依据**：`docs/design/review-agent/acceptance/v3-core-architecture-closure-r01/V3-CORE-ARCHITECTURE-CLOSURE-R01.md`（提交 `078318058`）
+**范围**：只做不依赖 T01/T04 新合同的 Main 工作；未实现 `compilePublishedTemplateReviewPlan`（云端 Owner 负责）。
+
+### C3 / D3：Run 有效性统一（真实缺陷）
+
+`currentT05Run` 原先读 `run.inputManifest.documents`——**该字段不存在**，真实字段是
+`documentVersions`。结果是「更换原件后仍可能选中过期 Run」。
+
+修复：`currentT05Run` 改为遍历 `listRunsV2` 并复用既有权威判定 `isWorkspaceRunStaleV2`
+（按 `inputManifest.hash`、`documentVersions` 顺序回退、补件回复后失效计算），
+同时核对 `caseId` / `templateId` / 状态。不再自造「当前 Run」的竞争判断。
+
+### D3：按动作适格判定（替代单一 readiness）
+
+新增 `t05ActionEligibility(aggregate, run)`，分开回答四个动作：
+
+| 动作 | 条件 |
+|---|---|
+| `stage-pass` | Run 有效 + 计划覆盖完整 + 无待确认/待补件/执行失败/未执行 + 无未解释非合规 |
+| `final-reject` | Run 有效即可（拒绝不等于通过） |
+| `return-for-supplement` | 无 Run 也可（缺件本就该补件） |
+| `return-to-previous-stage` | Run 有效即可 |
+
+具体处理：
+- **业务 `non-compliant`（如 21 人 >20）不再可无条件 stage-pass**，只有具名 `waived` 或人工更正为合规才解除；
+- `execution-failed` / `not-executed` 阻断通过，但**不算不合规**，仍可拒绝或退回；
+- **计划覆盖**：Run 若记录 `inputManifest.effectiveRuleIds`，逐条核对是否都产出 Check，缺失即 `coverage.missing`；
+- 人工处置必须绑定当前 Run，换输入后旧处置自然失效。
+
+### D2：可信业务模式解析（修正错误业务分类）
+
+原 `isLocalBusinessCase` 对 `aggregate.canonicalPlan` 一律 `return false`——若未来补足 C1，
+合法的本地业务案卷会被误判为技术预审。改为 `resolveT05BusinessMode`：
+
+1. 有 `d2RuntimePlan` → `technical-pre-review`（永远不能形成正式业务决定）；
+2. 有 `canonicalPlan` → **只有存在 Main 侧本地业务确认且计划指纹、模板版本均相符**才是
+   `local-business`，否则 fail closed 为技术预审；
+3. 无任何计划 → 模板绑定的本地业务案卷（A15 S1 现状）。
+
+新增 `registerT05LocalBusinessConfirmation`（仅接受 `local-organizer`；学校授权模式返回
+`INVALID_TRANSITION`，本地无此能力）。确认按计划指纹与模板版本绑定，升版后自动失效。
+
+**未做**：`compilePublishedTemplateReviewPlan` / `TemplateCriterionSpec` 结构化约束 / T04 typed clause
+——按 R01 归 T01/T04 Owner，本地不自行实现、不猜语义。
+
+### 定向测试
+
+`review-v3-t05-business-mode.test.ts`（11 项）：D2 五情形（无计划/D2/未确认计划/已确认/指纹变化）
++ D3 六情形（无 Run/全合规/21 人超限/具名例外/覆盖不足/执行失败与未执行）。
+测试持久化真实 Run 并用 `computeRunInputHash` 生成真实输入哈希，而非伪造内存对象。
+
+**验证**：typecheck 通过；`bun test --isolate` **4818 pass / 0 fail / 5 skip**。
+
+---
 ## Local-L04 R02（五份续作 + A15 素材）
 
 **origin/main 开工**：`b5ea0d9e3`（R01 收尾）→ 本轮完成后见文末 SHA。
