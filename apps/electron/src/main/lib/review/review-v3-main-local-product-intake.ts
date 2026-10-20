@@ -21,6 +21,7 @@ import {decodeReviewB2Zip} from './review-zip-intake-v3-b2'
 import {readB30AllCurrentMaterials} from './review-v3-b30-current-materials-read'
 import {ReviewB3OwnerBoundRouteSession,type B3ManualCatalogEntry,type B3RouteState,type B3RouteSuggestion} from './review-intake-routing-adapter-v3-b3'
 import {listTemplateVersions} from './template-store'
+import {loadD4UnifiedCatalog,loadD4UnifiedWorkspace} from './review-d4-catalog'
 import {prepareB29UnmatchedAuthorDraft,type B29HumanAuthorIntent,
   type B29UnmatchedAuthorDraft} from './review-v3-b3-unmatched-author-bootstrap'
 import type {B20MainReadScope} from './review-v3-b1-b2-main-read-bundle-v3-b'
@@ -139,11 +140,27 @@ function session(event:IpcMainInvokeEvent,caseId:string):{data:ReturnType<typeof
     assertC2PhysicalOriginalBytes(data.aggregate,doc.versionId)
   return {data,s}
 }
+let historicalD4Catalog:B3ManualCatalogEntry[]|undefined
 function catalog():B3ManualCatalogEntry[] {
-  return listTemplateVersions().filter(x=>x.status==='published').map(x=>({
+  const published=listTemplateVersions().filter(x=>x.status==='published').map(x=>({
     templateId:x.templateId,templateVersion:String(x.version),name:x.name,
     availability:'authorized-for-technical-selection' as const,
   }))
+  // Display the complete original 50 D4 authoring workspaces alongside
+  // locally published templates. Keep their candidate-held identity until
+  // their per-case D2 technical plan has actually been compiled and attached.
+  // Never silently swap a historical template into an unrelated published one.
+  if(!historicalD4Catalog){
+    historicalD4Catalog=loadD4UnifiedCatalog().templates.map(entry=>({
+      templateId:entry.templateId,
+      templateVersion:String(entry.templateVersion),
+      name:loadD4UnifiedWorkspace(entry).definitions.templates[0]!.name,
+      availability:'candidate-held' as const,
+    }))
+  }
+  const existing=new Set(published.map(x=>x.templateId+'@'+x.templateVersion))
+  return [...published,...historicalD4Catalog.filter(x=>
+    !existing.has(x.templateId+'@'+x.templateVersion))]
 }
 function evaluate(s:Session,items:B3ManualCatalogEntry[]):B3RouteState {
   const ids=s.staging.listScopedCandidateIds(s.ctx)
