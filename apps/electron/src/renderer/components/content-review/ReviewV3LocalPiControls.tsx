@@ -134,8 +134,8 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
             {item.sourceRefs.length>0&&<p className="mt-1 break-all text-muted-foreground">
               原件来源：{item.sourceRefs.map(s=>s.documentVersionId).join('、')}
             </p>}
-            {item.calculation?.detailLines?.length>0&&<p className="mt-1 whitespace-pre-wrap">
-              {item.calculation.detailLines.join('；')}
+            {Boolean(item.calculation?.detailLines?.length)&&<p className="mt-1 whitespace-pre-wrap">
+              {item.calculation?.detailLines?.join('；')}
             </p>}
           </div>)}
           {items.length>30&&<button type="button" className={button}
