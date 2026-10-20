@@ -21,7 +21,7 @@ const aggregate = (): CaseAggregateV2 => ({
   decisions: [], supplements: [],
 } as unknown as CaseAggregateV2)
 
-const run = () => ({ id: 'run-real-001', caseId: 'case-lab', status: 'completed' as const, current: true })
+const run = () => ({ id: 'run-real-001', caseId: 'case-lab', status: 'completed' as const, current: true, decisionReadiness: 'ready' as const })
 const act = (patch: Record<string, unknown> = {}) => ({
   aggregate: aggregate(), template: template(), actor: reviewer,
   businessMode: 'local-business' as const,
@@ -56,6 +56,15 @@ describe('T05 local-business stage planning for A15', () => {
     expect(() => planT05LocalStageAction(act({verifiedRun: {...run(),current:false}}))).toThrow('T05_CURRENT_REAL_RUN_REQUIRED')
     expect(() => planT05LocalStageAction(act({verifiedRun: {...run(),caseId:'other'}}))).toThrow('T05_CURRENT_REAL_RUN_REQUIRED')
     expect(() => planT05LocalStageAction(act({action:'final-reject',verifiedRun: undefined}))).toThrow('T05_CURRENT_REAL_RUN_REQUIRED')
+  })
+  test('21 people over limit or unhandled required checks cannot silently stage-pass', () => {
+    expect(() => planT05LocalStageAction(act({
+      verifiedRun: { ...run(), decisionReadiness: 'blocked' },
+    }))).toThrow('T05_REQUIRED_CHECKS_NOT_RESOLVED')
+    // A human can issue an explicit final rejection based on a genuine Run.
+    expect(planT05LocalStageAction(act({
+      action: 'final-reject', verifiedRun: { ...run(), decisionReadiness: 'blocked' },
+    })).decisionFinality).toBe('final')
   })
   test('missing plan can request supplement without inventing a Run or decision', () => {
     const result = planT05LocalStageAction(act({
