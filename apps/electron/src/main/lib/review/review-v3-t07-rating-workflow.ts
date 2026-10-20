@@ -277,10 +277,13 @@ export function computeT07Ranking(state: T07State): T07RankingRow[] {
   if (quota === undefined) eligible.forEach((r) => { r.selected = true })
   else {
     for (const row of eligible) row.selected = (row.rank ?? Number.POSITIVE_INFINITY) <= quota
-    const boundary = eligible.filter((row) => row.rank !== null && row.rank <= quota &&
-      eligible.some((other) => other !== row && other.rank === row.rank) &&
-      eligible.filter((other) => other.rank !== null && other.rank < row.rank).length < quota &&
-      eligible.filter((other) => other.rank !== null && other.rank <= row.rank).length > quota)
+    const boundary = eligible.filter((row) => {
+      const rank = row.rank
+      if (rank === null || rank > quota) return false
+      return eligible.some((other) => other !== row && other.rank === rank) &&
+        eligible.filter((other) => other.rank !== null && other.rank < rank).length < quota &&
+        eligible.filter((other) => other.rank !== null && other.rank <= rank).length > quota
+    })
     for (const row of boundary) { row.selected = null; row.blockers.push('同分跨越名额边界，需明确裁定') }
   }
   return rows.sort((a, b) => (a.rank ?? Number.POSITIVE_INFINITY) - (b.rank ?? Number.POSITIVE_INFINITY) || a.caseId.localeCompare(b.caseId))
