@@ -2,7 +2,6 @@ import { bindLocalReviewerCommand } from './review-ipc-actor-guard'
 import { bindC0LocalCaseCommand, bindC0LocalCreateIntent, assertC0ReviewMainSender } from './review-c0-authority'
 import { assertSafeReviewStorageId } from './review-storage-id'
 import { registerCMainV3AuthorPlanIpc } from './review-v3-main-author-plan-ipc'
-import { installC11LocalAuthorWorkbench } from './review-v3-main-local-author-workbench'
 /**
  * 内容审核专区 - IPC 处理器注册
  *
@@ -90,7 +89,6 @@ export function registerReviewIpc(): void {
   // Dev-C C-MAIN-WIRE: real Main channels, fail closed without independent
   // B1 current author grant and an authorized published school Plan issuer.
   registerCMainV3AuthorPlanIpc()
-  installC11LocalAuthorWorkbench()
 
   // 启动恢复：上次进程遗留的 queued/running 运行标 interrupted（08 设计 §5）
   try {
