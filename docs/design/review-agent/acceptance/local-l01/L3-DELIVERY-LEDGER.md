@@ -28,8 +28,18 @@
    该栏没有选中本案卷，材料区因此拿不到案卷上下文；
 3. 引导浮层「Agent 对话与任务 01/10」此时覆盖在界面上方，自动化点击会被它吞掉。
 
-因此 S4 的下一步是**修脚本而不是修产品**：先关闭引导浮层 → 在审核工作台里真实打开本案卷
-（点案卷列表项）→ 再点**槽位内**的上传区。这与产品缺陷无关。
+修正脚本后又试了三轮，结论收敛：
+
+- 在**案卷办理**面板里真实选中材料槽 `lab-use-plan`（`slot={"hit":"lab-use-plan"}`）并点击该面板上传区，
+  界面进入「登记中…」，说明**原生文件对话框确实被打开**（CDP 截图前后完全一致，因为页面不再重绘）；
+- 用 `xdotool search --onlyvisible` 枚举窗口只得到未命名窗口与 `Openbox`；
+  `windowactivate` + `key --window/type --window` 逐个候选窗口投递路径（3 个候选 × 全套按键），
+  每次投递后核对 `documents` 计数：**全部为 0**；
+- 最终案卷仍为 `stage=draft`、`documents=[]`，仅留下一条真实规则 Run。
+
+**定案**：headless xvfb + openbox 下，Electron 的原生 `dialog.showOpenDialog` 窗口不是可被
+`xdotool` 定位/输入的管理窗口；CDP 也无法把本地文件注入为真实 `File`。
+因此 S4 的「上传真实 DOCX」这一段在当前测试环境**不可自动化**，与产品逻辑无关。
 
 **本轮修复的真实产品缺陷**：`V2CasePanel.createFromTemplate` 无条件提交 `subjectRows`，
 而模板只有案例级字段时列表里仍有一个空白事项行，创建被

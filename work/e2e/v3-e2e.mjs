@@ -2369,18 +2369,13 @@ const scenarios = {
    * 导航 → 模板选择 → 填字段 → 创建案卷 → 拖入真实 DOCX → 按模板规则检查
    * → 提交 → 初审通过 → 导出报告。
    */
+  /**
+   * A15 S4：真实 Electron UI 旅程（全部经 DOM 点击/输入与真实文件对话框）。
+   * 导航 → 选模板 → 填字段 → 建案 → 槽位上传真实 DOCX → 规则检查 → 提交 → 初审 → 报告。
+   */
   async 'flow-a15-s4'({ send }) {
     const trace = []
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-    const waitFor = async (expr, label, tries = 40) => {
-      for (let i = 0; i < tries; i += 1) {
-        const ok = await evaluate(send, expr)
-        if (ok === true) return true
-        await sleep(500)
-      }
-      trace.push('timeout:' + label)
-      return false
-    }
     const clickText = async (text) => {
       const hit = await evaluate(send, `
         const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], summary'))
@@ -2388,12 +2383,16 @@ const scenarios = {
         if (hit) { hit.click(); return (hit.textContent ?? '').trim().slice(0, 40) }
         return null
       `)
-      trace.push(`click(${text})=${hit}`)
+      trace.push('click(' + text + ')=' + hit)
       return hit
     }
 
-    // 0. 自举 A15 模板（与 S2 同形），使 UI 里有可选的已发布模板
-    await waitFor(`Boolean(window.reviewAPI)`, 'bridge', 60)
+    // 0. 自举已发布模板（与 S2 同形；分项不强制申报事项，供纯案例级规则使用）
+    for (let i = 0; i < 60; i += 1) {
+      const ready = await evaluate(send, `Boolean(window.reviewAPI)`)
+      if (ready === true) break
+      await sleep(500)
+    }
     await evaluate(send, `
       const api = window.reviewAPI
       const templateId = 'a15-s4-lab'
@@ -2413,7 +2412,6 @@ const scenarios = {
             { key: 'usageTime', label: '使用时段', kind: 'text', required: true, visibility: 'public', scope: 'case' },
             { key: 'purpose', label: '用途', kind: 'text', required: true, visibility: 'public', scope: 'case' },
           ],
-          // 该分项只承载案例级确定性规则，不对申报事项做归属要求
           sections: [{ id: 'lab', name: '实验室使用', order: 0, required: false, criteria: [{
             id: 'headcount', title: '人数不超上限', requirement: '使用人数不得超过 20 人',
             execution: 'deterministic', targetScope: 'case',
@@ -2434,30 +2432,27 @@ const scenarios = {
       return true
     `)
 
-    // 0.5 让界面真正渲染
-    await waitFor(`Boolean(window.reviewAPI) && (document.body.textContent ?? '').trim().length > 20`, 'render', 60)
-
-    // 1. 导航到案卷办理
+    // 1. 真实导航到案卷办理
     await clickText('内容合规审查'); await sleep(1500)
     await clickText('进入本地材料审核'); await sleep(2500)
     await clickText('案卷办理'); await sleep(1500)
-
-    // 2. 展开「从已发布模板新建」并选择 A15 模板
     await clickText('打开其他案卷 / 从已发布模板新建'); await sleep(600)
-    const templatePicked = await evaluate(send, `
+
+    // 2. 选择模板
+    const picked = await evaluate(send, `
+      const wanted = ${JSON.stringify(process.env.E2E_TEMPLATE ?? 'a15-s4-lab@1')}
       const selects = Array.from(document.querySelectorAll('select'))
-      const wanted = ${JSON.stringify(process.env.E2E_TEMPLATE ?? 'a15-s2-lab@1')}
       const target = selects.find(sel => Array.from(sel.options).some(o => o.value === wanted))
-      if (!target) return { ok: false, options: selects.map(s => Array.from(s.options).map(o => o.value).slice(0, 5)) }
+      if (!target) return { ok: false }
       const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
       setter.call(target, wanted)
       target.dispatchEvent(new Event('change', { bubbles: true }))
       return { ok: true }
     `)
-    trace.push('template=' + JSON.stringify(templatePicked))
+    trace.push('template=' + JSON.stringify(picked))
     await sleep(800)
 
-    // 3. 填案卷级字段与标题（React 受控组件需原生 setter + input 事件）
+    // 3. 填案例级字段与标题
     const filled = await evaluate(send, `
       const setValue = (el, value) => {
         const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
@@ -2468,160 +2463,107 @@ const scenarios = {
       }
       const labels = ['组织名称', '负责人', '使用人数', '使用日期', '使用时段', '用途']
       const values = ['地球物理学院', '王老师', '18', '2026-11-10', '10:00-12:00', '课程实验']
-      const done = []
-      const missed = []
+      const done = [], missed = []
       labels.forEach((label, index) => {
-        // 只取「与标签同级」的那个输入框，避免把值写进外层容器里的其它输入框
-        const span = Array.from(document.querySelectorAll('span'))
-          .find(s => (s.textContent ?? '').trim().startsWith(label))
+        const span = Array.from(document.querySelectorAll('span')).find(s => (s.textContent ?? '').trim().startsWith(label))
         const input = span?.parentElement?.querySelector('input')
-        if (input && input.placeholder !== '案卷标题') { setValue(input, values[index]); done.push(label) }
-        else missed.push(label)
+        if (input && input.placeholder !== '案卷标题') { setValue(input, values[index]); done.push(label) } else missed.push(label)
       })
-      // 标题最后写，避免被字段填写覆盖
       const title = Array.from(document.querySelectorAll('input')).find(i => i.placeholder === '案卷标题')
       if (title) setValue(title, 'A15 S4 真实旅程')
-      return { ok: true, done, missed, titleSet: Boolean(title) }
+      return { done, missed, titleSet: Boolean(title) }
     `)
     trace.push('fields=' + JSON.stringify(filled))
-    // 模板没有事项级字段时，默认空事项行会被拒绝；像真实用户一样把它删掉
-    const removedRows = await evaluate(send, `
-      const emptyTitle = Array.from(document.querySelectorAll('input')).find(i => i.placeholder === '事项名称' && !i.value.trim())
-      if (!emptyTitle) return { removed: 0 }
-      const row = emptyTitle.closest('div.rounded-md') ?? emptyTitle.parentElement?.parentElement
-      const del = row ? Array.from(row.querySelectorAll('button')).find(b => (b.textContent ?? '').trim() === '删除') : null
-      if (del) { del.click(); return { removed: 1 } }
-      return { removed: 0, reason: 'no delete button' }
-    `)
-    trace.push('emptySubjectRow=' + JSON.stringify(removedRows))
     await sleep(400)
-    await sleep(500)
 
-    // 4. 真实点击创建（先确认按钮可用，再收集失败提示）
-    const preCreate = await evaluate(send, `
-      const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('创建一份案卷'))
-      return { exists: Boolean(btn), disabled: btn ? btn.disabled : null,
-        titleValue: (Array.from(document.querySelectorAll('input')).find(i => i.placeholder === '案卷标题') ?? {}).value ?? null }
+    // 4. 真实点击创建
+    await clickText('创建一份案卷'); await sleep(3500)
+    const created = await evaluate(send, `
+      const list = await window.reviewAPI.listCasesV2()
+      return (list ?? []).map(x => x.caseId)
     `)
-    trace.push('preCreate=' + JSON.stringify(preCreate))
-    // 装错误钩子，捕获被静默吞掉的创建失败原因
-    await evaluate(send, `
-      window.__s4 = []
-      const orig = console.error
-      console.error = (...args) => { window.__s4.push('console:' + String(args[0]).slice(0, 200)); orig(...args) }
-      window.addEventListener('unhandledrejection', (event) => {
-        window.__s4.push('rejection:' + String(event.reason).slice(0, 200))
-      })
-      return true
-    `)
-    const created = await clickText('创建一份案卷')
-    await sleep(3500)
-    const afterCreate = await evaluate(send, `
-      const api = window.reviewAPI
-      const text = (document.body.textContent ?? '')
-      const marks = ['已创建', '创建失败', '缺少', '必填', '不能创建', '请选择', '案卷列表']
-      const safe = async (fn) => { try { return await fn() } catch (e) { return 'ERR:' + String(e).slice(0, 60) } }
-      return { hints: marks.filter(m => text.includes(m)),
-        v2: await safe(async () => (await api.listCasesV2() ?? []).slice(0, 3).map(x => x.caseId)),
-        legacy: await safe(async () => (await api.listCases() ?? []).slice(0, 3).map(x => x.id ?? x.caseId)),
-        domCaseHint: (Array.from(document.querySelectorAll('p,div')).map(n => (n.textContent ?? '').trim())
-          .filter(t => t.startsWith('当前案卷')).slice(0, 2)),
-        toasts: Array.from(document.querySelectorAll('[data-sonner-toast], li[data-sonner-toast]')).map(n => (n.textContent ?? '').trim().slice(0, 120)),
-        captured: (window.__s4 ?? []).slice(-5) }
-    `)
-    trace.push('afterCreate=' + JSON.stringify(afterCreate))
-    // 直接从创建后的列表快照取案卷号（避免二次求值时机差）
-    const caseId = Array.isArray(afterCreate?.v2) ? (afterCreate.v2[0] ?? null) : null
+    const caseId = Array.isArray(created) ? (created[0] ?? null) : null
     trace.push('caseId=' + caseId)
-    if (!caseId) return { trace, caseId: null, error: 'UI 创建案卷未成功' }
+    if (!caseId) return { trace, error: 'UI 建案失败' }
 
-    // 5. 切到审核工作台，展开模板材料要求，点槽位上传区打开真实文件对话框
-    let dropped = null
-    await clickText('审核工作台'); await sleep(1500)
-    await clickText('模板材料要求'); await sleep(800)
-    const zoneClicked = await evaluate(send, `
+    // 5. 选材料槽 → 点上传区 → 用真实文件对话框投递
+    const slot = await evaluate(send, `
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+      for (const sel of Array.from(document.querySelectorAll('select'))) {
+        if (Array.from(sel.options).some(o => o.value === 'lab-use-plan')) {
+          setter.call(sel, 'lab-use-plan'); sel.dispatchEvent(new Event('change', { bubbles: true }))
+          return { hit: 'lab-use-plan' }
+        }
+      }
+      return { hit: null }
+    `)
+    trace.push('slot=' + JSON.stringify(slot))
+    await sleep(600)
+    const zone = await evaluate(send, `
       const zones = Array.from(document.querySelectorAll('[aria-label="导入材料：点击选择或拖入文件"]'))
       if (!zones.length) return { ok: false, count: 0 }
+      zones[0].scrollIntoView({ block: 'center' })
       zones[0].click()
       return { ok: true, count: zones.length }
     `)
-    trace.push('slotZone=' + JSON.stringify(zoneClicked))
-    if (zoneClicked?.ok) {
-      // 真实驱动 GTK 文件对话框：Ctrl+L 输入绝对路径后回车
-      await sleep(1800)
-      try {
-        const shot = await send('Page.captureScreenshot', { format: 'png' })
-        if (shot?.data) writeFileSync('/tmp/s4-dialog.png', Buffer.from(shot.data, 'base64'))
-        trace.push('screenshot=/tmp/s4-dialog.png')
-      } catch (error) { trace.push('screenshot=failed') }
-      try {
-        const listed = spawnSync('wmctrl', ['-l'], { encoding: 'utf8' })
-        trace.push('windows=' + JSON.stringify(String(listed.stdout ?? '').split('\n').filter(Boolean).slice(0, 6)))
-      } catch (error) { trace.push('wmctrl=failed') }
-      const docPath = process.env.E2E_DOCX_PATH ?? ''
-      try {
-        spawnSync('xdotool', ['key', '--clearmodifiers', 'ctrl+l'], { stdio: 'ignore' })
-        await sleep(400)
-        spawnSync('xdotool', ['type', '--delay', '25', docPath], { stdio: 'ignore' })
-        await sleep(400)
-        spawnSync('xdotool', ['key', 'Return'], { stdio: 'ignore' })
-        trace.push('xdotool=typed')
-      } catch (error) {
-        trace.push('xdotool=failed:' + String(error).slice(0, 120))
+    trace.push('zone=' + JSON.stringify(zone))
+
+    const docPath = process.env.E2E_DOCX_PATH ?? ''
+    if (zone?.ok) {
+      await sleep(2000)
+      const names = spawnSync('xdotool', ['search', '--onlyvisible', '--name', ''], { encoding: 'utf8' })
+      const ids = String(names.stdout ?? '').split('\n').map((x) => x.trim()).filter(Boolean)
+      const described = ids.map((id) => {
+        const title = spawnSync('xdotool', ['getwindowname', id], { encoding: 'utf8' })
+        return { id, name: String(title.stdout ?? '').trim() }
+      })
+      trace.push('xwindows=' + JSON.stringify(described.map((w) => w.name || w.id).slice(0, 8)))
+      const candidates = described.filter((w) => !/openbox/i.test(w.name) && !/CDUT Studio/i.test(w.name)).slice(0, 3)
+      for (const candidate of candidates) {
+        spawnSync('xdotool', ['windowactivate', '--sync', String(candidate.id)], { stdio: 'ignore' })
+        await sleep(300)
+        spawnSync('xdotool', ['key', '--window', String(candidate.id), '--clearmodifiers', 'ctrl+l'], { stdio: 'ignore' })
+        await sleep(300)
+        spawnSync('xdotool', ['type', '--window', String(candidate.id), '--delay', '20', docPath], { stdio: 'ignore' })
+        await sleep(300)
+        spawnSync('xdotool', ['key', '--window', String(candidate.id), 'Return'], { stdio: 'ignore' })
+        await sleep(1500)
+        const count = await evaluate(send, `
+          const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
+          return (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).length
+        `)
+        trace.push('try:' + candidate.id + ' docs=' + count)
+        if (typeof count === 'number' && count > 0) break
       }
-      await sleep(4000)
-      dropped = await evaluate(send, `(async () => {
-        const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
-        return (agg?.caseV2?.documents ?? []).filter(d => d.active !== false)
-          .map(d => d.fileName + '@' + (d.materialSlotId ?? '-'))
-      })()`)
+      for (let i = 0; i < 10; i += 1) {
+        const count = await evaluate(send, `
+          const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
+          const list = (agg?.caseV2?.documents ?? []).filter(d => d.active !== false)
+          return { count: list.length, names: list.map(d => d.fileName + '@' + (d.materialSlotId ?? '-')) }
+        `)
+        trace.push('docs=' + JSON.stringify(count))
+        if (count && count.count > 0) break
+        await sleep(1000)
+      }
     }
-    const dropTargets = []
-    if (Array.isArray(dropTargets) && dropTargets.length > 0) {
-      const box = dropTargets[0].rect
-      const x = Math.round(box.x + box.width / 2)
-      const y = Math.round(box.y + box.height / 2)
-      const dragData = { items: [], files: [process.env.E2E_DOCX_PATH ?? ''], dragOperationsMask: 1 }
-      // Chromium 要求 dragEnter/dragOver 先带 files，drop 才可能被 Electron 的 webUtils 认到
-      await send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data: dragData })
-      await send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data: dragData })
-      await send('Input.dispatchDragEvent', { type: 'drop', x, y, data: dragData })
-      await sleep(3000)
-      dropped = await evaluate(send, `(async () => {
-        const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
-        return (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).map(d => d.fileName)
-      })()`)
-    }
-    trace.push('dropped=' + JSON.stringify(dropped))
 
-    // 6. 真实点击「按模板规则检查」
-    await clickText('按模板规则检查')
-    await sleep(2500)
-    const ruleResult = await evaluate(send, `
-      const text = document.body.textContent ?? ''
-      const checks = (await window.reviewAPI.listRunsV2(${JSON.stringify(caseId)}))?.[0]
-      return { hint: text.includes('按模板规则检查'), run: checks ? { id: checks.id, status: checks.status,
-        checks: (checks.checks ?? []).map(c => c.ruleId + '=' + c.status) } : null }
-    `)
-    trace.push('ruleRun=' + JSON.stringify(ruleResult))
-
-    // 7. 提交并初审（真实按钮）
-    await clickText('提交案卷'); await sleep(2000)
-    const submitState = await evaluate(send, `(await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)}))?.caseV2?.stage ?? null`)
-    trace.push('stageAfterSubmit=' + submitState)
-    await clickText('初审通过'); await sleep(2000)
-
-    // 8. 导出报告（真实按钮）
+    // 6. 规则检查
+    await clickText('按模板规则检查'); await sleep(2500)
+    // 7. 提交与初审
+    await clickText('提交案卷'); await sleep(2500)
+    await clickText('初审通过'); await sleep(2500)
+    // 8. 报告导出
     await clickText('导出报告'); await sleep(2500)
 
-    const final = await evaluate(send, `(async () => {
+    const final = await evaluate(send, `
       const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
+      const runs = await window.reviewAPI.listRunsV2(${JSON.stringify(caseId)})
       return { stage: agg?.caseV2?.stage ?? null,
+        documents: (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).map(d => d.fileName + '@' + (d.materialSlotId ?? '-')),
         decisions: (agg?.decisions ?? []).map(d => d.result + '/' + d.finality + '/' + d.actor?.role),
-        documents: (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).length,
-        runs: (await window.reviewAPI.listRunsV2(${JSON.stringify(caseId)}))?.map(r => r.id + '=' + r.status) }
-    })()`)
-    return { trace, caseId, ruleResult, final }
+        runs: (runs ?? []).map(r => r.id + '=' + r.status) }
+    `)
+    return { trace, caseId, final }
   },
 
   async 'd4-list'({ send }) {
