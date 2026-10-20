@@ -286,7 +286,7 @@ export async function handleCMainB20CandidateRead(
     const frame=liveFrame(event)
     const raw=source.currentCandidate(frame.principalId,templateId)
     if(!raw)return undefined
-    assertSafeReviewStorageId(raw.caseCandidateId,'caseCandidateId')
+    assertSafeReviewStorageId(raw.caseCandidateId,'caseId')
     const grant=checkGrant(raw.grant)
     return {...frame,caseCandidateId:raw.caseCandidateId,
       ownerId:grant.ownerId,ownerGeneration:grant.generation,
