@@ -1456,6 +1456,171 @@ const scenarios = {
     `.replace('__PDF__', JSON.stringify(process.env.E2E_PDF_PATH ?? '')))
   },
 
+  /**
+   * A15 S1：真实通用模板（organization，无学年/无分数，人数≤20，必交计划书，
+   * reviewer 初审 → teacher 终审），验证发布、重开一致与复用。
+   */
+  async 'flow-a15-s1'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+      const templateId = 'a15-lab-application'
+      const now = new Date().toISOString()
+
+      const template = {
+        templateId, version: 1, schemaVersion: 2,
+        name: '实验室使用申请（A15）', displayName: { template: '{{organizationName}} 实验室使用申请' },
+        objectType: 'organization', status: 'draft', createdAt: now,
+        fields: [
+          { key: 'organizationName', label: '组织名称', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          { key: 'responsiblePerson', label: '负责人', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          { key: 'applicantCount', label: '使用人数', kind: 'number', required: true, visibility: 'public', scope: 'case', min: 1, max: 20 },
+          { key: 'usageDate', label: '使用日期', kind: 'date', required: true, visibility: 'public', scope: 'case' },
+          { key: 'usageTime', label: '使用时段', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          { key: 'purpose', label: '用途', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+        ],
+        sections: [{ id: 'lab', name: '实验室使用', order: 0, required: true, criteria: [
+          { id: 'headcount', title: '人数不超上限', requirement: '使用人数不得超过 20 人',
+            execution: 'deterministic', targetScope: 'case' },
+          { id: 'plan', title: '计划书齐备', requirement: '必须提交实验室使用计划书',
+            execution: 'semantic', targetScope: 'case' },
+        ] }],
+        materialSlots: [{ id: 'lab-use-plan', name: '实验室使用计划书', minCount: 1, requiredAt: 'submission' }],
+        policyVersionIds: [], policyRefs: [],
+        stages: [
+          { id: 'initial-review', name: '初审', kind: 'manual-review', executorRole: 'reviewer', nextStageId: 'final-review' },
+          { id: 'final-review', name: '终审', kind: 'manual-review', executorRole: 'teacher' },
+        ],
+        outputs: [{ id: 'feedback', kind: 'item-feedback', audience: 'reviewer' }],
+      }
+      try { await api.saveTemplateDraftV2(template); step('save', { ok: true }) }
+      catch (e) { step('save', { ok: false, error: String(e?.message ?? e) }); return out }
+      try { await api.publishTemplateV2(templateId, 1); step('publish', { ok: true }) }
+      catch (e) { step('publish', { ok: false, error: String(e?.message ?? e) }); return out }
+
+      // 重开一致：读回已发布版本，逐项核对关键配置
+      const reopened = await api.getTemplateV2(templateId, 1)
+      step('reopen', {
+        objectType: reopened?.objectType,
+        status: reopened?.status,
+        fields: (reopened?.fields ?? []).map(f => f.key),
+        countMax: (reopened?.fields ?? []).find(f => f.key === 'applicantCount')?.max ?? null,
+        slots: (reopened?.materialSlots ?? []).map(s => s.id),
+        stages: (reopened?.stages ?? []).map(s => s.id + ':' + s.executorRole),
+        hasAcademicYearField: (reopened?.fields ?? []).some(f => f.key === 'academicYear'),
+      })
+
+      // 复用：同一模板建两个案卷，均无学年
+      const cases = []
+      for (const title of ['A15 复用案卷一', 'A15 复用案卷二']) {
+        try {
+          const created = await api.createCase({ title, type: '自定义审核', applicant: 'E2E',
+            domainPackId: 'contract-review', reviewTemplate: { templateId, version: 1 } })
+          cases.push({ id: created.id, academicYear: created.academicYear ?? '' })
+        } catch (e) { cases.push({ error: String(e?.message ?? e) }) }
+      }
+      step('reuse', { cases })
+      out.templateId = templateId
+      out.caseIds = cases.filter(c => c.id).map(c => c.id)
+      return out
+    `)
+  },
+
+  /**
+   * A15 S3（不依赖 Run 的部分）：T05 可信阶段事务。
+   * 能力投影、无 Run 时 stage-pass 必须被拒、补件可在无 Run 时创建。
+   */
+  async 'flow-a15-s3'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+      const templateId = 'a15-lab-application'
+
+      // 自举：确保 A15 模板已发布（与 S1 同一形状，避免场景间依赖残留配置）
+      let existing = null
+      try { existing = await api.getTemplateV2(templateId, 1) } catch {}
+      if (!existing || existing.status !== 'published') {
+        const now = new Date().toISOString()
+        await api.saveTemplateDraftV2({
+          templateId, version: 1, schemaVersion: 2,
+          name: '实验室使用申请（A15）', displayName: { template: '{{organizationName}} 实验室使用申请' },
+          objectType: 'organization', status: 'draft', createdAt: now,
+          fields: [
+            { key: 'organizationName', label: '组织名称', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'responsiblePerson', label: '负责人', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'applicantCount', label: '使用人数', kind: 'number', required: true, visibility: 'public', scope: 'case', min: 1, max: 20 },
+            { key: 'usageDate', label: '使用日期', kind: 'date', required: true, visibility: 'public', scope: 'case' },
+            { key: 'usageTime', label: '使用时段', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'purpose', label: '用途', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          ],
+          sections: [{ id: 'lab', name: '实验室使用', order: 0, required: true, criteria: [
+            { id: 'headcount', title: '人数不超上限', requirement: '使用人数不得超过 20 人', execution: 'deterministic', targetScope: 'case' },
+            { id: 'plan', title: '计划书齐备', requirement: '必须提交实验室使用计划书', execution: 'semantic', targetScope: 'case' },
+          ] }],
+          materialSlots: [{ id: 'lab-use-plan', name: '实验室使用计划书', minCount: 1, requiredAt: 'submission' }],
+          policyVersionIds: [], policyRefs: [],
+          stages: [
+            { id: 'initial-review', name: '初审', kind: 'manual-review', executorRole: 'reviewer', nextStageId: 'final-review' },
+            { id: 'final-review', name: '终审', kind: 'manual-review', executorRole: 'teacher' },
+          ],
+          outputs: [{ id: 'feedback', kind: 'item-feedback', audience: 'reviewer' }],
+        })
+        await api.publishTemplateV2(templateId, 1)
+      }
+
+      const created = await api.createCase({ title: 'A15 S3 阶段案卷', type: '自定义审核', applicant: 'E2E',
+        domainPackId: 'contract-review', reviewTemplate: { templateId, version: 1 } })
+      const caseId = created.id
+      out.caseId = caseId
+      step('createCase', { caseId, academicYear: created.academicYear ?? '' })
+
+      // 能力投影：本地业务模式、审核员、无可办任务（未提交）
+      try {
+        const cap = await api.getT05StageCapability({ caseId, claim: { role: 'reviewer' } })
+        step('capabilityBeforeSubmit', { mode: cap.mode, actorRole: cap.actorRole,
+          eligible: cap.eligibleTaskIds.length, hasRun: cap.hasCurrentRun })
+      } catch (e) { step('capabilityBeforeSubmit', { error: String(e?.message ?? e) }) }
+
+      // 提交（需要计划书槽，先按槽位登记真实 DOCX）
+      try {
+        await api.registerMaterialPathV2({ caseId, sourcePath: __DOCX__, role: 'evidence', materialSlotId: 'lab-use-plan' })
+        const sub = await api.submitCaseV2(caseId)
+        step('submit', { ok: true, taskId: sub?.taskId ?? null })
+      } catch (e) { step('submit', { ok: false, error: String(e?.message ?? e) }) }
+
+      const agg = await api.getAggregateV2(caseId)
+      const openTask = (agg?.tasks ?? []).find(t => t.status === 'open')
+      step('openTask', { id: openTask?.id ?? null, role: openTask?.assigneeRole, stage: openTask?.stageId })
+
+      if (openTask) {
+        // 无有效 Run 时 stage-pass 必须被拒（不得把「没有 Run」当通过）
+        try {
+          const r = await api.recordT05StageDecision({ caseId, claim: { role: 'reviewer' },
+            templateId, version: 1, expectedRevision: agg.caseV2.revision, taskId: openTask.id,
+            action: 'stage-pass', reason: '试探跳过运行', requestId: 's3-pass-' + Date.now() })
+          step('stagePassWithoutRun', { unexpected: '不应成功', revision: r?.revision })
+        } catch (e) { step('stagePassWithoutRun', { rejected: true, error: String(e?.message ?? e).slice(0, 160) }) }
+
+        // 补件可以在没有 Run 时直接提出（不得伪造 Run/Decision）
+        try {
+          const r = await api.recordT05StageDecision({ caseId, claim: { role: 'reviewer' },
+            templateId, version: 1, expectedRevision: (await api.getAggregateV2(caseId)).caseV2.revision,
+            taskId: openTask.id, action: 'return-for-supplement',
+            reason: '计划书内容不足以判断', supplementRequiredElements: ['实验计划书'],
+            supplementReason: '请补交完整实验计划书', requestId: 's3-sup-' + Date.now() })
+          const after = await api.getAggregateV2(caseId)
+          step('supplementWithoutRun', { ok: true, revision: r.revision, stage: after?.caseV2?.stage,
+            supplements: (after?.supplements ?? []).map(s => ({ id: s.id, status: s.status })),
+            decisions: (after?.decisions ?? []).length })
+        } catch (e) { step('supplementWithoutRun', { ok: false, error: String(e?.message ?? e).slice(0, 160) }) }
+      }
+
+      return out
+    `.replace('__DOCX__', JSON.stringify((process.env.E2E_A15_DOCX ?? ''))))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

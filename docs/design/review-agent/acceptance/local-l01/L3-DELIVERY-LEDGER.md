@@ -1,3 +1,51 @@
+## Local-L04 R02（五份续作 + A15 素材）
+
+**origin/main 开工**：`b5ea0d9e3`（R01 收尾）→ 本轮完成后见文末 SHA。
+**说明**：R01 的 B1/B2/B3 十线已合入，本轮只接收 PR #174/#176/#177/#175/#179 与素材 #178，未重合旧十线。
+
+### 接收与合并
+
+| 本轮 | 来源固定 SHA | 合并/桥接提交 | 状态 |
+|---|---|---|---|
+| T02 #174 | `b346c1dad` | 批次 1 合并 | **MERGED**（视觉 OCR/PPTX 媒体与页来源；OCR 依赖外部引擎，缺资源只能 partial） |
+| T01 #176 | `362713730` | 批次 1 合并 | **MERGED**（需求→草稿、模型端口、六样例包）；模型端口尚未注入可信 invoke |
+| T06 #177 | `07ed0a25e` | 批次 1 合并 | **MERGED**（folder/ZIP 分组、预览、逐原件入库）；物理选择器与批次回执未接 Main |
+| T08 #175 | `82d543771` | 批次 1 合并 | **MERGED**（图片页 PDF、建议审阅）；非 text 字段保存仍禁用（缺 TemplateVersion 共享修复） |
+| T05 #179 | `0c2a382a2` | `ede84af37` + 桥接 `63c59d488` | **WIRED**（见下） |
+| A15 #178 | `a6d342405` | 本轮合并 | 测试素材，非功能；已生成 5 份真实 DOCX + 4 组预期 |
+
+### T05 可信阶段事务（CR-T05-04，L 线实现）
+
+`review-v3-t05-main-service.ts`：
+- 只读 `T05StageCapability`：Main 从真实任务指派与有效 Run 派生；渲染层只声明 `reviewer`/`teacher`，非法值降级
+- 写入 `recordT05StageDecision`：重核模板已发布、`expectedRevision`、真实任务与有权角色、当前 Run、决策准备度，
+  再调用 T05 纯领域 `planT05LocalStageAction` + `applyT05LocalStageProposal`，由 `submitCommand` 在唯一 CaseAggregate 事务原子落盘
+- `docs/deployment`：技术预审（`d2RuntimePlan`）与 `canonicalPlan` 案卷一律拒绝业务阶段办理
+- 决策准备度：待确认/待补件/执行失败/未结束补件任一存在即 `blocked`；**不把「Run 已完成」当成「检查全通过」**
+- 未使用 `stage-workflow` 的合成 `run@rev` 证据
+
+### A15 分阶段（S0–S4）
+
+| Gate | 结果 | 证据 / 真实断点 |
+|---|---|---|
+| **S0** | **PASS**（历史） | `flow-t01-bind`：旧样例发布/绑案、无学年。**不是完整 A15** |
+| **S1** | **PASS** | `flow-a15-s1`：`objectType=organization`；6 字段（organizationName/responsiblePerson/applicantCount(max=20)/usageDate/usageTime/purpose）；材料槽 `lab-use-plan`；阶段 `initial-review:reviewer → final-review:teacher`；**无 academicYear 字段**；复用建 2 案均 `academicYear=""` |
+| **S2** | **BLOCKED_OWNER:T01/T04** | 缺 `TemplateVersion → CanonicalPlan/PlanBinding` 编译合同。`UPGRADE_CANONICAL_PLAN_V3` 需 `planWriter` + `C2MainPublishedPlanProvenance`（特权发布权威 + 固定产物根），均未安装；仓库内不存在 `TemplateVersion → CanonicalPlan` 函数。**不用假 CheckResult 代替** |
+| **S3** | **PARTIAL** | `flow-a15-s3`：能力投影 `local-business/reviewer`；提交后任务 `reviewer/initial-review`；**无 Run 时 `stage-pass` 被 `T05_CURRENT_REAL_RUN_REQUIRED` 拒绝**；**补件可在无 Run 时创建**（stage=`awaiting-supplement`，decisions=0，未伪造 Run/Decision）。终审因初审需 Run 而无法推进，断点同 S2 |
+| **S4** | **NOT_RUN** | 依赖 S2/S3 |
+
+### S2 最小缺失（交回 Owner）
+
+1. `B1AuthorDocument.modules[].checks[]` 缺 `RuleSpec` 四要素（`execution` / `policyVersionId` / `targetScope` / `confirmation`），
+   或
+2. 需要 `compileTemplateToCanonicalPlan(template: TemplateVersion): { plan: CanonicalPlan; rules: RuleSpec[] }` 的领域定义，
+   明确 `sections[].criteria[].requirement`（自然语言）如何映射为可执行 `RuleSpec`、`PlanBinding.checkKey` 与来源版本。
+3. 明确 A15 的四项语义：人数≤20（`value-limit`）、计划书必交（材料槽）、两级阶段、无学年/无分数。
+
+**L 线承诺**：合同落地后负责把成熟 `RuleSpec/PlanBinding` 绑到唯一正式 Case/Run，`asOfDate` 由调用方显式传入，
+结果经既有 Run writer 持久化并展示真实 `CheckResult`/`SourceRef`。不猜规则、不特判「实验室」。
+
+---
 # L3｜主线接收台账
 
 **主线基线**：`main` @ `566ea893f`
