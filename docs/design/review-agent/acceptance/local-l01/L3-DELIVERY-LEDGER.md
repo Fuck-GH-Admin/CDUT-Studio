@@ -10,10 +10,17 @@
 5. 点「按模板规则检查」→ 真实 Run `run-tpl-mvha6hm1-40f32fb2`，
    人数 `compliant`、材料 `awaiting-supplement`，界面展示状态与理由。
 
-**断点（BLOCKED_BRIDGE:测试环境）**：材料导入只有两条真实路径——OS 文件对话框（
-`dialog.showOpenDialog`）与 OS 拖拽（`webUtils.getPathForFile`）。headless xvfb 下
-CDP 的 `Input.dispatchDragEvent` 无法把本地文件注入为真实 File，原生对话框也无法驱动。
-因此「上传真实 DOCX → 提交 → 初审 → 报告」在纯 UI 下无法完成。
+**断点（BLOCKED_BRIDGE:测试环境）**：材料导入只有两条真实路径——OS 文件对话框
+（`dialog.showOpenDialog`）与 OS 拖拽（`webUtils.getPathForFile`）。本轮两种自动化都试过：
+
+| 方式 | 结果 |
+|---|---|
+| CDP `Input.dispatchDragEvent` 携带 `files` | 无法注入真实 `File`，`webUtils.getPathForFile` 取不到路径 |
+| 点槽位上传区 → `xdotool` 对 GTK 对话框 Ctrl+L + 输入路径 + 回车 | `wmctrl -l` 在 xvfb 下返回空（无窗口管理器），对话框无焦点管理，输入未投递 |
+
+两次尝试后核对磁盘：`review-cases/case-mvhaf5e2/state.v2.json` 的 `documents` 仍为 `[]`，
+即材料确实没有注册。因此「上传真实 DOCX → 提交 → 初审 → 报告」在纯 UI 下未完成。
+需要真实显示服务器（或窗口管理器）才能跑完这一段。
 
 **本轮修复的真实产品缺陷**：`V2CasePanel.createFromTemplate` 无条件提交 `subjectRows`，
 而模板只有案例级字段时列表里仍有一个空白事项行，创建被

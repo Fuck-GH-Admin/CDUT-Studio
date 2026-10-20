@@ -13,7 +13,7 @@
  *   create-case      创建原生案卷并重新读取
  *   d4-list          读取 D4 目录，统计模板数与可用性
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -2535,13 +2535,43 @@ const scenarios = {
     trace.push('caseId=' + caseId)
     if (!caseId) return { trace, caseId: null, error: 'UI 创建案卷未成功' }
 
-    // 5. 切到审核工作台，材料拖放区在那一栏
-    await clickText('审核工作台'); await sleep(1500)
-    const dropTargets = await evaluate(send, `
-      Array.from(document.querySelectorAll('[aria-label="拖入审核依据文件"], [aria-label="拖入申报材料文件"]'))
-        .map(n => ({ label: n.getAttribute('aria-label'), rect: n.getBoundingClientRect() }))
-    `)
+    // 5. 切到审核工作台，展开模板材料要求，点槽位上传区打开真实文件对话框
     let dropped = null
+    await clickText('审核工作台'); await sleep(1500)
+    await clickText('模板材料要求'); await sleep(800)
+    const zoneClicked = await evaluate(send, `
+      const zones = Array.from(document.querySelectorAll('[aria-label="导入材料：点击选择或拖入文件"]'))
+      if (!zones.length) return { ok: false, count: 0 }
+      zones[0].click()
+      return { ok: true, count: zones.length }
+    `)
+    trace.push('slotZone=' + JSON.stringify(zoneClicked))
+    if (zoneClicked?.ok) {
+      // 真实驱动 GTK 文件对话框：Ctrl+L 输入绝对路径后回车
+      await sleep(1800)
+      try {
+        const listed = spawnSync('wmctrl', ['-l'], { encoding: 'utf8' })
+        trace.push('windows=' + JSON.stringify(String(listed.stdout ?? '').split('\n').filter(Boolean).slice(0, 6)))
+      } catch (error) { trace.push('wmctrl=failed') }
+      const docPath = process.env.E2E_DOCX_PATH ?? ''
+      try {
+        spawnSync('xdotool', ['key', '--clearmodifiers', 'ctrl+l'], { stdio: 'ignore' })
+        await sleep(400)
+        spawnSync('xdotool', ['type', '--delay', '25', docPath], { stdio: 'ignore' })
+        await sleep(400)
+        spawnSync('xdotool', ['key', 'Return'], { stdio: 'ignore' })
+        trace.push('xdotool=typed')
+      } catch (error) {
+        trace.push('xdotool=failed:' + String(error).slice(0, 120))
+      }
+      await sleep(4000)
+      dropped = await evaluate(send, `(async () => {
+        const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
+        return (agg?.caseV2?.documents ?? []).filter(d => d.active !== false)
+          .map(d => d.fileName + '@' + (d.materialSlotId ?? '-'))
+      })()`)
+    }
+    const dropTargets = []
     if (Array.isArray(dropTargets) && dropTargets.length > 0) {
       const box = dropTargets[0].rect
       const x = Math.round(box.x + box.width / 2)
