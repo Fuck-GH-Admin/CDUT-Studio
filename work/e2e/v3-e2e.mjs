@@ -945,6 +945,62 @@ const scenarios = {
       .replace('__POLL__', JSON.stringify(process.env.E2E_POLL_MS ?? '360000')))
   },
 
+  /**
+   * A15 起点：T01 保存并发布模板 → 无学年绑定到新案卷（T10 通用建案）。
+   *
+   * 验证 L2 学年解耦与 T01 模板绑定能组合工作：非综测业务模板不强制学年。
+   */
+  async 'flow-t01-bind'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+
+      const templateId = 'e2e-t01-lab-request'
+      const now = new Date().toISOString()
+      const template = {
+        templateId, version: 1, schemaVersion: 2,
+        name: 'E2E 实验室申请（T01 作者模板）', displayName: { template: '{{labName}} 实验室申请' },
+        objectType: 'document', status: 'draft', createdAt: now,
+        fields: [
+          { key: 'labName', label: '实验室名称', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          { key: 'applicantCount', label: '申请人数', kind: 'number', required: true, visibility: 'public', scope: 'case' },
+        ],
+        sections: [{ id: 'basic', name: '基本情况', order: 0, required: true, criteria: [
+          { id: 'lab-exists', title: '实验室存在', requirement: '核对申请材料中的实验室名称',
+            execution: 'semantic', targetScope: 'case' }] }],
+        materialSlots: [], policyVersionIds: [], policyRefs: [],
+        stages: [{ id: 'review', name: '审核', kind: 'manual-review', executorRole: 'reviewer' }],
+        outputs: [{ id: 'feedback', kind: 'item-feedback', audience: 'reviewer' }],
+      }
+
+      try {
+        await api.saveTemplateDraftV2(template)
+        step('saveDraft', { ok: true })
+      } catch (error) { step('saveDraft', { ok: false, error: String(error?.message ?? error) }) }
+
+      try {
+        await api.publishTemplateV2(templateId, 1)
+        step('publish', { ok: true })
+      } catch (error) { step('publish', { ok: false, error: String(error?.message ?? error) }) }
+
+      // 无学年绑定到通用案卷（非综测领域，学年应为可选）
+      try {
+        const created = await api.createCase({
+          title: 'A15 实验室申请案卷', type: '自定义审核', applicant: 'E2E',
+          domainPackId: 'contract-review',
+          reviewTemplate: { templateId, version: 1 },
+        })
+        const reopened = await api.getCase(created.id)
+        step('bindCase', { ok: true, caseId: created.id,
+          academicYear: reopened?.academicYear ?? null,
+          templateBound: created?.reviewTemplate?.templateId ?? null })
+      } catch (error) { step('bindCase', { ok: false, error: String(error?.message ?? error) }) }
+
+      return out
+    `)
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()
