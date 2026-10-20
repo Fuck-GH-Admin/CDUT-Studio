@@ -512,6 +512,8 @@ export const REVIEW_IPC_CHANNELS = {
   AUTHOR_READ_LATEST_V3: 'review-v3:author-read-latest',
   /** C Main-only current B20 physical candidate preview; never a published Plan. */
   B20_CANDIDATE_READ_V3: 'review-v3:b20-candidate-read',
+  /** User requests Main to show native ZIP picker for one CURRENT B20 selected archive. */
+  B20_NATIVE_REPICK_V3: 'review-v3:b20-native-repick',
   /** C Main formal published-Plan upgrade through native Case CAS/Receipt. */
   UPGRADE_CANONICAL_PLAN_V3: 'review-v3:upgrade-canonical-plan',
   /** 更新案卷设置（领域包 / 标题 / 类型 / 待审主体文档） */

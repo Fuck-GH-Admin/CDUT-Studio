@@ -4028,6 +4028,13 @@ const reviewAPI = {
       candidateProvenance:unknown;state:'candidate-held';displayOnly:true;candidateOnly:true;
       publicationAllowed:false;businessWriteAllowed:false;schoolPolicyVerified:false;
     }>,
+  /** Main validates selected B20 archive, opens a REAL OS picker and re-verifies original bytes.
+   * No Renderer pathname/private key/Principal/Owner is accepted. */
+  repickCurrentB20ArchiveV3: (templateId:string,archiveId:string) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.B20_NATIVE_REPICK_V3,{templateId,archiveId}) as
+    Promise<{schemaVersion:'review-v3-main-native-b20-repick/1';
+      status:'picked-for-candidate-only';publicationAllowed:false;
+      businessWriteAllowed:false;schoolPolicyVerified:false}>,
   /** Read/write separation: this requires a real published school-policy issuer in Main. */
   upgradeCanonicalPlanV3: (input: {
     caseId:string;requestId:string;expectedRevision:number;

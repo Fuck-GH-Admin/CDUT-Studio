@@ -95,6 +95,12 @@ export interface CMainV3B20ReadAuthorities {
     identity:CMainB20ReadIdentity,
     numeric:{senderId:number;frameId:number},
   ):Promise<unknown>|unknown
+  /** Only privileged C Main physical archive session can implement this.
+   * If omitted, user requests default-deny and cannot forge picker success. */
+  repickNativeArchive?(
+    expected:CMainB20PinnedExpectation,identity:CMainB20ReadIdentity,
+    numeric:{senderId:number;frameId:number},archiveId:string,
+  ):Promise<void>|void
 }
 type CMainB20Installation={source:CMainV3B20ReadAuthorities;token:string}
 let b20ReadInstallation:CMainB20Installation|undefined
@@ -355,6 +361,66 @@ export async function handleCMainB20CandidateRead(
   })
   return reader.read(templateId)
 }
+/**
+ * Real Main native ZIP archive re-pick. Renderer may request only a template
+ * plus an archive ID; selection/Owner/B Vault/source keys all come from Main.
+ * No author/Case/Run/BusinessWriter mutation is performed.
+ */
+export async function handleCMainB20NativeArchiveRepick(
+  event:IpcMainInvokeEvent,input:unknown,
+) {
+  const atStart=liveFrame(event)
+  if(!input||typeof input!=='object'||Array.isArray(input)||
+     Object.keys(input).length!==2||
+     !own(input,'templateId')||!own(input,'archiveId'))
+    return refuse('B20_REPICK_RENDERER_CREDENTIAL_OR_PATH_CLAIM')
+  const data=input as {templateId:unknown;archiveId:unknown}
+  if(typeof data.templateId!=='string'||
+     !/^[A-Za-z][A-Za-z0-9._-]{0,79}$/.test(data.templateId)||
+     typeof data.archiveId!=='string'||!/^[a-f0-9]{40}$/.test(data.archiveId))
+    return refuse('B20_REPICK_TEMPLATE_OR_ARCHIVE_INVALID')
+  const templateId=data.templateId, archiveId=data.archiveId
+  const installed=b20ReadInstallation
+  if(!installed || typeof installed.source.repickNativeArchive!=='function')
+    return refuse('B20_NATIVE_PICKER_NOT_INSTALLED')
+  const src=installed.source
+  const current=()=>{
+    if(b20ReadInstallation!==installed)refuse('B20_SOURCE_INSTALLATION_REVOKED')
+    const frame=liveFrame(event)
+    if(JSON.stringify(atStart)!==JSON.stringify(frame))
+      return refuse('B20_MAIN_PHYSICAL_FRAME_CHANGED')
+    const registration=src.currentCandidate(frame.principalId,templateId)
+    if(!registration)return refuse('B20_OWNER_CANDIDATE_NOT_CURRENT')
+    const grant=checkGrant(registration.grant)
+    if(!src.canReadCandidate(frame.principalId,templateId,
+      registration.caseCandidateId,grant))
+      return refuse('B20_REPICK_MAIN_ACL_REVOKED')
+    const pin=src.currentPinnedAuthor(registration.caseCandidateId,templateId)
+    if(!pin||pin.templateId!==templateId)
+      return refuse('B20_CURRENT_AUTHOR_PIN_MISSING')
+    return {
+      id:{...frame,caseCandidateId:registration.caseCandidateId,
+        ownerId:grant.ownerId,ownerGeneration:grant.generation,
+        authorityEpoch:grant.authorityEpoch},
+      pin:structuredClone(pin),
+    }
+  }
+  const observed=current()
+  const physical=event.senderFrame
+  const numeric={senderId:event.sender.id,frameId:physical?.routingId}
+  if(!physical||!Number.isSafeInteger(numeric.senderId)||numeric.senderId<0||
+     !Number.isSafeInteger(numeric.frameId)||numeric.frameId<0)
+    return refuse('B20_NATIVE_PICKER_NUMERIC_FRAME_MISSING')
+  await src.repickNativeArchive(observed.pin,observed.id,
+    {senderId:numeric.senderId,frameId:numeric.frameId},archiveId)
+  if(JSON.stringify(current())!==JSON.stringify(observed))
+    return refuse('B20_MAIN_REVOKED_DURING_NATIVE_PICK')
+  return {
+    schemaVersion:'review-v3-main-native-b20-repick/1',
+    status:'picked-for-candidate-only',
+    publicationAllowed:false,businessWriteAllowed:false,schoolPolicyVerified:false,
+  } as const
+}
 export interface CMainV3UpgradeIntent {
   caseId:string
   requestId:string
@@ -448,5 +514,6 @@ export async function handleCMainUpgradeCanonicalPlan(
 export function registerCMainV3AuthorPlanIpc():void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,handleCMainAuthorLatestRead)
   ipcMain.handle(REVIEW_IPC_CHANNELS.B20_CANDIDATE_READ_V3,handleCMainB20CandidateRead)
+  ipcMain.handle(REVIEW_IPC_CHANNELS.B20_NATIVE_REPICK_V3,handleCMainB20NativeArchiveRepick)
   ipcMain.handle(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,handleCMainUpgradeCanonicalPlan)
 }

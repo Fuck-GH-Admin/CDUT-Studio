@@ -74,6 +74,11 @@ const frame={processId:777,routingId:3}
 const sender={id:91,mainFrame:frame,isDestroyed:()=>false}
 const main={isDestroyed:()=>false,webContents:sender}
 const event={sender,senderFrame:frame}
+const repick=(request:unknown)=>{
+  const handler=handlers.get(REVIEW_IPC_CHANNELS.B20_NATIVE_REPICK_V3)
+  if(!handler)throw Error('Missing real native picker handler')
+  return Promise.resolve(handler(event,request))
+}
 const invoke=(request:unknown={templateId:'cR10demo'})=>{
   const handler=handlers.get(REVIEW_IPC_CHANNELS.B20_CANDIDATE_READ_V3)
   if(!handler)throw Error('Missing real IPC handler')
@@ -192,9 +197,11 @@ describe('C R10 real C Main registered IPC × B R23 B1/B2/B19/B20 physical compo
   test('real saved and frozen B1, actual ZIP CRC + accepted ledger, native physical repick, two C Main reads',async()=>{
     handlers.clear();setMainWindow(main as never);registerReviewIpc()
     const f=await setup()
-    f.select()
     const dispose=installCMainV3PhysicalB20Sources(f.entry)
     try{
+      await expect(repick({templateId:f.templateId,archiveId:f.checkpoint.archiveId}))
+        .resolves.toMatchObject({status:'picked-for-candidate-only',
+          publicationAllowed:false,businessWriteAllowed:false})
       const value=await invoke({templateId:f.templateId}) as Record<string,unknown>
       expect(value).toMatchObject({
         templateId:f.templateId,caseCandidateId:f.ctx.caseCandidateId,
@@ -260,6 +267,19 @@ describe('C R10 real C Main registered IPC × B R23 B1/B2/B19/B20 physical compo
       .toThrow('B_VAULT_PHYSICAL_ORIGIN_KEY_INVALID')
     expect(()=>f.picker.resolveNativeArchiveKey(f.archiveExpectation))
       .toThrow('CURRENT_NATIVE_REPICK_REQUIRED')
+  })
+  test('OS picker refuses Renderer physical paths/unknown archive and never opens arbitrary file',async()=>{
+    const f=await setup()
+    const dispose=installCMainV3PhysicalB20Sources(f.entry)
+    try{
+      await expect(repick({templateId:f.templateId,
+        archiveId:f.checkpoint.archiveId,path:'/tmp/attacker.zip'}))
+        .rejects.toThrow('B20_REPICK_RENDERER_CREDENTIAL_OR_PATH_CLAIM')
+      await expect(repick({templateId:f.templateId,archiveId:'f'.repeat(40)}))
+        .rejects.toThrow('ARCHIVE_NOT_IN_CURRENT_C_MAIN_SELECTIONS')
+      await expect(invoke({templateId:f.templateId}))
+        .rejects.toThrow('CURRENT_NATIVE_REPICK_REQUIRED')
+    }finally{dispose();f.picker.close()}
   })
   test('monotonic local numeric epoch is independent of string C epoch and revocation closed',()=>{
     const epoch=new CMainB20NumericEpoch()
