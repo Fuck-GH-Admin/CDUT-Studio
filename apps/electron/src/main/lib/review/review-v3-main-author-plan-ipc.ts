@@ -90,7 +90,11 @@ export interface CMainV3B20ReadAuthorities {
   canReadCandidate(principalId:string,templateId:string,caseCandidateId:string,grant:CMainV3Grant):boolean
   currentPinnedAuthor(caseCandidateId:string,templateId:string):
     CMainB20PinnedExpectation|undefined
-  readCurrentB20Bundle(expected:CMainB20PinnedExpectation):Promise<unknown>|unknown
+  readCurrentB20Bundle(
+    expected:CMainB20PinnedExpectation,
+    identity:CMainB20ReadIdentity,
+    numeric:{senderId:number;frameId:number},
+  ):Promise<unknown>|unknown
 }
 type CMainB20Installation={source:CMainV3B20ReadAuthorities;token:string}
 let b20ReadInstallation:CMainB20Installation|undefined
@@ -336,7 +340,16 @@ export async function handleCMainB20CandidateRead(
     },
     readCurrentBundle:expected=>{
       requireInstalled()
-      return source.readCurrentB20Bundle(expected)
+      const physical=liveFrame(event)
+      const senderId=event.sender.id
+      const frameId=event.senderFrame?.routingId
+      if(!Number.isSafeInteger(senderId)||senderId<0||
+         !Number.isSafeInteger(frameId)||frameId<0 ||
+         physical.frameId!==event.senderFrame.processId+':'+frameId)
+        return refuse('B20_NUMERIC_MAIN_FRAME_NOT_CURRENT')
+      const identity=current()
+      if(!identity)return refuse('B20_MAIN_CURRENT_SCOPE_LOST')
+      return source.readCurrentB20Bundle(expected,identity,{senderId,frameId})
     },
   })
   return reader.read(templateId)
