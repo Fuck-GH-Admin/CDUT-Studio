@@ -305,7 +305,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
         <span className="text-xs">{b1Frozen?.templateId??'请先在下方保存并冻结模板'}</span>
       </div>
       {b1Notice&&<p role="status" className="text-xs">{b1Notice}</p>}
-      {b1Error&&<p role="alert" className="text-xs text-red-600">{b1Error}</p>
+      {b1Error&&<p role="alert" className="text-xs text-red-600">{b1Error}</p>}
       <p className="text-xs text-muted-foreground">自定义审核目的不在既有 50 套时，可直接编辑、编译、保存和冻结候选。所有记录仅在本机，不代表校方发布、学校政策核验或正式审批。</p>
       <div className="flex flex-wrap items-center gap-2">
         <input aria-label="重开候选模板 ID" className="min-w-40 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm"
