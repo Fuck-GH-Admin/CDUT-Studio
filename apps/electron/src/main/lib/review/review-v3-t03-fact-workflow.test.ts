@@ -54,6 +54,16 @@ describe('T03 real fact/evidence review', () => {
       aggregate.evidenceLinks)
     expect(links).toHaveLength(2)
     expect(links.every(link => link.status === 'candidate')).toBe(true)
+    const withRunCandidate = projectT03Evidence(aggregate, [{
+      subjectId: 'alice', fieldKey: 'award', value: { kind: 'text', value: 'award' },
+      sourceRefs: [{ caseId: 'case1', documentVersionId: 'notice', parseRevision: 1,
+        location: { kind: 'file' } }],
+    }]).find(doc => doc.documentVersionId === 'notice')!
+    expect(withRunCandidate.suggestions).toEqual([{
+      documentVersionId: 'notice', subjectId: 'alice', supportsFact: 'award', status: 'candidate',
+    }])
+    expect(withRunCandidate.ambiguousSubjectIds).toContain('bob')
+    expect(withRunCandidate.ambiguousSubjectIds).toContain('alice')
   })
   test('correction/source retirement picks only dependent old checks, preserves immutable run', () => {
     const aggregate = fixture()
