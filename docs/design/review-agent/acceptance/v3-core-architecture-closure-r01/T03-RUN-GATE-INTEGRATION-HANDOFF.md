@@ -36,6 +36,8 @@ assessT03RunAction({
 
 ### L1：Run 选择
 
+本 PR 还提供 `selectT03CurrentRun({ aggregate, runs, prove })`：Main 传入现有 `listRunsV2(caseId)`、每个候选 Run 的可信快照/Plan 证明；函数只返回真实有效且输入未过期的 Run，**不读取或修改 RunStore**。这是替换 `currentT05Run` 内旧文件子集判断的最小可复用实现。
+
 当前 `currentT05Run` 在读取 `inputManifest.documents`，但真实 `ReviewRunV2` 只有 `inputManifest.documentVersions`。先修改为完整读取；优先复用当前 `workspace-business-service-v2.ts:isWorkspaceRunStaleV2` 来比对现有 RunStore + `computeRunInputHash`。比对时必须包含新材料版本及 caseFields、有效规则、Observation/Evidence，不能只判断当前材料 ID 都存在。
 
 读取 Run 期间对旧运行允许保留历史；一旦存在后续输入变化，旧运行不应被挑作当前批准依据。现有 `isWorkspaceRunStaleV2` 可以作为 `T03TrustedRunEvidence.inputSnapshotFresh` 的主要来源，并在 L 内补齐 Plan 绑定验证。
