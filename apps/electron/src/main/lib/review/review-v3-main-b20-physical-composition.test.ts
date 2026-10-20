@@ -210,7 +210,7 @@ describe('C R10 real C Main registered IPC × B R23 B1/B2/B19/B20 physical compo
         state:'candidate-held',displayOnly:true,publicationAllowed:false,
         schoolPolicyVerified:false,businessWriteAllowed:false,
       })
-      expect(f.reads()).toBe(2)
+      expect(f.reads()).toBe(3)
       const source=value.candidateProvenance as {bindings:{state:string}[]}
       expect(source.bindings).toHaveLength(2)
       expect(source.bindings.every(x=>x.state==='linked-candidate')).toBe(true)
