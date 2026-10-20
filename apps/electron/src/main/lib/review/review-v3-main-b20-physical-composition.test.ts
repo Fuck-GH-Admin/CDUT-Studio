@@ -171,8 +171,9 @@ async function setup(){
     currentPinnedAuthor:(cid:string,tid:string)=>active&&cid===caseCandidateId&&
       tid===templateId?pinned:undefined,
     currentSelections:()=>{physicalReads++;return structuredClone(selections)},
-    currentNativeArchiveKey:(_:CMainB20ReadIdentity,archiveId:string)=>
-      picker.resolveNativeArchiveKey({...archiveExpectation,archiveId}),
+    nativePicker:picker,
+    currentMainIssuedOriginalKey:(_:CMainB20ReadIdentity,archiveId:string)=>
+      archiveId===checkpoint.archiveId?physicalKey:null,
     assertLiveCMainIdentity:(id:CMainB20ReadIdentity)=>{
       if(!active||JSON.stringify(id)!==JSON.stringify(identity()))
         throw Error('C_REAL_MAIN_IDENTITY_REVOKED')
@@ -215,7 +216,7 @@ describe('C R10 real C Main registered IPC × B R23 B1/B2/B19/B20 physical compo
     const f=await setup()
     const dispose=installCMainV3PhysicalB20Sources(f.entry)
     try{await expect(invoke({templateId:f.templateId}))
-      .rejects.toThrow('NATIVE_PICKER_PROVENANCE_NOT_INSTALLED')}
+      .rejects.toThrow('CURRENT_NATIVE_REPICK_REQUIRED')}
     finally{dispose();f.picker.close()}
   })
   test('same filename and SHA but different physical original inode is not current provenance',async()=>{

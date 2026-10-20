@@ -19,6 +19,7 @@ import {
   type B20CurrentMainReadAuthority, type B20ReadOnlySources,
 } from './review-v3-b1-b2-main-read-bundle-v3-b'
 import type { B19SourceSelection } from './review-v3-b1-b2-candidate-source-bridge'
+import {CMainNativeArchiveRegistry} from './review-v3-main-native-archive-registry'
 import {
   installCMainV3B20ReadAuthorities,
   type CMainV3B20ReadAuthorities, type CMainV3Grant,
@@ -48,10 +49,16 @@ export interface CMainB20PhysicalSources {
   /** C Main-owned author/current source selector, not incoming IPC. */
   readonly currentSelections(scope:Readonly<B20MainReadScope>,
     author:Readonly<B20ReadAuthorExpectation>):readonly B19SourceSelection[]|null
-  /** C current native Picker grant, backed by exact B Vault checkpoint. */
-  readonly currentNativeArchiveKey(
+  /** One C-owned ephemeral OS-native capability registry, never a B vault. */
+  readonly nativePicker:CMainNativeArchiveRegistry
+  /**
+   * Original opaque ZIP key minted at initial C Main physical import. Its
+   * availability after cold restart must be NULL until newly reauthorized.
+   * Never return this key through an IPC response.
+   */
+  readonly currentMainIssuedOriginalKey(
     scope:Readonly<CMainB20ReadIdentity>,
-    archiveId:string, bScope:Readonly<B20MainReadScope>,
+    archiveId:string,bScope:Readonly<B20MainReadScope>,
   ):string|null
   /** Independent real Main Principal/frame/Owner current grant proof. */
   readonly assertLiveCMainIdentity(identity:CMainB20ReadIdentity):void
@@ -106,7 +113,8 @@ export function installCMainV3PhysicalB20Sources(source:CMainB20PhysicalSources)
      typeof source.canReadCandidate!=='function'||
      typeof source.currentPinnedAuthor!=='function'||
      typeof source.currentSelections!=='function'||
-     typeof source.currentNativeArchiveKey!=='function'||
+     !(source.nativePicker instanceof CMainNativeArchiveRegistry)||
+     typeof source.currentMainIssuedOriginalKey!=='function'||
      typeof source.assertLiveCMainIdentity!=='function')
     return reject('REAL_B1_B2_AND_C_MAIN_AUTHORITY_REQUIRED')
   const epochs=new CMainB20NumericEpoch()
@@ -127,6 +135,29 @@ export function installCMainV3PhysicalB20Sources(source:CMainB20PhysicalSources)
     if(!pin||!same(pin,expected)||!sha.test(pin.revisionDigest)||
        !sha.test(pin.frozenFingerprint))return reject('FROZEN_PIN_REVOKED')
   }
+  /** C native ZIP dialog may only target an archive already in C's trusted
+   * CURRENT B19 selections; checked from B Vault original + sealed key digest.
+   * This is a physical reauthorization only, never a Material/Plan writer. */
+  const repick=(expected:CMainB20PinnedExpectation,
+    id:CMainB20ReadIdentity,numeric:{senderId:number;frameId:number},
+    archiveId:string):void=>{
+    validate(id,expected)
+    const scope=epochs.create(id,numeric)
+    source.bSources.staging.assertStillGranted(scope)
+    const selected=source.currentSelections(scope,expected)
+    if(!Array.isArray(selected)||!selected.some(x=>x.archiveId===archiveId))
+      return reject('ARCHIVE_NOT_IN_CURRENT_C_MAIN_SELECTIONS')
+    const checkpoint=source.bSources.vault.inspect(scope,archiveId)
+    const key=source.currentMainIssuedOriginalKey(id,archiveId,scope)
+    if(!key||!safe(key))return reject('MAIN_ISSUED_ORIGINAL_KEY_NOT_AVAILABLE')
+    source.nativePicker.pickForBVault({
+      archiveId,archiveSha256:checkpoint.archiveSha256,
+      archiveByteLength:checkpoint.byteLength,
+    },key,checkpoint.physicalArchiveKeyDigest)
+    validate(id,expected)
+    if(!same(epochs.create(id,numeric),scope))
+      return reject('MAIN_SCOPE_CHANGED_DURING_OS_PICKER')
+  }
   const authority:CMainV3B20ReadAuthorities={
     currentCandidate:(principalId,templateId)=>{
       active()
@@ -139,6 +170,9 @@ export function installCMainV3PhysicalB20Sources(source:CMainB20PhysicalSources)
     currentPinnedAuthor:(candidate,id)=>{
       active()
       return source.currentPinnedAuthor(candidate,id)
+    },
+    repickNativeArchive:(expected,id,numeric,archiveId)=>{
+      repick(expected,id,numeric,archiveId)
     },
     readCurrentB20Bundle:(expected,id,numeric)=>{
       validate(id,expected)
@@ -161,9 +195,11 @@ export function installCMainV3PhysicalB20Sources(source:CMainB20PhysicalSources)
         nativeArchiveKey:(bScope,archiveId)=>{
           validate(id,expected)
           if(!same(bScope,numericStart))return reject('NATIVE_PICKER_SCOPE_DRIFT')
-          const key=source.currentNativeArchiveKey(id,archiveId,bScope)
-          if(key!==null&&!safe(key))return reject('PRIVATE_NATIVE_KEY_INVALID')
-          return key
+          const archive=source.bSources.vault.inspect(bScope,archiveId)
+          return source.nativePicker.resolveNativeArchiveKey({
+            archiveId,archiveSha256:archive.archiveSha256,
+            archiveByteLength:archive.byteLength,
+          })
         },
       }
       const result=readB20CurrentCandidateBundle(expected,{
