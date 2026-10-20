@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Button } from '@profer/ui/primitives/button'
+import { parseBatchManifest } from './review-v3-t06-batch-intake'
+import { suggestT06PhysicalManifest } from './review-v3-t06-physical-manifest'
 import {
   previewT06PhysicalImport, planT06PhysicalImport,
   type T06PhysicalSelection, type T06GroupChoice, type T06PhysicalCommitRequest, type T06CommitReceipt,
@@ -28,6 +30,7 @@ export function ReviewV3T06PhysicalImport({
   const [requestId, setRequestId] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const [manifestNote, setManifestNote] = useState('')
   const [receipt, setReceipt] = useState<T06CommitReceipt | null>(null)
   const preview = useMemo(() => source ? previewT06PhysicalImport(source, {
     stripCommonRoot: stripRoot, rootFileGroups: rootAssignments,
@@ -47,10 +50,21 @@ export function ReviewV3T06PhysicalImport({
       const next = await api.pickT06PhysicalSource({ sourceKind: kind })
       if (next) {
         setSource(next); setRequestId(crypto.randomUUID()); setReceipt(null)
-        setDecisions({}); setRootAssignments({}); setStripRoot(kind === 'folder')
+        setDecisions({}); setRootAssignments({}); setStripRoot(kind === 'folder'); setManifestNote('')
       }
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setPending(false) }
+  }
+  async function importManifest(file: File | undefined): Promise<void> {
+    if (!file || !preview || receipt) return
+    try {
+      const parsed = parseBatchManifest(await file.text(), file.name)
+      if (parsed.errors.length) { setManifestNote(parsed.errors.join('；')); return }
+      const match = suggestT06PhysicalManifest(preview, parsed.rows, existingCases.map(x => x.caseId))
+      setDecisions(old => ({ ...old, ...match.suggestions }))
+      setManifestNote('匹配建议 ' + Object.keys(match.suggestions).length + ' 组；未匹配 ' +
+        match.unmatched.length + ' 组；重复编号 ' + match.ambiguous.length + ' 组。请在下面核对后提交。')
+    } catch (cause) { setManifestNote(cause instanceof Error ? cause.message : String(cause)) }
   }
   function choose(groupId: string, value: T06GroupChoice): void {
     setDecisions(old => ({ ...old, [groupId]: value })); setReceipt(null)
@@ -84,6 +98,11 @@ export function ReviewV3T06PhysicalImport({
           setStripRoot(e.target.checked); setDecisions({}); setReceipt(null)
         }} />忽略全部原件共有的顶层目录
       </label>
+      <label className="block text-[11px] text-muted-foreground">可选：导入 CSV/TSV 清单，根据**唯一相同的申请编号/案卷编号**预填写案卷身份（仅为建议，仍需人工确认）。
+        <input type="file" disabled={!!receipt || pending} accept=".csv,.tsv" className="mt-1 block text-xs"
+          onChange={e => { void importManifest(e.target.files?.[0]); e.currentTarget.value = '' }} />
+      </label>
+      {manifestNote && <p className="text-[11px] text-muted-foreground">{manifestNote}</p>}
       <p className="text-xs">{preview.source.entries.length} 份原件 · {preview.groups.length} 组 · 未归属 {preview.unassignedCount}</p>
       {preview.errors.map((e, i) => <p key={i} role="alert" className="text-xs text-destructive">{e}</p>)}
       <div className="max-h-72 space-y-2 overflow-y-auto">
