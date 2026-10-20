@@ -152,7 +152,8 @@ export function makeT08CaseReport(input: {
       lines.push('- 补件：' + request.reason + '；状态：' + request.status + '；要求：' + request.requiredElements.join('、'))
     }
     for (const subject of aggregate.caseV2.subjects) {
-      lines.push('- 事项：' + subject.title + '；字段：' + escaped(publicFields(subject.fields)))
+      lines.push('- 事项：' + subject.title + '；字段：' + (Object.entries(publicFields(subject.fields))
+        .map(([key, value]) => escaped(key) + '：' + escaped(value)).join('；') || '无公开字段'))
     }
   }
   if (decision) {
