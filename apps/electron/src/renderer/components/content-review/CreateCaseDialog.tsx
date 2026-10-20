@@ -61,6 +61,11 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
   const [submitting, setSubmitting] = React.useState(false)
 
   const selectedTemplate = templates.find((template) => `${template.templateId}@${template.version}` === templateKey)
+  // 学年属于综测或显式声明该字段的模板，不应成为所有组织/项目的业务必填。
+  // Main 目前仍全局强制此字段；解除 Main 约束由本地 L 线完成。
+  const yearField = selectedTemplate?.fields.find((field) => field.key === 'academicYear' && (field.scope ?? 'case') === 'case')
+  const showAcademicYear = caseType === '综合测评' || !!yearField
+  const yearRequired = caseType === '综合测评' || yearField?.required === true
 
   // 每次打开重置为缺省值，避免带上一次输入
   React.useEffect(() => {
@@ -77,7 +82,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
   // An unbound draft is an intentional native-first state. Do not force
   // the sole published template back onto an explicitly blank selection.
   const selectedPack = resolveDomainPack(domainPackId)
-  const canSubmit = title.trim().length > 0 && applicant.trim().length > 0 && !submitting
+  const canSubmit = title.trim().length > 0 && applicant.trim().length > 0 && (!yearRequired || academicYear.trim().length > 0) && !submitting
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
@@ -88,7 +93,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
         title: title.trim(),
         type: caseType,
         applicant: applicant.trim(),
-        academicYear: academicYear.trim() || defaultAcademicYear(),
+        academicYear: showAcademicYear ? academicYear.trim() : '',
         domainPackId,
         reviewTemplate: selectedTemplate ? { templateId: selectedTemplate.templateId, version: selectedTemplate.version } : null,
       })
@@ -110,7 +115,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
         <DialogHeader>
           <DialogTitle>新建审核项目</DialogTitle>
           <DialogDescription>
-            可先建立未绑定正式政策的原生草稿，或选择已经发布的模板版本。建案不会自动发布学校政策或批准审核。
+            可先建立未绑定正式政策的原生草稿，或选择已经发布的模板版本。学年仅在综测或模板需要时填写；建案不会自动发布政策或批准审核。
           </DialogDescription>
         </DialogHeader>
 
@@ -127,9 +132,9 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="review-case-template">审核模板（可暂不选择）</Label>
+            <Label htmlFor="review-create-template">审核模板（可暂不选择）</Label>
             <select
-              id="review-case-template"
+              id="review-create-template"
               aria-label="新建项目使用的审核模板"
               value={templateKey}
               onChange={(event) => setTemplateKey(event.target.value)}
@@ -150,23 +155,24 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="review-case-applicant">申请人</Label>
+              <Label htmlFor="review-case-applicant">申请主体</Label>
               <Input
                 id="review-case-applicant"
                 value={applicant}
                 onChange={(event) => setApplicant(event.target.value)}
-                placeholder="如：张三"
+                placeholder="如：学生、团队或实验室"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="review-case-year">适用学年</Label>
+            {showAcademicYear && <div className="space-y-1.5">
+              <Label htmlFor="review-case-year">适用学年{yearRequired ? ' *' : '（可选）'}</Label>
               <Input
                 id="review-case-year"
                 value={academicYear}
+                required={yearRequired}
                 onChange={(event) => setAcademicYear(event.target.value)}
                 placeholder="如：2025-2026"
               />
-            </div>
+            </div>}
           </div>
 
           <div className="space-y-1.5">
@@ -230,7 +236,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
             </Button>
           </DialogFooter>
           {!canSubmit && !submitting && (
-            <p className="text-right text-xs text-muted-foreground">项目标题与申请人为必填项；未选模板将创建原生草稿。</p>
+            <p className="text-right text-xs text-muted-foreground">项目标题、申请主体{yearRequired ? '、适用学年' : ''}为必填项；未选模板将创建原生草稿。</p>
           )}
         </form>
       </DialogContent>
