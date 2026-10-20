@@ -224,7 +224,7 @@ export function installC11LocalNativeProductIntake():void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_MANUAL_CHOICE_V3,
     async (event:IpcMainInvokeEvent,input:{
       caseId:string;templateId:string;templateVersion:string
-    }):C11MainLocalTechnicalChoiceAck=>{
+    }):Promise<C11MainLocalTechnicalChoiceAck>=>{
       if(!input||typeof input.caseId!=='string'||
         typeof input.templateId!=='string'||typeof input.templateVersion!=='string')
         throw new Error('C11_NATIVE_MANUAL_CHOICE_INVALID')
