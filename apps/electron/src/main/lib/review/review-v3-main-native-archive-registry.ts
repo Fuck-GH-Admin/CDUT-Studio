@@ -60,7 +60,7 @@ function validateScope(s:CMainPhysicalArchiveScope|undefined):CMainPhysicalArchi
   if(!s||![s.principalId,s.sessionId,s.windowId,s.frameId,
         s.ownerId,s.authorityEpoch,s.caseCandidateId].every(safe)||
      !Number.isSafeInteger(s.ownerGeneration)||s.ownerGeneration<0)
-    refuse('AUTHENTICATED_MAIN_SCOPE_REQUIRED')
+    return refuse('AUTHENTICATED_MAIN_SCOPE_REQUIRED')
   return structuredClone(s)
 }
 function validateArchive(e:CMainNativeArchiveExpectation):CMainNativeArchiveExpectation {
@@ -116,7 +116,7 @@ export class CMainNativeArchiveRegistry {
     const initial=validateScope(this.source.currentScope())
     this.source.assertCurrentArchive(initial,expected)
     const picked=this.source.pickZipPath()
-    if(!picked)refuse('USER_DID_NOT_SELECT_ORIGINAL')
+    if(!picked)return refuse('USER_DID_NOT_SELECT_ORIGINAL')
     const disk=physicalRead(picked)
     if(disk.bytesSha!==expected.archiveSha256||
        disk.size!==expected.archiveByteLength)refuse('PICKED_DIFFERENT_PHYSICAL_ORIGINAL')
@@ -139,7 +139,7 @@ export class CMainNativeArchiveRegistry {
     this.source.assertCurrentArchive(current,expected)
     const record=this.entries.get(idOf(current,expected))
     if(!record||!same(record.scope,current)||!same(record.expected,expected))
-      refuse('CURRENT_NATIVE_REPICK_REQUIRED')
+      return refuse('CURRENT_NATIVE_REPICK_REQUIRED')
     const disk=physicalRead(record.path)
     if(disk.dev!==record.dev||disk.ino!==record.ino||
        disk.path!==record.path||disk.bytesSha!==expected.archiveSha256||
