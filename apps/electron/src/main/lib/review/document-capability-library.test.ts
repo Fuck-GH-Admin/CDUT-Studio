@@ -70,6 +70,9 @@ describe('DocumentCapabilityLibrary', () => {
       imagesAwaitingInspection: 1,
       parseError: '图片未提取',
     })
+    const library = new DocumentCapabilityLibrary({ caseId: 'case-1', caseRoot: '/tmp/case', documents: [source] })
+    expect(() => library.markImageRead(source.versionId, 'slide-2-picture')).toThrow('尚无可核验原件')
+    expect(library.isFullyRead(source.versionId)).toBeFalse()
   })
 
   test('图像只按已登记 blockId 读取，路径受案卷目录约束并校验真实格式', () => {
