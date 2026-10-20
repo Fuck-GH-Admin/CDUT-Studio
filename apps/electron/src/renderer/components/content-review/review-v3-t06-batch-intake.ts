@@ -47,7 +47,6 @@ function parseDelimited(text: string, delimiter: ',' | '\t'): { cells: string[][
   let record: string[] = []
   let field = ''
   let quoted = false
-  let position = 1
   let startLine = 1
   let line = 1
   const source = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
@@ -59,13 +58,13 @@ function parseDelimited(text: string, delimiter: ',' | '\t'): { cells: string[][
       else if (!field.trim()) quoted = true
       else field += '"'
     } else if (c === delimiter && !quoted) {
-      record.push(field.trim()); field = ''; position++
+      record.push(field.trim()); field = ''
     } else if (c === '\n') {
       line++
       if (quoted) { field += '\n'; continue }
       record.push(field.trim())
       if (record.some((value) => value.length > 0)) { cells.push(record); lines.push(startLine) }
-      record = []; field = ''; position = 1; startLine = line
+      record = []; field = ''; startLine = line
     } else {
       field += c
     }
@@ -95,7 +94,7 @@ export function parseBatchManifest(text: string, filename = ''): BatchManifestPa
     return { rows: [], errors: ['未识别清单列。请包含「案卷ID / 申请编号 / 申报人」等表头'] }
   }
   const rows = records.map((cells, i) => ({
-    line: parsed.lines[i + 1],
+    line: parsed.lines[i + 1] ?? (i + 2),
     caseId: cells[indexes.caseId] ?? '',
     externalId: cells[indexes.externalId] ?? '',
     applicant: cells[indexes.applicant] ?? '',
