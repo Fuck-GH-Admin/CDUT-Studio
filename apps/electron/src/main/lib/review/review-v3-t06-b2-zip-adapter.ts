@@ -35,6 +35,7 @@ export function buildT06SelectionFromB2Staging(staged: B2ZipImportPreview): T06S
       previewFingerprint: staged.archiveSha256,
       sourceKind: 'zip',
       entries,
+      warnings: skipped.map(x => x.relativePath + '：' + x.reason),
     },
     skipped,
   }
