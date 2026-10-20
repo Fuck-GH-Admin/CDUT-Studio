@@ -2,7 +2,7 @@ import {describe,expect,test} from 'bun:test'
 import {REVIEW_C0_SCHEMA_VERSION,type CanonicalPlan,type RuleSpec} from '@profer/shared'
 import {
   compileT04Operation, conditionT04, decimalT04, evaluateT04Plan,
-  evaluateT04Rule, formatT04, resolveT04PolicyClaims,
+  evaluateT04Rule, formatT04, partitionT04Items, resolveT04PolicyClaims,
   toT04CheckResult, type T04Item, type T04Operation,
 } from './review-v3-t04-rules-scoring'
 
@@ -67,6 +67,24 @@ describe('T04 real deterministic calculations (D04-D07)',()=>{
     expect(evaluateT04Rule(rule,op,[item('after',{date:'2026-01-01'})]).status).toBe('non-compliant')
     expect(evaluateT04Rule(rule,op,[item('bad',{date:'2025-02-30'})]).status).toBe('awaiting-confirmation')
     expect(evaluateT04Rule(rule,op,[item('zoned',{date:'2025-04-01T00:00:00+08:00'})]).status).toBe('awaiting-confirmation')
+  })
+  test('real grouping never merges unknown keys; mutually exclusive choices are not silently selected',()=>{
+    const grouping=makeRule('groups',{groupBy:['applicantId']})
+    const rows=[
+      item('a1',{applicantId:'A',event:'E1'}),
+      item('b1',{applicantId:'B',event:'E1'}),
+      item('a2',{applicantId:'A',event:'E2'}),
+      item('unknown',{applicantId:null,event:'E2'}),
+    ]
+    const partition=partitionT04Items(grouping,rows)
+    expect(partition.groups.map(x=>[x.key,x.items.map(y=>y.id)])).toEqual([
+      ['["A"]',['a1','a2']],['["B"]',['b1']],
+    ])
+    expect(partition.unknownItems).toEqual(['unknown'])
+    const exclusive:T04Operation={kind:'mutual-exclusion',groupField:'event'}
+    expect(evaluateT04Rule(grouping,exclusive,[item('x',{event:'E1'}),item('y',{event:'E1'})]).status).toBe('non-compliant')
+    expect(evaluateT04Rule(grouping,exclusive,[item('x',{event:'E1'}),item('y',{event:'E2'})]).status).toBe('compliant')
+    expect(evaluateT04Rule(grouping,exclusive,[item('x',{event:null})]).status).toBe('awaiting-confirmation')
   })
   test('conditions: all/any/not and exceptions are three-valued, not a silent pass',()=>{
     const row=item('x',{category:'competition',approved:0})
