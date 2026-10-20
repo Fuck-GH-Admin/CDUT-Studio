@@ -44,6 +44,16 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
     }).catch(e=>{if(mounted)setError(e instanceof Error?e.message:String(e))})
     return()=>{mounted=false}
   },[caseId])
+  const archive=async(documentId:string):Promise<void>=>{
+    if(busy||!caseId||!window.confirm('归档这份材料的当前版本？原件、历史记录会保留；它支持的旧证据将失效。'))return
+    setBusy(true);setError('');setNotice('')
+    try{
+      await window.reviewAPI.removeDocuments({caseId,role:'application',documentIds:[documentId]})
+      setNotice('已归档材料当前版本。原件历史仍保留；补件请使用上方系统选择器重新导入。')
+      await refresh()
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
   const submit=async():Promise<void>=>{
     if(!caseId||busy||!aggregate||!chosen||!title.trim()||!category.trim())return
     const score=Number(declaredScore)
@@ -85,6 +95,13 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
       <button className="rounded border border-border px-2 py-1 text-xs disabled:opacity-40" disabled={busy||!caseId}
         onClick={()=>void refresh().catch(e=>setError(e instanceof Error?e.message:String(e)))}>刷新当前原件</button>
     </div>
+    {sources.length>0&&<div className="space-y-1">
+      {sources.map(doc=><div key={doc.versionId} className="flex items-center justify-between gap-2 text-xs">
+        <span className="min-w-0 flex-1 truncate">{doc.fileName} · 版本 {doc.versionId.slice(0,12)}</span>
+        <button type="button" className="rounded border border-border px-2 py-1 disabled:opacity-40"
+          disabled={busy} onClick={()=>void archive(doc.documentId)}>归档旧版</button>
+      </div>)}
+    </div>}
     <select aria-label="选用真实申请材料" className="w-full rounded border border-border bg-background p-2 text-sm" value={sourceVersionId}
       onChange={e=>{setSourceVersionId(e.target.value);setSourceBlockId('');retry.current=null}}>
       {!sources.length&&<option value="">请先导入真实申请材料</option>}
