@@ -222,6 +222,12 @@ export async function resolveSupplementV2(caseId: string, command: { requestId: 
       || (originTask?.assigneeActorId && originTask.assigneeActorId !== command.actor.actorId)) {
       throw new CommandValidationError('INVALID_TRANSITION', '无权判定其他审核角色负责的补件')
     }
+    // 判定结果必须是三值之一：非法值会让 status 被写成 undefined，
+    // 等于把补件记录静默变成「无状态」，既关不掉也门控不住。
+    if (payload.outcome !== 'satisfied' && payload.outcome !== 'insufficient' && payload.outcome !== 'cancelled') {
+      throw new CommandValidationError('VALIDATION_FAILED',
+        `补件判定结果无效：${String(payload.outcome)}（只允许 satisfied / insufficient / cancelled）`)
+    }
     if (target.status !== 'open' && target.status !== 'responded') throw new CommandValidationError('INVALID_TRANSITION', `补件已关闭（${target.status}）`)
     if (payload.outcome === 'cancelled' && !payload.reason.trim()) throw new CommandValidationError('VALIDATION_FAILED', '取消补件必须说明理由')
     return {

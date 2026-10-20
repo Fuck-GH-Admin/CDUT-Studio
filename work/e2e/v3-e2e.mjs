@@ -1167,6 +1167,137 @@ const scenarios = {
     `.replace('BATCH_ID', JSON.stringify(process.env.E2E_BATCH_ID ?? '')))
   },
 
+  /**
+   * A09 补件/复审：真实 Run → 要求补件 → 导入新原件 → 答复 → 解除补件。
+   * 同时核对旧 Run 未被改写、申诉更正因缺教师权限被拒（安全边界）。
+   */
+  async 'flow-a09'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+
+      let boot = null
+      try { boot = await api.bootCheckV2() } catch {}
+      let templates = await api.listTemplatesV2()
+      let published = (templates ?? []).filter(t => t.status === 'published' && (t.fields?.length ?? 0) > 0)
+      if (published.length === 0) {
+        const draftable = (templates ?? []).filter(t => t.status === 'draft' && (t.fields?.length ?? 0) > 0)
+        if (draftable[0]) {
+          await api.publishTemplateV2(draftable[0].templateId, draftable[0].version)
+          templates = await api.listTemplatesV2()
+          published = (templates ?? []).filter(t => t.status === 'published' && (t.fields?.length ?? 0) > 0)
+        }
+      }
+      const tpl = published[0]
+      if (!tpl) return { ...out, error: '没有带字段的已发布模板' }
+
+      const created = await api.createCase({ title: 'A09 补件复审案卷', type: '综合测评', applicant: 'E2E',
+        academicYear: '2026', domainPackId: 'comprehensive-assessment',
+        reviewTemplate: { templateId: tpl.templateId, version: tpl.version } })
+      out.caseId = created.id
+      step('createCase', { ok: true, templateId: tpl.templateId })
+
+      const first = await api.importDocumentFromPath({ caseId: created.id, sourcePath: __PDF__, role: 'evidence' })
+      step('importFirst', { fileName: first?.fileName, parseStatus: first?.parseStatus })
+
+      let state = await api.startBackgroundPiReviewV2({ caseId: created.id })
+      const deadline = Date.now() + Number(__POLL__ ?? 900000)
+      let last = null
+      while (Date.now() < deadline) {
+        try { last = await api.getBackgroundPiReviewStateV2(created.id) } catch {}
+        const p = last?.phase
+        if (p && ['completed','failed','incomplete','stopped','cancelled','error'].includes(p)) break
+        await new Promise(r => setTimeout(r, 3000))
+      }
+      const runs1 = await api.listRunsV2(created.id)
+      const run1 = runs1[0]
+      step('run1', { status: run1?.status, checks: run1?.checks?.length ?? 0, id: run1?.id })
+      if (!run1) return out
+
+      const agg1 = await api.getAggregateV2(created.id)
+      const target = (run1.checks ?? []).find(c => c.status === 'awaiting-supplement')
+        ?? (run1.checks ?? []).find(c => c.status === 'awaiting-confirmation')
+      if (!target) { step('pickFinding', { error: '没有可补件的检查项' }); return out }
+
+      // 1) 要求补件
+      let supplementId = null
+      try {
+        const r = await api.openWorkspaceSupplementV2({ caseId: created.id, command: {
+          requestId: 'a09-open-' + Date.now().toString(36),
+          target: { kind: 'case', id: created.id }, expectedRevision: agg1.caseV2.revision,
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'OpenWorkspaceSupplement',
+          payload: { findingKey: target.checkId, runId: run1.id, inputHash: run1.inputManifest?.hash,
+            requiredElements: ['补充证明材料'], reason: '现有材料不足以确认该项' },
+        }})
+        supplementId = r?.aggregate?.supplements?.at(-1)?.id ?? null
+        step('openSupplement', { ok: r?.ok, supplementId, code: r?.code ?? null })
+      } catch (error) { step('openSupplement', { ok: false, error: String(error?.message ?? error) }) }
+
+      // 2) 导入真实新原件
+      const second = await api.importDocumentFromPath({ caseId: created.id, sourcePath: __DOCX__, role: 'evidence' })
+      step('importSupplement', { fileName: second?.fileName, parseStatus: second?.parseStatus })
+
+      // 3) 答复补件
+      if (supplementId) {
+        try {
+          const agg2 = await api.getAggregateV2(created.id)
+          const r = await api.respondSupplementV2({ caseId: created.id, command: {
+            requestId: 'a09-respond-' + Date.now().toString(36),
+            target: { kind: 'case', id: created.id }, expectedRevision: agg2.caseV2.revision,
+            actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            type: 'RespondSupplement',
+            payload: { supplementId, note: '已补交证明材料',
+              documentVersionIds: agg2.caseV2.documents.filter(d => d.active !== false).map(d => d.versionId) },
+          }})
+          step('respondSupplement', { ok: r?.ok, code: r?.code ?? null })
+        } catch (error) { step('respondSupplement', { ok: false, error: String(error?.message ?? error) }) }
+
+        // 4) 解除补件
+        try {
+          const agg3 = await api.getAggregateV2(created.id)
+          const r = await api.resolveSupplementV2({ caseId: created.id, command: {
+            requestId: 'a09-resolve-' + Date.now().toString(36),
+            target: { kind: 'case', id: created.id }, expectedRevision: agg3.caseV2.revision,
+            actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            type: 'ResolveSupplement',
+            payload: { supplementId, outcome: 'satisfied', reason: '补件已满足' },
+          }})
+          step('resolveSupplement', { ok: r?.ok, code: r?.code ?? null })
+        } catch (error) { step('resolveSupplement', { ok: false, error: String(error?.message ?? error) }) }
+      }
+
+      // 5) 核对旧 Run 未被改写、材料与阶段
+      const aggFinal = await api.getAggregateV2(created.id)
+      const runs2 = await api.listRunsV2(created.id)
+      step('after', {
+        stage: aggFinal?.caseV2?.stage,
+        documents: (aggFinal?.caseV2?.documents ?? []).filter(d => d.active !== false).length,
+        supplements: (aggFinal?.supplements ?? []).map(s => ({ id: s.id, status: s.status, responses: s.responses?.length ?? 0 })),
+        runCount: runs2?.length ?? 0,
+        oldRunStatus: (runs2 ?? []).find(r => r.id === run1.id)?.status,
+      })
+
+      // 6) 申诉更正需要教师权限：本地必须被拒（安全边界，不是缺陷）
+      try {
+        const aggX = await api.getAggregateV2(created.id)
+        const appeal = await api.resolveAppealV2({ caseId: created.id, command: {
+          requestId: 'a09-appeal-' + Date.now().toString(36),
+          target: { kind: 'case', id: created.id }, expectedRevision: aggX.caseV2.revision,
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'ResolveAppeal', payload: { appealId: 'none', resolution: 'maintain-original', reason: '试探' },
+        }})
+        step('appealResolution', { ok: appeal?.ok, code: appeal?.code ?? null })
+      } catch (error) { step('appealResolution', { rejected: true, error: String(error?.message ?? error).slice(0, 160) }) }
+
+      return out
+    `
+      .replace('__PDF__', JSON.stringify(process.env.E2E_PDF_PATH ?? ''))
+      .replace('__DOCX__', JSON.stringify(process.env.E2E_DOCX_PATH ?? ''))
+      .replace('__POLL__', JSON.stringify(process.env.E2E_POLL_MS ?? '900000')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

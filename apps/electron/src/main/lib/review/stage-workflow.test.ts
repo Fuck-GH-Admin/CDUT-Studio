@@ -176,6 +176,17 @@ describe('补件多请求门控（06 §5.3）', () => {
     agg = second.ok ? second.aggregate : agg
     const openRequests = agg.supplements.filter((request) => request.status === 'open')
     expect(openRequests).toHaveLength(2)
+    // 非法判定值必须 fail-closed：否则 status 会被写成 undefined，
+    // 补件既不关闭也不参与门控（真机 A09 曾复现）。
+    const bogus = await resolveSupplementV2(caseId, {
+      requestId: nextReq(), actor, expectedRevision: agg.caseV2.revision,
+      payload: { supplementId: openRequests[0]!.id, outcome: 'satisfied-x' as never, reason: '非法值' },
+    })
+    expect(bogus.ok).toBeFalse()
+    if (!bogus.ok) expect(bogus.code).toBe('VALIDATION_FAILED')
+    const afterBogus = readAggregate(caseId)!
+    expect(afterBogus.supplements.find((request) => request.id === openRequests[0]!.id)?.status).toBe('open')
+
     const satisfied = await resolveSupplementV2(caseId, { requestId: nextReq(), actor, expectedRevision: agg.caseV2.revision, payload: { supplementId: openRequests[0]!.id, outcome: 'satisfied', reason: '要素齐' } })
     expect(satisfied.ok).toBeTrue()
     if (satisfied.ok) {

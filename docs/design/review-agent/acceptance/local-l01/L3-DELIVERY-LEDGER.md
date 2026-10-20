@@ -44,7 +44,8 @@ T10 的 `onCaseOpened`（7 处）、「案卷办理」标题、折叠区、条�
 |---|---|---|
 | A15 起点（T01 模板 → 无学年绑案） | **PASS** | `saveDraft` → `publish` → `createCase`（contract-review 领域、无学年）→ 学年为空、`templateBound=e2e-t01-lab-request` |
 | A15 完整（初审/终审/决定/报告） | NOT_RUN | 依赖 T04 规则执行入口与 T05 阶段决定在真实案卷上的联调 |
-| A09 补件/复审 | NOT_RUN | T05 已接线，但需真实材料往返与申诉复核联测 |
+| A09 补件闭环 | **PASS** | `flow-a09` 真机：建案(带字段模板) → 真实 PDF → 审核 `completed/12 checks` → 要求补件 → 导入真实 DOCX 新原件 → 答复 → 判定 satisfied → 阶段回到 `reviewing`、补件状态 `satisfied`、**旧 Run 仍 completed 且 runCount=1（未被改写）** |
+| A09 申诉复审 | **BLOCKED_BY_DESIGN** | `resolveAppealV2` 要求 `actor.role === 'teacher'`（"申诉更正必须由经过授权的复核教师完成"），本地入口经 `bindLocalReviewerCommand` 固定为 reviewer。本地无法完成改判是**正确的安全边界**，不是缺口；T05 UI 在缺端口时如实提示「填写内容只保存在当前表单，不会假称已提交」 |
 | A12+A14 批次/评委 | **PASS（评委链路）** | `flow-t07-judging` 真机：2 案 → 批次 → 轮次 rev1 → 4 次分配 rev5 → 双评委各 2 项评分 rev9 → 组织者排名（各 2 有效评委、total 5）→ 定稿 rev10 |
 | 冷重启恢复（T07 状态） | **PASS** | `phase-t07-prepare`（新进程 A）建批次+轮次+4 分配+2 票 → `phase-t07-verify`（新进程 B）读回 revision 7、assignments 4、votes 2；缺评时 `rank=null`，门控未因重启失效 |
 | 冷重启恢复（Case/Plan/D4） | **PASS** | 早前 `phase-prepare`/`phase-verify`：案卷、2 份材料、60 项 Plan、4 条回执链完整恢复 |
