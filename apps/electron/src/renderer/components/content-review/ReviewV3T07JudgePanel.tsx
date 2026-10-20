@@ -239,7 +239,7 @@ function T07OrganizerDesk({ view, busy, onSubmit }: {
             <tbody>{ranking.map((row) => (
               <tr key={row.caseId} className="border-b align-top">
                 <td className="p-2 font-medium">{row.blindLabel}</td><td className="p-2">{row.effectiveJudges}</td>
-                <td className="p-2">{scoreLabel(row.total)}</td><td className="p-2">{row.rank ?? '—'}</td>
+                <td className="p-2">{scoreLabel(row.total)}{row.convertedTotal !== null && <div className="text-muted-foreground">折算 {row.convertedTotal.toFixed(2)}</div>}</td><td className="p-2">{row.rank ?? '—'}</td>
                 <td className="p-2">{row.selected === null ? '待裁定' : row.selected ? '入选' : '未入选'}</td>
                 <td className="p-2">
                   {row.blockers.length ? row.blockers.join('；') : '可定稿'}
