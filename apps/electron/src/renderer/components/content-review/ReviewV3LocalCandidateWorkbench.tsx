@@ -38,8 +38,8 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   }|null>(null)
   const [productError,setProductError]=React.useState('')
   React.useEffect(()=>{
-    const choice=product?.read.route.status==='default-selected'
-      ?product.read.route.chosen:undefined
+    const route=product?.read.route
+    const choice=route?.status==='default-selected'?route.chosen:undefined
     if(!choice)return
     if(product.catalog.some(item=>item.templateId===choice.templateId&&
       item.templateVersion===choice.templateVersion)){
