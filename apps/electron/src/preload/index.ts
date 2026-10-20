@@ -4019,6 +4019,15 @@ const reviewAPI = {
       schemaVersion:'review-v3-author-current-read/1';templateId:string;revision:number;
       sourceDigest:string;document:unknown;state:'candidate-held';displayOnly:true
     }>,
+  /** C Main-only B20 source view; requires separate trusted picker, B vault/ledger and current Owner. */
+  readCurrentB20CandidateV3: (templateId:string) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.B20_CANDIDATE_READ_V3,{templateId}) as Promise<{
+      schemaVersion:'review-v3-cmain-b20-candidate-preview/1';
+      templateId:string;caseCandidateId:string;ownerId:string;ownerGeneration:number;
+      authorRevision:number;authorRevisionDigest:string;frozenFingerprint:string;
+      candidateProvenance:unknown;state:'candidate-held';displayOnly:true;candidateOnly:true;
+      publicationAllowed:false;businessWriteAllowed:false;schoolPolicyVerified:false;
+    }>,
   /** Read/write separation: this requires a real published school-policy issuer in Main. */
   upgradeCanonicalPlanV3: (input: {
     caseId:string;requestId:string;expectedRevision:number;

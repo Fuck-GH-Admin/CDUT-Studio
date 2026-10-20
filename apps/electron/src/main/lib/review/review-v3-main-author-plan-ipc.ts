@@ -8,6 +8,7 @@
  * The handler is registered in the real review-ipc.ts and is only reachable
  * through the main-frame-only Preload reviewAPI.
  */
+import { randomUUID } from 'node:crypto'
 import type { IpcMainInvokeEvent } from 'electron'
 import { ipcMain } from 'electron'
 import {
@@ -33,6 +34,11 @@ import { assertSafeReviewStorageId } from './review-storage-id'
 import {
   CMainRemovalConsentGate, type CMainRemovalWitnessSource,
 } from './review-v3-main-removal-consent'
+import {
+  CMainB20TrustedCandidateRead,
+  type CMainB20PinnedExpectation,
+  type CMainB20ReadIdentity,
+} from './review-v3-main-b20-trusted-candidate-read'
 
 const refuse=(reason:string):never=>{throw new Error('C_MAIN_V3_IPC_'+reason)}
 const safe=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=128
@@ -71,6 +77,30 @@ export interface CMainV3PlanUpgradeAuthorities {
 export interface CMainV3AuthorPlanAuthorities<T extends CMainB1CandidateDocument=CMainB1CandidateDocument>
   extends CMainV3AuthorReadAuthorities<T>, CMainV3PlanUpgradeAuthorities {}
 
+/** Only C's privileged Main composition may install B20's real read dependencies.
+ * This is NOT a school issuer or a second author vault/source registry.
+ * The source must call B's exact pinned R20 facade after I's separate source import.
+ */
+export interface CMainV3B20ReadAuthorities {
+  currentCandidate(principalId:string,templateId:string):
+    {caseCandidateId:string;grant:CMainV3Grant}|undefined
+  canReadCandidate(principalId:string,templateId:string,caseCandidateId:string,grant:CMainV3Grant):boolean
+  currentPinnedAuthor(caseCandidateId:string,templateId:string):
+    CMainB20PinnedExpectation|undefined
+  readCurrentB20Bundle(expected:CMainB20PinnedExpectation):Promise<unknown>|unknown
+}
+type CMainB20Installation={source:CMainV3B20ReadAuthorities;token:string}
+let b20ReadInstallation:CMainB20Installation|undefined
+export function installCMainV3B20ReadAuthorities(next:CMainV3B20ReadAuthorities):()=>void {
+  if(b20ReadInstallation)refuse('B20_READER_ALREADY_INSTALLED')
+  if(!next||typeof next.currentCandidate!=='function'||
+     typeof next.canReadCandidate!=='function'||
+     typeof next.currentPinnedAuthor!=='function'||
+     typeof next.readCurrentB20Bundle!=='function')refuse('B20_REAL_SOURCE_REQUIRED')
+  const installed:CMainB20Installation={source:next,token:randomUUID()}
+  b20ReadInstallation=installed
+  return ()=>{if(b20ReadInstallation===installed)b20ReadInstallation=undefined}
+}
 type MainInstallation<T>={
   readonly source:T;readonly token:symbol
   readonly removalGate?:CMainRemovalConsentGate
@@ -231,6 +261,62 @@ export async function handleCMainAuthorLatestRead(
   })
   return port.readLatestAuthorRevision(scope,expected as number|undefined)
 }
+/** Registered Electron Main handler. Renderer may request ONLY a template ID.
+ * All candidate/Owner/frame/pin/archive identity is looked up independently.
+ * Absent actual B20 and Main-native-picker wiring always rejects.
+ */
+export async function handleCMainB20CandidateRead(
+  event:IpcMainInvokeEvent,input:unknown,
+) {
+  liveFrame(event)
+  if(!input||typeof input!=='object'||Array.isArray(input)||
+     Object.keys(input).length!==1||!own(input,'templateId'))
+    return refuse('B20_RENDERER_CREDENTIAL_OR_SOURCE_CLAIM')
+  const templateId=(input as {templateId:unknown}).templateId
+  if(typeof templateId!=='string'||!/^[A-Za-z][A-Za-z0-9._-]{0,79}$/.test(templateId))
+    return refuse('B20_TEMPLATE_ID_INVALID')
+  const installed=b20ReadInstallation
+  if(!installed)return refuse('B20_TRUSTED_SOURCE_NOT_INSTALLED')
+  const source=installed.source
+  const requireInstalled=()=>{
+    if(b20ReadInstallation!==installed)refuse('B20_SOURCE_INSTALLATION_REVOKED')
+  }
+  const current=():CMainB20ReadIdentity|undefined=>{
+    requireInstalled()
+    const frame=liveFrame(event)
+    const raw=source.currentCandidate(frame.principalId,templateId)
+    if(!raw)return undefined
+    assertSafeReviewStorageId(raw.caseCandidateId,'caseCandidateId')
+    const grant=checkGrant(raw.grant)
+    return {...frame,caseCandidateId:raw.caseCandidateId,
+      ownerId:grant.ownerId,ownerGeneration:grant.generation,
+      authorityEpoch:grant.authorityEpoch}
+  }
+  const reader=new CMainB20TrustedCandidateRead({
+    currentIdentity:current,
+    currentInstallationToken:()=>{requireInstalled();return installed.token},
+    canRead:(identity,id)=>{
+      requireInstalled()
+      if(id!==templateId)return false
+      const live=current()
+      if(!live||JSON.stringify(live)!==JSON.stringify(identity))return false
+      const grant=checkGrant(source.currentCandidate(live.principalId,id)?.grant)
+      if(grant.ownerId!==identity.ownerId||grant.generation!==identity.ownerGeneration||
+         grant.authorityEpoch!==identity.authorityEpoch)return false
+      return source.canReadCandidate(live.principalId,id,identity.caseCandidateId,grant)
+    },
+    getPinnedExpectation:(identity,id)=>{
+      requireInstalled()
+      if(id!==templateId)return undefined
+      return source.currentPinnedAuthor(identity.caseCandidateId,id)
+    },
+    readCurrentBundle:expected=>{
+      requireInstalled()
+      return source.readCurrentB20Bundle(expected)
+    },
+  })
+  return reader.read(templateId)
+}
 export interface CMainV3UpgradeIntent {
   caseId:string
   requestId:string
@@ -317,5 +403,6 @@ export async function handleCMainUpgradeCanonicalPlan(
 /** Actual Main hook registered unconditionally; missing authorities deny. */
 export function registerCMainV3AuthorPlanIpc():void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.AUTHOR_READ_LATEST_V3,handleCMainAuthorLatestRead)
+  ipcMain.handle(REVIEW_IPC_CHANNELS.B20_CANDIDATE_READ_V3,handleCMainB20CandidateRead)
   ipcMain.handle(REVIEW_IPC_CHANNELS.UPGRADE_CANONICAL_PLAN_V3,handleCMainUpgradeCanonicalPlan)
 }
