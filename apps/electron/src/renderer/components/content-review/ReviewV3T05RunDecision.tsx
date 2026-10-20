@@ -85,8 +85,9 @@ export function ReviewV3T05RunDecision({
   const selectedFinding = findings.find((entry) => entry.key === findingKey) ?? findings[0]
   const selectedSubject = aggregate.caseV2.subjects.find((entry) => entry.id === subjectId) ?? aggregate.caseV2.subjects[0]
   const isTechnicalOnly = Boolean(aggregate.d2RuntimePlan || aggregate.canonicalPlan)
+  const stageManaged = aggregate.tasks.length > 0
   const reviewable = Boolean(run && inputHash && !stale && !busy)
-  const canDecide = reviewable && !isTechnicalOnly
+  const canDecide = reviewable && !isTechnicalOnly && !stageManaged
     && aggregate.caseV2.stage !== 'decided' && aggregate.caseV2.stage !== 'archived'
 
   const send = async (fn: () => Promise<ReviewCommandResult | undefined>): Promise<boolean> => {
@@ -213,6 +214,7 @@ export function ReviewV3T05RunDecision({
 
           <section className="space-y-1 rounded-md bg-muted/30 p-2">
             <h4 className="font-medium">案卷层面的本地最终决定</h4>
+            {stageManaged && <p className="text-muted-foreground">本案已有阶段任务，必须通过阶段流程形成终审；不能与案卷快捷最终决定混用。</p>}
             {isTechnicalOnly && <p className="text-amber-700 dark:text-amber-300">
               此案为 D2/CanonicalPlan 技术预审，不能调用旧正式决定接口。须先接入受控 V3 本地阶段和当前 Run。
             </p>}
