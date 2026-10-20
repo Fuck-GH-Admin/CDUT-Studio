@@ -1,0 +1,136 @@
+/** T08 report workbench: no Main write, no actor spoofing, and no mixed historical runs. */
+import * as React from 'react'
+import type { CaseAggregateV2, ReviewRunV2, TemplateVersion } from '@profer/shared'
+import { makeT08CaseReport, t08ReportTable, type T08Audience } from './review-v3-t08-case-report'
+
+interface Props {
+  aggregate: CaseAggregateV2 | null
+  currentRun: ReviewRunV2 | null
+  currentStale: boolean
+  template: TemplateVersion | null
+}
+
+function safeFilename(name: string): string {
+  return name.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)
+}
+function htmlReport(body: string): string {
+  const encoded = body.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return '<!doctype html><html lang="zh"><meta charset="utf-8"><title>审核报告</title>' +
+    '<style>body{font:14px/1.65 system-ui,sans-serif;max-width:850px;margin:40px auto;padding:0 24px;white-space:pre-wrap}'+
+    '@page{size:A4;margin:18mm}@media print{body{margin:0;padding:0}}</style><body>'+encoded+'</body></html>'
+}
+function saveBlob(data: Blob, filename: string): void {
+  const url = URL.createObjectURL(data)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500)
+}
+
+export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, template }: Props): React.ReactElement {
+  const [runs, setRuns] = React.useState<ReviewRunV2[]>([])
+  const [selectedId, setSelectedId] = React.useState('')
+  const [audience, setAudience] = React.useState<T08Audience>('student')
+  const [format, setFormat] = React.useState<'md' | 'json' | 'xlsx' | 'html'>('md')
+  const [busy, setBusy] = React.useState(false)
+  const [notice, setNotice] = React.useState('')
+  const caseId = aggregate?.caseV2.id ?? ''
+
+  React.useEffect(() => {
+    setRuns(currentRun ? [currentRun] : [])
+    setSelectedId(currentRun?.id ?? '')
+    setNotice('')
+    if (!caseId) return
+    let active = true
+    void window.reviewAPI.listRunsV2(caseId).then((history) => {
+      if (!active) return
+      setRuns((previous) => [...new Map([...history, ...previous].map((run) => [run.id, run])).values()])
+    }).catch((error) => {
+      if (active) setNotice('历史运行列表暂不可用：' + String(error))
+    })
+    return () => { active = false }
+  }, [caseId, currentRun?.id])
+
+  const run = runs.find((item) => item.id === selectedId) ?? currentRun
+  const isHistorical = !!run && (run.id !== currentRun?.id || currentStale)
+  const report = React.useMemo(() => {
+    if (!aggregate || !run) return null
+    try { return makeT08CaseReport({ aggregate, run, audience, template, stale: isHistorical }) }
+    catch { return null }
+  }, [aggregate, run, audience, template, isHistorical])
+
+  const exportFile = async (): Promise<void> => {
+    if (!report) return
+    setBusy(true)
+    setNotice('')
+    try {
+      const filename = safeFilename(report.caseId + '-' + report.runId + '-' + audience)
+      if (format === 'xlsx') {
+        const XLSX = await import('xlsx')
+        const book = XLSX.utils.book_new()
+        const sheet = XLSX.utils.aoa_to_sheet(t08ReportTable(report))
+        XLSX.utils.book_append_sheet(book, sheet, '检查与来源')
+        const buffer = XLSX.write(book, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
+        saveBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename + '.xlsx')
+      } else {
+        const text = format === 'json' ? report.json : format === 'html' ? htmlReport(report.markdown) : report.markdown
+        const mime = format === 'json' ? 'application/json' : format === 'html' ? 'text/html' : 'text/markdown'
+        saveBlob(new Blob([text], { type: mime + ';charset=utf-8' }), filename + '.' + format)
+      }
+      setNotice(format === 'html' ? '已请求保存可打印 HTML；在浏览器中打开后可打印为 PDF。' : '已向系统提交文件下载，请确认保存结果。')
+    } catch (error) {
+      setNotice('导出未完成：' + (error instanceof Error ? error.message : String(error)))
+    } finally { setBusy(false) }
+  }
+  const copy = async (): Promise<void> => {
+    if (!report) return
+    try { await navigator.clipboard.writeText(report.markdown); setNotice('已复制所选报告的 Markdown 文本。') }
+    catch (error) { setNotice('复制失败：' + String(error)) }
+  }
+
+  return <section className="space-y-3 text-xs" aria-label="案卷报告">
+    {!aggregate || !run || !report
+      ? <p className="rounded border border-border p-3 text-muted-foreground">当前没有可用的 V3 案卷及运行；报告不会用演示数据代替真实结果。</p>
+      : <>
+        <div className="rounded-md bg-muted/50 p-2 leading-5">
+          <strong className="block">所选运行 {run.id}</strong>
+          <span>状态：{run.status} · 有效判断 {run.coverage.effectiveVerdicts}/{run.coverage.plannedChecks} · 待处理 {run.coverage.pendingChecks}</span>
+          <p className="text-muted-foreground">输出绑定该 Run 的 inputManifest；模型意见不等于正式决定。</p>
+          {report.stale && <p className="text-amber-700 dark:text-amber-400">历史/过期运行：未冻结的当前案卷字段及补件不会混入该次报告。</p>}
+        </div>
+        <label className="block space-y-1">选择运行
+          <select className="w-full rounded border border-border bg-background p-2" value={run.id} onChange={(event) => setSelectedId(event.target.value)}>
+            {runs.map((entry) => <option value={entry.id} key={entry.id}>{entry.id} / {entry.status} / {entry.startedAt}</option>)}
+          </select>
+        </label>
+        <label className="block space-y-1">查看角色
+          <select className="w-full rounded border border-border bg-background p-2" value={audience} onChange={(event) => setAudience(event.target.value as T08Audience)}>
+            <option value="student">学生 / 申请人（不含内部意见）</option>
+            <option value="reviewer">审核人（含内部核对）</option>
+            <option value="organizer">组织者（含内部核对）</option>
+          </select>
+        </label>
+        <div className="space-y-1">
+          <label htmlFor="t08-export-format">导出格式</label>
+          <select id="t08-export-format" className="w-full rounded border border-border bg-background p-2" value={format} onChange={(event) => setFormat(event.target.value as typeof format)}>
+            <option value="md">Markdown 报告</option>
+            <option value="json">JSON 结构化交接</option>
+            <option value="xlsx">XLSX 检查与来源表</option>
+            <option value="html">HTML 打印版（可打印为 PDF）</option>
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" disabled={busy} onClick={() => void exportFile()} className="rounded bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50">导出所选版本</button>
+          <button type="button" onClick={() => void copy()} className="rounded border border-border px-3 py-2">复制 MD</button>
+        </div>
+        {notice && <p role="status" className="text-muted-foreground">{notice}</p>}
+        <details>
+          <summary className="cursor-pointer">预览报告（{report.rows.length} 条记录）</summary>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px]">{report.markdown}</pre>
+        </details>
+      </>}
+  </section>
+}
