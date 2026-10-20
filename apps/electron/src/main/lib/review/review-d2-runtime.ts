@@ -15,6 +15,7 @@ import { CommandValidationError, createAggregate, payloadHash, readAggregate, su
 import { getTemplate, isAuthoringCandidateDraft } from './template-store'
 import { hashEffectiveRuleSet, resolveEffectiveRules } from './effective-rules'
 import { computeRunInputHash } from './run-service-v2'
+import { isNativeWorkspaceCaseV3 } from './native-workspace-case-v3'
 import { validateD2GuardSubmission } from './review-d2-execution-gates'
 import { compileD4Generic } from './review-d4-common'
 
@@ -372,16 +373,31 @@ export function attachD2RuntimePlan(input: {
       if (aggregate.caseV2.stage !== 'draft' || aggregate.d2RuntimePlan) {
         throw new CommandValidationError('INVALID_TRANSITION', 'D2 只能绑定未开始审核且没有已固定计划的草稿案卷')
       }
-      const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+      // Native V3 cases are created unbound: attach the selected candidate
+      // and its entire D2 plan in one existing Case transaction.
+      const nativeUnbound = isNativeWorkspaceCaseV3(aggregate) &&
+        aggregate.caseV2.templateId === 'pending-template-v3' &&
+        aggregate.caseV2.templateVersion === 0
+      const templateId = nativeUnbound ? payload.selection.templateId : aggregate.caseV2.templateId
+      const templateVersion = nativeUnbound ? payload.selection.version : aggregate.caseV2.templateVersion
+      const template = getTemplate(templateId, templateVersion)
       const shellProblem = d2CandidateShellProblem(template)
       if (shellProblem || !template) throw new CommandValidationError('AGENT_DECISION_DISABLED', shellProblem ?? '候选模板不存在')
-      const plan = compileD2RuntimePlan(payload.workspace, payload.selection, aggregate.caseV2, payload.trustedStudentSnapshot)
+      const selectedCase = nativeUnbound ? {
+        ...aggregate.caseV2, templateId, templateVersion, objectType: template.objectType,
+      } : aggregate.caseV2
+      const plan = compileD2RuntimePlan(payload.workspace, payload.selection, selectedCase, payload.trustedStudentSnapshot)
       if ((aggregate.caseV2.reviewRules?.length ?? 0) > 0 || aggregate.caseV2.subjects.length > 0) {
         throw new CommandValidationError('VALIDATION_FAILED', 'D2 草稿案卷不能预先混入未登记的规则或业务主体；须先固定唯一任务包')
       }
       return {
         summary: '固定 D2 技术预审计划：' + plan.templateId + (plan.scenario ? '/' + plan.scenario : '') + '，' + plan.mapping.length + ' 项检查',
         mutate: (draft) => {
+          if (nativeUnbound) {
+            draft.caseV2.templateId = templateId
+            draft.caseV2.templateVersion = templateVersion
+            draft.caseV2.objectType = template.objectType
+          }
           draft.caseV2.subjects.push(...structuredClone(plan.subjects))
           draft.caseV2.reviewRules = [...(draft.caseV2.reviewRules ?? []), ...structuredClone(plan.rules)]
           draft.caseV2.caseFields = { ...draft.caseV2.caseFields, d2PlanFingerprint: { kind: 'text', value: plan.fingerprint } }
