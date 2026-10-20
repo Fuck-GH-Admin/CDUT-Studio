@@ -141,7 +141,11 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
     if (!selectedTemplate) { toast.error('请先选择已发布模板'); return }
     if (!newTitle.trim()) { toast.error('请填写案卷标题'); return }
     const caseId = `case-${Date.now().toString(36)}`
-    const subjects = subjectRows.map((subject) => ({
+    // 只提交用户真正填写的事项：模板没有事项级字段时列表里仍有一个空白行，
+    // 直接提交会被「申报事项名称不能为空」拒绝，导致整类案例无法建案。
+    const filledSubjectRows = subjectRows.filter((subject) => subject.title.trim()
+      || Object.values(subject.fieldValues).some((value) => String(value ?? '').trim()))
+    const subjects = filledSubjectRows.map((subject) => ({
       ...subject,
       type: 'item' as const,
       fieldValues: Object.fromEntries(Object.entries(subject.fieldValues).map(([key, value]) => {

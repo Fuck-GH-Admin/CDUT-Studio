@@ -2157,7 +2157,8 @@ const scenarios = {
             { key: 'usageTime', label: '使用时段', kind: 'text', required: true, visibility: 'public', scope: 'case' },
             { key: 'purpose', label: '用途', kind: 'text', required: true, visibility: 'public', scope: 'case' },
           ],
-          sections: [{ id: 'lab', name: '实验室使用', order: 0, required: true, criteria: [{
+          // 该分项只承载案例级确定性规则，不对申报事项做归属要求
+          sections: [{ id: 'lab', name: '实验室使用', order: 0, required: false, criteria: [{
             id: 'headcount', title: '人数不超上限', requirement: '使用人数不得超过 20 人',
             execution: 'deterministic', targetScope: 'case',
             deterministicConstraint: { schemaVersion: 1, kind: 'field-number-limit', fieldKey: 'applicantCount',
@@ -2272,6 +2273,320 @@ const scenarios = {
       return out
     `.replace('__UNCLEAR__', JSON.stringify(process.env.E2E_A15_UNCLEAR ?? ''))
       .replace('__CORRECTED__', JSON.stringify(process.env.E2E_A15_CORRECTED ?? '')))
+  },
+
+  /** 探测当前渲染树里与 A15 旅程相关的按钮/输入（只读，不改状态） */
+  async 'probe-ui'({ send }) {
+    // 等渲染真正挂载（React 根有内容且 reviewAPI 可用）
+    for (let i = 0; i < 60; i += 1) {
+      const ready = await evaluate(send, `Boolean(window.reviewAPI) && (document.body.textContent ?? '').trim().length > 20`)
+      if (ready === true) break
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+    }
+    return evaluate(send, `
+      const texts = (sel) => Array.from(document.querySelectorAll(sel))
+        .map(n => (n.textContent ?? '').trim()).filter(Boolean).slice(0, 60)
+      return {
+        url: location.href,
+        navButtons: texts('header button, nav button'),
+        allButtons: texts('button').slice(0, 50),
+        inputs: Array.from(document.querySelectorAll('input,select,textarea'))
+          .map(n => ({ id: n.id || null, label: n.getAttribute('aria-label'), placeholder: n.getAttribute('placeholder'), tag: n.tagName })),
+        dropZones: Array.from(document.querySelectorAll('[aria-label]'))
+          .map(n => n.getAttribute('aria-label')).filter(a => a && (a.includes('导入') || a.includes('材料'))),
+        bodyHint: (document.body.textContent ?? '').slice(0, 300),
+      }
+    `)
+  },
+
+  /** 点进内容合规审查后再探测（只读） */
+  async 'probe-ui2'({ send }) {
+    for (let i = 0; i < 60; i += 1) {
+      const ready = await evaluate(send, `Boolean(window.reviewAPI) && (document.body.textContent ?? '').trim().length > 20`)
+      if (ready === true) break
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+    }
+    const clicked = await evaluate(send, `
+      const clickText = (text) => {
+        const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], div[role="button"]'))
+        const hit = nodes.find(n => (n.textContent ?? '').includes(text))
+        if (hit) { hit.click(); return (hit.textContent ?? '').trim().slice(0, 40) }
+        return null
+      }
+      const hit = clickText('内容合规审查') ?? clickText('材料审核')
+      return { hit }
+    `)
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+    const dom = await evaluate(send, `
+      const texts = (sel) => Array.from(document.querySelectorAll(sel)).map(n => (n.textContent ?? '').trim()).filter(Boolean).slice(0, 40)
+      return {
+        buttons: texts('button'),
+        inputs: Array.from(document.querySelectorAll('input,select,textarea')).map(n => ({ id: n.id || null, label: n.getAttribute('aria-label'), placeholder: n.getAttribute('placeholder') })),
+        zones: Array.from(document.querySelectorAll('[aria-label]')).map(n => n.getAttribute('aria-label')).filter(Boolean).slice(0, 20),
+        hint: (document.body.textContent ?? '').slice(0, 400),
+      }
+    `)
+    return { clicked, dom }
+  },
+
+  /** 走到审核工作台后探测案卷办理面板（只读） */
+  async 'probe-ui3'({ send }) {
+    const waitReady = async () => {
+      for (let i = 0; i < 60; i += 1) {
+        const ready = await evaluate(send, `Boolean(window.reviewAPI) && (document.body.textContent ?? '').trim().length > 20`)
+        if (ready === true) return true
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+      return false
+    }
+    const clickText = async (text) => evaluate(send, `
+      const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], div[role="button"]'))
+      const hit = nodes.find(n => (n.textContent ?? '').includes(${JSON.stringify(text)}))
+      if (hit) { hit.click(); return (hit.textContent ?? '').trim().slice(0, 40) }
+      return null
+    `)
+    await waitReady()
+    const a = await clickText('内容合规审查')
+    await new Promise((r) => setTimeout(r, 2000))
+    const b = await clickText('进入本地材料审核')
+    await new Promise((r) => setTimeout(r, 3000))
+    const c = await clickText('案卷办理')
+    await new Promise((r) => setTimeout(r, 2000))
+    const dom = await evaluate(send, `
+      const texts = (sel) => Array.from(document.querySelectorAll(sel)).map(n => (n.textContent ?? '').trim()).filter(Boolean).slice(0, 40)
+      return {
+        buttons: texts('button'),
+        inputs: Array.from(document.querySelectorAll('input,select,textarea')).map(n => ({ id: n.id || null, label: n.getAttribute('aria-label'), placeholder: n.getAttribute('placeholder') })).slice(0, 16),
+        zones: Array.from(document.querySelectorAll('[aria-label]')).map(n => n.getAttribute('aria-label')).filter(Boolean).slice(0, 24),
+        hint: (document.body.textContent ?? '').slice(0, 500),
+      }
+    `)
+    return { clicked: { a, b, c }, dom }
+  },
+
+  /**
+   * A15 S4：真实 Electron UI 旅程（全部经 DOM 点击/输入，不调用后门 IPC 造事实）。
+   * 导航 → 模板选择 → 填字段 → 创建案卷 → 拖入真实 DOCX → 按模板规则检查
+   * → 提交 → 初审通过 → 导出报告。
+   */
+  async 'flow-a15-s4'({ send }) {
+    const trace = []
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+    const waitFor = async (expr, label, tries = 40) => {
+      for (let i = 0; i < tries; i += 1) {
+        const ok = await evaluate(send, expr)
+        if (ok === true) return true
+        await sleep(500)
+      }
+      trace.push('timeout:' + label)
+      return false
+    }
+    const clickText = async (text) => {
+      const hit = await evaluate(send, `
+        const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], summary'))
+        const hit = nodes.find(n => (n.textContent ?? '').includes(${JSON.stringify(text)}))
+        if (hit) { hit.click(); return (hit.textContent ?? '').trim().slice(0, 40) }
+        return null
+      `)
+      trace.push(`click(${text})=${hit}`)
+      return hit
+    }
+
+    // 0. 自举 A15 模板（与 S2 同形），使 UI 里有可选的已发布模板
+    await waitFor(`Boolean(window.reviewAPI)`, 'bridge', 60)
+    await evaluate(send, `
+      const api = window.reviewAPI
+      const templateId = 'a15-s4-lab'
+      let existing = null
+      try { existing = await api.getTemplateV2(templateId, 1) } catch {}
+      if (!existing || existing.status !== 'published') {
+        const now = new Date().toISOString()
+        await api.saveTemplateDraftV2({
+          templateId, version: 1, schemaVersion: 2, name: '实验室使用申请（S2）',
+          displayName: { template: '{{organizationName}} 实验室使用申请' },
+          objectType: 'organization', status: 'draft', createdAt: now,
+          fields: [
+            { key: 'organizationName', label: '组织名称', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'responsiblePerson', label: '负责人', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'applicantCount', label: '使用人数', kind: 'number', required: true, visibility: 'public', scope: 'case' },
+            { key: 'usageDate', label: '使用日期', kind: 'date', required: true, visibility: 'public', scope: 'case' },
+            { key: 'usageTime', label: '使用时段', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'purpose', label: '用途', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          ],
+          // 该分项只承载案例级确定性规则，不对申报事项做归属要求
+          sections: [{ id: 'lab', name: '实验室使用', order: 0, required: false, criteria: [{
+            id: 'headcount', title: '人数不超上限', requirement: '使用人数不得超过 20 人',
+            execution: 'deterministic', targetScope: 'case',
+            deterministicConstraint: { schemaVersion: 1, kind: 'field-number-limit', fieldKey: 'applicantCount',
+              fieldScope: 'case', operator: 'lte', threshold: 20, unit: '人',
+              ownerStatement: { actorId: 'local-organizer', confirmedAt: now, statement: '负责人确认：使用人数不超过 20' } },
+          }] }],
+          materialSlots: [{ id: 'lab-use-plan', name: '实验室使用计划书', minCount: 1, requiredAt: 'submission' }],
+          policyVersionIds: [], policyRefs: [],
+          stages: [
+            { id: 'initial-review', name: '初审', kind: 'manual-review', executorRole: 'reviewer', nextStageId: 'final-review' },
+            { id: 'final-review', name: '终审', kind: 'manual-review', executorRole: 'teacher' },
+          ],
+          outputs: [{ id: 'feedback', kind: 'item-feedback', audience: 'reviewer' }],
+        })
+        await api.publishTemplateV2(templateId, 1)
+      }
+      return true
+    `)
+
+    // 0.5 让界面真正渲染
+    await waitFor(`Boolean(window.reviewAPI) && (document.body.textContent ?? '').trim().length > 20`, 'render', 60)
+
+    // 1. 导航到案卷办理
+    await clickText('内容合规审查'); await sleep(1500)
+    await clickText('进入本地材料审核'); await sleep(2500)
+    await clickText('案卷办理'); await sleep(1500)
+
+    // 2. 展开「从已发布模板新建」并选择 A15 模板
+    await clickText('打开其他案卷 / 从已发布模板新建'); await sleep(600)
+    const templatePicked = await evaluate(send, `
+      const selects = Array.from(document.querySelectorAll('select'))
+      const wanted = ${JSON.stringify(process.env.E2E_TEMPLATE ?? 'a15-s2-lab@1')}
+      const target = selects.find(sel => Array.from(sel.options).some(o => o.value === wanted))
+      if (!target) return { ok: false, options: selects.map(s => Array.from(s.options).map(o => o.value).slice(0, 5)) }
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+      setter.call(target, wanted)
+      target.dispatchEvent(new Event('change', { bubbles: true }))
+      return { ok: true }
+    `)
+    trace.push('template=' + JSON.stringify(templatePicked))
+    await sleep(800)
+
+    // 3. 填案卷级字段与标题（React 受控组件需原生 setter + input 事件）
+    const filled = await evaluate(send, `
+      const setValue = (el, value) => {
+        const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value').set
+        setter.call(el, value)
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      const labels = ['组织名称', '负责人', '使用人数', '使用日期', '使用时段', '用途']
+      const values = ['地球物理学院', '王老师', '18', '2026-11-10', '10:00-12:00', '课程实验']
+      const done = []
+      const missed = []
+      labels.forEach((label, index) => {
+        // 只取「与标签同级」的那个输入框，避免把值写进外层容器里的其它输入框
+        const span = Array.from(document.querySelectorAll('span'))
+          .find(s => (s.textContent ?? '').trim().startsWith(label))
+        const input = span?.parentElement?.querySelector('input')
+        if (input && input.placeholder !== '案卷标题') { setValue(input, values[index]); done.push(label) }
+        else missed.push(label)
+      })
+      // 标题最后写，避免被字段填写覆盖
+      const title = Array.from(document.querySelectorAll('input')).find(i => i.placeholder === '案卷标题')
+      if (title) setValue(title, 'A15 S4 真实旅程')
+      return { ok: true, done, missed, titleSet: Boolean(title) }
+    `)
+    trace.push('fields=' + JSON.stringify(filled))
+    // 模板没有事项级字段时，默认空事项行会被拒绝；像真实用户一样把它删掉
+    const removedRows = await evaluate(send, `
+      const emptyTitle = Array.from(document.querySelectorAll('input')).find(i => i.placeholder === '事项名称' && !i.value.trim())
+      if (!emptyTitle) return { removed: 0 }
+      const row = emptyTitle.closest('div.rounded-md') ?? emptyTitle.parentElement?.parentElement
+      const del = row ? Array.from(row.querySelectorAll('button')).find(b => (b.textContent ?? '').trim() === '删除') : null
+      if (del) { del.click(); return { removed: 1 } }
+      return { removed: 0, reason: 'no delete button' }
+    `)
+    trace.push('emptySubjectRow=' + JSON.stringify(removedRows))
+    await sleep(400)
+    await sleep(500)
+
+    // 4. 真实点击创建（先确认按钮可用，再收集失败提示）
+    const preCreate = await evaluate(send, `
+      const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('创建一份案卷'))
+      return { exists: Boolean(btn), disabled: btn ? btn.disabled : null,
+        titleValue: (Array.from(document.querySelectorAll('input')).find(i => i.placeholder === '案卷标题') ?? {}).value ?? null }
+    `)
+    trace.push('preCreate=' + JSON.stringify(preCreate))
+    // 装错误钩子，捕获被静默吞掉的创建失败原因
+    await evaluate(send, `
+      window.__s4 = []
+      const orig = console.error
+      console.error = (...args) => { window.__s4.push('console:' + String(args[0]).slice(0, 200)); orig(...args) }
+      window.addEventListener('unhandledrejection', (event) => {
+        window.__s4.push('rejection:' + String(event.reason).slice(0, 200))
+      })
+      return true
+    `)
+    const created = await clickText('创建一份案卷')
+    await sleep(3500)
+    const afterCreate = await evaluate(send, `
+      const api = window.reviewAPI
+      const text = (document.body.textContent ?? '')
+      const marks = ['已创建', '创建失败', '缺少', '必填', '不能创建', '请选择', '案卷列表']
+      const safe = async (fn) => { try { return await fn() } catch (e) { return 'ERR:' + String(e).slice(0, 60) } }
+      return { hints: marks.filter(m => text.includes(m)),
+        v2: await safe(async () => (await api.listCasesV2() ?? []).slice(0, 3).map(x => x.caseId)),
+        legacy: await safe(async () => (await api.listCases() ?? []).slice(0, 3).map(x => x.id ?? x.caseId)),
+        domCaseHint: (Array.from(document.querySelectorAll('p,div')).map(n => (n.textContent ?? '').trim())
+          .filter(t => t.startsWith('当前案卷')).slice(0, 2)),
+        toasts: Array.from(document.querySelectorAll('[data-sonner-toast], li[data-sonner-toast]')).map(n => (n.textContent ?? '').trim().slice(0, 120)),
+        captured: (window.__s4 ?? []).slice(-5) }
+    `)
+    trace.push('afterCreate=' + JSON.stringify(afterCreate))
+    // 直接从创建后的列表快照取案卷号（避免二次求值时机差）
+    const caseId = Array.isArray(afterCreate?.v2) ? (afterCreate.v2[0] ?? null) : null
+    trace.push('caseId=' + caseId)
+    if (!caseId) return { trace, caseId: null, error: 'UI 创建案卷未成功' }
+
+    // 5. 切到审核工作台，材料拖放区在那一栏
+    await clickText('审核工作台'); await sleep(1500)
+    const dropTargets = await evaluate(send, `
+      Array.from(document.querySelectorAll('[aria-label="拖入审核依据文件"], [aria-label="拖入申报材料文件"]'))
+        .map(n => ({ label: n.getAttribute('aria-label'), rect: n.getBoundingClientRect() }))
+    `)
+    let dropped = null
+    if (Array.isArray(dropTargets) && dropTargets.length > 0) {
+      const box = dropTargets[0].rect
+      const x = Math.round(box.x + box.width / 2)
+      const y = Math.round(box.y + box.height / 2)
+      const dragData = { items: [], files: [process.env.E2E_DOCX_PATH ?? ''], dragOperationsMask: 1 }
+      // Chromium 要求 dragEnter/dragOver 先带 files，drop 才可能被 Electron 的 webUtils 认到
+      await send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data: dragData })
+      await send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data: dragData })
+      await send('Input.dispatchDragEvent', { type: 'drop', x, y, data: dragData })
+      await sleep(3000)
+      dropped = await evaluate(send, `(async () => {
+        const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
+        return (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).map(d => d.fileName)
+      })()`)
+    }
+    trace.push('dropped=' + JSON.stringify(dropped))
+
+    // 6. 真实点击「按模板规则检查」
+    await clickText('按模板规则检查')
+    await sleep(2500)
+    const ruleResult = await evaluate(send, `
+      const text = document.body.textContent ?? ''
+      const checks = (await window.reviewAPI.listRunsV2(${JSON.stringify(caseId)}))?.[0]
+      return { hint: text.includes('按模板规则检查'), run: checks ? { id: checks.id, status: checks.status,
+        checks: (checks.checks ?? []).map(c => c.ruleId + '=' + c.status) } : null }
+    `)
+    trace.push('ruleRun=' + JSON.stringify(ruleResult))
+
+    // 7. 提交并初审（真实按钮）
+    await clickText('提交案卷'); await sleep(2000)
+    const submitState = await evaluate(send, `(await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)}))?.caseV2?.stage ?? null`)
+    trace.push('stageAfterSubmit=' + submitState)
+    await clickText('初审通过'); await sleep(2000)
+
+    // 8. 导出报告（真实按钮）
+    await clickText('导出报告'); await sleep(2500)
+
+    const final = await evaluate(send, `(async () => {
+      const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
+      return { stage: agg?.caseV2?.stage ?? null,
+        decisions: (agg?.decisions ?? []).map(d => d.result + '/' + d.finality + '/' + d.actor?.role),
+        documents: (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).length,
+        runs: (await window.reviewAPI.listRunsV2(${JSON.stringify(caseId)}))?.map(r => r.id + '=' + r.status) }
+    })()`)
+    return { trace, caseId, ruleResult, final }
   },
 
   async 'd4-list'({ send }) {

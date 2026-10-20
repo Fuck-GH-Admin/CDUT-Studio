@@ -1,3 +1,29 @@
+### S4 真实 UI 旅程（PARTIAL）与一处产品缺陷修复
+
+`flow-a15-s4` 全程经 DOM 点击/输入驱动，不使用后门 IPC 造事实。
+
+**已真实走通**：
+1. 首页 → 「内容合规审查」→ 「进入本地材料审核（无需校园账号）」→ 「案卷办理」；
+2. 展开「打开其他案卷 / 从已发布模板新建」，选择已发布模板；
+3. 填组织名称/负责人/使用人数(18)/使用日期/使用时段/用途 与案卷标题；
+4. 点「创建一份案卷」→ 真实写入 `case-mvha4fj8`，界面显示「当前案卷：A15 S4 真实旅程」；
+5. 点「按模板规则检查」→ 真实 Run `run-tpl-mvha6hm1-40f32fb2`，
+   人数 `compliant`、材料 `awaiting-supplement`，界面展示状态与理由。
+
+**断点（BLOCKED_BRIDGE:测试环境）**：材料导入只有两条真实路径——OS 文件对话框（
+`dialog.showOpenDialog`）与 OS 拖拽（`webUtils.getPathForFile`）。headless xvfb 下
+CDP 的 `Input.dispatchDragEvent` 无法把本地文件注入为真实 File，原生对话框也无法驱动。
+因此「上传真实 DOCX → 提交 → 初审 → 报告」在纯 UI 下无法完成。
+
+**本轮修复的真实产品缺陷**：`V2CasePanel.createFromTemplate` 无条件提交 `subjectRows`，
+而模板只有案例级字段时列表里仍有一个空白事项行，创建被
+「申报事项名称不能为空」拒绝——整类案例无法建案。现只提交用户真正填写的事项行。
+
+**发现但未改的 UX 问题**：模板的 `sections[].required=true` 会强制要求申报事项，
+案例级纯规则分项若标 required 就无法建案。本轮通过模板声明 `required:false` 规避，
+是否放宽属 T01 模板领域。
+
+---
 ### A15 S2 真机四案例（`flow-a15-s2` + `flow-a15-s2-gate`）
 
 模板：`a15-s2-lab@1`（organization，6 字段，`applicantCount` 无数值上限表单限制，
@@ -202,7 +228,7 @@ S4 的完整用户旅程（真实点击 + 报告 + 冷重启）尚未一次性�
 | **S2** | **PASS（四案例真机）** | 见下节。已发布模板 + 负责人确认 `lte 20` → `compilePublishedTemplateReviewPlan` → 冻结 `planFingerprint` → T04 `evaluateT04Plan` → **真实 `ReviewRunV2`**（`run-tpl-*`）。18 人 `compliant`、21 人 `non-compliant`、人数未知 `awaiting-confirmation`、缺计划书 `awaiting-supplement`。Run 内经 `inputManifest` 冻结 `planFingerprint` / `effectiveRuleIds` / `documentVersions` |
 | **S3** | **PASS（S3-02 两段阶段）** | `flow-a15-s3`：无 Run 时 `stage-pass` 被 `T05_CURRENT_REAL_RUN_REQUIRED` 拒绝、补件可在无 Run 时创建（decisions=0）。`flow-a15-s3-run`（真实 Run）：A15 案卷填字段 18 人 → 按槽位导入真实 DOCX → Pi 审核 `completed`，**2 checks 全 compliant，`effectiveRuleIds` 两条规则各产出 1 项（覆盖完整）** → 初审 `stage-pass` 成功（stage=reviewing，`finality=stage`，`basedOnRunId=run-pi-mvh7e7rl-k76ff`）→ 生成 teacher 终审任务。`flow-a15-s3-final`：**reviewer 冒充终审被 `T05_ACTOR_NOT_ASSIGNED_TO_STAGE` 拒绝**；teacher（本地模拟，非学校身份）终审通过 → stage=`decided`、`finality=final`，两段决定均绑定同一真实 Run。**冷重启后 stage/decisions/Run 完整保留** |
 | **S3-01（补件两轮）** | **PASS** | `flow-a15-s3-01`：缺计划书 → 首轮 Run `partially-completed`（材料 `awaiting-supplement`）→ 开补件 → 第一次 `insufficient`（stage=`awaiting-supplement`，1 份原件）→ 第二次 `satisfied`（stage=`reviewing`，2 份原件，新增 `doc-2-mvh99etc-v1`）→ **新 Run `run-tpl-mvh99ev4-823ca317` completed**，旧 Run `run-tpl-mvh99eos-b75dffe5` 保留且状态仍为 `partially-completed`（未被改写） |
-| **S4** | **NOT_RUN** | 依赖 S2/S3 |
+| **S4** | **PARTIAL** | `flow-a15-s4` 真实 UI 驱动：导航「内容合规审查 → 进入本地材料审核 → 案卷办理」→ 展开「从已发布模板新建」→ 选择模板 → 填 6 个案例级字段 → **点「创建一份案卷」成功**（`case-mvha4fj8`）→ **点「按模板规则检查」产出真实 Run** `run-tpl-mvha6hm1-40f32fb2`（人数 compliant、材料 awaiting-supplement）。**断点**：材料导入需 OS 级文件拖拽或原生文件对话框，CDP `Input.dispatchDragEvent` 无法把本地文件投递给 `webUtils.getPathForFile`，headless 环境无法合成；因此提交与初审未能经 UI 走到。材料与后续阶段的真实证据来自 S2/S3（IPC 触发、走同一 Main writer）。 |
 
 ### S2 最小缺失（交回 Owner）
 
