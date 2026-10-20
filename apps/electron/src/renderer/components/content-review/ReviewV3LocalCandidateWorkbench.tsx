@@ -62,6 +62,8 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     })()
     return ()=>{mounted=false}
   },[localCaseId,materialsEpoch])
+  const [dropActive,setDropActive]=React.useState(false)
+  const [dropRole,setDropRole]=React.useState<'application'|'evidence'>('application')
   const [caseBusy,setCaseBusy]=React.useState(false)
   const [caseNotice,setCaseNotice]=React.useState('')
   const [caseError,setCaseError]=React.useState('')
@@ -165,6 +167,34 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
+  const dropMaterials=async(event:React.DragEvent<HTMLDivElement>):Promise<void>=>{
+    event.preventDefault()
+    event.stopPropagation()
+    setDropActive(false)
+    if(!localCaseId||caseBusy)return
+    const files=Array.from(event.dataTransfer.files)
+    if(!files.length)return
+    setCaseBusy(true);setCaseNotice('');setCaseError('')
+    let imported=0
+    const errors:string[]=[]
+    try{
+      for(const file of files){
+        try{
+          const sourcePath=window.electronAPI.getPathForFile(file)
+          if(!sourcePath)throw new Error('无法读取系统拖拽文件路径')
+          await window.reviewAPI.registerMaterialPathV2({
+            caseId:localCaseId,sourcePath,role:dropRole,fileName:file.name,
+          })
+          imported++
+        }catch(reason){
+          errors.push(file.name+': '+(reason instanceof Error?reason.message:String(reason)))
+        }
+      }
+      if(imported)setMaterialsEpoch(x=>x+1)
+      setCaseNotice('拖入 '+files.length+' 份材料，成功 '+imported+' 份，失败 '+errors.length+' 份；已记录到当前案卷')
+      if(errors.length)setCaseError(errors.join('；').slice(0,800))
+    }finally{setCaseBusy(false)}
+  }
   const exportLocalMd=async ():Promise<void>=>{
     if(caseBusy||!localCaseId)return
     setCaseBusy(true);setCaseError('');setCaseNotice('')
@@ -221,6 +251,24 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
           disabled={caseBusy||!localCaseId} onClick={()=>void exportLocalMd()}>导出本地 MD 报告</button>
       </div>
+      {localCaseId&&<div className={`rounded-lg border-2 border-dashed p-4 ${dropActive?'border-primary bg-primary/10':'border-border'}`}
+        data-testid="review-v3-native-file-drop" onDragOver={event=>{
+          event.preventDefault();event.dataTransfer.dropEffect='copy';setDropActive(true)
+        }} onDragLeave={event=>{event.preventDefault();setDropActive(false)}}
+        onDrop={event=>void dropMaterials(event)}>
+        <p className="text-sm font-medium">把申请材料或证明文件直接拖到这里</p>
+        <p className="text-xs text-muted-foreground">多个文件会依次进入当前原生案卷；仍使用现有材料服务、真实原件和 V3 解析链。</p>
+        <div className="mt-2 flex gap-4 text-sm">
+          <label className="flex items-center gap-1">
+            <input type="radio" checked={dropRole==='application'} onChange={()=>setDropRole('application')}/>
+            申请材料
+          </label>
+          <label className="flex items-center gap-1">
+            <input type="radio" checked={dropRole==='evidence'} onChange={()=>setDropRole('evidence')}/>
+            证明材料
+          </label>
+        </div>
+      </div>}
       {savedCases.length>0&&<select aria-label="从历史案卷重开" value="" 
         onChange={e=>{setLocalCaseId(e.target.value);setCaseNotice('已选择历史案卷 '+e.target.value) }}
         className="w-full rounded border border-border bg-background px-2 py-2 text-sm">
