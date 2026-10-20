@@ -439,11 +439,6 @@ export function TemplateWizardPanel(): JSX.Element {
                     <Button size="sm" variant="ghost" onClick={() => updateTemplate((current) => ({ ...current, fields: current.fields.filter((_, i) => i !== index) }))}>删除</Button>
                   </div>
                   {field.kind === 'enum' && <input className="sm:col-span-5 rounded border px-2 py-1 text-xs" placeholder="选项，以中文逗号分隔" value={(field.options ?? []).map((option) => option.label).join('，')} onChange={(event) => {
-                  {field.kind === 'number' && <div className="sm:col-span-5 flex flex-wrap gap-3 rounded border p-2 text-xs">
-                    <label>最小值 <input type="number" className="ml-1 w-24 rounded border bg-background px-2 py-1" value={field.min ?? ''} onChange={event=>updateTemplate(current=>({...current,fields:current.fields.map((item,i)=>i===index?{...item,min:event.target.value===''?undefined:Number(event.target.value)}:item)}))} /></label>
-                    <label>最大值 <input type="number" className="ml-1 w-24 rounded border bg-background px-2 py-1" value={field.max ?? ''} onChange={event=>updateTemplate(current=>({...current,fields:current.fields.map((item,i)=>i===index?{...item,max:event.target.value===''?undefined:Number(event.target.value)}:item)}))} /></label>
-                    <label>单位 <input className="ml-1 w-24 rounded border bg-background px-2 py-1" value={field.unit ?? ''} onChange={event=>updateTemplate(current=>({...current,fields:current.fields.map((item,i)=>i===index?{...item,unit:event.target.value||undefined}:item)}))} /></label>
-                  </div>}
                     const options = event.target.value.split(/[，,]/).map((label) => label.trim()).filter(Boolean).map((label) => ({ value: label, label }))
                     updateTemplate((current) => ({ ...current, fields: current.fields.map((item, i) => i === index ? { ...item, options } : item) }))
                   }} />}
