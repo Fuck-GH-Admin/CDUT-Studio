@@ -31,7 +31,7 @@
 | T06 | `9ac93052f` | B2 合入 | **WIRED** | `BatchPanel` → `ReviewV3T06BatchIntakePreview` |
 | T07 | `37c6d3212` | B2 合入 + 桥接 `e4e4d50f3` | **JOURNEY_VERIFIED** | `BatchPanel` 区 → `ReviewV3T07Workbench` → `ReviewV3T07JudgePanel`；桥接新增 `review-v3-t07-state-store`（原子写 + revision 乐观锁）、`review-v3-t07-main-service`（Main 派生 actor / 投影 / 动作）、IPC `T07_GET_VIEW`/`T07_APPLY_ACTION`/`T07_INIT_STATE` |
 | T08 | `d83b4be32` | B3 合入 | **WIRED** | `AssistantDrawer` → `ReviewV3T08ReportPanel` |
-| T09 | `474cf5f84` | B2 合入 | **BLOCKED_BRIDGE** | `offline-codec` 仅被 `offline-issuer` 使用，issuer 无入口；缺任务签发/回件导入的 Main IPC 与附件登记桥接 |
+| T09 | `474cf5f84` | B2 合入 + 桥接 `8d7cd369f` | **WIRED** | `review-v3-t09-main-service`（签发落盘 / 回件校验 / actionId 幂等）+ IPC `T09_ISSUE_STUDENT`/`T09_PREVIEW_REPLY`/`T09_IMPORT_REPLY`；附件先登记为 DocumentVersion 再答复补件。**尚无渲染层入口**（离线编辑器是独立 HTML，未接入产品导航） |
 | T10 | `3679cc4e3` | B3 合入 | **WIRED** | `ContentReviewView` → `ReviewV3T10WorkspaceOverview` |
 
 **T05 × T10 交叠文件 `V2CasePanel.tsx`**：git 自动三方合并，已逐项核对双方内容均在——
