@@ -87,6 +87,7 @@ import {
 import { DEFAULT_CONTEXT_WINDOW, buildModel, normalizePiApi } from './pi-model-registry'
 import {
   applyWatchdogTerminalReason,
+  applyWatchdogToAssistantError,
   createPiReviewWatchdog,
   resolvePiReviewWatchdogTimeouts,
   type PiReviewWatchdog,
@@ -2814,27 +2815,40 @@ export class PiAgentAdapter implements AgentProviderAdapter {
        * 命中后必须做到两件事：立刻中止在途请求，并让本轮终态带上可诊断的中文原因，
        * 绝不允许 V2 run 无限停在 running。
        */
+      const reviewWatchdogTimeoutMs = resolvePiReviewWatchdogTimeouts({
+        transportIdleTimeoutMs: settingsManager.getHttpIdleTimeoutMs(),
+      })
       reviewWatchdog = isReviewProfile
         ? createPiReviewWatchdog({
             label: `渠道：${input.channelName ?? input.provider}，模型：${input.model ?? session.model?.id ?? '未知'}`,
-            timeouts: resolvePiReviewWatchdogTimeouts({
-              transportIdleTimeoutMs: settingsManager.getHttpIdleTimeoutMs(),
-            }),
+            timeouts: reviewWatchdogTimeoutMs,
             logger: (message) => console.error(`${message} session=${input.sessionId}`),
           })
         : undefined
-      /** 中止当前审核轮次：先断当前请求；没有在途请求（例如工具卡住）时再断整轮。 */
+      /**
+       * 中止当前审核轮次。
+       *
+       * 两件事都要做，缺一不可：
+       * 1. 断掉在途的模型请求（让它立刻停止等数据，而不是继续空耗）；
+       * 2. 中止整轮 Pi 会话——工具执行卡住时没有「在途请求」可断，
+       *    只断请求会让轮次继续挂着。
+       * 注意：这里不设置 active.abortRequested，看门狗不是用户停止，
+       * 终态由下面的 result 覆盖逻辑给出可诊断原因。
+       */
       const abortReviewTurn = (reason: string): void => {
         try {
           activeReviewRequest?.abort(new Error(reason))
         } catch { /* AbortController.abort 不会抛，防御性兜底 */ }
-        if (!activeReviewRequest) {
-          void active.session?.abort().catch((error) => {
-            console.error('[Pi 审核看门狗] 中止会话失败:', error)
-          })
-        }
+        void active.session?.abort().catch((error) => {
+          console.error('[Pi 审核看门狗] 中止会话失败:', error)
+        })
       }
       if (reviewWatchdog) {
+        console.log(
+          `[Pi 审核看门狗] 已启用 session=${input.sessionId} `
+          + `首字节阈值=${Math.round(reviewWatchdogTimeoutMs.firstByteTimeoutMs / 1_000)}s `
+          + `整轮无进展阈值=${Math.round(reviewWatchdogTimeoutMs.turnStallTimeoutMs / 60_000)}min`,
+        )
         // 闭包内固定已窄化的引用，避免 let 声明在回调里退化为可能 undefined。
         const watchdog = reviewWatchdog
         reviewWatchdogTimer = setInterval(() => {
@@ -2930,7 +2944,12 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const flushPendingTerminalRetryError = (): void => {
         if (!pendingTerminalRetryError) return
         runtimeGuard.recordMessage(pendingTerminalRetryError.assistantMessage)
-        queue.push(pendingTerminalRetryError.sdkMessage)
+        // 看门狗命中：延迟刷出的失败 assistant 也必须带中文可诊断原因，
+        // 否则编排层会按「瞬时网络错误」自动重试，轮次重新挂起。
+        const watchdogReason = reviewWatchdog?.firedReason()
+        queue.push(watchdogReason
+          ? applyWatchdogToAssistantError(pendingTerminalRetryError.sdkMessage as unknown as Record<string, unknown>, watchdogReason) as unknown as SDKMessage
+          : pendingTerminalRetryError.sdkMessage)
         pendingTerminalRetryError = undefined
       }
 
@@ -2972,8 +2991,16 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         if (reviewWatchdog) {
           if (PI_REVIEW_DATA_EVENTS.has(event.type)) reviewWatchdog.touch()
           else reviewWatchdog.noteActivity()
-          // assistant 消息结束即该次模型请求结束；工具执行阶段不应再算「请求在途」。
-          if (event.type === 'message_end') reviewWatchdog.endRequest()
+          // 消息结束即该次模型请求结束（工具执行阶段不应再算「请求在途」），
+          // 同时释放请求级控制器，避免下一轮误断一个已结束的请求。
+          if (event.type === 'message_end') {
+            reviewWatchdog.endRequest()
+            if (activeReviewRequest && reviewWatchdog.state.requestStartedAt == null) {
+              releaseActiveRequestSignal?.()
+              releaseActiveRequestSignal = undefined
+              activeReviewRequest = undefined
+            }
+          }
         }
         try {
           for (const lifecycleEvent of mapPiHarnessLifecycleEvent(event)) {
@@ -3010,10 +3037,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               }
               const isAssistant = isAssistantPiMessage(event.message)
               const assistantUuid = isAssistant ? assistantUuidFor() : undefined
-              const converted = convertPiMessage(event.message, session.sessionId, input.model, {
+              const rawConverted = convertPiMessage(event.message, session.sessionId, input.model, {
                 final: true,
                 ...(assistantUuid && { uuid: assistantUuid }),
               })
+              // 看门狗命中后的失败 assistant：先换成中文可诊断原因再往下走。
+              const watchdogAssistantReason = reviewWatchdog?.firedReason()
+              const converted = watchdogAssistantReason && rawConverted?.type === 'assistant'
+                ? applyWatchdogToAssistantError(rawConverted as unknown as Record<string, unknown>, watchdogAssistantReason) as unknown as SDKMessage
+                : rawConverted
               const isRetryableAssistantError = isAssistant && (event.message as AssistantMessage).stopReason === 'error'
               if (isRetryableAssistantError && converted?.type === 'assistant' && assistantUuid) {
                 // Native retry 会丢弃该失败 assistant；不应消耗 Proma 的 turn/budget 配额。

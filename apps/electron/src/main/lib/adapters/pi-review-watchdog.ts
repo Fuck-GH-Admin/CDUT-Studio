@@ -46,7 +46,9 @@ export function resolvePiReviewWatchdogTimeouts(options: {
   env?: Record<string, string | undefined>
   transportIdleTimeoutMs?: number
 } = {}): PiReviewWatchdogTimeouts {
-  const env = options.env ?? {}
+  // 默认读取进程环境：E2E 与现场排障都通过环境变量调整阈值。
+  // 测试显式传 env，避免受宿主环境影响。
+  const env = options.env ?? process.env
   const transport = options.transportIdleTimeoutMs
   const transportBudget = typeof transport === 'number' && transport > 0
     ? Math.max(MIN_FIRST_BYTE_TIMEOUT_MS, transport - FIRST_BYTE_SAFETY_MARGIN_MS)
@@ -79,12 +81,17 @@ export function createPiReviewWatchdogState(now: number): PiReviewWatchdogState 
   return { requestFirstByteSeen: false, lastProgressAt: now }
 }
 
-function formatSeconds(ms: number): string {
-  return String(Math.max(1, Math.round(ms / 1_000)))
-}
-
-function formatMinutes(ms: number): string {
-  return String(Math.max(1, Math.round(ms / 60_000)))
+/**
+ * 时长文案。
+ *
+ * 必须避开编排层「可重试错误」的识别特征，否则看门狗失败会被自动重试，
+ * 轮次重新挂起（等于没修）：
+ * - 不使用「请稍后重试」等中文瞬时文案；
+ * - 2 分钟以上按分钟表述，避免出现形如 `500` 的三位数被当成 5xx 状态码。
+ */
+function formatDuration(ms: number): string {
+  if (ms >= 120_000) return `${Math.max(1, Math.round(ms / 60_000))} 分钟`
+  return `${Math.max(1, Math.round(ms / 1_000))} 秒`
 }
 
 /** 纯函数判定：便于用假时钟覆盖「超时」与「慢但不误杀」两类场景。 */
@@ -101,7 +108,7 @@ export function evaluatePiReviewWatchdog(
       return {
         kind: 'first_byte',
         elapsedMs: elapsed,
-        reason: `模型请求 ${formatSeconds(elapsed)} 秒无任何数据返回（${label}），已中止本轮审核；请检查该渠道连通性，或改用响应更快的模型后重试。`,
+        reason: `模型请求 ${formatDuration(elapsed)}无任何数据返回（${label}），本轮审核已中止。请检查该渠道连通性，或更换响应更快的模型后重新发起审核。`,
       }
     }
   }
@@ -110,7 +117,7 @@ export function evaluatePiReviewWatchdog(
     return {
       kind: 'stalled',
       elapsedMs: idle,
-      reason: `审核轮次 ${formatMinutes(idle)} 分钟无进展（既无新的模型输出也无工具结果，${label}），已中止本轮审核；已完成的检查与材料读取记录仍保留，可重试或转人工。`,
+      reason: `审核轮次 ${formatDuration(idle)}无进展（既无新的模型输出也无工具结果，${label}），本轮审核已中止。已完成的检查与材料读取记录仍保留，可重新发起审核或转人工核验。`,
     }
   }
   return { kind: 'none' }
@@ -204,4 +211,38 @@ export function applyWatchdogTerminalReason<T extends Record<string, unknown>>(
     terminal_reason: 'review_watchdog_timeout',
     errors: [reason],
   }
+}
+
+/**
+ * 自检：看门狗原因不得命中编排层「可重试错误」的文案特征。
+ *
+ * 一旦命中，看门狗失败会被自动重试，轮次重新挂起，等于没修。
+ * 中文瞬时文案特征见 agent-retry-utils / error-patterns：
+ * 服务繁忙、请求量较大、暂时无法及时响应、请稍后重试、请稍后再试，
+ * 以及形如 `502` / `529` 的裸 5xx 三位数。
+ */
+export function isWatchdogReasonRetryable(reason: string): boolean {
+  if (/服务繁忙|请求量较大|暂时无法及时响应|请稍后重试|请稍后再试/.test(reason)) return true
+  if (/\b5\d{2}\b/.test(reason)) return true
+  if (/\b502\b|\b529\b|overloaded|service\s+unavailable|request could not be completed/i.test(reason)) return true
+  return false
+}
+
+/**
+ * 把看门狗原因写进失败的 assistant 消息。
+ *
+ * 为什么必须做：看门狗中止请求后，Pi 会先产生一条 stopReason='error' 的 assistant
+ * 消息（文案是传输层的 `terminated` / `The operation was aborted`）。编排层会把它
+ * 当成「瞬时网络错误」自动重试，轮次于是重新挂起——看门狗等于没生效。
+ * 这里把文案换成中文可诊断原因，同时保证它不命中可重试特征。
+ */
+export function applyWatchdogToAssistantError(
+  message: Record<string, unknown>,
+  reason: string,
+): Record<string, unknown> {
+  const error = message.error
+  const nextError = error && typeof error === 'object'
+    ? { ...(error as Record<string, unknown>), message: reason, errorType: 'review_watchdog_timeout' }
+    : { message: reason, errorType: 'review_watchdog_timeout' }
+  return { ...message, error: nextError }
 }

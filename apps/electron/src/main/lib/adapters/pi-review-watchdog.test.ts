@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   DEFAULT_PI_REVIEW_FIRST_BYTE_TIMEOUT_MS,
   applyWatchdogTerminalReason,
+  isWatchdogReasonRetryable,
   DEFAULT_PI_REVIEW_TURN_STALL_TIMEOUT_MS,
   createPiReviewWatchdog,
   evaluatePiReviewWatchdog,
@@ -13,9 +14,22 @@ const LABEL = '渠道：测试渠道，模型：测试模型'
 
 describe('Pi 审核看门狗 · 阈值解析', () => {
   test('默认阈值来自导出常量', () => {
-    const resolved = resolvePiReviewWatchdogTimeouts()
+    // 显式传空 env：不读取宿主进程环境，保证断言稳定。
+    const resolved = resolvePiReviewWatchdogTimeouts({ env: {} })
     expect(resolved.firstByteTimeoutMs).toBe(DEFAULT_PI_REVIEW_FIRST_BYTE_TIMEOUT_MS)
     expect(resolved.turnStallTimeoutMs).toBe(DEFAULT_PI_REVIEW_TURN_STALL_TIMEOUT_MS)
+  })
+
+  test('不传 env 时读取进程环境（E2E / 现场排障可用环境变量调阈值）', () => {
+    const key = 'PROFER_PI_REVIEW_FIRST_BYTE_TIMEOUT_MS'
+    const previous = process.env[key]
+    process.env[key] = '45000'
+    try {
+      expect(resolvePiReviewWatchdogTimeouts().firstByteTimeoutMs).toBe(45_000)
+    } finally {
+      if (previous === undefined) delete process.env[key]
+      else process.env[key] = previous
+    }
   })
 
   test('首字节预算自动早于传输层空闲超时触发', () => {
@@ -171,5 +185,33 @@ describe('Pi 审核看门狗 · 终态原因', () => {
       '审核轮次 20 分钟无进展，已中止本轮审核。',
     ) as { errors?: string[] }
     expect(result.errors).toEqual(['审核轮次 20 分钟无进展，已中止本轮审核。'])
+  })
+})
+
+describe('Pi 审核看门狗 · 原因不得被编排层当成可重试错误', () => {
+  test('默认阈值下的两种原因都不命中可重试文案特征', () => {
+    const firstByte = createPiReviewWatchdog({ label: LABEL, timeouts: TIMEOUTS })
+    firstByte.startRequest(0)
+    const firstByteReason = firstByte.evaluate(TIMEOUTS.firstByteTimeoutMs)!
+
+    const stalled = createPiReviewWatchdog({ label: LABEL, timeouts: TIMEOUTS })
+    stalled.startRequest(0)
+    stalled.markFirstByte(1_000)
+    stalled.endRequest()
+    stalled.touch(2_000)
+    const stalledReason = stalled.evaluate(2_000 + TIMEOUTS.turnStallTimeoutMs)!
+
+    expect(isWatchdogReasonRetryable(firstByteReason)).toBe(false)
+    expect(isWatchdogReasonRetryable(stalledReason)).toBe(false)
+    // 时长按分钟表述，避免出现形如 500 的三位数被当成 5xx
+    expect(firstByteReason).toContain('4 分钟')
+    expect(firstByteReason).not.toContain('秒')
+    expect(stalledReason).toContain('20 分钟')
+  })
+
+  test('自检本身能识别中文瞬时文案与裸 5xx', () => {
+    expect(isWatchdogReasonRetryable('服务繁忙，请稍后重试')).toBe(true)
+    expect(isWatchdogReasonRetryable('网关返回 502')).toBe(true)
+    expect(isWatchdogReasonRetryable('overloaded')).toBe(true)
   })
 })
