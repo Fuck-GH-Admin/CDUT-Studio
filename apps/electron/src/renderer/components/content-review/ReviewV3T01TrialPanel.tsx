@@ -4,7 +4,7 @@
  */
 import { useMemo, useState } from 'react'
 import type { TemplateVersion } from '@profer/shared'
-import { trialT01Template, type T01TrialValue } from './review-v3-t01-business-presets'
+import { trialT01Template, exampleT01TrialInput, type T01TrialValue } from './review-v3-t01-business-presets'
 
 interface Props { template: TemplateVersion }
 export function ReviewV3T01TrialPanel({ template }: Props): JSX.Element {
@@ -26,7 +26,12 @@ export function ReviewV3T01TrialPanel({ template }: Props): JSX.Element {
           <h4 className="text-sm font-semibold">配置试跑：填一份模拟申请</h4>
           <p className="mt-1 text-xs text-muted-foreground">检查必填字段、数值范围、材料份数和业务阶段；不调用真实 AI、不读取证明、不产生审批结论。</p>
         </div>
-        <button type="button" className="rounded border bg-background px-3 py-1.5 text-xs" onClick={()=>{setValues({});setCounts({});setShowResults(false)}}>清空模拟数据</button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="rounded border bg-background px-3 py-1.5 text-xs" onClick={()=>{
+            const demo=exampleT01TrialInput(template);setValues(demo.values);setCounts(demo.materialCounts);setShowResults(true)
+          }}>载入虚构样例并检查</button>
+          <button type="button" className="rounded border bg-background px-3 py-1.5 text-xs" onClick={()=>{setValues({});setCounts({});setShowResults(false)}}>清空模拟数据</button>
+        </div>
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         {caseFields.map(field=><label className="text-xs" key={field.key}>
