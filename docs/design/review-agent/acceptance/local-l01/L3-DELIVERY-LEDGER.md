@@ -29,7 +29,7 @@
 | T04 | `54678e8ee` | `5df23c6da` | **BLOCKED_BRIDGE** | `evaluateT04Plan` 仅文件内自用；缺「冻结 Plan binding + 已确认事实/政策选择」的 Main 调用入口 |
 | T05 | `41c3f2fa9` | B2 合入 | **WIRED** | `V2CasePanel` → `ReviewV3T05HumanWorkflow` + `RunDecision`（替换旧 `BusinessFlowSection`） |
 | T06 | `9ac93052f` | B2 合入 | **WIRED** | `BatchPanel` → `ReviewV3T06BatchIntakePreview` |
-| T07 | `37c6d3212` | B2 合入 | **BLOCKED_BRIDGE** | `ReviewV3T07JudgePanel` 无生产引用；T07 只提供纯状态机（`applyT07Action`/`projectT07View`/`computeT07Ranking`），缺持久化 T07State + 读写 IPC + 可信评委 roster 派生 |
+| T07 | `37c6d3212` | B2 合入 + 桥接 `e4e4d50f3` | **JOURNEY_VERIFIED** | `BatchPanel` 区 → `ReviewV3T07Workbench` → `ReviewV3T07JudgePanel`；桥接新增 `review-v3-t07-state-store`（原子写 + revision 乐观锁）、`review-v3-t07-main-service`（Main 派生 actor / 投影 / 动作）、IPC `T07_GET_VIEW`/`T07_APPLY_ACTION`/`T07_INIT_STATE` |
 | T08 | `d83b4be32` | B3 合入 | **WIRED** | `AssistantDrawer` → `ReviewV3T08ReportPanel` |
 | T09 | `474cf5f84` | B2 合入 | **BLOCKED_BRIDGE** | `offline-codec` 仅被 `offline-issuer` 使用，issuer 无入口；缺任务签发/回件导入的 Main IPC 与附件登记桥接 |
 | T10 | `3679cc4e3` | B3 合入 | **WIRED** | `ContentReviewView` → `ReviewV3T10WorkspaceOverview` |
@@ -45,7 +45,7 @@ T10 的 `onCaseOpened`（7 处）、「案卷办理」标题、折叠区、条�
 | A15 起点（T01 模板 → 无学年绑案） | **PASS** | `saveDraft` → `publish` → `createCase`（contract-review 领域、无学年）→ 学年为空、`templateBound=e2e-t01-lab-request` |
 | A15 完整（初审/终审/决定/报告） | NOT_RUN | 依赖 T04 规则执行入口与 T05 阶段决定在真实案卷上的联调 |
 | A09 补件/复审 | NOT_RUN | T05 已接线，但需真实材料往返与申诉复核联测 |
-| A12+A14 批次/评委 | **BLOCKED** | T06 已接线；T07 为 BLOCKED_BRIDGE，评委路径无法联测 |
+| A12+A14 批次/评委 | **PASS（评委链路）** | `flow-t07-judging` 真机：2 案 → 批次 → 轮次 rev1 → 4 次分配 rev5 → 双评委各 2 项评分 rev9 → 组织者排名（各 2 有效评委、total 5）→ 定稿 rev10 |
 | 冷重启恢复 | NOT_RUN | 待 T 线状态持久化后复验 |
 | 原基线不回归 | **PASS** | `bun test --isolate` 4747 pass / 0 fail / 5 skip；D4 50 套、学年解耦、看门狗用例均在 |
 
