@@ -108,6 +108,20 @@ describe('V3 R01 T03 Run evidence gate (pure business contract)', () => {
     }
   })
 
+  test('a different documentId cannot reuse an old versionId and hash', () => {
+    const moved = aggregate({ caseV2: { ...aggregate().caseV2, documents: [
+      { ...document, documentId: 'another-document-id' },
+    ] } })
+    expect(gate('stage-pass', run(), moved).allowed).toBe(false)
+  })
+
+  test('effective verdict counter must match actual compliant and non-compliant checks', () => {
+    const bad = run([check('people')], { coverage: {
+      documents: [], plannedChecks: 1, completedChecks: 1, effectiveVerdicts: 0, pendingChecks: 0,
+    } })
+    expect(gate('stage-pass', bad).allowed).toBe(false)
+  })
+
   test('full snapshot validation is Main-owned: observation, field, parse revisions also stale Run', () => {
     expect(gate('stage-pass', run(), aggregate(), evidence({ inputSnapshotFresh: false })).allowed).toBe(false)
     expect(gate('stage-pass', run(), aggregate(), undefined).allowed).toBe(false)
