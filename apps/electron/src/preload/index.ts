@@ -4035,6 +4035,10 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_D4_ATTACH_PLAN_V3,input) as Promise<{
       caseId:string;templateId:string;templateVersion:number;checks:number;fingerprint:string
     }>,
+  attachB1TechnicalPlanV3: (input:{caseId:string;templateId:string;fingerprint:string}) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_B1_ATTACH_PLAN_V3,input) as Promise<{
+      caseId:string;templateId:string;templateVersion:number;checks:number;fingerprint:string
+    }>,
   /** Native Main Case source bytes rehashed and staged into real B2/B30 candidate read. */
   readLocalNativeProductV3: (caseId:string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_CURRENT_V3,caseId) as Promise<import('../main/lib/review/review-v3-main-local-product-intake').C11MainLocalProductRead>,
