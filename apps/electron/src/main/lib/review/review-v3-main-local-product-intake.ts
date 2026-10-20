@@ -230,6 +230,21 @@ export function installC11LocalNativeProductIntake():void {
       s.interrupted=true
       return read(event,caseId)
     })
+  /**
+   * T02 只读暂存预览（Local-L04 桥接）。
+   *
+   * 复用本文件已有的 `session(event, caseId)` 派生 B2MainContext，绝不
+   * 接受渲染层传入的任意物理路径；产物是 staging-only 预览，不产生
+   * DocumentVersion，也不改变案卷。
+   */
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T02_STAGED_INVENTORY_V3,
+    async (event:IpcMainInvokeEvent,caseId:string)=>{
+      if(typeof caseId!=='string'||!caseId)throw new Error('参数 caseId 非法')
+      const {s}=session(event,caseId)
+      const {previewT02StagedInventory}=
+        require('./review-v3-t02-staged-source-preview') as typeof import('./review-v3-t02-staged-source-preview')
+      return previewT02StagedInventory(s.ctx,s.staging)
+    })
   ipcMain.handle(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_UNMATCHED_V3,
     (event:IpcMainInvokeEvent,input:{
       caseId:string;intent:B29HumanAuthorIntent

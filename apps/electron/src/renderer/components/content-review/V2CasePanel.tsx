@@ -14,6 +14,7 @@ import { RunResultPanel } from './RunResultPanel'
 import { ObservationConfirmPanel } from './ObservationConfirmPanel'
 import { ReviewAssignmentCard } from './ReviewAssignmentCard'
 import { CaseTimelinePanel } from './CaseTimelinePanel'
+import { ReviewV3T02CoverageSection } from './ReviewV3T02CoverageSection'
 import { ReviewV3T03FactWorkbench } from './ReviewV3T03FactWorkbench'
 import { ReviewV3T05HumanWorkflow } from './ReviewV3T05HumanWorkflow'
 import { ReviewV3T05RunDecision } from './ReviewV3T05RunDecision'
@@ -376,6 +377,8 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
             <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
             <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
+            {/* T02 材料来源覆盖（只读暂存预览，不产生原件） */}
+            <ReviewV3T02CoverageSection caseId={current.caseV2.id} />
             {/* T03 事实确认与证据多对多：与观察项面板同一案卷上下文 */}
             <ReviewV3T03FactWorkbench />
             <ReviewAssignmentCard caseId={current.caseV2.id} />

@@ -602,6 +602,8 @@ export const REVIEW_IPC_CHANNELS = {
   T07_APPLY_ACTION: 'review-v3:t07-apply-action',
   /** T07 建立评分轮次（仅组织者、仅首次） */
   T07_INIT_STATE: 'review-v3:t07-init-state',
+  /** T02 暂存来源只读预览（Main 派生 B2 ctx；不产生 DocumentVersion） */
+  T02_STAGED_INVENTORY_V3: 'review-v3:t02-staged-inventory',
   /** T09 签发学生离线应答包 */
   T09_ISSUE_STUDENT: 'review-v3:t09-issue-student',
   /** T09 预览离线回件（只校验不写入） */

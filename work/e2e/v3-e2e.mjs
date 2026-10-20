@@ -1298,6 +1298,26 @@ const scenarios = {
       .replace('__POLL__', JSON.stringify(process.env.E2E_POLL_MS ?? '900000')))
   },
 
+  /** T02 只读暂存预览：真实案卷 → Main 派生 B2 ctx → 覆盖统计 */
+  async 'flow-t02-coverage'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const created = await api.createCase({ title: 'T02 覆盖案卷', type: '自定义审核', applicant: 'E2E',
+        domainPackId: 'contract-review', reviewTemplate: null })
+      await api.importDocumentFromPath({ caseId: created.id, sourcePath: __PDF__, role: 'evidence' })
+      await api.importDocumentFromPath({ caseId: created.id, sourcePath: __DOCX__, role: 'evidence' })
+      try {
+        const inv = await api.getT02StagedInventory(created.id)
+        return { ok: true, caseId: created.id, total: inv.total, parsed: inv.parsed,
+          partial: inv.partial, failed: inv.failed, images: inv.imagesAwaitingInspection,
+          sources: (inv.sources ?? []).map(s => ({ name: s.fileName, status: s.parseStatus,
+            blocks: s.blocks?.length ?? 0 })) }
+      } catch (error) { return { ok: false, caseId: created.id, error: String(error?.message ?? error) } }
+    `
+      .replace('__PDF__', JSON.stringify(process.env.E2E_PDF_PATH ?? ''))
+      .replace('__DOCX__', JSON.stringify(process.env.E2E_DOCX_PATH ?? '')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

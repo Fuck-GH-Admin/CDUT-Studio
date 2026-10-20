@@ -4719,6 +4719,16 @@ const reviewAPI = {
     updatedAt: string
     view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
   }>,
+  /** T02 暂存来源只读预览（Main 派生 B2 ctx；不产生 DocumentVersion） */
+  getT02StagedInventory: (caseId: string) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T02_STAGED_INVENTORY_V3, caseId) as Promise<{
+      schemaVersion: 'review-v3-t02-staged-inventory/1'
+      candidateOnly: true
+      checkpoint: 'staging-only'
+      total: number; parsed: number; partial: number; failed: number
+      imagesAwaitingInspection: number
+      sources: import('../main/lib/review/review-v3-t02-staged-source-preview').T02StagedSourcePreview[]
+    }>,
   /** T09 签发学生离线应答包 */
   issueT09StudentPackage: (input: {
     caseId: string; supplementId: string; recipientId: string
