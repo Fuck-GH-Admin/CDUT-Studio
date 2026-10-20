@@ -1157,11 +1157,22 @@ export class AgentOrchestrator {
           backgroundTasksPending: true,
         })
     }
+      /**
+       * 终止本轮并标记失败。
+       *
+       * 必须把真实原因作为 resultErrors 传下去：owner（后台审核）据此写入
+       * run.error。只置 runEndedWithError 会让 owner 只拿到 endReasonLabel
+       * （「执行出错」），真实原因丢失，违反「失败可追踪」。
+       */
       const failRun = (error: string, messages?: AgentMessage[], opts?: CompleteOptions): void => {
-      callbacks.onError(error)
-      runEndedWithError = true
-      completeRun(messages, opts)
-    }
+        callbacks.onError(error)
+        runEndedWithError = true
+        completeRun(messages, {
+          ...opts,
+          resultSubtype: opts?.resultSubtype ?? 'error_during_execution',
+          resultErrors: opts?.resultErrors ?? [error],
+        })
+      }
 
     // 3. 构建本轮专属 SDK 环境。绝不修改主进程 process.env，避免并发 session 串扰凭证。
     const configuredModelId = modelId || DEFAULT_MODEL_ID
