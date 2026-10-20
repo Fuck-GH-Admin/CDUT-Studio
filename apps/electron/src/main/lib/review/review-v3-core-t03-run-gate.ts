@@ -233,3 +233,32 @@ export function assessT03RunAction(input: {
   }
   return { action, allowed: blockers.length === 0, runCurrent, blockers, nonCompliantCheckIds }
 }
+
+
+/**
+ * Replacement for T05's legacy currentT05Run scan.
+ * A caller in trusted Main supplies the RunStore list and the exact freshness/
+ * Plan binding proof for each candidate. This avoids the old, nonexistent
+ * inputManifest.documents field and never treats a subset of old files as
+ * proof that the Run is current.
+ *
+ * This does not load storage itself: the sole RunStore remains owned by Main.
+ */
+export function selectT03CurrentRun(input: {
+  aggregate: CaseAggregateV2
+  runs: readonly ReviewRunV2[]
+  prove: (run: ReviewRunV2) => T03TrustedRunEvidence | undefined
+}): ReviewRunV2 | undefined {
+  for (let index = input.runs.length - 1; index >= 0; index -= 1) {
+    const candidate = input.runs[index]
+    if (!candidate || !['completed', 'partially-completed'].includes(candidate.status)) continue
+    const result = assessT03RunAction({
+      aggregate: input.aggregate,
+      run: candidate,
+      action: 'final-reject',
+      evidence: input.prove(candidate),
+    })
+    if (result.runCurrent) return candidate
+  }
+  return undefined
+}
