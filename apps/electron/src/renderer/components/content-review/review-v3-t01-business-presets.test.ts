@@ -25,7 +25,7 @@ describe('T01 configurable business templates',()=>{
     expect(template.objectType).toBe('organization')
     expect(template.fields.some(f=>f.key==='academicYear')).toBe(false)
     expect(template.rubric).toBeUndefined()
-    expect(template.fields.find(f=>f.key==='peopleCount')).toMatchObject({kind:'number',min:1,max:20})
+    expect(template.fields.find(f=>f.key==='peopleCount')).toMatchObject({kind:'number',min:1,max:undefined})
     expect(template.stages.map(s=>s.kind)).toEqual(['auto-check','manual-review','manual-review'])
     expect(template.stages.map(s=>s.nextStageId)).toEqual(['first-review','final-review',undefined])
     expect(template.materialSlots.map(s=>s.id)).toContain('plan')
@@ -38,10 +38,12 @@ describe('T01 configurable business templates',()=>{
     expect(output.issues.some(issue=>issue.includes('参加人数'))).toBe(true)
   })
 
-  test('headcount 21 fails, 20 passes form/material trial but does not imply business decision',()=>{
+  test('headcount 21 is captured for an actual T04 non-compliant check, not rejected by form max',()=>{
     const template=make('laboratory')
     const values={organization:'实验室协会',contact:'申请人',peopleCount:21,useDate:'2026-11-01',timePeriod:'14:00-16:00',purpose:'培训'}
-    expect(trialT01Template(template,values,{plan:1}).issues).toContain('字段「参加人数」超出有效数值范围')
+    const exceeding=trialT01Template(template,values,{plan:1})
+    expect(exceeding.status).toBe('ready-for-human-review')
+    expect(exceeding.note).toContain('未执行制度规则')
     const accepted=trialT01Template(template,{...values,peopleCount:20},{plan:1})
     expect(accepted.status).toBe('ready-for-human-review')
     expect(accepted.checksForReview).toBe(3)

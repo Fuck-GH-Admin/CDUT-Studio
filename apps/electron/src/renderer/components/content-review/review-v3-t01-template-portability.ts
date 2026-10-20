@@ -1,5 +1,6 @@
 /** T01 portable no-code template draft: data only, never an approval or policy signature. */
 import type { TemplateVersion } from '@profer/shared'
+import { resetT01ImportedConfirmations } from './review-v3-t01-typed-criteria'
 
 export interface T01TemplateEnvelope {
   format:'review-t01-template/1'
@@ -23,9 +24,9 @@ export function importT01Template(raw:string,templateId:string,createdAt:string)
     !Array.isArray(t.outputs)||!Array.isArray(t.policyVersionIds)||
     !['person','organization','project','document','transaction','custom'].includes(t.objectType))
       throw Error('T01_IMPORT_TEMPLATE_INVALID')
-  return {
+  return resetT01ImportedConfirmations({
     ...t,templateId,version:1,createdAt,status:'draft',catalogKind:'custom',
     sourceNote:[t.sourceNote,'外部导入草稿：发布前核实制度版本与来源。'].filter(Boolean).join(' '),
     publishedAt:undefined,
-  }
+  })
 }

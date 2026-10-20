@@ -3,6 +3,7 @@
  * form/material trial. Uses the existing V2 template store and workflow contract.
  * No school authority, Case/Run writes or fabricated review verdicts.
  */
+import { setT01NumberLimit } from './review-v3-t01-typed-criteria'
 import type { FieldSpec, MaterialSlotSpec, TemplateCriterionSpec, TemplateSectionSpec, TemplateVersion, WorkflowStageSpec, ConditionAST } from '@profer/shared'
 
 export type T01ScenarioId = 'student' | 'activity' | 'scholarship' | 'judging' | 'expense' | 'agreement' | 'laboratory'
@@ -60,11 +61,14 @@ export function createT01Scenario(id: T01ScenarioId, templateId: string, created
       ...base, name:'实验室使用申请（无评分示例）', objectType:'organization',
       description:'组织提出实验室借用申请；人数≤20；申请计划必交；初审、终审均由本地具名人员处理。',
       displayName:{ template:'{{organization}} · 实验室申请' },
-      fields:[field('organization','申请组织'),field('contact','负责人'),field('peopleCount','参加人数','number',{min:1,max:20,unit:'人'}),
+      fields:[field('organization','申请组织'),field('contact','负责人'),field('peopleCount','参加人数','number',{min:1,unit:'人'}),
         field('useDate','使用日期','date'),field('timePeriod','使用时段'),field('purpose','用途说明')],
       materialSlots:[slot('plan','申请计划附件',['组织','人员','时间','用途'])],
       sections:[section('eligibility','借用条件',[
-        criterion('count','人数上限','申请参加人数不得超过20；人数缺失时必须补充证明。','manual'),
+        setT01NumberLimit(criterion('count','人数上限','申请参加人数不得超过20；人数缺失时必须补充证明。','deterministic'), {
+          schemaVersion: 1, kind: 'field-number-limit', fieldKey: 'peopleCount',
+          fieldScope: 'case', operator: 'lte', threshold: 20, unit: '人',
+        }),
         criterion('time','日期与时段','核对日期、时段及申请计划是否一致；场地可用性由管理人员确认。'),
         criterion('plan','申请计划','须提交包括使用目的、参加人员与安全安排的计划附件。')])],
       outputs:[{id:'approval',kind:'approval',audience:'teacher'},{id:'supplements',kind:'supplement-list',audience:'student'}],
