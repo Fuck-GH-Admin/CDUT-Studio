@@ -7,6 +7,8 @@ import { useAtomValue } from 'jotai'
 import type { CaseAggregateV2, FieldValue, SourceRef } from '@profer/shared'
 import { reviewWorkspaceAggregateAtom, reviewWorkspaceExtractedObservationsAtom, reviewWorkspaceRunAtom } from '@/atoms/review-atoms'
 import { useReviewWorkspaceActions } from './use-review-workspace-actions'
+import { ReviewV3T03RestructurePanel } from './ReviewV3T03RestructurePanel'
+import type { T03RestructureProposal } from '../../../main/lib/review/review-v3-t03-subject-restructure'
 import { parseT03Correction, planT03Recheck, projectT03Evidence, projectT03Facts, type T03ExtractedFact } from '../../../main/lib/review/review-v3-t03-fact-workflow'
 
 function asValue(value: unknown): FieldValue {
@@ -38,7 +40,7 @@ function readRef(raw: unknown, aggregate: CaseAggregateV2): SourceRef | null {
     ...(typeof ref.quote === 'string' ? { quote: ref.quote } : {}),
   }
 }
-export function ReviewV3T03FactWorkbench(): React.ReactElement {
+export function ReviewV3T03FactWorkbench({ onRestructure }: { onRestructure?: (proposal: T03RestructureProposal) => Promise<void> } = {}): React.ReactElement {
   const aggregate = useAtomValue(reviewWorkspaceAggregateAtom)
   const extracted = useAtomValue(reviewWorkspaceExtractedObservationsAtom)
   const run = useAtomValue(reviewWorkspaceRunAtom)
@@ -187,5 +189,6 @@ export function ReviewV3T03FactWorkbench(): React.ReactElement {
         </div> : <p className="text-xs text-muted-foreground">案卷尚无证明文档。</p>}
       </div>
     </div>
+    <ReviewV3T03RestructurePanel aggregate={aggregate} run={run} onApply={onRestructure} />
   </section>
 }
