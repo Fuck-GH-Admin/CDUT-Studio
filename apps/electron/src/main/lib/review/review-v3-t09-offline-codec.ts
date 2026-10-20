@@ -25,6 +25,8 @@ export type T09State = {
   caseId: string; revision: number; lock: T09Lock
   supplements: Record<string, 'open' | 'responded' | 'insufficient' | 'satisfied' | 'cancelled'>
   assignments: Record<string, { reviewerId: string; rubricVersion: number; status: 'assigned' | 'submitted' | 'missing'; recused: boolean }>
+  /** Main may supply a version-to-version summary for user-visible conflict preview. */
+  changesSinceIssue?: Array<{ field: string; previous: string; current: string }>
 }
 export type T09Preview = { status: 'ready' | 'conflict' | 'rejected'; caseId: string; actionId: string; details: string[]; baseRevision: number; currentRevision: number }
 export type T09Receipt = { actionId: string; hash: string; caseId: string; status: 'accepted' | 'rejected'; newRevision?: number; message?: string }
@@ -133,7 +135,10 @@ export function previewT09Reply(reply: T09ReplyPackage, task: T09TaskPackage, st
   if (!sameLock(reply.lock, task.lock) || !sameLock(reply.lock, state.lock) || reply.baseRevision !== task.baseRevision) details.push('模板/政策/基础案卷版本不匹配')
   try { checkReply(task.task, reply.reply) } catch (error) { details.push(error instanceof Error ? error.message : String(error)) }
   if (details.length) return { ...base, status: 'rejected', details }
-  if (state.revision !== reply.baseRevision) return { ...base, status: 'conflict', details: ['案卷版本已变化，必须显示差异并重新发包，不能覆盖新内容'] }
+  if (state.revision !== reply.baseRevision) return { ...base, status: 'conflict', details: [
+    '案卷版本已变化，不能覆盖新内容。请复核并重新发出任务包。',
+    ...(state.changesSinceIssue ?? []).map(change => change.field + '：' + change.previous + ' → ' + change.current),
+  ] }
   if (reply.reply.kind === 'student-reply') {
     if (!['open', 'insufficient'].includes(state.supplements[reply.reply.supplementId] ?? '')) return { ...base, status: 'conflict', details: ['补件请求已关闭或不存在'] }
     return { ...base, status: 'ready', details: ['补件：' + reply.reply.supplementId, reply.reply.note, '附加材料 ' + reply.reply.assets.length + ' 份'] }
