@@ -2,7 +2,10 @@ import * as React from 'react'
 import type { D4ClientSelection, D4ClientTemplate, D2TargetBinding } from '@profer/shared'
 
 /** 受控候选的场景输入；只改变案卷选择，不改写冻结作者态。 */
-export function D4CaseSetup({ onChange }: { onChange: (value: D4ClientSelection | undefined) => void }): React.ReactElement {
+export function D4CaseSetup({ onChange, suggestedTemplateId }: {
+  onChange: (value: D4ClientSelection | undefined) => void
+  suggestedTemplateId?:string
+}): React.ReactElement {
   const [templates, setTemplates] = React.useState<D4ClientTemplate[]>([])
   const [templateId, setTemplateId] = React.useState('')
   const [draft, setDraft] = React.useState('')
@@ -22,6 +25,14 @@ export function D4CaseSetup({ onChange }: { onChange: (value: D4ClientSelection 
       .catch(e => { if (active) setError(String(e)) })
     return () => { active = false }
   }, [])
+  React.useEffect(()=>{
+    if(!suggestedTemplateId||!templates.length)return
+    const suggested=templates.find(t=>t.templateId===suggestedTemplateId)
+    if(!suggested)return
+    setTemplateId(suggested.templateId)
+    setDraft(JSON.stringify(suggested.selection,null,2))
+    setConfirmed(false);setStudentFixture(false);setError('')
+  },[suggestedTemplateId,templates])
   React.useEffect(() => {
     let value: D4ClientSelection | undefined
     try {
