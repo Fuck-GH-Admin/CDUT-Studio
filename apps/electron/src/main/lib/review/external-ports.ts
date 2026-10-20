@@ -30,20 +30,80 @@ export interface SchoolPort {
   push(payload: PushPayload): Promise<SyncReceipt>
 }
 
+/** 可替换的外部读取能力，不要求真实学校提供尚未授权的 API。 */
+export interface ExternalCaseSnapshot {
+  caseId: string
+  externalId: string
+  revision: number
+  fields: Record<string, unknown>
+  source: 'mock' | 'school'
+}
+export interface ExternalTaskSnapshot {
+  id: string
+  caseId: string
+  role: 'student' | 'judge' | 'reviewer'
+  actorId: string
+  status: 'open' | 'completed'
+  title: string
+}
+export interface ExternalVerification {
+  reference: string
+  result: 'verified' | 'rejected' | 'unknown'
+  source: 'mock' | 'school'
+  detail?: string
+}
+export interface SchoolReadPort extends SchoolPort {
+  capabilities(): { tasks: boolean; identity: boolean; verification: boolean; push: boolean; source: 'mock' | 'school' }
+  fetchCase(caseId: string): Promise<ExternalCaseSnapshot | undefined>
+  listTasks(caseId: string): Promise<ExternalTaskSnapshot[]>
+  verify(reference: string): Promise<ExternalVerification>
+  getReceipt(actionId: string): Promise<SyncReceipt | undefined>
+}
+
 /** Mock 校方：内存状态（caseId → externalRevision），动作幂等 */
-export class MockSchoolAdapter implements SchoolPort {
+export class MockSchoolAdapter implements SchoolReadPort {
   readonly kind = 'mock' as const
   private revisions = new Map<string, number>()
   private receipts = new Map<string, SyncReceipt>()
+  private payloadHashes = new Map<string, string>()
+  private cases = new Map<string, ExternalCaseSnapshot>()
+  private tasks = new Map<string, ExternalTaskSnapshot[]>()
+  private verifications = new Map<string, ExternalVerification>()
+  private online = true
+
+  setOnline(value: boolean): void { this.online = value }
+  seedCase(caseId: string, externalId: string, fields: Record<string, unknown>, revision = 0): void {
+    this.cases.set(caseId, { caseId, externalId, fields, revision, source: 'mock' })
+    this.revisions.set(caseId, revision)
+  }
+  seedTask(task: ExternalTaskSnapshot): void {
+    this.tasks.set(task.caseId, [...(this.tasks.get(task.caseId) ?? []), task])
+  }
+  seedVerification(reference: string, result: ExternalVerification['result'], detail?: string): void {
+    this.verifications.set(reference, { reference, result, detail, source: 'mock' })
+  }
+  capabilities() { return { tasks: true, identity: false, verification: true, push: true, source: 'mock' as const } }
+  private ensureOnline(): void { if (!this.online) throw new Error('MOCK_PORT_OFFLINE: 模拟外部服务当前断开') }
+  async fetchCase(caseId: string) { this.ensureOnline(); return this.cases.get(caseId) }
+  async listTasks(caseId: string) { this.ensureOnline(); return [...(this.tasks.get(caseId) ?? [])] }
+  async verify(reference: string): Promise<ExternalVerification> {
+    this.ensureOnline(); return this.verifications.get(reference) ?? { reference, result: 'unknown', source: 'mock' }
+  }
+  async getReceipt(actionId: string) { this.ensureOnline(); return this.receipts.get(actionId) }
   /** 测试注入口：把某案卷的外部版本拨到指定值（制造冲突） */
   seedRevision(caseId: string, revision: number): void {
     this.revisions.set(caseId, revision)
   }
 
   async push(payload: PushPayload): Promise<SyncReceipt> {
-    // 幂等：同一 actionId 重放返回同一回执（不重复执行）
+    this.ensureOnline()
+    // 幂等应包含载荷身份：同一 actionId 不允许改内容。
+    const currentHash = pushHash(payload)
     const existing = this.receipts.get(payload.actionId)
-    if (existing) return existing
+    if (existing) {
+      if (this.payloadHashes.get(payload.actionId) === currentHash) return existing
+      return { ...existing, status: 'rejected', externalReceipt: { receivedAt: new Date().toISOString(), message: '同 actionId 载荷漂移' } }
+    }
     const current = this.revisions.get(payload.caseId) ?? 0
     if (payload.baseExternalRevision !== current) {
       const receipt: SyncReceipt = {
@@ -70,6 +130,7 @@ export class MockSchoolAdapter implements SchoolPort {
       externalReceipt: { receivedAt: new Date().toISOString(), externalId: `ext-${payload.caseId}-${current + 1}` },
     }
     this.receipts.set(payload.actionId, receipt)
+    this.payloadHashes.set(payload.actionId, currentHash)
     return receipt
   }
 }
