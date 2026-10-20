@@ -45,8 +45,10 @@ describe('T01 author-confirmed numeric rule contract', () => {
     ])
     const imported = importT01Template(exportT01Template(template),'copy-a15','2026-10-21T02:00:00.000Z')
     expect(imported.status).toBe('draft')
-    expect(validateT01TypedCriteria(imported)).toEqual([])
-    expect(collectT01ConfirmedNumericChecks(imported)[0]?.constraint.threshold).toBe(20)
+    expect(readT01NumberLimit(imported.sections![0]!.criteria[0]!)?.threshold).toBe(20)
+    expect(readT01NumberLimit(imported.sections![0]!.criteria[0]!)?.ownerStatement).toBeUndefined()
+    expect(validateT01TypedCriteria(imported).join(' ')).toContain('负责人确认')
+    expect(() => collectT01ConfirmedNumericChecks(imported)).toThrow('T01_RULES_NOT_CONFIRMED')
   })
 
   test('changing numeric bounds erases old owner confirmation and requires re-signing', () => {
