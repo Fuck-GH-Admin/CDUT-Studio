@@ -522,6 +522,7 @@ export const REVIEW_IPC_CHANNELS = {
   /** Existing D4 candidate workspaces -> one native Case's technical ReviewPlan. */
   LOCAL_D4_LIST_V3: 'review-v3:local-d4-list',
   LOCAL_D4_ATTACH_PLAN_V3: 'review-v3:local-d4-attach-plan',
+  LOCAL_B1_ATTACH_PLAN_V3: 'review-v3:local-b1-attach-plan',
   /** C Main-only current B20 physical candidate preview; never a published Plan. */
   B20_CANDIDATE_READ_V3: 'review-v3:b20-candidate-read',
   /** User requests Main to show native ZIP picker for one CURRENT B20 selected archive. */
