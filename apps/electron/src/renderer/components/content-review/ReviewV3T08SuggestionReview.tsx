@@ -28,6 +28,7 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
   const [requiredElements, setRequiredElements] = React.useState('')
   const [supplementReason, setSupplementReason] = React.useState('')
   const [draft, setDraft] = React.useState('')
+  const [reviewNote, setReviewNote] = React.useState(opinion.suggestionText)
   const [confirmed, setConfirmed] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [notice, setNotice] = React.useState('')
@@ -86,7 +87,15 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
       <strong>人工审阅 AI 建议 · {opinion.title}</strong>
       <button type="button" className="rounded border px-2 py-1" onClick={onClose}>关闭</button>
     </header>
-    <p className="whitespace-pre-wrap">{opinion.suggestionText}</p>
+    <label className="block space-y-1">AI 原建议（可审阅编辑的临时草案，不自动执行）
+      <textarea className="w-full rounded border bg-background p-2" rows={3}
+        value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} />
+    </label>
+    <button type="button" className="rounded border px-2 py-1" onClick={() => {
+      void navigator.clipboard.writeText(reviewNote)
+        .then(() => setNotice('草案已复制；修改仍需通过下方明确的人工确认操作。'))
+        .catch((error) => setNotice('复制草案失败：' + String(error)))
+    }}>复制临时草案</button>
     <p className="text-muted-foreground">关联 Run：{run.id}；当前案卷 revision {aggregate.caseV2.revision}。准确定位来源 {located}/{sources.length}，无法核对的来源不得视作证据。</p>
     {sources.map((source, index) => <p key={index} className="text-muted-foreground">{source.label} · {source.state}</p>)}
     {stale && <p className="text-amber-700">本次 Run 已过期；刷新并重新核查后才能应用。</p>}
