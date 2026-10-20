@@ -37,7 +37,41 @@ export interface T05AppealPorts {
   withdrawAppeal?: (input: { requestId: string; caseId: string; expectedRevision: number; appealId: string }) => Promise<ReviewCommandResult | undefined>
 }
 
-interface Props extends T05AppealPorts {
+/**
+ * Main-issued read projection: not an authorization token. The actual command
+ * must independently resolve actor, stage, and current ReviewRun in Main.
+ * Enables teacher final stages without forging a renderer actor.
+ */
+export interface T05TrustedStageCapability {
+  mode: 'local-business'
+  actorLabel: string
+  actorRole: 'reviewer' | 'teacher'
+  eligibleTaskIds: string[]
+  hasCurrentRun: boolean
+}
+
+export interface T05TrustedStageCommand {
+  caseId: string
+  templateId: string
+  version: number
+  expectedRevision: number
+  taskId: string
+  action: StageAction
+  reason: string
+  supplementRequiredElements?: string[]
+  supplementReason?: string
+}
+
+export interface T05TrustedStagePorts {
+  stageCapability?: T05TrustedStageCapability
+  /**
+   * No actor or fabricated runId from the renderer. Main verifies the
+   * actual Run and decides which actor can act on the task.
+   */
+  recordTrustedStageDecision?: (input: T05TrustedStageCommand) => Promise<ReviewCommandResult | undefined>
+}
+
+interface Props extends T05AppealPorts, T05TrustedStagePorts {
   aggregate: CaseAggregateV2
   onResult: (result: ReviewCommandResult | undefined) => void
 }
@@ -185,6 +219,7 @@ function SupplementCard({
 
 export function ReviewV3T05HumanWorkflow({
   aggregate, onResult, submitAppeal, reviewAppeal, withdrawAppeal,
+  stageCapability, recordTrustedStageDecision,
 }: Props): JSX.Element {
   const caseId = aggregate.caseV2.id
   const [selectedTaskId, setSelectedTaskId] = useState('')
@@ -203,9 +238,15 @@ export function ReviewV3T05HumanWorkflow({
   const [amendedResult, setAmendedResult] = useState<T05AppealReview['amendedResult']>('pass')
 
   const openTasks = aggregate.tasks.filter((task) => task.status === 'open')
-  const reviewerTasks = openTasks.filter((task) =>
-    task.assigneeRole === 'reviewer' && (!task.assigneeActorId || task.assigneeActorId === 'local-reviewer'))
-  const task = reviewerTasks.find((current) => current.id === selectedTaskId) ?? reviewerTasks[0]
+  // Stage capabilities come from trusted Main, not a role picker in Renderer.
+  // Legacy reviewer controls remain available for pre-existing local cases
+  // until L replaces them with the stage command backed by a real ReviewRun.
+  const eligibleTasks = stageCapability
+    ? openTasks.filter((task) => stageCapability.eligibleTaskIds.includes(task.id)
+      && task.assigneeRole === stageCapability.actorRole)
+    : openTasks.filter((task) => task.assigneeRole === 'reviewer'
+      && (!task.assigneeActorId || task.assigneeActorId === 'local-reviewer'))
+  const task = eligibleTasks.find((current) => current.id === selectedTaskId) ?? eligibleTasks[0]
   const unresolvedSupplements = aggregate.supplements.filter((request) => !terminalSupplement.has(request.status))
   const effectiveDecisions = useMemo(() => {
     const overwritten = new Set(aggregate.decisions.map((decision) => decision.amendsDecisionId).filter(Boolean))
@@ -216,8 +257,15 @@ export function ReviewV3T05HumanWorkflow({
   const activeDocuments = aggregate.caseV2.documents.filter((document) => document.active !== false)
   const pendingAppeals = aggregate.appeals.filter((appeal) => appeal.status === 'submitted' || appeal.status === 'in-review')
   const chosenAppeal = pendingAppeals.find((appeal) => appeal.id === appealReviewId) ?? pendingAppeals[0]
-  const technicalPreReview = Boolean(aggregate.d2RuntimePlan || aggregate.canonicalPlan)
+  // CanonicalPlan alone is not proof of technical-only semantics: the new
+  // local-business path may also own an executable Plan. Main must explicitly
+  // attest that the case supports local-business stage decisions.
+  const technicalPreReview = Boolean(aggregate.d2RuntimePlan
+    || (aggregate.canonicalPlan && stageCapability?.mode !== 'local-business'))
+  const runRequired = action !== 'return-for-supplement'
+  const missingCurrentRun = Boolean(stageCapability && runRequired && !stageCapability.hasCurrentRun)
   const stageDisabled = technicalPreReview || unresolvedSupplements.length > 0 || !task
+    || Boolean(stageCapability && !recordTrustedStageDecision) || missingCurrentRun
 
   useEffect(() => {
     setSelectedTaskId('')
@@ -249,26 +297,37 @@ export function ReviewV3T05HumanWorkflow({
     if (!task || !reason.trim()) return
     const required = parseElements(elements)
     if (action === 'return-for-supplement' && (required.length === 0 || !supplementReason.trim())) return
-    const succeeded = await execute(() => window.reviewAPI.recordStageDecisionV2({
-      caseId,
-      templateId: aggregate.caseV2.templateId,
-      version: aggregate.caseV2.templateVersion,
-      command: {
-        requestId: newRequestId('t05-stage'),
-        target: { kind: 'case', id: caseId },
-        expectedRevision: aggregate.caseV2.revision,
-        actor: localReviewer,
-        type: 'RecordStageDecision',
-        payload: {
+    const succeeded = await execute(() => stageCapability && recordTrustedStageDecision
+      ? recordTrustedStageDecision({
+          caseId,
+          templateId: aggregate.caseV2.templateId,
+          version: aggregate.caseV2.templateVersion,
+          expectedRevision: aggregate.caseV2.revision,
           taskId: task.id,
           action,
           reason: reason.trim(),
           ...(action === 'return-for-supplement'
             ? { supplementRequiredElements: required, supplementReason: supplementReason.trim() }
             : {}),
-        },
-      },
-    }))
+        })
+      : window.reviewAPI.recordStageDecisionV2({
+          caseId,
+          templateId: aggregate.caseV2.templateId,
+          version: aggregate.caseV2.templateVersion,
+          command: {
+            requestId: newRequestId('t05-stage'),
+            target: { kind: 'case', id: caseId },
+            expectedRevision: aggregate.caseV2.revision,
+            actor: localReviewer,
+            type: 'RecordStageDecision',
+            payload: {
+              taskId: task.id, action, reason: reason.trim(),
+              ...(action === 'return-for-supplement'
+                ? { supplementRequiredElements: required, supplementReason: supplementReason.trim() }
+                : {}),
+            },
+          },
+        }))
     if (succeeded) { setReason(''); setElements(''); setSupplementReason('') }
   }
 
@@ -291,13 +350,17 @@ export function ReviewV3T05HumanWorkflow({
       <section className="space-y-2 rounded-md bg-muted/30 p-2">
         <h4 className="font-medium">阶段待办与人工决定</h4>
         {openTasks.length > 0 && <p className="text-muted-foreground">当前任务：{openTasks.map((entry) => entry.stageId + '（第 ' + entry.round + ' 轮，' + entry.assigneeRole + '）').join('、')}</p>}
-        {reviewerTasks.length === 0 ? (
-          <p className="text-muted-foreground">当前没有本地审核员可操作的阶段任务。教师、评委和学校角色的任务不能在本地伪造身份处理。</p>
+        {stageCapability && <p className="text-muted-foreground">
+          当前本地操作者：{stageCapability.actorLabel}（{stageCapability.actorRole === 'teacher' ? '终审' : '初审'}），
+          由 Main 判定可处理任务与审核运行。
+        </p>}
+        {eligibleTasks.length === 0 ? (
+          <p className="text-muted-foreground">当前身份没有可操作的阶段任务。终审请切换至 Main 确认的本地终审身份；不能在界面伪造教师或校方授权。</p>
         ) : (
           <>
             <select className="w-full rounded border bg-background px-2 py-1" value={task?.id ?? ''}
               onChange={(event) => setSelectedTaskId(event.target.value)}>
-              {reviewerTasks.map((entry) => <option key={entry.id} value={entry.id}>{entry.stageId} · 第 {entry.round} 轮</option>)}
+              {eligibleTasks.map((entry) => <option key={entry.id} value={entry.id}>{entry.stageId} · 第 {entry.round} 轮</option>)} 
             </select>
             <select className="w-full rounded border bg-background px-2 py-1" value={action}
               onChange={(event) => setAction(event.target.value as StageAction)}>
@@ -317,6 +380,8 @@ export function ReviewV3T05HumanWorkflow({
               </>
             )}
             {unresolvedSupplements.length > 0 && <p className="text-muted-foreground">仍有未结束的补件请求，应先逐项核对；当前不会提前放行阶段决定。</p>}
+            {missingCurrentRun && <p className="text-muted-foreground">当前尚无经 Main 核实且未过期的真实 ReviewRun。必须先完成审核，或先选择“退回合并补件清单”处理缺少材料。</p>}
+            {stageCapability && !recordTrustedStageDecision && <p className="text-muted-foreground">业务阶段写入尚未接入 Main；不可在 Renderer 用模拟身份代写。</p>}
             <Button size="sm" disabled={busy || stageDisabled || !reason.trim()
               || (action === 'return-for-supplement' && (!parseElements(elements).length || !supplementReason.trim()))}
               onClick={() => void decideStage()}>记录当前阶段决定</Button>
@@ -364,7 +429,7 @@ export function ReviewV3T05HumanWorkflow({
         <select className="w-full rounded border bg-background px-2 py-1" value={appealDecisionId}
           onChange={(event) => setAppealDecisionId(event.target.value)}>
           <option value="">选择要申诉的业务决定</option>
-          {effectiveDecisions.map((decision) => (
+          {effectiveDecisions.filter((decision) => decision.finality === 'final').map((decision) => (
             <option key={decision.id} value={decision.id}>{decisionLabel[decision.result] ?? decision.result} · {decision.id}</option>
           ))}
         </select>
