@@ -51,6 +51,15 @@ export function buildB3RouteView(
     authority:'technical-candidate-only',
   }
 }
+/** Text search never converts a held template into a selectable one. */
+export function filterB3Catalog(
+ options:readonly B3ManualCatalogEntry[],query:string,
+):B3ManualCatalogEntry[]{
+ const needle=query.trim().toLocaleLowerCase()
+ return !needle?[...options]:options.filter(item=>
+  [item.name,item.templateId,item.templateVersion].some(value=>
+   value.toLocaleLowerCase().includes(needle)))
+}
 export function requireB3VisibleManualChoice(
   catalog:readonly B3ManualCatalogEntry[],
   templateId:string,templateVersion:string,
