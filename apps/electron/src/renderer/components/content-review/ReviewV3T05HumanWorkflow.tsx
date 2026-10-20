@@ -9,9 +9,10 @@ import { Button } from '@profer/ui/primitives/button'
 
 type StageAction = 'stage-pass' | 'return-for-supplement' | 'return-to-previous-stage' | 'final-reject'
 type SupplementOutcome = 'satisfied' | 'insufficient' | 'cancelled'
-type AppealResolution = 'maintain-original' | 'amend-original' | 'withdrawn'
+type AppealResolution = 'maintain-original' | 'amend-original'
 
 export interface T05AppealSubmission {
+  requestId: string
   caseId: string
   expectedRevision: number
   againstDecisionId: string
@@ -20,6 +21,7 @@ export interface T05AppealSubmission {
 }
 
 export interface T05AppealReview {
+  requestId: string
   caseId: string
   expectedRevision: number
   appealId: string
@@ -32,6 +34,7 @@ export interface T05AppealReview {
 export interface T05AppealPorts {
   submitAppeal?: (input: T05AppealSubmission) => Promise<ReviewCommandResult | undefined>
   reviewAppeal?: (input: T05AppealReview) => Promise<ReviewCommandResult | undefined>
+  withdrawAppeal?: (input: { requestId: string; caseId: string; expectedRevision: number; appealId: string }) => Promise<ReviewCommandResult | undefined>
 }
 
 interface Props extends T05AppealPorts {
@@ -181,7 +184,7 @@ function SupplementCard({
 }
 
 export function ReviewV3T05HumanWorkflow({
-  aggregate, onResult, submitAppeal, reviewAppeal,
+  aggregate, onResult, submitAppeal, reviewAppeal, withdrawAppeal,
 }: Props): JSX.Element {
   const caseId = aggregate.caseV2.id
   const [selectedTaskId, setSelectedTaskId] = useState('')
@@ -381,7 +384,7 @@ export function ReviewV3T05HumanWorkflow({
           onClick={() => void (async () => {
             if (!submitAppeal) return
             const ok = await execute(() => submitAppeal({
-              caseId, expectedRevision: aggregate.caseV2.revision, againstDecisionId: appealDecisionId,
+              requestId: newRequestId('t05-appeal'), caseId, expectedRevision: aggregate.caseV2.revision, againstDecisionId: appealDecisionId,
               statement: appealStatement.trim(), newEvidenceDocumentVersionIds: appealDocuments,
             }))
             if (ok) { setAppealStatement(''); setAppealDocuments([]) }
@@ -400,7 +403,6 @@ export function ReviewV3T05HumanWorkflow({
               onChange={(event) => setAppealResolution(event.target.value as AppealResolution)}>
               <option value="maintain-original">维持原决定</option>
               <option value="amend-original">更正原决定（追加关联决定）</option>
-              <option value="withdrawn">撤回申诉</option>
             </select>
             {appealResolution === 'amend-original' && (
               <select className="w-full rounded border bg-background px-2 py-1" value={amendedResult}
@@ -418,13 +420,19 @@ export function ReviewV3T05HumanWorkflow({
               onClick={() => void (async () => {
                 if (!reviewAppeal) return
                 const ok = await execute(() => reviewAppeal({
-                  caseId, expectedRevision: aggregate.caseV2.revision, appealId: chosenAppeal.id,
+                  requestId: newRequestId('t05-appeal-review'), caseId, expectedRevision: aggregate.caseV2.revision, appealId: chosenAppeal.id,
                   resolution: appealResolution, reason: appealReason.trim(),
                   ...(appealResolution === 'amend-original' ? { amendedResult } : {}),
                 }))
                 if (ok) setAppealReason('')
               })()}>保存复核结论</Button>
-            {!reviewAppeal && <p className="text-muted-foreground">复核端口需要可信教师/复核人身份；本地审核员不会伪装该角色。</p>}
+            {!reviewAppeal && <p className="text-muted-foreground">复核端口需要可信教师/独立复核人身份；本地审核员不会伪装该角色。</p>}
+            <Button size="sm" variant="outline" disabled={busy || !withdrawAppeal}
+              onClick={() => void execute(() => withdrawAppeal!({
+                requestId: newRequestId('t05-appeal-withdraw'), caseId,
+                expectedRevision: aggregate.caseV2.revision, appealId: chosenAppeal.id,
+              }))}>由原申诉人撤回</Button>
+            {!withdrawAppeal && <p className="text-muted-foreground">撤回须由可信 Main 识别原申诉人，不允许复审人代撤回。</p>}
           </div>
         )}
       </section>
