@@ -15,6 +15,7 @@ import {
   resolveT05BusinessMode, t05ActionEligibility, registerT05LocalBusinessConfirmation,
   clearT05LocalBusinessConfirmations,
 } from './review-v3-t05-main-service'
+import type { CaseAggregateV2, ReviewCaseV2, ReviewRunV2 } from '@profer/shared'
 import { saveRunV2 } from './run-store-v2'
 import { computeRunInputHash } from './run-service-v2'
 
@@ -26,21 +27,26 @@ afterEach(() => { clearT05LocalBusinessConfirmations() })
 
 let runSeq = 0
 
-function aggregate(overrides: Record<string, unknown> = {}) {
+/** 案卷夹具：保持真实类型，避免 `as never` 造成属性访问不可检查。 */
+function caseFixture(): ReviewCaseV2 {
   return {
-    caseV2: {
-      id: 'case-arch', revision: 5, templateId: 'tpl-arch', templateVersion: 1,
-      stage: 'submitted', documents: [], caseFields: {}, subjects: [],
-    },
+    id: 'case-arch', revision: 5, templateId: 'tpl-arch', templateVersion: 1,
+    stage: 'submitted', documents: [], caseFields: {}, subjects: [],
+  } as unknown as ReviewCaseV2
+}
+
+function aggregate(overrides: Record<string, unknown> = {}): CaseAggregateV2 {
+  return {
+    caseV2: caseFixture(),
     tasks: [], decisions: [], supplements: [], dispositions: [], receiptLog: [],
     observations: [], evidenceLinks: [],
     ...overrides,
-  } as never
+  } as unknown as CaseAggregateV2
 }
 
 function run(checks: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) {
   runSeq += 1
-  const caseV2 = aggregate().caseV2 as never
+  const caseV2 = aggregate().caseV2
   // 输入哈希必须与案卷当前快照一致，否则该 Run 按 D3 就是过期运行
   const realHash = computeRunInputHash(caseV2, [], [])
   const value = {
@@ -51,7 +57,7 @@ function run(checks: Array<Record<string, unknown>>, extra: Record<string, unkno
     checkpoints: [], artifacts: [], opinions: [],
     checks,
     ...extra,
-  } as never
+  } as unknown as ReviewRunV2
   saveRunV2(value)
   return value
 }
@@ -124,7 +130,7 @@ describe('D3 按动作适格判定', () => {
   test('具名例外（waived）后非合规项不再阻断通过', () => {
     const persisted = run([{ checkId: 'headcount', ruleId: 'r1', status: 'non-compliant' }])
     const e = t05ActionEligibility(
-      aggregate({ dispositions: [{ findingKey: 'headcount', disposition: 'waived', actor: 'local-reviewer', reason: '具名例外', at: '', runId: (persisted as { id: string }).id }] }),
+      aggregate({ dispositions: [{ findingKey: 'headcount', disposition: 'waived', actor: 'local-reviewer', reason: '具名例外', at: '', runId: persisted.id }] }),
       persisted)
     expect(e.readiness).toBe('ready')
     expect(e.allowed['stage-pass']).toBe(true)
@@ -133,7 +139,7 @@ describe('D3 按动作适格判定', () => {
   test('计划覆盖不足阻断通过', () => {
     const e = t05ActionEligibility(aggregate(), run(
       [{ checkId: 'c1', ruleId: 'r1', status: 'compliant' }],
-      { inputManifest: { hash: computeRunInputHash(aggregate().caseV2 as never, [], []), templateVersion: 1, policyVersions: [], documentVersions: [],
+      { inputManifest: { hash: computeRunInputHash(aggregate().caseV2, [], []), templateVersion: 1, policyVersions: [], documentVersions: [],
         observationIds: [], evidenceLinkIds: [], effectiveRuleIds: ['r1', 'r2'] } }))
     expect(e.coverage.missing).toEqual(['r2'])
     expect(e.allowed['stage-pass']).toBe(false)
