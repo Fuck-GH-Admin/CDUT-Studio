@@ -18,11 +18,13 @@
  */
 
 import { readFile, stat, writeFile, mkdir } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname, extname, join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { load } from 'cheerio'
 import type { DocumentLayoutBlock, LayoutRegionKind, ReviewDocumentBlock, SourceDocument } from '@profer/shared'
 import { extractDocxReviewContent, extractSpreadsheetReviewContent, extractTextFromFile } from '../document-parser'
+import { parseCsvRows } from './source-index'
 
 /** 支持直接按文本切块的扩展名 */
 const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.csv', '.json', '.html', '.htm', '.eml'])
@@ -102,6 +104,32 @@ export function parseTextIntoBlocks(fileName: string, text: string): ReviewDocum
     index += 1
   }
 
+  return blocks
+}
+
+/**
+ * T02 real CSV cell locations. Unlike line splitting, a quoted newline belongs
+ * to the same record. Sheet+row+column coordinates can be shown as provenance;
+ * text values (including student IDs with leading zeroes) are never numeric.
+ * Existing parseTextIntoBlocks stays compatible with V1 preview callers.
+ */
+export function parseCsvIntoCellBlocks(fileName: string, csv: string): ReviewDocumentBlock[] {
+  const slug = slugifyFileName(fileName)
+  const rows = parseCsvRows(csv.replace(/^\uFEFF/, ''))
+  const blocks: ReviewDocumentBlock[] = []
+  for (const [rowIndex, cells] of rows.entries()) {
+    if (cells.every((value) => value.trim() === '')) continue
+    for (const [columnIndex, value] of cells.entries()) {
+      if (value === '') continue
+      blocks.push({
+        id: blockIdAt(slug, blocks.length),
+        kind: rowIndex === 0 ? 'heading' : 'table-cell',
+        text: value,
+        page: 1,
+        table: { sheet: 'CSV', row: rowIndex + 1, column: columnIndex + 1 },
+      })
+    }
+  }
   return blocks
 }
 
@@ -399,15 +427,18 @@ interface SourceDocumentDraft {
  * parseError 仅在确有值时写入（不写空字符串/undefined），保持落盘 JSON 干净。
  */
 function toSourceDocument(draft: SourceDocumentDraft): SourceDocument {
+  const documentInstanceId = randomUUID()
   return {
-    id: `doc-${slugifyFileName(draft.fileName)}-${Date.now().toString(36)}`,
+    id: `doc-${slugifyFileName(draft.fileName)}-${documentInstanceId}`,
     fileName: draft.fileName,
     role: draft.role,
     mimeType: draft.mimeType,
     sizeBytes: draft.sizeBytes,
     parseStatus: draft.parseStatus,
     ...(draft.parseError === undefined ? {} : { parseError: draft.parseError }),
-    blocks: draft.blocks,
+    // IDs must be unique across two same-name files imported in one millisecond.
+    // Keep parseTextIntoBlocks' deterministic local IDs for its independent callers.
+    blocks: draft.blocks.map((block, index) => ({ ...block, id: `blk-${documentInstanceId}-${String(index + 1).padStart(3, '0')}` })),
     origin: 'upload',
     importedAt: draft.importedAt,
   }
@@ -570,7 +601,14 @@ export async function parseFileIntoSourceDocument(
       // OOXML Office 文档（DOCX / PPTX / XLSX）：优先走双平面重排引擎
       const officeBlocks = await parseOfficeLayoutBlocks(filePath, fileName)
       if (officeBlocks && officeBlocks.length > 0) {
-        return draftOf('parsed', officeBlocks)
+        const isPresentation = ['.ppt', '.pptx', '.pptm', '.potx', '.potm', '.ppsx', '.ppsm', '.dps', '.dpt', '.odp'].includes(ext)
+        const unresolvedImages = officeBlocks.filter((block) => block.kind === 'image' && !block.imageAssetPath).length
+        // OOXML layout blocks describe geometry but do not provide slide image bytes.
+        // Never claim that a PPTX (or other slide deck) has been visually checked.
+        const incompleteVisuals = isPresentation || unresolvedImages > 0
+        return draftOf(incompleteVisuals ? 'partial' : 'parsed', officeBlocks, incompleteVisuals
+          ? `Office 结构文本已读取；${unresolvedImages} 个图像块尚无可视原件，演示文稿页面需视觉核验`
+          : undefined)
       }
     }
 
@@ -597,7 +635,8 @@ export async function parseFileIntoSourceDocument(
       )
     }
 
-    return draftOf('parsed', parseTextIntoBlocks(fileName, extracted))
+    return draftOf(ext === '.pdf' ? 'parsed' : 'partial', parseTextIntoBlocks(fileName, extracted),
+      ext === '.pdf' ? undefined : 'Office 版面解析不可用，已按纯文本读取；页码、图像及版式需查看原件核对')
   }
 
   // 其他二进制：明确告知不支持，不伪造解析结果
@@ -623,6 +662,12 @@ export async function parseFileIntoSourceDocument(
     return draftOf('parsed', [{ id: `blk-${slug}-001`, kind: 'image', text: '', page: 1, imageAlt: alt }])
   }
 
+  // CSV: split at logical records and preserve actual sheet/row/column evidence.
+  if (ext === '.csv') {
+    const cells = parseCsvIntoCellBlocks(fileName, text)
+    return draftOf(cells.length ? 'parsed' : 'partial', cells,
+      cells.length ? undefined : 'CSV 未发现可用单元格，请核对原件')
+  }
   // 文本类：按行切块
   return draftOf('parsed', parseTextIntoBlocks(fileName, text))
 }

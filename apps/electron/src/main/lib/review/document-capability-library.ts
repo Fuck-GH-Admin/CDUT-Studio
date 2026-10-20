@@ -122,8 +122,11 @@ export class DocumentCapabilityLibrary {
 
   listDocuments(): Array<Record<string, unknown>> {
     return this.activeDocuments().map((document) => {
-      const sheetNames = [...new Set(document.blocks.flatMap((block) => block.location?.kind === 'sheet-cell' ? [block.location.sheet] : []))]
-      const pages = [...new Set(document.blocks.flatMap((block) => block.location?.kind === 'pdf-rect' ? [block.location.page] : []))].sort((a, b) => a - b)
+      const visibleBlocks = document.parseStatus === 'failed' ? [] : document.blocks
+      const images = visibleBlocks.filter((block) => block.kind === 'image')
+      const seen = this.readBlockIds.get(document.versionId)
+      const sheetNames = [...new Set(visibleBlocks.flatMap((block) => block.location?.kind === 'sheet-cell' ? [block.location.sheet] : []))]
+      const pages = [...new Set(visibleBlocks.flatMap((block) => block.location?.kind === 'pdf-rect' ? [block.location.page] : []))].sort((a, b) => a - b)
       return {
         documentVersionId: document.versionId,
         fileName: document.fileName,
@@ -133,7 +136,12 @@ export class DocumentCapabilityLibrary {
         parseError: document.parseError ?? null,
         blockCount: document.parseStatus === 'failed' ? 0 : document.blocks.length,
         textBlockCount: document.parseStatus === 'failed' ? 0 : document.blocks.filter((block) => block.kind !== 'image').length,
-        imageBlocks: document.parseStatus === 'failed' ? [] : document.blocks.filter((block) => block.kind === 'image').map((block) => ({ blockId: block.blockId, location: block.location ?? { kind: 'file' }, description: block.imageAlt ?? null })),
+        imageBlocks: images.map((block) => ({ blockId: block.blockId, location: block.location ?? { kind: 'file' }, description: block.imageAlt ?? null })),
+        // User-visible coverage: image blocks count even when a model has not seen them.
+        // Missing visual asset is not evidence that the image was inspected.
+        imageBlockCount: images.length,
+        imageAssetsMissingCount: images.filter((block) => !block.imageAssetPath).length,
+        imagesAwaitingInspection: images.filter((block) => !seen?.has(block.blockId)).length,
         sheetNames,
         pages,
       }
@@ -251,6 +259,9 @@ export class DocumentCapabilityLibrary {
       ? document.blocks.find((candidate) => candidate.blockId === blockId && candidate.kind === 'image')
       : undefined
     if (!document || !block) return
+    // A layout-only image without original bytes cannot be claimed inspected.
+    // The caller must obtain the registered image asset through loadImage first.
+    if (!block.imageAssetPath) throw new Error(`图像块尚无可核验原件: ${blockId}`)
     this.recordRead(document, [blockId])
     this.options.onActivity?.({ capability: 'inspect_document_image', summary: `视觉核对 ${document.fileName}（${block.location?.kind === 'pdf-rect' ? `第 ${block.location.page} 页` : blockId}）` })
   }
