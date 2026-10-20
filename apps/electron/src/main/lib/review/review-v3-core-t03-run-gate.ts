@@ -60,17 +60,18 @@ function documentVersionsMatch(
   const recorded = run.inputManifest?.documentVersions
   if (!Array.isArray(recorded)) return false
   const current = aggregate.caseV2.documents
-  const versions = new Map<string, string>()
+  const versions = new Map<string, { documentId: string; hash: string }>()
   for (const document of current) {
     if (!document.versionId || versions.has(document.versionId)) return false
-    versions.set(document.versionId, document.contentHash)
+    versions.set(document.versionId, { documentId: document.documentId, hash: document.contentHash })
   }
   if (recorded.length !== versions.size) return false
   const seen = new Set<string>()
   for (const item of recorded) {
     if (!item.versionId || seen.has(item.versionId)) return false
     seen.add(item.versionId)
-    if (versions.get(item.versionId) !== item.contentHash) return false
+    const source = versions.get(item.versionId)
+    if (!source || source.hash !== item.contentHash || source.documentId !== item.documentId) return false
   }
   return true
 }
@@ -87,16 +88,26 @@ function checkLedgerMatches(run: ReviewRunV2, evidence: T03TrustedRunEvidence): 
   if (!coverage || !Number.isInteger(coverage.plannedChecks)
     || !Number.isInteger(coverage.completedChecks)
     || !Number.isInteger(coverage.pendingChecks)
+    || !Number.isInteger(coverage.effectiveVerdicts)
     || coverage.plannedChecks < 0 || coverage.completedChecks < 0
-    || coverage.pendingChecks < 0 || coverage.completedChecks > coverage.plannedChecks) {
+    || coverage.pendingChecks < 0 || coverage.effectiveVerdicts < 0
+    || coverage.effectiveVerdicts > coverage.plannedChecks
+    || coverage.completedChecks > coverage.plannedChecks) {
     blockers.push('运行检查覆盖账本缺失或计数无效')
     return blockers
+  }
+  const countedVerdicts = checks.filter((c) => c.status === 'compliant' || c.status === 'non-compliant').length
+  if (coverage.effectiveVerdicts !== countedVerdicts) {
+    blockers.push('有效检查结论数与实际 Check 状态不一致')
   }
   if (coverage.plannedChecks !== checks.length) {
     blockers.push('运行结果数量与冻结计划的检查分母不一致')
   }
   if (coverage.completedChecks + coverage.pendingChecks !== coverage.plannedChecks) {
     blockers.push('已完成与待处理检查数量未覆盖计划分母')
+  }
+  if (coverage.plannedChecks > 0 && countedVerdicts === 0 && !evidence.manualOnlyTemplate) {
+    blockers.push('所有检查均无有效适用结论，不能宣称整体符合')
   }
   if (coverage.plannedChecks === 0 && !evidence.manualOnlyTemplate) {
     blockers.push('不存在已确认的必检计划；不能将空检查结果当成通过')
