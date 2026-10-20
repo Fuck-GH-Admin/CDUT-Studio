@@ -6,17 +6,19 @@ import { toast } from 'sonner'
 import { draftT01FromBrief, type T01BriefDraft } from './review-v3-t01-brief-authoring'
 import { exampleT01PackFiles, T01_STANDARD_EXAMPLES, type T01StandardScenario } from './review-v3-t01-example-packs'
 import { T01_SCENARIOS } from './review-v3-t01-business-presets'
+import {draftT01ViaAuthorizedModel,type T01ModelDraftInvoke} from './review-v3-t01-model-draft-port'
 
-interface Props { onDraft:(draft:TemplateVersion)=>void }
+interface Props { onDraft:(draft:TemplateVersion)=>void; modelDraftInvoke?:T01ModelDraftInvoke }
 /**
  * Accessible in the existing TemplateWizardPanel. Nothing is published or
  * installed by natural-language input or downloading example material files.
  */
-export function ReviewV3T01AuthoringLaunchpad({onDraft}:Props):JSX.Element {
+export function ReviewV3T01AuthoringLaunchpad({onDraft,modelDraftInvoke}:Props):JSX.Element {
   const [brief,setBrief]=useState('')
   const [proposal,setProposal]=useState<T01BriefDraft|null>(null)
   const [example,setExample]=useState<T01StandardScenario>('student')
   const [busy,setBusy]=useState(false)
+  const [modelBusy,setModelBusy]=useState(false)
   const analyze=():void=>{
     try {
       const draft=draftT01FromBrief(brief,'t01-brief-'+Date.now().toString(36),
@@ -26,6 +28,17 @@ export function ReviewV3T01AuthoringLaunchpad({onDraft}:Props):JSX.Element {
       setProposal(null)
       toast.error('需求无法起草：'+(error instanceof Error?error.message:String(error)))
     }
+  }
+  const modelDraft=async():Promise<void>=>{
+    if(!modelDraftInvoke||!brief.trim())return
+    setModelBusy(true)
+    try{
+      setProposal(await draftT01ViaAuthorizedModel(brief,'t01-model-'+Date.now().toString(36),
+        new Date().toISOString(),modelDraftInvoke))
+    }catch(error){
+      setProposal(null)
+      toast.error('模型起草失败：'+(error instanceof Error?error.message:String(error)))
+    }finally{setModelBusy(false)}
   }
   const download=async():Promise<void>=>{
     setBusy(true)
@@ -48,7 +61,7 @@ export function ReviewV3T01AuthoringLaunchpad({onDraft}:Props):JSX.Element {
         <textarea aria-label="模板需求自然语言" className="min-h-28 w-full rounded border bg-background p-2 text-xs"
           placeholder={'模板名称：实验室申请\n审核对象：组织\n字段：组织名称、负责人、参加人数（1-20人）、使用日期、用途\n必交材料：实验计划书\n流程：自动核对→初审→终审\n规则：人数不得超过20'}
           value={brief} onChange={event=>{setBrief(event.target.value);setProposal(null)}}/>
-        <Button size="sm" variant="outline" onClick={analyze} disabled={!brief.trim()}>提取明确要求</Button>
+        <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={analyze} disabled={!brief.trim()}>提取明确要求</Button>{modelDraftInvoke&&<Button size="sm" disabled={!brief.trim()||modelBusy} onClick={()=>void modelDraft()}>{modelBusy?'模型起草中…':'使用已授权模型起草'}</Button>}</div>
         {proposal && <div className="space-y-2 rounded border bg-background p-2 text-xs" role="status">
           <p className="font-medium">草稿：{proposal.template.name} · {proposal.template.fields.length} 字段 · {proposal.template.materialSlots.length} 材料槽</p>
           <ul className="list-disc space-y-1 pl-4">{proposal.extracted.map((text,i)=><li key={i}>{text}</li>)}</ul>
