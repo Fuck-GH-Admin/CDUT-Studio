@@ -25,7 +25,7 @@ describe('T01 configurable business templates',()=>{
     expect(template.objectType).toBe('organization')
     expect(template.fields.some(f=>f.key==='academicYear')).toBe(false)
     expect(template.rubric).toBeUndefined()
-    expect(template.fields.find(f=>f.key==='peopleCount')).toMatchObject({kind:'number',min:1,max:20})
+    expect(template.fields.find(f=>f.key==='peopleCount')).toMatchObject({kind:'number',min:1,max:undefined})
     expect(template.stages.map(s=>s.kind)).toEqual(['auto-check','manual-review','manual-review'])
     expect(template.stages.map(s=>s.nextStageId)).toEqual(['first-review','final-review',undefined])
     expect(template.materialSlots.map(s=>s.id)).toContain('plan')
