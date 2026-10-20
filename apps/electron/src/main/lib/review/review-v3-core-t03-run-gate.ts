@@ -103,11 +103,15 @@ function checkLedgerMatches(run: ReviewRunV2, evidence: T03TrustedRunEvidence): 
   if (coverage.plannedChecks !== checks.length) {
     blockers.push('运行结果数量与冻结计划的检查分母不一致')
   }
-  if (coverage.completedChecks + coverage.pendingChecks !== coverage.plannedChecks) {
-    blockers.push('已完成与待处理检查数量未覆盖计划分母')
-  }
-  if (coverage.plannedChecks > 0 && countedVerdicts === 0 && !evidence.manualOnlyTemplate) {
-    blockers.push('所有检查均无有效适用结论，不能宣称整体符合')
+  // Awaiting checks count both as completed execution and as pending business
+  // interpretation in coverage-ledger. They are not disjoint buckets.
+  const countedCompleted = checks.filter((c) =>
+    c.status !== 'not-executed' && c.status !== 'execution-failed').length
+  const countedPending = checks.filter((c) =>
+    c.status === 'awaiting-confirmation' || c.status === 'awaiting-supplement' ||
+    c.status === 'not-executed' || c.status === 'execution-failed').length
+  if (coverage.completedChecks !== countedCompleted || coverage.pendingChecks !== countedPending) {
+    blockers.push('执行完成数或待处理数与实际 Check 状态不一致')
   }
   if (coverage.plannedChecks === 0 && !evidence.manualOnlyTemplate) {
     blockers.push('不存在已确认的必检计划；不能将空检查结果当成通过')
@@ -132,6 +136,18 @@ function supplementIsOpen(aggregate: CaseAggregateV2): number {
   return (aggregate.supplements ?? []).filter((item) =>
     item.status === 'open' || item.status === 'responded' || item.status === 'insufficient'
   ).length
+}
+
+function resolvedByHuman(
+  aggregate: CaseAggregateV2, run: ReviewRunV2, check: CheckResult,
+): boolean {
+  return (aggregate.dispositions ?? []).some((item) =>
+    (!item.runId || item.runId === run.id) &&
+    (item.findingKey === check.checkId || item.findingKey === check.ruleId) &&
+    (item.disposition === 'human-confirmed-compliant' || item.disposition === 'false-positive'
+      || item.disposition === 'waived') &&
+    !!item.reason?.trim()
+  )
 }
 
 function authorizedException(
@@ -215,10 +231,14 @@ export function assessT03RunAction(input: {
             blockers.push('不符合规则不得无依据通过阶段: ' + check.checkId)
           }
           break
-        case 'not-executed':
-        case 'execution-failed':
         case 'awaiting-confirmation':
         case 'awaiting-supplement':
+          if (!resolvedByHuman(aggregate, run, check)) {
+            blockers.push('待确认检查没有当前 Run 对应的具名人工处置: ' + check.checkId)
+          }
+          break
+        case 'not-executed':
+        case 'execution-failed':
           blockers.push('必检规则尚未形成可通过的有效判断: ' + check.checkId)
           break
         default:
@@ -227,9 +247,10 @@ export function assessT03RunAction(input: {
     }
     const pendingCount = supplementIsOpen(aggregate)
     if (pendingCount > 0) blockers.push(pendingCount + ' 项补件请求仍未关闭')
-    if ((run.coverage?.pendingChecks ?? 0) > 0) {
-      blockers.push('覆盖账本仍有待处理检查')
-    }
+    // Outstanding pending checks were handled individually above. Human
+    // dispositions do not change the immutable Run coverage counters.
+    // Main's existing t05ActionEligibility remains authoritative for
+    // allowed business actions, actor rights and stage transitions.
   }
   return { action, allowed: blockers.length === 0, runCurrent, blockers, nonCompliantCheckIds }
 }
