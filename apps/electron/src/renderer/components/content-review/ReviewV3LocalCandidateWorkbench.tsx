@@ -25,6 +25,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   const [localCaseId,setLocalCaseId]=React.useState('')
   const [savedCases,setSavedCases]=React.useState<Array<{id:string;title:string}>>([])
   const [d4Selection,setD4Selection]=React.useState<D4ClientSelection|undefined>(undefined)
+  const [routedD4TemplateId,setRoutedD4TemplateId]=React.useState<string|undefined>(undefined)
   const [b1Frozen,setB1Frozen]=React.useState<{templateId:string;fingerprint:string}|null>(null)
   const [b1Notice,setB1Notice]=React.useState('')
   const [b1Error,setB1Error]=React.useState('')
@@ -283,7 +284,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     {localCaseId&&!activePlan&&<div className="space-y-3 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">使用已有 50 套 D4 模板生成本案审核任务</h2>
       <p className="text-xs text-muted-foreground">复用 G01–G08 冻结候选和原有 D2 规则编译器。明确选择对象/场景后，一次性把技术预审 Plan 写入当前原生案卷；不另外创建案卷，不代表校方审批。已添加人工事项或已固定 Plan 的案卷请另建新案卷。</p>
-      <D4CaseSetup onChange={setD4Selection}/>
+      <D4CaseSetup onChange={setD4Selection} suggestedTemplateId={routedD4TemplateId}/>
       <button type="button" className="rounded border border-border px-3 py-2 text-sm disabled:opacity-50"
         disabled={caseBusy||!d4Selection} onClick={()=>void installD4()}>
         在当前案卷编译并固定 D4 技术审核任务
@@ -333,6 +334,10 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
         onManualChoice={async choice=>{
           const ack=await window.reviewAPI.chooseLocalNativeProductTemplateV3({
             caseId:localCaseId,templateId:choice.templateId,templateVersion:choice.templateVersion})
+          if(ack.requiresPlanSetup){
+            setRoutedD4TemplateId(choice.templateId)
+            setD4Notice('已从材料路由选中 '+choice.templateId+'，请在上方 D4 编辑器核对实际对象、场景后固定审核任务。')
+          }else setMaterialsEpoch(x=>x+1)
           await readProduct()
           return ack
         }}
