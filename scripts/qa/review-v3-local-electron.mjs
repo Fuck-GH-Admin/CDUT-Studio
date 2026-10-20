@@ -58,7 +58,13 @@ async function connect(){
 async function navigate(){
  await wait('preload','!!window.reviewAPI?.readLocalNativeProductV3',90000)
  await wait('CDUT navigation','document.body?.innerText?.includes("CDUT 专区")',90000)
- await click('CDUT 专区');await sleep(650)
+ const toggled=await evalJs('(()=>{const el=document.querySelector("[data-profer-navigation-region=mode-switcher-cdut]"); if(!el||!el.getClientRects().length)return {found:false};el.click();return{found:true,clicked:true,text:el.innerText}})()')
+ console.log('CDUT zone switch control',JSON.stringify(toggled))
+ if(!toggled?.clicked)throw Error('CDUT_ZONE_BUTTON_MISSING_IN_REAL_RENDERER')
+ await sleep(1250)
+ const active=await evalJs('(()=>({zone:document.body?.innerText?.includes("特区账户"),mode:document.querySelector("[data-profer-navigation-region=mode-switcher-cdut]")?.className,body:document.body?.innerText?.slice(0,900)}))()')
+ console.log('CDUT mode-switch result',JSON.stringify(active))
+ if(!active.zone)throw Error('CDUT_ZONE_NOT_VISIBLE_AFTER_ACTUAL_BUTTON_CLICK '+JSON.stringify(active))
  if(await evalJs('!!document.querySelector("input[type=password]")')){
   if(!username||!password)throw Error('QA_DEMO_CREDENTIALS_NOT_DOCUMENTED')
   const ok=await evalJs('(()=>{const p=document.querySelector("input[type=password]");const u=[...document.querySelectorAll("input")].find(e=>e!==p&&e.getClientRects().length&&["text","tel",""].includes(e.type));if(!p||!u)return false;const s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set;for(const [el,val] of [[u,'+JSON.stringify(username)+'],[p,'+JSON.stringify(password)+']]){s.call(el,val);el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}))}return true})()')
