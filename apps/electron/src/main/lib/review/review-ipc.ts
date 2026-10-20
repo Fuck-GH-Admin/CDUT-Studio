@@ -1058,6 +1058,7 @@ export function registerReviewIpc(): void {
       const document = await registerNativeWorkspaceMaterialV3(
         input.caseId, input.sourcePath, input.role, undefined,
         () => assertC0ReviewMainSender(_e),
+        input.materialSlotId,
       )
       return document.id
     }

@@ -1344,6 +1344,118 @@ const scenarios = {
     `)
   },
 
+  /**
+   * A15 通用申请与本地办理：无学年 → T01 模板（含人数上限）→ 提交 →
+   * 初审通过（本地审核员）→ 终审受阻（需教师）→ 报告导出。
+   * 不跑 Pi：A15 的业务阶段链与 Run 无关，跑模型只会拖长验证。
+   */
+  async 'flow-a15'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+
+      const templateId = 'e2e-a15-lab'
+      const now = new Date().toISOString()
+      const template = {
+        templateId, version: 1, schemaVersion: 2,
+        name: 'A15 实验室使用申请', displayName: { template: '{{labName}} 实验室申请' },
+        objectType: 'document', status: 'draft', createdAt: now,
+        fields: [
+          { key: 'labName', label: '实验室名称', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          { key: 'applicantCount', label: '申请人数', kind: 'number', required: true, visibility: 'public', scope: 'case',
+            min: 1, max: 20 },
+        ],
+        sections: [{ id: 'basic', name: '基本情况', order: 0, required: true, criteria: [
+          { id: 'capacity', title: '人数不超过上限', requirement: '申请人数不得超过 20 人',
+            execution: 'deterministic', targetScope: 'case' },
+          { id: 'purpose', title: '用途合理', requirement: '核对申请用途与材料一致',
+            execution: 'semantic', targetScope: 'case' }] }],
+        materialSlots: [{ id: 'plan', name: '实验计划', minCount: 1, requiredAt: 'submission' }],
+        policyVersionIds: [], policyRefs: [],
+        stages: [
+          { id: 'first', name: '初审', kind: 'manual-review', executorRole: 'reviewer', nextStageId: 'final' },
+          { id: 'final', name: '终审', kind: 'manual-review', executorRole: 'teacher' },
+        ],
+        outputs: [{ id: 'feedback', kind: 'item-feedback', audience: 'reviewer' }],
+      }
+      try { await api.saveTemplateDraftV2(template) } catch (e) { step('saveDraft', { ok: false, error: String(e?.message ?? e) }) }
+      try { await api.publishTemplateV2(templateId, 1); step('publish', { ok: true }) }
+      catch (e) { step('publish', { ok: false, error: String(e?.message ?? e) }) }
+
+      // 无学年建案（非综测领域，学年应为可选）
+      let caseId = null
+      try {
+        const created = await api.createCase({ title: 'A15 实验室申请', type: '自定义审核', applicant: 'E2E',
+          domainPackId: 'contract-review', reviewTemplate: { templateId, version: 1 } })
+        caseId = created.id
+        step('createCase', { ok: true, caseId, academicYear: created.academicYear ?? '' })
+      } catch (e) { step('createCase', { ok: false, error: String(e?.message ?? e) }) }
+      if (!caseId) return out
+
+      try {
+        // 材料槽绑定必须走 registerMaterialPathV2（importDocumentFromPath 不支持 slot）
+        const versionId = await api.registerMaterialPathV2({ caseId, sourcePath: __PDF__,
+          role: 'evidence', materialSlotId: 'plan' })
+        const after = await api.getAggregateV2(caseId)
+        // 原生分支返回的是 documentId，不是 versionId
+        const doc = (after?.caseV2?.documents ?? []).find(d => d.documentId === versionId || d.versionId === versionId)
+        step('importPlan', { fileName: doc?.fileName, status: doc?.parseStatus,
+          slot: doc?.materialSlotId ?? null, returnedId: versionId })
+      } catch (e) { step('importPlan', { ok: false, error: String(e?.message ?? e) }) }
+
+      let taskId = null
+      try {
+        const submitted = await api.submitCaseV2(caseId)
+        taskId = submitted?.taskId ?? submitted?.id ?? submitted?.aggregate?.tasks?.[0]?.id ?? null
+        const agg = await api.getAggregateV2(caseId)
+        taskId = taskId ?? agg?.tasks?.find(t => t.status === 'open')?.id ?? null
+        step('submit', { ok: true, stage: agg?.caseV2?.stage, taskId,
+          openTasks: (agg?.tasks ?? []).filter(t => t.status === 'open').map(t => ({ id: t.id, role: t.assigneeRole, stage: t.stageId })) })
+      } catch (e) { step('submit', { ok: false, error: String(e?.message ?? e) }) }
+      if (!taskId) return out
+
+      // 初审：本地审核员有权
+      try {
+        const agg = await api.getAggregateV2(caseId)
+        const r = await api.recordStageDecisionV2({ caseId, templateId, version: 1, command: {
+          requestId: 'a15-first-' + Date.now().toString(36),
+          target: { kind: 'case', id: caseId }, expectedRevision: agg.caseV2.revision,
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'RecordStageDecision',
+          payload: { action: 'stage-pass', taskId, reason: '初审通过：材料齐备、人数未超限' },
+        }})
+        const after = await api.getAggregateV2(caseId)
+        step('firstStage', { ok: r?.ok, code: r?.code ?? null, stage: after?.caseV2?.stage,
+          decisions: (after?.decisions ?? []).map(d => ({ result: d.result, actor: d.actor?.role })) })
+      } catch (e) { step('firstStage', { ok: false, error: String(e?.message ?? e) }) }
+
+      // 终审：本地无教师身份，预期被拒（安全边界）
+      try {
+        const agg2 = await api.getAggregateV2(caseId)
+        const openFinal = (agg2?.tasks ?? []).find(t => t.status === 'open' && t.stageId === 'final')
+        if (!openFinal) { step('finalStage', { skipped: '没有开放终审任务' }) }
+        else {
+          const r = await api.recordStageDecisionV2({ caseId, templateId, version: 1, command: {
+            requestId: 'a15-final-' + Date.now().toString(36),
+            target: { kind: 'case', id: caseId }, expectedRevision: agg2.caseV2.revision,
+            actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            type: 'RecordStageDecision',
+            payload: { action: 'stage-pass', taskId: openFinal.id, reason: '试探终审' },
+          }})
+          step('finalStage', { ok: r?.ok, code: r?.code ?? null, message: (r?.message ?? '').slice(0, 120) })
+        }
+      } catch (e) { step('finalStage', { rejected: true, error: String(e?.message ?? e).slice(0, 140) }) }
+
+      try {
+        const report = await api.exportReportV2(caseId)
+        step('exportReport', { file: report?.file ?? null })
+      } catch (e) { step('exportReport', { ok: false, error: String(e?.message ?? e) }) }
+
+      return out
+    `.replace('__PDF__', JSON.stringify(process.env.E2E_PDF_PATH ?? '')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

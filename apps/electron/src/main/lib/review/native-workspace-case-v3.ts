@@ -391,6 +391,14 @@ export async function updateNativeWorkspaceSettingsV3(
 export async function registerNativeWorkspaceMaterialV3(
   caseId: string, sourcePath: string, role: SourceDocument['role'], actor: Actor = MAIN_ACTOR,
   authorizeAtCommit?: () => void,
+  /**
+   * 可选材料槽绑定。
+   *
+   * 模板可用 materialSlots 约束「提交前必须有哪些材料」，但原生案卷此前
+   * 完全没有把槽位透传下去——结果任何带必需槽的模板永远无法提交
+   * （提交时按槽位核对 active 材料数，槽位恒为 0）。这里补上透传。
+   */
+  materialSlotId?: string,
 ): Promise<SourceDocument> {
   const current = readAggregate(caseId)
   if (!isNativeWorkspaceCaseV3(current) || !current || current.caseV2.stage === 'archived')
@@ -399,7 +407,7 @@ export async function registerNativeWorkspaceMaterialV3(
   const result = await registerMaterial(caseId, {
     requestId: `native-register-${randomUUID().replace(/-/g, '')}`,
     actor, expectedRevision: current.caseV2.revision,
-    payload: { sourcePath, role },
+    payload: { sourcePath, role, ...(materialSlotId ? { materialSlotId } : {}) },
   }, authorizeAtCommit)
   if (!result.ok) throw new CommandValidationError(result.code, result.message)
   const doc = result.entity
