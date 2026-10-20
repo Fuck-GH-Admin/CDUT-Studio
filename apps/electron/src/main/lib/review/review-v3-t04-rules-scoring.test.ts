@@ -82,12 +82,27 @@ describe('T04 multi-policy and Plan adapter (D09)',()=>{
   test('two enabled conflicting caps block only their claim; explicit named decision chooses one',()=>{
     const claims=[{key:'competition-cap',rule:a,operation:cap('10')},{key:'competition-cap',rule:b,operation:cap('12')},
       {key:'date-rule',rule:makeRule('date'),operation:{kind:'date-range' as const,field:'date'}}]
-    expect(resolveT04PolicyClaims(claims).blocked[0]?.ruleIds).toEqual(['a','b'])
+    expect(resolveT04PolicyClaims(claims).blocked[0]?.ruleIds).toEqual(['p@1::a','p@1::b'])
     expect(resolveT04PolicyClaims(claims).selected.map(x=>x.rule.id)).toEqual(['date'])
     const resolved=resolveT04PolicyClaims(claims,[{key:'competition-cap',selectedRuleId:'a',confirmedBy:'local-reviewer',reason:'确定学校政策优先'}])
     expect(resolved.blocked).toHaveLength(0)
     expect(resolved.selected.map(x=>x.rule.id)).toEqual(['a','date'])
     expect(resolved.excluded[0]?.ruleId).toBe('b')
+  })
+
+  test('identical rule ids from different policies cannot bypass the conflict decision',()=>{
+    const school=makeRule('cap',{policyVersionId:'school@1'})
+    const faculty=makeRule('cap',{policyVersionId:'faculty@2'})
+    const claims=[
+      {key:'cap',rule:school,operation:cap('10')},
+      {key:'cap',rule:faculty,operation:cap('12')},
+    ]
+    expect(resolveT04PolicyClaims(claims).blocked[0]?.ruleIds).toEqual(['faculty@2::cap','school@1::cap'])
+    const unresolved=resolveT04PolicyClaims(claims,[{key:'cap',selectedRuleId:'cap',confirmedBy:'reviewer',reason:'prefer school'}])
+    expect(unresolved.blocked).toHaveLength(1)
+    const selected=resolveT04PolicyClaims(claims,[{key:'cap',selectedRuleId:'cap',selectedPolicyVersionId:'school@1',confirmedBy:'reviewer',reason:'prefer school'}])
+    expect(selected.selected[0]?.rule.policyVersionId).toBe('school@1')
+    expect(selected.excluded[0]?.policyVersionId).toBe('faculty@2')
   })
   test('Plan with repeated checkKey across targets evaluates each exact target independently',()=>{
     const bindings=[
