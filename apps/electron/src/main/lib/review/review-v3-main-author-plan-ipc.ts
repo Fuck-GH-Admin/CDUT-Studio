@@ -350,8 +350,8 @@ export async function handleCMainB20CandidateRead(
       const frame=event.senderFrame
       const senderId=event.sender.id
       const frameId=frame?.routingId
-      if(!frame||!Number.isSafeInteger(senderId)||senderId<0||
-         !Number.isSafeInteger(frameId)||frameId<0 ||
+      if(!frame||typeof senderId!=='number'||!Number.isSafeInteger(senderId)||senderId<0||
+         typeof frameId!=='number'||!Number.isSafeInteger(frameId)||frameId<0 ||
          physical.frameId!==frame.processId+':'+frameId)
         return refuse('B20_NUMERIC_MAIN_FRAME_NOT_CURRENT')
       const identity=current()
@@ -408,8 +408,9 @@ export async function handleCMainB20NativeArchiveRepick(
   const observed=current()
   const physical=event.senderFrame
   const numeric={senderId:event.sender.id,frameId:physical?.routingId}
-  if(!physical||!Number.isSafeInteger(numeric.senderId)||numeric.senderId<0||
-     !Number.isSafeInteger(numeric.frameId)||numeric.frameId<0)
+  if(!physical||typeof numeric.senderId!=='number'||
+     !Number.isSafeInteger(numeric.senderId)||numeric.senderId<0||
+     typeof numeric.frameId!=='number'||!Number.isSafeInteger(numeric.frameId)||numeric.frameId<0)
     return refuse('B20_NATIVE_PICKER_NUMERIC_FRAME_MISSING')
   await src.repickNativeArchive(observed.pin,observed.id,
     {senderId:numeric.senderId,frameId:numeric.frameId},archiveId)

@@ -40,14 +40,14 @@ const safe=(s:unknown):s is string=>typeof s==='string'&&s.length>0&&s.length<=2
  */
 export interface CMainB20PhysicalSources {
   readonly bSources:B20ReadOnlySources
-  readonly currentCandidate(principalId:string,templateId:string):
+  currentCandidate(principalId:string,templateId:string):
     {caseCandidateId:string;grant:CMainV3Grant}|undefined
-  readonly canReadCandidate(principalId:string,templateId:string,
+  canReadCandidate(principalId:string,templateId:string,
     caseCandidateId:string,grant:CMainV3Grant):boolean
-  readonly currentPinnedAuthor(caseCandidateId:string,templateId:string):
+  currentPinnedAuthor(caseCandidateId:string,templateId:string):
     CMainB20PinnedExpectation|undefined
   /** C Main-owned author/current source selector, not incoming IPC. */
-  readonly currentSelections(scope:Readonly<B20MainReadScope>,
+  currentSelections(scope:Readonly<B20MainReadScope>,
     author:Readonly<B20ReadAuthorExpectation>):readonly B19SourceSelection[]|null
   /** One C-owned ephemeral OS-native capability registry, never a B vault. */
   readonly nativePicker:CMainNativeArchiveRegistry
@@ -56,12 +56,12 @@ export interface CMainB20PhysicalSources {
    * availability after cold restart must be NULL until newly reauthorized.
    * Never return this key through an IPC response.
    */
-  readonly currentMainIssuedOriginalKey(
+  currentMainIssuedOriginalKey(
     scope:Readonly<CMainB20ReadIdentity>,
     archiveId:string,bScope:Readonly<B20MainReadScope>,
   ):string|null
   /** Independent real Main Principal/frame/Owner current grant proof. */
-  readonly assertLiveCMainIdentity(identity:CMainB20ReadIdentity):void
+  assertLiveCMainIdentity(identity:CMainB20ReadIdentity):void
 }
 /**
  * Epoch is a local monotonic number, NEVER parsed from C authorityEpoch.
