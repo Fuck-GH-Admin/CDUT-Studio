@@ -6,7 +6,7 @@
  * Main must supply the authenticated LOCAL actor, frozen published template,
  * and current/verified Run information inside its authoritative transaction.
  */
-import type { Actor, CaseAggregateV2, TemplateVersion } from '@profer/shared'
+import type { Actor, BusinessDecision, CaseAggregateV2, ReviewCaseV2, SupplementRequest, TemplateVersion, WorkflowTask } from '@profer/shared'
 
 export type T05LocalStageAction =
   | 'stage-pass'
@@ -164,4 +164,112 @@ export function planT05SupplementReentry(
     ...(target.originStageId ? { restoreStageId: target.originStageId } : {}),
     ...(origin ? { restoreRole: origin.assigneeRole } : {}),
   }
+}
+
+/**
+ * Materialize the prepared stage action as a pure, append-only state change.
+ * Main supplies IDs/time and persists the result atomically in the existing
+ * CaseAggregate transaction; this helper deliberately performs NO IO.
+ *
+ * For a missing document, there is no ReviewRun yet, so a supplement request
+ * is recorded without inventing a fake BusinessDecision.
+ */
+export interface T05StageMutationContext {
+  decisionId: string
+  nextTaskId: string
+  supplementId: string
+  at: string
+}
+
+export interface T05StageMutation {
+  caseStage: ReviewCaseV2['stage']
+  tasks: WorkflowTask[]
+  decisions: BusinessDecision[]
+  supplements: SupplementRequest[]
+  addedTask?: WorkflowTask
+  addedDecision?: BusinessDecision
+  addedSupplement?: SupplementRequest
+}
+
+export function applyT05LocalStageProposal(
+  aggregate: CaseAggregateV2,
+  proposal: T05StageProposal,
+  actor: Actor,
+  ids: T05StageMutationContext,
+): T05StageMutation {
+  if (aggregate.caseV2.revision !== proposal.basedOnRevision) {
+    throw Error('T05_STAGE_REVISION_CHANGED')
+  }
+  const task = aggregate.tasks.find(t => t.id === proposal.taskId && t.status === 'open')
+  if (!task || task.stageId !== proposal.stageId || task.assigneeRole !== actor.role ||
+      (task.assigneeActorId && task.assigneeActorId !== actor.actorId)) {
+    throw Error('T05_STAGE_TASK_CHANGED')
+  }
+  const closedTasks = aggregate.tasks.map(t => t.id === task.id
+    ? { ...t, status: 'completed' as const, completedAt: ids.at } : t)
+  const next: T05StageMutation = {
+    caseStage: aggregate.caseV2.stage,
+    tasks: closedTasks, decisions: [...aggregate.decisions],
+    supplements: [...aggregate.supplements],
+  }
+
+  if (proposal.action === 'return-for-supplement') {
+    if (!proposal.supplement) throw Error('T05_SUPPLEMENT_PROPOSAL_REQUIRED')
+    const newSupplement: SupplementRequest = {
+      id: ids.supplementId,
+      caseId: aggregate.caseV2.id,
+      originFindingKeys: [],
+      requiredElements: proposal.supplement.requiredElements,
+      reason: proposal.supplement.publicReason,
+      responsibleRole: 'student',
+      status: 'open', responses: [],
+      createdAt: ids.at,
+      originTaskId: task.id,
+      originStageId: task.stageId,
+    }
+    next.supplements.push(newSupplement)
+    next.addedSupplement = newSupplement
+    next.caseStage = 'awaiting-supplement'
+    return next
+  }
+
+  if (!proposal.basedOnRunId || !proposal.decisionFinality) throw Error('T05_REAL_RUN_DECISION_REQUIRED')
+  const newDecision: BusinessDecision = {
+    id: ids.decisionId,
+    actor,
+    scope: { kind: 'case', ids: [] },
+    stageId: task.stageId,
+    result: proposal.action === 'final-reject' ? 'reject' :
+      proposal.action === 'return-to-previous-stage' ? 'return' : 'pass',
+    reason: proposal.reason,
+    basedOnRunId: proposal.basedOnRunId,
+    basedOnRevision: aggregate.caseV2.revision,
+    at: ids.at,
+    finality: proposal.decisionFinality,
+    taskId: task.id,
+    round: task.round,
+  }
+  next.decisions.push(newDecision)
+  next.addedDecision = newDecision
+
+  const stageId = proposal.nextStageId ?? proposal.returnToStageId
+  if (stageId && proposal.nextAssigneeRole) {
+    const newTask: WorkflowTask = {
+      id: ids.nextTaskId,
+      caseId: aggregate.caseV2.id,
+      stageId,
+      round: task.round + (proposal.returnToStageId ? 1 : 0),
+      assigneeRole: proposal.nextAssigneeRole,
+      status: 'open',
+      prerequisiteTaskId: task.id,
+      inputRevision: aggregate.caseV2.revision,
+      createdAt: ids.at,
+    }
+    next.tasks.push(newTask)
+    next.addedTask = newTask
+    next.caseStage = 'reviewing'
+  } else {
+    next.caseStage = 'decided'
+  }
+  return next
 }
