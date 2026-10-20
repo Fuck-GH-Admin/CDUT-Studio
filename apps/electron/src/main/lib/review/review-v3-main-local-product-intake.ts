@@ -14,7 +14,7 @@ import {getMainWindow} from '../main-window-state'
 import {assertC0ReviewMainSender} from './review-c0-authority'
 import {assertSafeReviewStorageId} from './review-storage-id'
 import {readAggregate} from './case-store-v2'
-import {isNativeWorkspaceCaseV3} from './native-workspace-case-v3'
+import {isNativeWorkspaceCaseV3,updateNativeWorkspaceSettingsV3} from './native-workspace-case-v3'
 import {assertC2PhysicalOriginalBytes} from './review-v3-main-trust-port'
 import {ReviewB2StagingService,type B2MainContext,type B2MaterialCandidate} from './review-intake-adapter-v3-b2'
 import {decodeReviewB2Zip} from './review-zip-intake-v3-b2'
@@ -222,7 +222,7 @@ export function installC11LocalNativeProductIntake():void {
       return candidate
     })
   ipcMain.handle(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_MANUAL_CHOICE_V3,
-    (event:IpcMainInvokeEvent,input:{
+    async (event:IpcMainInvokeEvent,input:{
       caseId:string;templateId:string;templateVersion:string
     }):C11MainLocalTechnicalChoiceAck=>{
       if(!input||typeof input.caseId!=='string'||
@@ -237,6 +237,23 @@ export function installC11LocalNativeProductIntake():void {
       const current=evaluate(s,catalog())
       if(current.status!=='manually-selected'||current.chosen?.templateId!==input.templateId)
         throw new Error('C11_NATIVE_MANUAL_CHOICE_NOT_CONFIRMED')
+      // Apply the user's explicit choice to the existing native Case, rather
+      // than leaving it only in the ephemeral B3 routing session. This is a
+      // local draft template binding, not a school or approval decision.
+      const version=Number(input.templateVersion)
+      if(!Number.isSafeInteger(version)||version<1)
+        throw new Error('C11_NATIVE_TEMPLATE_VERSION_INVALID')
+      await updateNativeWorkspaceSettingsV3(input.caseId,{
+        caseId:input.caseId,
+        reviewTemplate:{templateId:input.templateId,version},
+      },undefined,()=>assertC0ReviewMainSender(event))
+      const updated=readAggregate(input.caseId)
+      if(!updated||updated.caseV2.templateId!==input.templateId||
+         updated.caseV2.templateVersion!==version)
+        throw new Error('C11_NATIVE_TEMPLATE_BINDING_NOT_PERSISTED')
+      // The Case revision changed: discard the old staged route session.
+      // The next read reconstructs the inventory from current originals.
+      sessions.delete(local(event,input.caseId).key)
       return {candidateOnly:true,technicalChoiceRecorded:true,
         caseCandidateId:input.caseId,templateId:input.templateId,
         templateVersion:input.templateVersion}
