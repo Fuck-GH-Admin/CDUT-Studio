@@ -113,16 +113,23 @@ type BashToolOptions = import('@earendil-works/pi-coding-agent').BashToolOptions
 const PI_NATIVE_MAX_RETRIES = 8
 
 /**
- * 能证明「模型/工具链路真的在产出数据」的 Pi 会话事件。
- * 其余事件（turn_start、queue_update 等）只说明控制流在推进，不能作为首字节信号。
+ * 能证明「模型真的开始产出内容」的 Pi 会话事件——只有它们才满足首字节条件。
+ *
+ * 关键区分：`message_start` 与 HTTP 响应头同时到达，只证明连接建立，**不证明模型在生成**。
+ * 部分兼容网关会先回响应头再长时间空转（实测 GLM 渠道可挂 300s 以上），
+ * 若把响应头当首字节，请求级看门狗会被提前满足，轮次重新退化成无限 running。
  */
-const PI_REVIEW_DATA_EVENTS: ReadonlySet<string> = new Set([
-  'message_start',
+const PI_REVIEW_CONTENT_EVENTS: ReadonlySet<string> = new Set([
   'message_update',
-  'message_end',
   'tool_execution_start',
   'tool_execution_update',
   'tool_execution_end',
+])
+
+/** 只证明「链路仍在运转」但不证明模型在生成的控制类事件。 */
+const PI_REVIEW_ACTIVITY_EVENTS: ReadonlySet<string> = new Set([
+  'message_start',
+  'message_end',
   'compaction_start',
   'compaction_end',
 ])
@@ -2898,9 +2905,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           },
           ...(reviewWatchdog
             ? {
-                // 响应头到达即视为「已开始返回数据」，是首字节看门狗最早的可信信号。
+                /**
+                 * 响应头只证明连接建立，**不是**首字节。
+                 *
+                 * 兼容网关（含实测的 GLM 自部署 vLLM）会先回响应头、再长时间不吐 token；
+                 * 若把响应头当首字节，请求级看门狗会被提前满足，轮次又变成无限 running。
+                 * 这里只刷新「链路还活着」，真正的首字节由内容类会话事件标记。
+                 */
                 onResponse: (response: ProviderResponse, responseModel: Model<Api>) => {
-                  reviewWatchdog?.markFirstByte()
+                  reviewWatchdog?.noteActivity()
                   return originalOnResponse?.(response, responseModel)
                 },
               }
@@ -2989,8 +3002,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         // （消息流、工具执行）才算「模型已经开始返回数据」。
         // 这样不依赖各协议是否实现 onResponse，也不会把 turn_start 误当首字节。
         if (reviewWatchdog) {
-          if (PI_REVIEW_DATA_EVENTS.has(event.type)) reviewWatchdog.touch()
-          else reviewWatchdog.noteActivity()
+          if (PI_REVIEW_CONTENT_EVENTS.has(event.type)) reviewWatchdog.touch()
+          else if (PI_REVIEW_ACTIVITY_EVENTS.has(event.type)) reviewWatchdog.noteActivity()
           // 消息结束即该次模型请求结束（工具执行阶段不应再算「请求在途」），
           // 同时释放请求级控制器，避免下一轮误断一个已结束的请求。
           if (event.type === 'message_end') {

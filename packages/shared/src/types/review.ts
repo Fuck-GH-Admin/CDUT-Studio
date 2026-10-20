@@ -642,6 +642,11 @@ export interface ReviewBackgroundPiRunState {
   /** Persisted V2 ledger status; 'running' alone never means accepted. */
   runStatus?: import('./review-v2').RunV2Status
   completedAt?: string
+  /**
+   * 终态失败/中断的可诊断原因（仅在 phase 为 incomplete/needs-attention 时给出）。
+   * 失败必须可追踪：只给 phase 而不给原因，界面无法区分「模型慢」与「链路挂死」。
+   */
+  error?: string
 }
 
 /** Main 创建内部会话和指派；前台不传 session、目录或执行回调。 */

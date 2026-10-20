@@ -30,10 +30,45 @@
 
 ## 看门狗实测
 
-`PROFER_PI_REVIEW_FIRST_BYTE_TIMEOUT_MS=90000` 在真实慢渠道上跑 `flow-full`：
-`piReviewOutcome.phase=incomplete`、`run.status=**failed**`、`checks=0`。
-修复前同样条件下 run 会无限停在 `running`。默认阈值（首字节 240s / 整轮 20min）下
-正常慢审核（实测 10~15 分钟跑完 60 项）不会被误杀。
+**触发实测**（`PROFER_PI_REVIEW_FIRST_BYTE_TIMEOUT_MS=15000`，AMD Radeon / GLM-5.3-Flash，
+`run-pi-mvh1snzx-bq89c`）：`phase=incomplete`、`run.status=**failed**`、耗时 23.3s，
+`piReviewOutcome.error` 与 `run.error` 同时为
+`模型请求 20 秒无任何数据返回（渠道：AMD Radeon，模型：GLM-5.3-Flash），本轮审核已中止。请检查该渠道连通性，或更换响应更快的模型后重新发起审核。`
+（90s 阈值下同样触发并落 `failed`，`run-pi-mvgzbh47-bf47n`，耗时 96.8s。）
+修复前同样条件下 run 会无限停在 `running`。
+
+**对照实测（不误杀）**（默认阈值：首字节自动取 `min(240s, 传输层空闲超时-15s)=285s` / 整轮 20min）：
+`run-pi-mvh06oqi-7bgob` 在真实慢渠道上 195.9s 正常跑完，`checks=60`，
+日志只有 `已启用` 行、**没有任何命中行**。此前同渠道另一次 901s 的完整审核同样 `completed`。
+结论：看门狗不会误杀真实的慢审核。
+
+**过程中发现并修复的第二个缺陷**：看门狗首次触发时 `run.error` 只有 `执行出错`，
+真实原因丢失。根因在 `agent-orchestrator.ts` 的「不可重试 TypedError 终态」分支：
+它只置 `runEndedWithError` 而不传 `resultSubtype`/`resultErrors`，`createAgentRunOutcomeReporter`
+于是只能回退到 `endReasonLabel`。已补 `resultSubtype: 'error_during_execution'` +
+`resultErrors: [typedError.message]`，并加回归测试（`agent-run-outcome.test.ts`）。
+同一函数内 `empty_output` 分支本就是正确写法，说明这是遗漏而非设计。
+
+**过程中还修掉两个「看门狗看起来生效、实际没兜住」的缺口**：
+
+1. **响应头被当成首字节**。`onResponse` 一到就 `markFirstByte`，而兼容网关（实测的 GLM
+   自部署 vLLM）会先回响应头、再长时间不吐 token。结果首字节看门狗被提前满足，
+   轮次又退化成无限 `running`（实测复现：90s 阈值下 run 停在 `running` 超过 5 分钟）。
+   已改为：响应头只 `noteActivity`，真正的首字节只由内容类事件
+   （`message_update` / `tool_execution_*`）标记；`message_start` 同样不算。
+2. **失败原因没到界面**。`ReviewBackgroundPiRunState` 没有 `error` 字段，
+   `getBackgroundPiReviewStateV2` 只回 `phase`，界面知道「没成功」但不知道「为什么」。
+   已在 shared 类型补 `error?`，`summarizeBackgroundPiReviewState` 从 `run.error` 带出。
+
+**原始日志**（本次留档，避免 E2E 清空配置根后证据丢失）：
+`evidence-logs/watchdog-fired-with-error.txt`（触发 + 原因透出）、`evidence-logs/watchdog-fired-90s.txt`（90s 触发）、
+`evidence-logs/watchdog-control-default.txt`（对照不误杀）、`evidence-logs/review-completed-901s.txt`（默认阈值下 901s 完整审核）。
+
+**`partially-completed` 的归因**（`run-pi-mvgqvzt-xs4yg`）：`execution-failed` = 0，
+实际分布为 `awaiting-confirmation 48 / not-applicable 9 / awaiting-supplement 3`。
+诊断是「Pi 会话结束时未收到明确的完成提交」——模型 10 次 `review_submit_result` 全部
+`finish` 缺省/False，写完总结就停了。这是**模型行为**（小模型不遵守「全部提交后必须 finish=true」），
+不是看门狗误杀，也不是 JSON 解析失败；`finishPiReviewRunV2` 把它落成 `partially-completed` 是正确降级。
 
 ## 明确的边界（不得误读为已完成）
 

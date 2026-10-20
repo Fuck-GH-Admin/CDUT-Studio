@@ -36,6 +36,11 @@ xvfb-run -a node work/e2e/v3-e2e.mjs <scenario>
 | `E2E_POLL_MS` | `flow-full` 等待审核终态的上限（默认 360000） |
 | `E2E_CHANNEL_NAME` / `E2E_MODEL_ID` | 覆盖测试渠道与模型 |
 | `E2E_VERBOSE=1` | 打印主进程日志 |
+| `PROFER_PI_REVIEW_FIRST_BYTE_TIMEOUT_MS` | 审核首字节看门狗阈值（默认自动取 `min(240s, Pi 传输层空闲超时-15s)`，Pi 默认 300s → 285s） |
+| `PROFER_PI_REVIEW_TURN_STALL_TIMEOUT_MS` | 审核整轮无进展看门狗阈值（默认 1200000 = 20min） |
+
+> 看门狗只对审核档案（`toolProfile='review'`）启用。压测看门狗时把首字节阈值调小
+> （如 `90000`），正常回归时保持默认，避免把真实的慢审核当故障。
 
 ## 关键约束
 

@@ -103,6 +103,30 @@ describe('Pi 审核看门狗 · 首字节超时', () => {
   })
 })
 
+describe('Pi 审核看门狗 · 响应头不算首字节', () => {
+  test('只收到响应头（noteActivity）不能解除首字节超时', () => {
+    // 兼容网关会先回响应头再长时间不吐 token；若响应头算首字节，
+    // 请求级看门狗会被提前满足，轮次重新退化成无限 running。
+    const watchdog = createPiReviewWatchdog({ label: LABEL, timeouts: TIMEOUTS })
+    watchdog.startRequest(0)
+    watchdog.noteActivity(500)
+    watchdog.noteActivity(1_000)
+    expect(watchdog.state.requestFirstByteSeen).toBe(false)
+    const reason = watchdog.evaluate(TIMEOUTS.firstByteTimeoutMs)
+    expect(reason).toBeDefined()
+    expect(reason).toContain('无任何数据返回')
+  })
+
+  test('真正的内容增量（touch）才解除首字节超时', () => {
+    const watchdog = createPiReviewWatchdog({ label: LABEL, timeouts: TIMEOUTS })
+    watchdog.startRequest(0)
+    watchdog.noteActivity(500)
+    watchdog.touch(80_000)
+    expect(watchdog.state.requestFirstByteSeen).toBe(true)
+    expect(watchdog.evaluate(TIMEOUTS.firstByteTimeoutMs)).toBeUndefined()
+  })
+})
+
 describe('Pi 审核看门狗 · 整轮无进展', () => {
   test('工具结果之后长时间无任何事件 → 判定 stalled', () => {
     const watchdog = createPiReviewWatchdog({ label: LABEL, timeouts: TIMEOUTS })

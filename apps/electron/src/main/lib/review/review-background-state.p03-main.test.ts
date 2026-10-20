@@ -48,6 +48,20 @@ describe('P03-MAIN-S01 read-only Pi business state', () => {
     }
   })
 
+  test('终态失败必须带出可诊断原因（失败可追踪）', () => {
+    const reason = '模型请求 95 秒无任何数据返回（渠道：AMD Radeon，模型：GLM-5.3-Flash），本轮审核已中止。'
+    const failed = summarizeBackgroundPiReviewState(
+      'sample',
+      [{ ...run('failed'), error: reason, completedAt: '2026-10-21T00:00:00Z' }],
+      yes,
+    )
+    expect(failed.phase).toBe('incomplete')
+    expect(failed.error).toBe(reason)
+    // 运行中/已完成不带 error 字段，避免把内部细节泄漏成常态字段
+    expect(summarizeBackgroundPiReviewState('sample', [run('running')], yes).error).toBeUndefined()
+    expect(summarizeBackgroundPiReviewState('sample', [run('completed')], yes).error).toBeUndefined()
+  })
+
   test('snapshot never returns owner sessionId, assignmentId or raw transcript', () => {
     const state = summarizeBackgroundPiReviewState('sample', [{ ...run('completed'), completedAt: '2026-10-13T00:00:00Z' }], no)
     expect(state.completedAt).toBe('2026-10-13T00:00:00Z')

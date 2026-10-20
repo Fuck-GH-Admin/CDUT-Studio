@@ -68,6 +68,9 @@ const child = spawn(ELECTRON, [
     ...process.env,
     // 开发模式配置根，复用已配置的真实渠道
     PROFER_CONFIG_DIR: configDir,
+    // 独立开发实例：避免与用户日常运行的 CDUT Studio 抢单实例锁与 userData 目录
+    PROFER_DEV_INSTANCE: process.env.E2E_DEV_INSTANCE ?? 'e2e',
+    PROFER_USER_DATA_DIR: userDataDir,
     ELECTRON_ENABLE_LOGGING: '1',
     NODE_ENV: 'development',
   },
@@ -315,7 +318,7 @@ const scenarios = {
         step('startPiReview', { ok: false, error: String(error?.message ?? error) })
       }
 
-      // 轮询到终态（最多 6 分钟）；启动已失败则不空等
+      // 轮询到终态；启动已失败则不空等
       const deadline = Date.now() + Number(POLL_MS ?? 360000)
       let last = null
       const startFailed = !state
@@ -325,6 +328,7 @@ const scenarios = {
         if (phase && ['completed', 'failed', 'incomplete', 'stopped', 'cancelled', 'error'].includes(phase)) break
         await new Promise(r => setTimeout(r, 3000))
       }
+      out.pollTimedOut = !startFailed && !(last?.phase && ['completed','failed','incomplete','stopped','cancelled','error'].includes(last.phase))
       step('piReviewOutcome', { phase: last?.phase, runId: last?.runId ?? null,
         elapsedMs: Date.now() - started, error: last?.error ?? null })
       out.runId = last?.runId ?? null
@@ -383,6 +387,36 @@ const scenarios = {
       } catch (error) {
         step('formalDecision', { rejected: true,
           error: String(error?.message ?? error).slice(0, 160) })
+      }
+
+      // 人工复核：对已完成 Run 的具体 check 记录处置（D2 预审的复核对象是 check）
+      try {
+        const runs2 = await api.listRunsV2(created.id)
+        const run2 = (runs2 ?? [])[0]
+        const target = (run2?.checks ?? []).find(c => c.status === 'awaiting-confirmation')
+          ?? (run2?.checks ?? [])[0]
+        if (run2 && target) {
+          const agg2 = await api.getAggregateV2(created.id)
+          const disp = await api.recordWorkspaceDispositionV2({
+            caseId: created.id,
+            command: {
+              requestId: 'e2e-disp-' + Date.now().toString(36),
+              target: { kind: 'case', id: created.id },
+              expectedRevision: agg2.caseV2.revision,
+              actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+              type: 'RecordWorkspaceFindingDisposition',
+              payload: { findingKey: target.checkId, disposition: 'human-confirmed-compliant',
+                reason: '审核员对照审核依据和材料后确认本项符合',
+                runId: run2.id, inputHash: run2.inputManifest?.hash },
+            },
+          })
+          const after = await api.getAggregateV2(created.id)
+          step('manualDisposition', { ok: disp?.ok, code: disp?.code ?? null,
+            checkId: target.checkId, revision: after?.caseV2?.revision,
+            dispositionCount: (after?.dispositions ?? []).length })
+        }
+      } catch (error) {
+        step('manualDisposition', { ok: false, error: String(error?.message ?? error).slice(0, 160) })
       }
 
       // MD 报告导出
@@ -710,6 +744,63 @@ const scenarios = {
     `)
 
     return { caseId: created.caseId, dropZoneInDom: dom, pathRegister: registered }
+  },
+
+  /**
+   * 第 5 步的真实人工复核：对已完成 Run 的具体 check 记录处置。
+   * D2 技术预审不抽取事实（候选壳无字段），所以人工复核对象是 check，
+   * 入口是 recordWorkspaceDispositionV2 / RecordWorkspaceFindingDisposition。
+   */
+  async 'flow-disposition'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const caseId = __CASE_ID__
+      const out = { caseId, steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+
+      const aggregate = await api.getAggregateV2(caseId)
+      const runs = await api.listRunsV2(caseId)
+      const run = (runs ?? [])[0]
+      if (!run) return { error: '没有可处置的运行' }
+      step('run', { id: run.id, status: run.status, checks: run.checks?.length ?? 0 })
+
+      // 选一条 awaiting-confirmation 的 check 做人工确认
+      const target = (run.checks ?? []).find(c => c.status === 'awaiting-confirmation')
+      if (!target) return { ...out, error: '没有待确认的 check' }
+      step('targetCheck', { checkId: target.checkId, status: target.status })
+
+      const result = await api.recordWorkspaceDispositionV2({
+        caseId,
+        command: {
+          requestId: 'e2e-disp-' + Date.now().toString(36),
+          target: { kind: 'case', id: caseId },
+          expectedRevision: aggregate.caseV2.revision,
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'RecordWorkspaceFindingDisposition',
+          payload: { findingKey: target.checkId, disposition: 'human-confirmed-compliant',
+            reason: '审核员对照审核依据和材料后确认本项符合',
+            runId: run.id, inputHash: run.inputManifest?.hash },
+        },
+      })
+      step('recordDisposition', { ok: result?.ok, code: result?.code ?? null,
+        message: result?.message ?? null })
+
+      // 复核后读回：处置是否持久
+      const after = await api.getAggregateV2(caseId)
+      step('persisted', {
+        revision: after?.caseV2?.revision,
+        dispositions: (after?.dispositions ?? []).length,
+        receipts: (after?.receiptLog ?? []).map(r => r.type).slice(-3),
+      })
+
+      // 复核后重新导出报告
+      try {
+        const report = await api.exportReportV2(caseId)
+        step('exportReport', { file: report?.file ?? null })
+      } catch (error) { step('exportReport', { ok: false, error: String(error?.message ?? error) }) }
+
+      return out
+    `.replace('__CASE_ID__', JSON.stringify(process.env.E2E_CASE_ID ?? '')))
   },
 
   async 'd4-list'({ send }) {

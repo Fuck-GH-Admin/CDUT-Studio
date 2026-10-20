@@ -10,7 +10,7 @@ import { getCaseV2Aggregate } from './application-service'
 import { isPiReviewRunAdmitted } from './review-pi-admission'
 import { listRunsV2 } from './run-store-v2'
 
-type RunSummary = Pick<ReviewRunV2, 'id' | 'caseId' | 'status' | 'completedAt'>
+type RunSummary = Pick<ReviewRunV2, 'id' | 'caseId' | 'status' | 'completedAt' | 'error'>
 
 export function summarizeBackgroundPiReviewState(
   caseId: string,
@@ -26,6 +26,8 @@ export function summarizeBackgroundPiReviewState(
     runId: latest.id,
     runStatus: latest.status,
     ...(latest.completedAt ? { completedAt: latest.completedAt } : {}),
+    // 终态失败原因必须随状态一起回传，否则界面只知道「没成功」而不知道「为什么」。
+    ...(latest.error ? { error: latest.error } : {}),
   }
   switch (latest.status) {
     case 'queued':
