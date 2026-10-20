@@ -2,6 +2,7 @@
  * 普通 Pi 会话的案卷审核接入。
  * Agent 自主读取材料；本模块只创建输入快照、校验结构化结果并写入现有运行记录。
  */
+import { piObservationFieldContract } from './pi-review-prompt-contract'
 import { existsSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { AiOpinion, CaseAggregateV2, CheckResult, FieldValue, Observation, ReviewRunV2, RuleSpec, SourceRef, TemplateVersion } from '@profer/shared'
@@ -412,6 +413,8 @@ function promptFor(aggregate: CaseAggregateV2, template: TemplateVersion): strin
     ]),
     '按模板要求完成整案核对；多个分项仍是同一次案卷审核。确定性预算/编号规则由系统按现有计算器校验，不接受模型自算值替代。规则或材料不足时如实提交待确认/待补件。符合或不符合必须提供本案真实 documentVersionId、blockId 和准确引文；图片引用需提供清楚的图像观察描述。',
     '用 review_submit_result 提交事实候选与检查结果。可以先分批提交（finish=false）。finish=true 只有在所有语义检查都有效且提交没有被拒绝时才会关闭运行；若有缺项或出处被拒，运行会保持开放，请按工具返回的 rejected 和 missingChecks 修正并再次提交。审核分析结束不等于正式认定或批准；不得调用决定类操作。',
+    // 把模板已声明的字段如实提前告知，避免模型猜 fieldKey 被事后校验拒绝
+    piObservationFieldContract(template, aggregate.caseV2.id),
     '长流程中请分批提交已经核验的检查（finish=false），避免只把大量原文留在对话历史里。需要压缩上下文时，先持久化当前可提交结果，再调用 CompactContext；压缩后先读取运行账本确认已提交项、读取覆盖和缺项，再继续审核。未读取材料和待核实事项必须继续保留为未完成状态。',
     ...(aggregate.d2RuntimePlan ? [
       '【D2 固定技术预审包】版本指纹：' + aggregate.d2RuntimePlan.fingerprint,

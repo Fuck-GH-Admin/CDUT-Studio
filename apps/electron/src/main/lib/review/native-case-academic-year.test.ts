@@ -65,7 +65,7 @@ describe('切换领域时的学年一致性', () => {
       domainPackId: 'contract-review', reviewTemplate: null,
     }, actor)
     await expect(updateNativeWorkspaceSettingsV3(created.aggregate.caseV2.id, {
-      domainPackId: 'comprehensive-assessment',
+      caseId: created.aggregate.caseV2.id, domainPackId: 'comprehensive-assessment',
     }, actor)).rejects.toThrow('请先为案卷填写适用学年')
   })
 
@@ -77,7 +77,7 @@ describe('切换领域时的学年一致性', () => {
       domainPackId: 'contract-review', reviewTemplate: null,
     }, actor)
     const updated = await updateNativeWorkspaceSettingsV3(created.aggregate.caseV2.id, {
-      domainPackId: 'comprehensive-assessment',
+      caseId: created.aggregate.caseV2.id, domainPackId: 'comprehensive-assessment',
     }, actor)
     expect(updated.id).toBe(created.aggregate.caseV2.id)
   })
