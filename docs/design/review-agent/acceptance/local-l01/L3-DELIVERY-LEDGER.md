@@ -24,6 +24,20 @@
 - 决策准备度：待确认/待补件/执行失败/未结束补件任一存在即 `blocked`；**不把「Run 已完成」当成「检查全通过」**
 - 未使用 `stage-workflow` 的合成 `run@rev` 证据
 
+### L 线本轮新增桥接
+
+| 提交 | 模块 | 内容 |
+|---|---|---|
+| `63c59d488` | T05 | 可信阶段事务：能力投影 + `recordT05StageDecision`（重核身份/模板/修订/任务/当前 Run/准备度后原子落盘） |
+| `b3311ab51` | T08 共享修复 | `UPDATE_FIELDS_V2` 读已发布模板 FieldSpec；`toFieldValueV2` 与建案同源，消除 date/boolean/enum 被降级为 text 的类型漂移 |
+| `bea8df92f` | T06 | 物理入库：真实 OS 选择器只下发不透明 entryId；指纹校验 + requestId 幂等 + 部分失败保留但与批次隔离 |
+| `969cb1cb4` | T01 | 受控模型起草：Main 解析既有审核网关渠道并调用，凭据不出 Main；返回原文与真实模型标识 |
+
+**T06 真机未运行**：`pickT06PhysicalSource` 需真实 OS 弹窗，当前自动化环境（xvfb）无法驱动原生对话框；
+枚举/指纹/幂等/部分失败由 `review-v3-t06-main-service.test.ts` 用真实目录覆盖。UI 侧 BatchPanel 已按端口存在性降级。
+
+**T01 模型端口真机 PASS**：`flow-t01-model` 真实调用 `mimo-v2.6-flash` 返回 `{"ok":true}`，渠道名与模型标识正确回传。
+
 ### A15 分阶段（S0–S4）
 
 | Gate | 结果 | 证据 / 真实断点 |
