@@ -23,7 +23,9 @@ export function exportCaseReport(caseId: string): ExportReportResultV2 {
   const aggregate = getCaseV2Aggregate(caseId)
   if (!aggregate) throw new Error(`案卷聚合不存在: ${caseId}`)
   const feedback = buildCaseFeedback(aggregate.caseV2, aggregate.decisions, aggregate.supplements, {})
-  const runs = reconcilePiReviewRunsWithReadReceipts(caseId, listRunsV2(caseId)).filter((run) => run.status === 'completed' || run.status === 'partially-completed')
+  // Export what actually happened, including unfinished or interrupted local
+  // Pi work. No completed-only filter that silently hides the current run.
+  const runs = reconcilePiReviewRunsWithReadReceipts(caseId, listRunsV2(caseId))
   const finalDecision = aggregate.decisions.at(-1)
   const lastRun = (finalDecision ? runs.find((run) => run.id === finalDecision.basedOnRunId) : undefined) ?? runs[0]
   const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
@@ -32,7 +34,19 @@ export function exportCaseReport(caseId: string): ExportReportResultV2 {
   if (feedback.decision) lines.push(`## 决定`, `- 结果：${feedback.decision.result}`, `- 理由：${feedback.decision.reason}`, `- 时间：${feedback.decision.at}`, '')
   if (lastRun) {
     lines.push(`## 审核依据（运行 ${lastRun.id}）`)
+    lines.push(`- 技术运行状态：${lastRun.status}（尚未完成不等于审核通过）`)
+    lines.push(`- 当前输入哈希：${lastRun.inputManifest.hash}`)
+    lines.push(`- 检查覆盖：计划 ${lastRun.coverage.plannedChecks}、已完成 ${lastRun.coverage.completedChecks}、有效判断 ${lastRun.coverage.effectiveVerdicts}、待处理 ${lastRun.coverage.pendingChecks}`)
+    lines.push(`- 模型意见：${lastRun.opinions.length} 条`)
     lines.push(`- 有效规则集哈希：${lastRun.inputManifest.effectiveRuleSetHash ?? '旧运行未记录'}`)
+    if(lastRun.error)lines.push(`- 运行错误：${lastRun.error}`)
+    if(aggregate.d2RuntimePlan?.fingerprint)
+      lines.push(`- 本地 D4/D2 技术计划：${aggregate.d2RuntimePlan.templateId}@${aggregate.d2RuntimePlan.templateVersion} / ${aggregate.d2RuntimePlan.fingerprint}（非校方发布）`)
+    if(lastRun.coverage.documents.length){
+      lines.push('', '### 实际材料覆盖')
+      for(const doc of lastRun.coverage.documents)
+        lines.push(`- ${doc.documentVersionId}：${doc.status}${doc.reason?'；'+doc.reason:''}`)
+    }
     for (const { rule, origin } of effectiveRules) {
       const sectionName = rule.sectionId ? template?.sections?.find((section) => section.id === rule.sectionId)?.name : undefined
       const source = origin.kind === 'policy' ? `政策 ${origin.policyId}@${origin.version}` : origin.kind === 'template' ? `模板 ${origin.templateId}@${origin.version}` : '案卷规则'
@@ -40,9 +54,23 @@ export function exportCaseReport(caseId: string): ExportReportResultV2 {
     }
     lines.push('', `## 检查结果（运行 ${lastRun.id}）`)
     for (const check of lastRun.checks) {
-      const item = check as { ruleId: string; status: string; reason?: string }
-      lines.push(`- ${item.ruleId}：${item.status}${item.reason ? `——${item.reason}` : ''}`)
+      lines.push(`- ${check.checkId}（规则 ${check.ruleId}）【${check.status}】：${check.reason || '未注明原因'}；执行来源 ${check.executedBy}`)
+      for(const ref of check.sourceRefs)
+        lines.push(`  - 原件 ${ref.documentVersionId}（解析修订 ${ref.parseRevision}）：${JSON.stringify(ref.location)}`)
+      if(check.calculation?.detailLines?.length)
+        for(const line of check.calculation.detailLines)lines.push('  - 计算：'+line)
     }
+    if(lastRun.opinions.length){
+      lines.push('', '### 模型建议（必须人工复核，非最终认定）')
+      for(const item of lastRun.opinions){
+        lines.push(`- ${item.title}（${item.kind}/${item.verification}）：${item.detail}`)
+        if(item.suggestionText)lines.push('  - 建议：'+item.suggestionText)
+        for(const ref of item.sourceRefs)
+          lines.push(`  - 原件 ${ref.documentVersionId}（解析修订 ${ref.parseRevision}）：${JSON.stringify(ref.location)}`)
+      }
+    }
+    if(lastRun.coverage.pendingChecks>0)
+      lines.push('', `**尚有 ${lastRun.coverage.pendingChecks} 项检查待处理，不能作为完整结论使用。**`)
     lines.push('')
     const waived = aggregate.dispositions.filter((entry) => entry.runId === lastRun.id && entry.inputHash === lastRun.inputManifest.hash && entry.disposition === 'waived')
     if (waived.length) {
