@@ -93,9 +93,15 @@ async function rasterizePdfPages(
   }
 }
 
-function ocrBlocksForImage(image: ReviewDocumentBlock, result: OcrResult): ReviewDocumentBlock[] {
-  // OCR coordinates in the existing port are raster pixels; they cannot be
-  // labeled PDF-normalized boxes without the real source page dimensions.
+/** OCR pixel rectangles can locate a block on a *whole-page raster*.
+ * PPTX embedded pictures have an image-space rectangle, not slide coordinates;
+ * preserve their image link without pretending to know a slide-page bbox.
+ */
+function ocrBlocksForImage(
+  image: ReviewDocumentBlock, result: OcrResult, wholePageImage: boolean,
+): ReviewDocumentBlock[] {
+  const clamp = (n: number): number => Math.max(0, Math.min(1, n))
+  const canLocate = wholePageImage && result.imageWidth > 0 && result.imageHeight > 0
   return result.blocks.filter(b => b.text.trim()).map((b, i) => ({
     id: image.id + '-ocr-' + String(i + 1).padStart(3, '0'),
     kind: 'paragraph' as const,
@@ -103,12 +109,19 @@ function ocrBlocksForImage(image: ReviewDocumentBlock, result: OcrResult): Revie
     text: b.text.trim(),
     confidence: b.confidence,
     readingOrder: i,
+    ...(image.imageAssetPath ? { imageAssetPath: image.imageAssetPath } : {}),
+    ...(canLocate ? { bbox: [
+      clamp(b.rect.x / result.imageWidth),
+      clamp(b.rect.y / result.imageHeight),
+      clamp((b.rect.x + b.rect.w) / result.imageWidth),
+      clamp((b.rect.y + b.rect.h) / result.imageHeight),
+    ] as NonNullable<ReviewDocumentBlock['bbox']> } : {}),
   }))
 }
 
 async function readImage(
   source: SourceDocument, image: ReviewDocumentBlock,
-  physicalPath: string, ocr: OcrPort,
+  physicalPath: string, ocr: OcrPort, wholePageImage: boolean,
 ): Promise<{ blocks: ReviewDocumentBlock[]; engine: string }> {
   const result = await ocr.recognize({
     documentVersionId: source.id,
@@ -116,7 +129,7 @@ async function readImage(
     language: 'chi_sim+eng',
     timeoutMs: 60_000,
   })
-  return { blocks: ocrBlocksForImage(image, result), engine: result.engine }
+  return { blocks: ocrBlocksForImage(image, result, wholePageImage), engine: result.engine }
 }
 
 /**
@@ -197,7 +210,11 @@ export async function parseT02VisualMaterialWithOcr(input: T02OcrInput): Promise
         continue
       }
       try {
-        const extracted = await readImage(source, image, physical, input.ocr)
+        // A stand-alone image or a full rendered PDF page has the same pixel
+        // canvas as its source page. An Office-embedded image does not.
+        const fullPageImage = /^\.(png|jpg|jpeg|gif|bmp|webp)$/.test(ext) ||
+          (ext === '.pdf' && image.id.startsWith('blk-t02-pdf-page-'))
+        const extracted = await readImage(source, image, physical, input.ocr, fullPageImage)
         if (extracted.blocks.length > 0) {
           newOcrBlocks.push(...extracted.blocks)
           inspectedImages++
