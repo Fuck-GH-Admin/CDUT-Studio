@@ -77,11 +77,15 @@ export function parseT08FieldDraft(field: FieldSpec, text: string): FieldValue {
 }
 
 export function makeT08FieldUpdate(target: T08FieldTarget, value: FieldValue): {
-  caseFieldValues?: Record<string, FieldValue>
-  subjectFieldValues?: Array<{ subjectId: string; values: Record<string, FieldValue> }>
+  caseFieldValues?: Record<string, string>
+  subjectFieldValues?: Array<{ subjectId: string; values: Record<string, string> }>
 } {
   if (value.kind !== target.field.kind) throw new Error('字段类型与模板不匹配')
-  if (target.scope === 'case') return { caseFieldValues: { [target.field.key]: value } }
+  // Main's current updateFieldsC0 does not pass a template to updateFields().
+  // Its fallback turns ALL input into {kind:'text', value:String(raw)}.
+  // Until L wires typed template validation, only genuine text can be safely saved.
+  if (value.kind !== 'text') throw new Error('该字段需先接入 Main 的模板类型写入服务；不能将数字或日期错误保存为文本')
+  if (target.scope === 'case') return { caseFieldValues: { [target.field.key]: value.value } }
   if (!target.subjectId) throw new Error('事项 ID 缺失')
-  return { subjectFieldValues: [{ subjectId: target.subjectId, values: { [target.field.key]: value } }] }
+  return { subjectFieldValues: [{ subjectId: target.subjectId, values: { [target.field.key]: value.value } }] }
 }
