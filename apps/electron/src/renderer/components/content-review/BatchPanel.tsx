@@ -14,6 +14,8 @@ import { BatchGroupActionDialog } from './BatchGroupActionDialog'
 import { BatchAutomationDialog } from './BatchAutomationDialog'
 import { batchAutomationDisplay, reviewBusinessError, summarizeBatchExecution } from './batch-ui-feedback'
 import { ReviewV3T06BatchIntakePreview } from './ReviewV3T06BatchIntakePreview'
+import { ReviewV3T06PhysicalImport, type T06PhysicalMainApi } from './ReviewV3T06PhysicalImport'
+import type { T06CommitReceipt } from './review-v3-t06-physical-intake'
 import { buildBatchSummaryCsv } from './review-v3-t06-batch-intake'
 
 type CaseIndexItem = Awaited<ReturnType<typeof window.reviewAPI.listCasesV2>>[number]
@@ -719,6 +721,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         selectedCaseIds={selectedCaseIds}
         onToggleCase={toggleCase}
         onApplyCaseIds={setSelectedCaseIds}
+        onPhysicalCommitted={(result) => { if (result.batchId) { setCreateOpen(false); void refresh() } }}
         onCreate={createBatch}
       />
     </div>
@@ -740,7 +743,7 @@ function SummaryCard({ label, value, hint, icon, tone }: { label: string; value:
 
 function CreateBatchDialog({
   open, onOpenChange, creating, batchName, onBatchNameChange, templates, templateKey, onTemplateKeyChange,
-  availableCases, legacyById, selectedCaseIds, onToggleCase, onApplyCaseIds, onCreate,
+  availableCases, legacyById, selectedCaseIds, onToggleCase, onApplyCaseIds, onPhysicalCommitted, onCreate,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -755,10 +758,14 @@ function CreateBatchDialog({
   selectedCaseIds: string[]
   onToggleCase: (caseId: string) => void
   onApplyCaseIds: (ids: string[]) => void
+  onPhysicalCommitted: (result: T06CommitReceipt) => void
   onCreate: (event: React.FormEvent<HTMLFormElement>) => void
 }): JSX.Element {
   const selectedTemplate = templates.find((template) => `${template.templateId}@${template.version}` === templateKey)
   const canCreate = !!selectedTemplate && batchName.trim().length > 0 && selectedCaseIds.length > 0 && !creating
+  const physicalMain = window.reviewAPI as typeof window.reviewAPI & Partial<T06PhysicalMainApi>
+  const physicalApi: T06PhysicalMainApi | undefined = physicalMain.pickT06PhysicalSource && physicalMain.commitT06PhysicalImport
+    ? { pickT06PhysicalSource: physicalMain.pickT06PhysicalSource, commitT06PhysicalImport: physicalMain.commitT06PhysicalImport } : undefined
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -787,6 +794,10 @@ function CreateBatchDialog({
               }))}
               onApply={onApplyCaseIds} />
           )}
+          {selectedTemplate && <ReviewV3T06PhysicalImport key={'physical:' + templateKey}
+            api={physicalApi} templateId={selectedTemplate.templateId} templateVersion={selectedTemplate.version}
+            batchName={batchName} existingCases={availableCases.map(item => ({ caseId: item.caseId, title: item.title }))}
+            onCommitted={onPhysicalCommitted} />}
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <Label>纳入项目</Label>
