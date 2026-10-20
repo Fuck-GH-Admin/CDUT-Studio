@@ -188,4 +188,23 @@ describe('V3 R01 T03 Run evidence gate (pure business contract)', () => {
     } })
     expect(gate('stage-pass', originalRun, data).allowed).toBe(true)
   })
+
+  test('Main can select only latest verifiably current Run, never a stale historical candidate', async () => {
+    const { selectT03CurrentRun } = await import('./review-v3-core-t03-run-gate')
+    const old = run(undefined, { id: 'run-old' })
+    const changed = run(undefined, { id: 'run-stale', inputManifest: {
+      ...run().inputManifest, documentVersions: [{ ...document, contentHash: 'obsolete-hash' }],
+    } })
+    const selected = selectT03CurrentRun({
+      aggregate: aggregate(),
+      runs: [old, changed],
+      prove: () => evidence(),
+    })
+    expect(selected?.id).toBe('run-old')
+    const missingProof = selectT03CurrentRun({
+      aggregate: aggregate(), runs: [old], prove: () => undefined,
+    })
+    expect(missingProof).toBeUndefined()
+  })
+
 })
