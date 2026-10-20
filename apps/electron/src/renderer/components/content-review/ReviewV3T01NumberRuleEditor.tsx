@@ -21,7 +21,8 @@ export function ReviewV3T01NumberRuleEditor({ criterion, fields, onChange }: Pro
   const update = (patch: Partial<Pick<T01NumberLimit, 'fieldKey' | 'operator' | 'threshold' | 'unit'>>): void => {
     if (!current) return
     // Any semantic change invalidates the previous owner's confirmation.
-    onChange(setT01NumberLimit(criterion, { ...current, ...patch, ownerStatement: undefined }))
+    const { ownerStatement: _previous, ...constraint } = current
+    onChange(setT01NumberLimit(criterion, { ...constraint, ...patch }))
   }
   if (!current) {
     return numberFields.length > 0 ? (
