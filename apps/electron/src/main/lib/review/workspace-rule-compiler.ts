@@ -1,10 +1,6 @@
 /** 将案卷中人工确认的 V1 规则摘要编译成 V2 可执行规则；不支持的约束明确降为人工核验。 */
 import type { RuleConstraint, RuleOutlineItem, RulePack, RuleSpec } from '@profer/shared'
 
-function fieldCondition(field: string, op: 'eq' | 'lte' | 'gte', value: string | number) {
-  return { field, op, value } as const
-}
-
 export function compileWorkspaceRule(pack: RulePack, outline: RuleOutlineItem, priority = 1): RuleSpec {
   const constraint = outline.constraint
   let execution: RuleSpec['execution'] = pack.confirmed ? 'semantic' : 'manual'
