@@ -10,6 +10,7 @@ export interface T06PhysicalSelection {
   previewFingerprint: string
   sourceKind: T06SourceKind
   entries: T06PhysicalEntry[]
+  warnings?: string[] // Main-owned inventory skips/rejects, never silent successes
 }
 export interface T06PhysicalGroup {
   groupId: string
