@@ -183,6 +183,10 @@ export function ContentReviewView(): React.ReactElement {
                 {label}
               </Button>
             ))}
+            <Button type="button" size="sm" variant="ghost" className="h-7 px-2.5 text-xs font-medium"
+              onClick={() => openPane('right')} title="在当前案卷查看需要核对的检查与人工待办">
+              待办
+            </Button>
           </nav>
 
           {reviewCase && (
