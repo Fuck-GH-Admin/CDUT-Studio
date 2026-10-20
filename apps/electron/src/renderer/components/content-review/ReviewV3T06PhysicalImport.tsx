@@ -88,7 +88,7 @@ export function ReviewV3T06PhysicalImport({
       {preview.errors.map((e, i) => <p key={i} role="alert" className="text-xs text-destructive">{e}</p>)}
       <div className="max-h-72 space-y-2 overflow-y-auto">
         {preview.groups.map(group => {
-          const choice = selected[group.groupId]
+          const choice: T06GroupChoice = selected[group.groupId] ?? { action: 'create', title: group.name, applicant: '' }
           return <div className="space-y-2 rounded border bg-background p-2" key={group.groupId}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium">{group.name} · {group.entries.length} 个文件</span>
@@ -104,8 +104,8 @@ export function ReviewV3T06PhysicalImport({
             </div>
             {group.unassigned && <label className="block text-[11px] text-amber-700 dark:text-amber-300">
               根目录文件必须明确归属，填写案卷组：
-              <input value={rootAssignments[group.entries[0].entryId] ?? ''} disabled={!!receipt} className="mt-1 w-full rounded border bg-background p-1"
-                onChange={e => setRootAssignments(old => ({ ...old, [group.entries[0].entryId]: e.target.value }))}/>
+              <input value={rootAssignments[group.entries[0]?.entryId ?? ''] ?? ''} disabled={!!receipt} className="mt-1 w-full rounded border bg-background p-1"
+                onChange={e => setRootAssignments(old => ({ ...old, [group.entries[0]?.entryId ?? '']: e.target.value }))}/>
             </label>}
             {choice.action === 'create' && <div className="grid gap-2 sm:grid-cols-2">
               <input className="rounded border bg-background p-1.5 text-xs" aria-label={group.name + ' 标题'}
