@@ -252,11 +252,17 @@ function groupScore(rule: RuleSpec, op: Extract<T04Operation,{kind:'group-score'
   const raw=kept.reduce((sum,x)=>sum+x.value,0n)
   const total=cap!==undefined && raw>cap?cap:raw
   let remaining=total
+  let displayRemaining=decimalT04(formatT04(total,precision))
   const allocation:T04Outcome['allocation']=[]
   for (const entry of kept) {
     const counted=entry.value<remaining?entry.value:remaining
     remaining-=counted
-    allocation.push({itemId:entry.item.id,counted:formatT04(counted,precision),reason:counted===entry.value?'全额计入':'组上限截断'})
+    // Round allocations as a ledger: distribute display units in score order,
+    // never allow separately rounded rows to exceed the rounded group total.
+    const rounded=decimalT04(formatT04(counted,precision))
+    const roundedCounted=rounded<displayRemaining?rounded:displayRemaining
+    displayRemaining-=roundedCounted
+    allocation.push({itemId:entry.item.id,counted:formatT04(roundedCounted,precision),reason:counted===entry.value?'全额计入':'组上限截断'})
   }
   for (const entry of dropped) allocation.push({itemId:entry.item.id,counted:formatT04(0n,precision),reason:'同键择高/择单项未计入'})
   allocation.sort((a,b)=>a.itemId.localeCompare(b.itemId))
@@ -437,7 +443,9 @@ export function evaluateT04Plan(
     else if(excluded.has(check.rule.policyVersionId+'::'+check.rule.id))
       outcome=complete('not-applicable',null,'相同约束已有具名优先政策，当前规则不计入',[],check.items,check.rule)
     else if((check.rule.effectiveFrom||check.rule.effectiveUntil) &&
-      (!check.asOfDate||!strictDate(check.asOfDate)))
+      (!check.asOfDate||!strictDate(check.asOfDate)||
+       (check.rule.effectiveFrom&&!strictDate(check.rule.effectiveFrom))||
+       (check.rule.effectiveUntil&&!strictDate(check.rule.effectiveUntil))))
       outcome=pending('规则有效日期缺失/不明确，不能凭系统时间判断',check.items,check.rule)
     else if(check.asOfDate &&
       ((check.rule.effectiveFrom&&check.asOfDate<check.rule.effectiveFrom)||
