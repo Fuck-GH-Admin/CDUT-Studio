@@ -34,6 +34,10 @@ export interface CMainRemovalObservedConsent extends CMainRemovalPhysicalIdentit
   readonly observedAtMs: number
 }
 export interface CMainRemovalWitnessSource {
+  /** Optional trusted native confirmation hook, invoked ONLY inside Case CAS.
+   * Production may implement it via Electron's synchronous modal dialog.
+   * No Renderer event/payload is allowed to implement this interface. */
+  observeAtCommit?(ctx: CMainRemovalCommitContext): void
   /** Must read privileged Main's real human-observation ledger, never IPC. */
   getObservedMainHumanConsent(caseId: string, requestId: string):
     CMainRemovalObservedConsent | undefined

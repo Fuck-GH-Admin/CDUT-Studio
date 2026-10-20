@@ -388,14 +388,20 @@ export async function handleCMainUpgradeCanonicalPlan(
     const grant=checkGrant(authority.getCaseGrant(data.caseId))
     const removalGate=installed.removalGate
     if(!removalGate)throw new Error('C_MAIN_V3_IPC_HUMAN_REMOVAL_OBSERVER_NOT_INSTALLED')
-    removalGate.consumeAtCommit({
+    const observedCtx={
       caseId:data.caseId,requestId:data.requestId,
       currentCaseRevision:aggregate.caseV2.revision,
       identity:{...now,ownerId:grant.ownerId,ownerGeneration:grant.generation,
         authorityEpoch:grant.authorityEpoch},
       acknowledgement:ack,computedRemovedIdentities:removed,
       reason:data.payload.acknowledgement,
-    })
+    }
+    // Called INSIDE the serialized Case CAS with the REAL computed removals.
+    // The Main-owned native OS dialog is independent of Renderer ACK.
+    // No native confirmation or observed physical source => fail closed.
+    authority.removalConsentSource?.observeAtCommit?.(observedCtx)
+    recheck(aggregate)
+    removalGate.consumeAtCommit(observedCtx)
     recheck(aggregate)
   })
 }
