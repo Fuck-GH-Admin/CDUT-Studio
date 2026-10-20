@@ -106,6 +106,10 @@ function validateTargets(selection: D2ScenarioSelection): void {
           target.operation || target.operationId || target.itemId || target.scenario) {
         throw new Error('D2_TARGET_INVALID: 学籍目标必须绑定精确学生/字段/更正意图')
       }
+    } else if(target.kind==='custom-object') {
+      if(!safe(target.objectKey)||target.itemId||target.operation||
+        target.studentId||target.fieldKey||target.conditions?.length||target.scenario)
+        throw Error('D2_CUSTOM_OBJECT_INVALID')
     } else if (target.kind==='generic-object') {
       if(!safe(target.objectKey)||!safe(target.businessType??'')||target.operation||target.operationId||
          target.itemId||target.studentId||target.fieldKey||target.intent||
