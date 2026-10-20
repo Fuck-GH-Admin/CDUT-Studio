@@ -45,7 +45,7 @@ export function parseT01ModelDraftResponse(raw:string,templateId:string,createdA
   }
   return {template,extracted:safeArray(data.extracted),
     questions:[...new Set([...safeArray(data.questions),'请核实政策原文、版本、阈值、角色权限与适用范围。'])],
-    supportedBy:'explicit-local-brief'}
+    supportedBy:'authorized-model-draft'}
 }
 export async function draftT01ViaAuthorizedModel(
   brief:string,templateId:string,createdAt:string,invoke:T01ModelDraftInvoke,
