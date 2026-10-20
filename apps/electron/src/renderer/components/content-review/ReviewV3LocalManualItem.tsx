@@ -17,6 +17,20 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
   const [notice,setNotice]=React.useState('')
   const [error,setError]=React.useState('')
   const retry=React.useRef<{signature:string;requestId:string}|null>(null)
+  const [editingId,setEditingId]=React.useState('')
+  const [editTitle,setEditTitle]=React.useState('')
+  const [editCategory,setEditCategory]=React.useState('')
+  const [editScore,setEditScore]=React.useState('0')
+  const editableItems=(aggregate?.caseV2.subjects??[]).filter(item=>
+    item.type==='item'&&item.sourceRefs.length>0)
+  const beginEdit=(item:(typeof editableItems)[number]):void=>{
+    setEditingId(item.id)
+    setEditTitle(item.title)
+    setEditCategory(item.fields.category?.kind==='text'?item.fields.category.value:'人工声明')
+    setEditScore(item.fields.declaredScore?.kind==='number'?
+      String(item.fields.declaredScore.value):'0')
+    setError('');setNotice('')
+  }
   const sources=(aggregate?.caseV2.documents??[]).filter(doc=>
     doc.role==='application'&&doc.active!==false&&
     Number.isSafeInteger(doc.parseRevision)&&doc.parseRevision>=0)
@@ -44,6 +58,34 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
     }).catch(e=>{if(mounted)setError(e instanceof Error?e.message:String(e))})
     return()=>{mounted=false}
   },[caseId])
+  const saveEdit=async():Promise<void>=>{
+    if(busy||!caseId||!editingId)return
+    const score=Number(editScore)
+    if(!editTitle.trim()||!editCategory.trim()||
+       !Number.isFinite(score)||score<0||score>1000000){
+      setError('请填写事项名称、类别及 0 至 1000000 的有效声明分数')
+      return
+    }
+    setBusy(true);setError('');setNotice('')
+    try{
+      const fresh=await window.reviewAPI.getAggregateV2(caseId)
+      const original=fresh?.caseV2.subjects.find(item=>item.id===editingId&&
+        item.type==='item'&&item.sourceRefs.length>0)
+      if(!fresh||fresh.caseV2.id!==caseId||
+         fresh.caseV2.stage!=='draft'||!original)
+        throw new Error('案卷/原件来源或草稿状态已变化，请刷新后重新选择事项')
+      // Existing trusted Main native writer retains the exact original anchor,
+      // checks native Case CAS and rejects stale/confirmed evidence changes.
+      await window.reviewAPI.updateReviewItem({
+        caseId,itemId:editingId,title:editTitle.trim(),
+        category:editCategory.trim(),declaredScore:score,
+      })
+      setEditingId('')
+      setNotice('人工事项修正已写入本机原生案卷；来源锚点未替换，仍待审核认定')
+      await refresh()
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
   const archive=async(documentId:string):Promise<void>=>{
     if(busy||!caseId||!window.confirm('归档这份材料的当前版本？原件、历史记录会保留；它支持的旧证据将失效。'))return
     setBusy(true);setError('');setNotice('')
@@ -124,7 +166,36 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
         disabled={busy||!chosen||!title.trim()||!category.trim()||aggregate?.caseV2.stage!=='draft'}
         onClick={()=>void submit()}>登记真实来源人工事项</button>
     </div>
-    {notice&&<p role="status" className="text-xs">{notice}</p>}
+    {editableItems.length>0&&<div className="space-y-2 rounded border border-border p-3">
+      <h4 className="text-sm font-medium">本机已登记事项（{editableItems.length}）</h4>
+      <p className="text-xs text-muted-foreground">仅显示带当前来源记录的事项；修改使用原有 Main 原生案卷写入，保留材料关联与历史。</p>
+      {editableItems.map(item=><div key={item.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-2 text-xs">
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium">{item.title}</p>
+          <p className="text-muted-foreground">状态：{item.status} · 已登记来源 {item.sourceRefs.length} 条（不代表审核通过）</p>
+        </div>
+        <button type="button" className="rounded border border-border px-2 py-1 disabled:opacity-40"
+          disabled={busy||aggregate?.caseV2.stage!=='draft'} onClick={()=>beginEdit(item)}>修正声明</button>
+      </div>)}
+      {editingId&&<div className="space-y-2 border-t border-border pt-2">
+        <p className="text-xs font-medium">编辑已有来源锚定事项（不修改来源）</p>
+        <div className="flex flex-wrap gap-2">
+          <input aria-label="修正事项名称" className="min-w-44 flex-1 rounded border border-border bg-background px-2 py-1 text-sm"
+            value={editTitle} onChange={e=>setEditTitle(e.target.value)}/>
+          <input aria-label="修正申报类别" className="min-w-32 flex-1 rounded border border-border bg-background px-2 py-1 text-sm"
+            value={editCategory} onChange={e=>setEditCategory(e.target.value)}/>
+          <input aria-label="修正声明分数" type="number" min="0" max="1000000"
+            className="w-24 rounded border border-border bg-background px-2 py-1 text-sm"
+            value={editScore} onChange={e=>setEditScore(e.target.value)}/>
+          <button type="button" className="rounded border border-border px-3 py-1 text-sm disabled:opacity-40"
+            disabled={busy||aggregate?.caseV2.stage!=='draft'||!editTitle.trim()||!editCategory.trim()}
+            onClick={()=>void saveEdit()}>保存人工修正</button>
+          <button type="button" className="rounded border border-border px-3 py-1 text-sm"
+            disabled={busy} onClick={()=>setEditingId('')}>取消</button>
+        </div>
+      </div>}
+    </div>}
+    {notice&&<p role="status" className="text-xs">{notice}</p>
     {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
     {aggregate?.caseV2.stage!=='draft'&&<p className="text-xs text-muted-foreground">当前不是可编辑草稿，不能新增事项，请走正式变更或重审流程。</p>}
   </section>
