@@ -67,7 +67,7 @@ export function ReviewV3T03FactWorkbench({ onRestructure }: { onRestructure?: (p
     })
   }, [aggregate, extracted])
   const facts = React.useMemo(() => aggregate ? projectT03Facts(aggregate, candidates) : [], [aggregate, candidates])
-  const evidence = React.useMemo(() => aggregate ? projectT03Evidence(aggregate) : [], [aggregate])
+  const evidence = React.useMemo(() => aggregate ? projectT03Evidence(aggregate, candidates) : [], [aggregate, candidates])
   const fact = facts.find(item => item.key === factKey) ?? facts[0] ?? null
   const doc = evidence.find(item => item.documentVersionId === docId) ?? evidence[0] ?? null
   const lastCandidate = fact?.candidates[fact.candidates.length - 1] ?? null
@@ -169,6 +169,16 @@ export function ReviewV3T03FactWorkbench({ onRestructure }: { onRestructure?: (p
                   subjectId: link.subjectId, supportsFact: link.supportsFact, status: 'rejected' }),
                   '已拒绝关联，历史保留')}>拒绝</button>
             </div>}
+          </div>)}
+          {doc.suggestions.map(item => <div key={item.subjectId + ':' + item.supportsFact}
+            className="flex items-center justify-between gap-1 rounded border border-amber-500/30 bg-amber-500/5 p-1">
+            <span>抽取候选 · {titles.get(item.subjectId) ?? item.subjectId} · {item.supportsFact}（未绑定）</span>
+            <button type="button" disabled={busy || !doc.active}
+              className="rounded border px-1 disabled:opacity-50"
+              onClick={() => void perform(() => actions.transitionEvidenceLink({
+                documentVersionId: item.documentVersionId, subjectId: item.subjectId,
+                supportsFact: item.supportsFact, status: 'confirmed',
+              }), '已由审核员核对并绑定候选来源')}>核对并绑定</button>
           </div>)}
           <label className="block">手动绑定事项
             <select value={subjectId} onChange={event => setSubjectId(event.target.value)}
