@@ -5,6 +5,7 @@
  * must never accept a Renderer-supplied filesystem path or issue a Case.
  */
 import { createHash } from 'node:crypto'
+import type { ReviewDocumentBlock } from '@profer/shared'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { extname, join } from 'node:path'
@@ -16,7 +17,7 @@ import { parseFileIntoSourceDocument } from './document-service'
 export interface T02SourceBlockPreview {
   /** Unique within the B2 document version; stable across repeat previews. */
   sourceBlockKey: string
-  kind: 'heading' | 'paragraph' | 'list-item' | 'table-cell' | 'image'
+  kind: ReviewDocumentBlock['kind']
   text: string
   page: number
   table?: { row: number; column: number; sheet?: string }
