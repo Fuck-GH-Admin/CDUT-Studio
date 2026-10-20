@@ -6,6 +6,7 @@ import * as React from 'react'
 import { useSetAtom } from 'jotai'
 import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { reviewV2AggregateAtom } from './V2CasePanel'
+import { ReviewV3LocalManualItem } from './ReviewV3LocalManualItem'
 import { ReviewV3AuthorWizard, emptyB1AuthorDocument } from '../review-v3-dev-b/ReviewV3AuthorWizard'
 import type { B1AuthorDocument } from '../../../main/lib/review/review-template-plan-adapter-v3-b1'
 import type { B1CandidateReadResponse } from '../review-v3-dev-b/review-v3-author-revision-read'
@@ -17,6 +18,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   const [caseApplicant,setCaseApplicant]=React.useState('本机用户')
   const [caseYear,setCaseYear]=React.useState(String(new Date().getFullYear()))
   const [localCaseId,setLocalCaseId]=React.useState('')
+  const [savedCases,setSavedCases]=React.useState<Array<{id:string;title:string}>>([])
   const [caseBusy,setCaseBusy]=React.useState(false)
   const [caseNotice,setCaseNotice]=React.useState('')
   const [caseError,setCaseError]=React.useState('')
@@ -44,6 +46,16 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
+  const listSavedCases=async ():Promise<void>=>{
+    if(caseBusy)return
+    setCaseBusy(true);setCaseError('')
+    try{
+      const cases=await window.reviewAPI.listCases()
+      setSavedCases(cases.map(item=>({id:item.id,title:item.title})))
+      setCaseNotice('已列出本地已保存案卷（含只读历史）；选择后可以重新打开。')
+    }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
+    finally{setCaseBusy(false)}
+  }
   const createCase=async ():Promise<void>=>{
     if(caseBusy)return
     setCaseBusy(true);setCaseError('');setCaseNotice('')
@@ -54,6 +66,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
         reviewTemplate:null,
       })
       setLocalCaseId(created.id)
+      setSavedCases([])
       setCaseNotice('本机原生案卷已创建：'+created.id+'；未绑定校方模板，请先导入材料并人工审核。')
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
@@ -64,6 +77,18 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     try{
       const imported=await window.reviewAPI.importDocument({caseId:localCaseId,role:'application'})
       setCaseNotice('已处理本地导入：'+JSON.stringify(imported).slice(0,350))
+    }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
+    finally{setCaseBusy(false)}
+  }
+  const exportLocalMd=async ():Promise<void>=>{
+    if(caseBusy||!localCaseId)return
+    setCaseBusy(true);setCaseError('');setCaseNotice('')
+    try{
+      const fresh=await window.reviewAPI.getAggregateV2(localCaseId)
+      if(!fresh||fresh.caseV2.id!==localCaseId)
+        throw new Error('案卷不存在；请重新读取当前原生案卷')
+      const exported=await window.reviewAPI.exportReportV2(localCaseId)
+      setCaseNotice('已生成本地 Markdown 报告（草稿未审核不代表审批）：'+exported.file)
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
@@ -101,10 +126,20 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
         <input aria-label="当前本机案卷 ID" className="min-w-44 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm"
           placeholder="本机已有案卷 ID 可直接粘贴重开" value={localCaseId} onChange={e=>setLocalCaseId(e.target.value)}/>
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          disabled={caseBusy} onClick={()=>void listSavedCases()}>列出本机历史案卷</button>
+        <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
           disabled={caseBusy||!localCaseId} onClick={()=>void importMaterial()}>选择并导入真实申请材料</button>
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
-          disabled={caseBusy||!localCaseId} onClick={()=>void openCase()}>打开案卷与人工核查</button>
+          disabled={caseBusy||!localCaseId} onClick={()=>void openCase()}>打开案卷历史/人工流程</button>
+        <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          disabled={caseBusy||!localCaseId} onClick={()=>void exportLocalMd()}>导出本地 MD 报告</button>
       </div>
+      {savedCases.length>0&&<select aria-label="从历史案卷重开" value="" 
+        onChange={e=>{setLocalCaseId(e.target.value);setCaseNotice('已选择历史案卷 '+e.target.value) }}
+        className="w-full rounded border border-border bg-background px-2 py-2 text-sm">
+        <option value="">选择一份本机历史案卷</option>
+        {savedCases.map(c=><option key={c.id} value={c.id}>{c.title} · {c.id}</option>)}
+      </select>}
       {caseNotice&&<p role="status" className="text-xs">{caseNotice}</p>}
       {caseError&&<p role="alert" className="text-xs text-red-600">{caseError}</p>}
     </div>
@@ -121,6 +156,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       {message&&<p role="status" className="text-xs">{message}</p>}
       {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
     </div>
+    <ReviewV3LocalManualItem caseId={localCaseId} />
     <ReviewV3AuthorWizard key={key} initialDraft={loaded?.document??emptyB1AuthorDocument()}
       initialRevision={loaded?.revision??0}
       onSaveDraft={(document,expectedRevision)=>
