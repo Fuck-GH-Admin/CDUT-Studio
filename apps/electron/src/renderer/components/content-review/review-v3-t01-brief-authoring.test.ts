@@ -36,7 +36,7 @@ describe('T01 explicit-language authoring and honest uncertainty',()=>{
     expect(result.template.name).toBe('采购申请')
     expect(result.template.objectType).toBe('transaction')
     expect(result.template.fields[0]).toMatchObject({kind:'number',min:0,max:500})
-    expect(result.template.materialSlots[0].name).toBe('询价表')
+    expect(result.template.materialSlots[0]?.name).toBe('询价表')
     expect(result.template.stages).toHaveLength(2)
   })
   test('does not turn an unknown subjective requirement into an executable policy rule',()=>{
