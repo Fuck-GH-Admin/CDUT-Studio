@@ -1,6 +1,6 @@
 /** 审核模板库与编辑器：案卷字段、材料槽、综测分项、审核标准与流程均可在界面配置。 */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FieldSpec, MaterialSlotSpec, RubricSpec, TemplateCriterionSpec, TemplateSectionSpec, TemplateVersion, WorkflowStageSpec } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { toast } from 'sonner'
@@ -8,6 +8,10 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { templatesRefreshAtom, reviewV2BusyAtom } from './V2CasePanel'
 import { useStore } from 'jotai'
 import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
+import { T01_SCENARIOS, createT01Scenario, type T01ScenarioId } from './review-v3-t01-business-presets'
+import { ReviewV3T01TrialPanel } from './ReviewV3T01TrialPanel'
+import { ReviewV3T01ConditionEditor } from './ReviewV3T01ConditionEditor'
+import { exportT01Template, importT01Template } from './review-v3-t01-template-portability'
 
 type EditableFieldKind = 'text' | 'number' | 'date' | 'boolean' | 'enum'
 type TemplateLibraryFilter = 'all' | 'published' | 'reference' | 'drafts'
@@ -134,6 +138,8 @@ export function TemplateWizardPanel(): JSX.Element {
   const [message, setMessage] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [libraryFilter, setLibraryFilter] = useState<TemplateLibraryFilter>('all')
+  const [scenarioChoice,setScenarioChoice]=useState<T01ScenarioId>('laboratory')
+  const importPicker=useRef<HTMLInputElement|null>(null)
 
   const refreshTemplates = useCallback(async (): Promise<void> => {
     try {
@@ -153,6 +159,32 @@ export function TemplateWizardPanel(): JSX.Element {
   const startNew = (kind: 'blank' | 'comprehensive'): void => {
     setEditing(newTemplate(kind))
     setMessage([])
+  }
+
+  const startScenario = (): void => {
+    const next=createT01Scenario(scenarioChoice,generatedId('t01-scenario'),new Date().toISOString())
+    setEditing(next)
+    setMessage([])
+  }
+
+  const importConfiguration = async (file:File):Promise<void> => {
+    try {
+      if(file.size>2_000_000)throw Error('配置文件超过2MB')
+      const template=importT01Template(await file.text(),generatedId('t01-import'),new Date().toISOString())
+      setEditing(template)
+      setMessage([])
+      toast.success('已导入可编辑草稿，确认依据后保存/发布')
+    } catch(error) {toast.error('导入失败：'+(error instanceof Error?error.message:String(error)))}
+  }
+  const exportConfiguration = ():void => {
+    if(!editing)return
+    const blob=new Blob([exportT01Template(editing)],{type:'application/json;charset=utf-8'})
+    const url=URL.createObjectURL(blob)
+    const a=document.createElement('a')
+    a.href=url
+    a.download=editing.templateId+'.template.json'
+    a.click()
+    setTimeout(()=>URL.revokeObjectURL(url),1000)
   }
 
   const openTemplate = (template: TemplateVersion): void => {
@@ -303,10 +335,20 @@ export function TemplateWizardPanel(): JSX.Element {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => startNew('blank')}>新建空白模板</Button>
+            <label className="flex items-center gap-1 text-xs">
+              <span>从模拟业务起草</span>
+              <select aria-label="选择模拟业务" className="rounded border bg-background px-2 py-1.5 text-xs" value={scenarioChoice} onChange={event=>setScenarioChoice(event.target.value as T01ScenarioId)}>
+                {T01_SCENARIOS.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+            <Button size="sm" variant="outline" onClick={startScenario}>创建可编辑示例草稿</Button>
+            <input ref={importPicker} type="file" accept=".json,application/json" className="hidden" aria-label="导入模板配置文件"
+              onChange={event=>{const file=event.target.files?.[0];if(file)void importConfiguration(file);event.target.value=''}} />
+            <Button size="sm" variant="ghost" onClick={()=>importPicker.current?.click()}>导入模板配置</Button>
           </div>
         </div>
         <div className="mt-3 rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2 text-xs leading-5 text-muted-foreground">
-          当前有 <span className="font-medium text-foreground">{libraryCounts.published} 套可载入</span>、
+          新增的七种模拟场景（含实验室无评分双级审核）只生成可编辑草稿，不自动认定学校制度，也不自行安装到原生 V3 Case。当前有 <span className="font-medium text-foreground">{libraryCounts.published} 套可载入</span>、
           <span className="font-medium text-foreground">{libraryCounts.reference + libraryCounts.drafts} 套待配置</span>。
           草稿不会直接进入审核，避免未确认的示例标准被当成本校正式规则。
         </div>
@@ -370,7 +412,10 @@ export function TemplateWizardPanel(): JSX.Element {
               <h3 className="text-sm font-semibold">{editing.status === 'draft' ? '编辑草稿' : '已发布模板'}</h3>
               <p className="mt-1 text-xs text-muted-foreground">{editing.templateId} · v{editing.version}{editing.status !== 'draft' ? ' · 正在编辑新草稿' : ''}</p>
             </div>
-            <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>关闭</Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={exportConfiguration}>导出配置</Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>关闭</Button>
+            </div>
           </div>
 
           {editing.sections?.some((section) => section.name.startsWith('综测分项')) && (
@@ -385,6 +430,10 @@ export function TemplateWizardPanel(): JSX.Element {
               <select className="mt-1 w-full rounded-md border bg-background px-2 py-1.5 text-sm" value={editing.objectType} onChange={(event) => updateTemplate((current) => ({ ...current, objectType: event.target.value as TemplateVersion['objectType'] }))}>
                 <option value="person">个人</option><option value="organization">组织</option><option value="project">项目</option><option value="document">文件</option><option value="transaction">交易</option><option value="custom">自定义</option>
               </select>
+            </label>
+            <label className="text-xs md:col-span-2">案卷展示名模板
+              <input className="mt-1 w-full rounded-md border bg-background px-2 py-1.5 text-sm" value={editing.displayName.template}
+                onChange={event=>updateTemplate(current=>({...current,displayName:{template:event.target.value}}))} placeholder="{{organization}} · {{activityName}}" />
             </label>
             <label className="text-xs md:col-span-2">模板用途说明
               <textarea className="mt-1 w-full rounded-md border bg-background px-2 py-1.5 text-sm" rows={2} value={editing.description ?? ''} onChange={(event) => updateTemplate((current) => ({ ...current, description: event.target.value }))} placeholder="说明适用对象、流程范围和需要负责人确认的规则边界" />
@@ -427,6 +476,11 @@ export function TemplateWizardPanel(): JSX.Element {
                     <input type="number" className="rounded border px-2 py-1 text-xs" placeholder="最小值（可选）" value={field.min ?? ''} onChange={(event) => updateTemplate((current) => ({ ...current, fields: current.fields.map((item, i) => i === index ? { ...item, min: event.target.value === '' ? undefined : Number(event.target.value) } : item) }))} />
                     <input type="number" className="rounded border px-2 py-1 text-xs" placeholder="最大值（可选）" value={field.max ?? ''} onChange={(event) => updateTemplate((current) => ({ ...current, fields: current.fields.map((item, i) => i === index ? { ...item, max: event.target.value === '' ? undefined : Number(event.target.value) } : item) }))} />
                   </div>}
+                  <div className="sm:col-span-5 rounded border border-border/60 p-2">
+                    <ReviewV3T01ConditionEditor label="条件必填" value={field.conditionRequired}
+                      fields={editing.fields.filter(candidate=>candidate.key!==field.key&&candidate.scope==='case')}
+                      onChange={condition=>updateTemplate(current=>({...current,fields:current.fields.map((item,i)=>i===index?{...item,required:condition?false:item.required,conditionRequired:condition}:item)}))}/>
+                  </div>
                 </div>
               ))}
             </div>
@@ -544,6 +598,11 @@ export function TemplateWizardPanel(): JSX.Element {
                     <label className="text-xs text-muted-foreground">要求提交时间<select className="mt-1 w-full rounded border bg-background px-2 py-1 text-xs text-foreground" value={slot.requiredAt ?? 'submission'} onChange={(event) => updateTemplate((current) => ({ ...current, materialSlots: current.materialSlots.map((item, i) => i === index ? { ...item, requiredAt: event.target.value as MaterialSlotSpec['requiredAt'] } : item) }))}><option value="submission">提交时</option><option value="decision">定稿前</option></select></label>
                     <label className="mt-4 flex items-center gap-1 text-xs"><input type="checkbox" checked={slot.allowReuseAcrossSubjects} onChange={(event) => updateTemplate((current) => ({ ...current, materialSlots: current.materialSlots.map((item, i) => i === index ? { ...item, allowReuseAcrossSubjects: event.target.checked } : item) }))} />允许事项共用</label>
                   </div>
+                  <div className="md:col-span-5 rounded border border-border/60 p-2">
+                    <ReviewV3T01ConditionEditor label="条件要求材料" value={slot.requiredWhen}
+                      fields={editing.fields.filter(candidate=>candidate.scope==='case')}
+                      onChange={condition=>updateTemplate(current=>({...current,materialSlots:current.materialSlots.map((item,i)=>i===index?{...item,requiredWhen:condition}:item)}))}/>
+                  </div>
                 </div>
               ))}
             </div>
@@ -614,6 +673,7 @@ export function TemplateWizardPanel(): JSX.Element {
             <Button size="sm" variant="outline" className="mt-2" onClick={() => updateTemplate((current) => ({ ...current, stages: [...current.stages, newStage(`审核节点 ${current.stages.length + 1}`, 'manual-review', 'reviewer')] }))}>添加流程节点</Button>
           </details>
 
+          <ReviewV3T01TrialPanel key={editing.templateId + ':' + editing.version} template={editing} />
           {message.length > 0 && <ul className="mt-3 list-disc rounded-lg bg-red-500/10 px-8 py-2 text-xs text-red-700 dark:text-red-300">{message.map((item, index) => <li key={index}>{item}</li>)}</ul>}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-muted-foreground">草稿可继续修改；发布后版本不可覆盖，后续修改会创建新版本。</p>
