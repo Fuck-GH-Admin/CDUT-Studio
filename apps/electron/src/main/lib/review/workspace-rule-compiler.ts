@@ -22,17 +22,19 @@ export function compileWorkspaceRule(pack: RulePack, outline: RuleOutlineItem, p
   } else if (constraint?.kind === 'score-value' && typeof constraint.value === 'number') {
     // 固定分值必须有明确适用条件；没有条件时转人工核对，避免误套到全部事项。
     execution = constraint.appliesWhen ? 'deterministic' : 'manual'
-    when = { field: constraint.appliesWhen?.field ?? 'title', op: 'exists' }
+    // appliesWhen defines applicability, not the fixed-score requirement itself.
+    when = constraint.appliesWhen
+      ? { field: constraint.appliesWhen.field, op: 'eq', value: constraint.appliesWhen.equals }
+      : { field: 'title', op: 'exists' }
   } else if (constraint?.kind === 'date-range' && (constraint.dateFrom || constraint.dateTo)) {
     execution = 'deterministic'
-    const conditions = [
-      ...(constraint.dateFrom ? [fieldCondition('activityDate', 'gte', constraint.dateFrom)] : []),
-      ...(constraint.dateTo ? [fieldCondition('activityDate', 'lte', constraint.dateTo)] : []),
-    ]
-    when = conditions.length === 1 ? conditions[0]! : { all: conditions }
+    // A date outside the required range is a violation, never "not applicable".
+    // The actual inclusive bounds are evaluated from workspaceConstraint.
+    when = { field: 'activityDate', op: 'exists' }
   } else if (constraint?.kind === 'amount-limit' && typeof constraint.value === 'number') {
     execution = 'deterministic'
-    when = fieldCondition('amount', 'lte', constraint.value)
+    // Do not exclude over-limit amounts from the check's denominator.
+    when = { field: 'amount', op: 'exists' }
   } else if (constraint?.kind === 'level-mapping' && Object.keys(constraint.levels ?? {}).length > 0) {
     execution = 'deterministic'
     when = { field: 'level', op: 'exists' }
