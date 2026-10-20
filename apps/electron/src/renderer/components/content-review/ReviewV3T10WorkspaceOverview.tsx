@@ -68,10 +68,10 @@ export function ReviewV3T10WorkspaceOverview({
   const pendingChecks = view?.pendingActions.filter((action) => action.kind === 'check' || action.kind === 'supplement').length ?? 0
   const templateName = caseV2?.templateId === 'pending-template-v3'
     ? '尚未绑定审核模板'
-    : template ? `${template.name} · v${template.version}`
-      : legacy?.reviewTemplate ? `${legacy.reviewTemplate.templateId} · v${legacy.reviewTemplate.version}`
+    : matchesSelected && template ? `${template.name} · v${template.version}`
+      : matchesSelected && legacy?.reviewTemplate ? `${legacy.reviewTemplate.templateId} · v${legacy.reviewTemplate.version}`
         : caseV2 ? `${caseV2.templateId} · v${caseV2.templateVersion}` : '未选择'
-  const executing = running || execution.status === 'running' || execution.status === 'preparing'
+  const executing = matchesSelected && (running || execution.status === 'running' || execution.status === 'preparing')
   const checkLabel = executing ? '正在运行'
     : runStale && matchesSelected ? '结果已过期，请重审'
       : run ? `${run.checks.length} 项已记录 · ${pendingChecks} 项需处理`
