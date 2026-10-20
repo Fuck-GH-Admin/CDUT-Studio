@@ -25,6 +25,9 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   const [localCaseId,setLocalCaseId]=React.useState('')
   const [savedCases,setSavedCases]=React.useState<Array<{id:string;title:string}>>([])
   const [d4Selection,setD4Selection]=React.useState<D4ClientSelection|undefined>(undefined)
+  const [b1Frozen,setB1Frozen]=React.useState<{templateId:string;fingerprint:string}|null>(null)
+  const [b1Notice,setB1Notice]=React.useState('')
+  const [b1Error,setB1Error]=React.useState('')
   const [d4Notice,setD4Notice]=React.useState('')
   const [d4Error,setD4Error]=React.useState('')
   const [materialsEpoch,setMaterialsEpoch]=React.useState(0)
@@ -67,6 +70,8 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     try{
       const source=await readLatest(templateId.trim())
       setLoaded({document:source.document,revision:source.revision})
+      const descriptor=await window.reviewAPI.previewLocalCandidateAuthorV3({document:source.document})
+      setB1Frozen({templateId:source.document.templateId,fingerprint:descriptor.canonicalPlan.fingerprint})
       setKey(k=>k+1)
       setMessage('已从 Main 重新读取本机保存的候选修订 '+source.revision)
     }catch(e){setError(e instanceof Error?e.message:String(e))}
@@ -108,6 +113,22 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
         ' 已写入同一原生案卷，固定 '+ack.checks+' 项检查。现在可以从下方运行 Pi。')
       setMaterialsEpoch(x=>x+1)
     }catch(e){setD4Error(e instanceof Error?e.message:String(e))}
+    finally{setCaseBusy(false)}
+  }
+  const freezeB1=async(document:B1AuthorDocument,expectedRevision:number):Promise<{fingerprint:string}>=>{
+    const result=await window.reviewAPI.freezeLocalCandidateAuthorV3({document,expectedRevision})
+    setB1Frozen({templateId:document.templateId,fingerprint:result.fingerprint})
+    setB1Notice('第51套已冻结，可绑定当前本机案卷。')
+    return result
+  }
+  const attachB1=async():Promise<void>=>{
+    if(caseBusy||!localCaseId||!b1Frozen)return
+    setCaseBusy(true);setB1Error('');setB1Notice('')
+    try{
+      const ack=await window.reviewAPI.attachB1TechnicalPlanV3({caseId:localCaseId,...b1Frozen})
+      setB1Notice('本案已安装 '+ack.checks+' 项真实 Pi 检查；可以启动审核')
+      setMaterialsEpoch(x=>x+1)
+    }catch(e){setB1Error(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
   const importMaterial=async (role:'application'|'evidence'):Promise<void>=>{
@@ -203,6 +224,15 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     </div>}
     <div className="space-y-2 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">本地候选审核模板 · 第 51 套</h2>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          disabled={caseBusy||!localCaseId||!b1Frozen} onClick={()=>void attachB1()}>
+          将已冻结第 51 套安装为当前案卷的审核任务
+        </button>
+        <span className="text-xs">{b1Frozen?.templateId??'请先在下方保存并冻结模板'}</span>
+      </div>
+      {b1Notice&&<p role="status" className="text-xs">{b1Notice}</p>}
+      {b1Error&&<p role="alert" className="text-xs text-red-600">{b1Error}</p>
       <p className="text-xs text-muted-foreground">自定义审核目的不在既有 50 套时，可直接编辑、编译、保存和冻结候选。所有记录仅在本机，不代表校方发布、学校政策核验或正式审批。</p>
       <div className="flex flex-wrap items-center gap-2">
         <input aria-label="重开候选模板 ID" className="min-w-40 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm"
@@ -241,8 +271,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
           onSaveDraft:(document,expectedRevision)=>
             window.reviewAPI.saveLocalCandidateAuthorV3({document,expectedRevision}),
           onPreview:document=>window.reviewAPI.previewLocalCandidateAuthorV3({document}),
-          onFreezeCandidate:(document,expectedRevision)=>
-            window.reviewAPI.freezeLocalCandidateAuthorV3({document,expectedRevision}),
+          onFreezeCandidate:freezeB1,
           onReadLatestCandidate:async id=>readLatest(id),
         }}
         product={{
@@ -260,8 +289,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       onSaveDraft={(document,expectedRevision)=>
         window.reviewAPI.saveLocalCandidateAuthorV3({document,expectedRevision})}
       onPreview={document=>window.reviewAPI.previewLocalCandidateAuthorV3({document})}
-      onFreezeCandidate={(document,expectedRevision)=>
-        window.reviewAPI.freezeLocalCandidateAuthorV3({document,expectedRevision})}
+      onFreezeCandidate={freezeB1}
       onReadLatestCandidate={(id)=>readLatest(id)}
     />
   </div>
