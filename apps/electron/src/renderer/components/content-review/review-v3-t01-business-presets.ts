@@ -163,6 +163,32 @@ function conditionValue(cond: ConditionAST | undefined, values: Record<string, T
     case 'in': return Array.isArray(expected)?expected.includes(current):undefined
   }
 }
+/** Create clearly simulated form values; no original document bytes are generated. */
+export function exampleT01TrialInput(template:TemplateVersion):{
+  values:Record<string,T01TrialValue>; materialCounts:Record<string,number>
+} {
+  const values:Record<string,T01TrialValue>={}
+  const examples:Record<string,string>={
+    organization:'示例学生组织',contact:'示例申请人',timePeriod:'14:00–16:00',purpose:'实验室安全培训',
+    studentName:'示例学生',studentId:'S0001',academicYear:'2026',activityName:'示例活动',
+    leader:'示例负责人',category:'示例类别',claimant:'示例报销人',projectCode:'DEMO',
+    projectName:'示例项目',team:'示例团队',documentName:'示例文件',owner:'示例经办人',
+    version:'v1',useDate:'2026-11-01',activityDate:'2026-11-01',expenseDate:'2026-11-01',
+    deadline:'2026-11-01',
+  }
+  for(const field of template.fields.filter(f=>f.scope==='case')) {
+    switch(field.kind) {
+      case 'number':
+        values[field.key]=Math.max(field.min??0,Math.min(field.max??10,10));break
+      case 'date': values[field.key]='2026-11-01';break
+      case 'boolean': values[field.key]=true;break
+      case 'enum': values[field.key]=field.options?.[0]?.value;break
+      case 'text': values[field.key]=examples[field.key]??'模拟信息';break
+      default: values[field.key]=undefined
+    }
+  }
+  return {values,materialCounts:Object.fromEntries(template.materialSlots.map(m=>[m.id,m.minCount]))}
+}
 /**
  * Dry-run author configuration only. Does not execute rules, parse files or
  * approve the application. Unknown conditions stay as pending.
