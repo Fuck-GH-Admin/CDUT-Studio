@@ -14,6 +14,7 @@ import { RunResultPanel } from './RunResultPanel'
 import { ObservationConfirmPanel } from './ObservationConfirmPanel'
 import { ReviewAssignmentCard } from './ReviewAssignmentCard'
 import { CaseTimelinePanel } from './CaseTimelinePanel'
+import { ReviewV3T05HumanWorkflow } from './ReviewV3T05HumanWorkflow'
 import { MaterialDropZone } from './MaterialDropZone'
 
 /** 当前案卷聚合 */
@@ -356,7 +357,7 @@ export function V2CasePanel(): JSX.Element {
                 <Button size="sm" onClick={submitCase}>{current.caseV2.stage === 'draft' ? '提交案卷' : '恢复审核任务'}</Button>
               )}
             </div>
-            <BusinessFlowSection aggregate={current} onResult={applyResult} />
+            <ReviewV3T05HumanWorkflow aggregate={current} onResult={applyResult} />
             <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
             <ReviewAssignmentCard caseId={current.caseV2.id} />
@@ -402,102 +403,3 @@ export function V2CasePanel(): JSX.Element {
   )
 }
 
-/** 业务流程操作区（N3b，06 §5.2 动作表；U03-U05 入口） */
-function BusinessFlowSection({ aggregate, onResult }: { aggregate: CaseAggregateV2; onResult: (result: ReviewCommandResult | undefined) => void }): JSX.Element {
-  const [replyText, setReplyText] = useState('')
-  const [replyAttachments, setReplyAttachments] = useState<string[]>([])
-  const openTasks = aggregate.tasks.filter((task) => task.status === 'open')
-  // Local reviewer UI cannot claim a teacher, judge or school credential.
-  // Renderer actors are rebound by main process to the local-reviewer principal.
-  const reviewerTasks = openTasks.filter((task) => task.assigneeRole === 'reviewer'
-    && (!task.assigneeActorId || task.assigneeActorId === 'local-reviewer'))
-  const projection = resolveFinalDecisionProjectionPublic(aggregate.decisions)
-  const templateId = aggregate.caseV2.templateId
-  const version = aggregate.caseV2.templateVersion
-  const caseId = aggregate.caseV2.id
-
-  const act = async (action: string, extra: Record<string, unknown>): Promise<void> => {
-    const task = reviewerTasks[0]
-    if (!task) {
-      return
-    }
-    const result = await window.reviewAPI.recordStageDecisionV2({
-      caseId,
-      templateId,
-      version,
-      command: { requestId: `dec-${Date.now().toString(36)}`, target: { kind: 'case', id: caseId }, expectedRevision: aggregate.caseV2.revision, actor: localActor, type: 'RecordStageDecision', payload: { action, taskId: task.id, reason: String((extra as { reason?: string }).reason ?? '面板操作'), ...extra } },
-    })
-    onResult(result)
-  }
-
-  return (
-    <div className="rounded-lg border-t pt-2">
-      <p className="mb-1 font-medium">业务流程（{templateId}@{version}）</p>
-      <p className="text-muted-foreground">
-        开放任务：{openTasks.length > 0 ? openTasks.map((task) => `${task.stageId}(R${task.round})`).join('、') : '无'}
-        {' · '}最终决定：{projection.decision ? `${projection.decision.result}${projection.isFinal ? '（终审）' : '（阶段）'}` : '未形成'}
-      </p>
-      {openTasks.length > 0 && reviewerTasks.length === 0 && (
-        <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-          当前开放任务由教师、评委或其他角色负责；本地工作台不能自行声明其审批身份，请使用已授权的角色入口。
-        </p>
-      )}
-      {reviewerTasks.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-1.5">
-          <Button size="sm" variant="outline" onClick={() => void act('stage-pass', { reason: `${reviewerTasks[0]?.stageId ?? ''} 通过` })}>阶段通过</Button>
-          <Button size="sm" variant="outline" onClick={() => void act('return-for-supplement', { reason: '缺证明', supplementRequiredElements: ['等级', '日期'], supplementReason: '请补交含等级与日期的证明' })}>退回补件</Button>
-          <Button size="sm" variant="outline" onClick={() => void act('final-reject', { reason: '不符合规定' })}>最终驳回</Button>
-          <Button size="sm" variant="outline" onClick={() => void act('withdraw', { reason: '提交者撤回' })}>撤回</Button>
-
-        </div>
-      )}
-      {aggregate.supplements.filter((request) => request.status === 'open' || request.status === 'responded').length > 0 && (
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          <span className="text-muted-foreground">补件：</span>
-          {aggregate.supplements.filter((request) => request.status === 'open' || request.status === 'responded').map((request) => (
-            <span key={request.id} className="inline-flex items-center gap-1">
-              <code className="rounded bg-muted px-1">{request.id.slice(0, 10)}</code>
-              <input
-                className="rounded border px-1 py-0.5"
-                placeholder="回复说明"
-                value={replyText}
-                onChange={(event) => setReplyText(event.target.value)}
-              />
-              {aggregate.caseV2.documents.filter((doc) => doc.active !== false).map((doc) => (
-                <label key={doc.versionId} className="flex items-center gap-1 text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={replyAttachments.includes(doc.versionId)}
-                    onChange={(event) => setReplyAttachments(event.target.checked ? [...replyAttachments, doc.versionId] : replyAttachments.filter((id) => id !== doc.versionId))}
-                  />
-                  {doc.fileName}
-                </label>
-              ))}
-              <Button size="sm" variant="outline" disabled={!replyText.trim() && replyAttachments.length === 0} onClick={() => {
-                void window.reviewAPI.respondSupplementV2({
-                  caseId,
-                  command: { requestId: `res-${Date.now().toString(36)}`, target: { kind: 'case', id: caseId }, expectedRevision: aggregate.caseV2.revision, actor: { actorId: 'local-student', actorSource: 'local', role: 'student' }, type: 'RespondSupplement', payload: { supplementId: request.id, note: replyText.trim() || '见附件', documentVersionIds: replyAttachments } },
-                }).then((result) => { onResult(result); if (result?.ok) { setReplyText(''); setReplyAttachments([]) } })
-              }}>回复补件</Button>
-              <Button size="sm" variant="outline" onClick={() => {
-                void window.reviewAPI.resolveSupplementV2({
-                  caseId,
-                  command: { requestId: `sup-${Date.now().toString(36)}`, target: { kind: 'case', id: caseId }, expectedRevision: aggregate.caseV2.revision, actor: localActor, type: 'ResolveSupplement', payload: { supplementId: request.id, outcome: 'satisfied', reason: '要素齐全' } },
-                }).then(onResult)
-              }}>判定满足</Button>
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** 投影纯函数的前端引用（服务层同源逻辑：finality 优先 + 更正排除） */
-function resolveFinalDecisionProjectionPublic(decisions: Array<{ id: string; result: string; finality?: string; amendsDecisionId?: string; at: string }>): { decision: { id: string; result: string } | null; isFinal: boolean } {
-  const superseded = decisions.filter((decision) => decision.amendsDecisionId).map((decision) => decision.amendsDecisionId!)
-  const effective = decisions.filter((decision) => !superseded.includes(decision.id))
-  const final = [...effective].filter((decision) => decision.finality === 'final').sort((a, b) => a.at.localeCompare(b.at)).at(-1)
-  if (final) return { decision: final, isFinal: true }
-  return { decision: [...effective].sort((a, b) => a.at.localeCompare(b.at)).at(-1) ?? null, isFinal: false }
-}
