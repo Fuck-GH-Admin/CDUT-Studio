@@ -123,9 +123,15 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
       </label>
       <button type="button" className={action} disabled={!selected||busy}
         onClick={()=>void manual()}>提交选择给 Main 再核验（不建案）</button>
-      {view.held.length>0 && <p className="text-xs text-muted-foreground">
-        另有 {view.held.length} 套候选模板缺少技术选择授权，当前不可直接选择。
-      </p>}
+      <p className="text-xs text-muted-foreground">当前展示 {options.length+view.held.length} 套候选版本；可提交 {options.length} 套，待人工复核 {view.held.length} 套。</p>
+      {view.held.length>0 && <details className="rounded border border-border p-3 text-sm">
+        <summary className="cursor-pointer">查看尚不可提交的 {view.held.length} 套候选（来源/政策授权待核）</summary>
+        <ul className="mt-2 max-h-64 list-disc space-y-1 overflow-y-auto pl-5">
+         {view.held.map(item=><li key={item.templateId+'@'+item.templateVersion}>
+          {item.name} · {item.templateId} · {item.templateVersion} · 待人工复核，不可直接提交
+         </li>)}
+        </ul>
+      </details>}
       <button type="button" className={action} disabled={busy}
         onClick={props.onOpenCustomAuthor}>没有匹配模板？自建审核业务（候选）</button>
     </div>
@@ -153,8 +159,8 @@ export function ReviewV3CandidateIntakeSurface(props:B1B3CandidateWorkspaceProps
     renderRoute={(open,liveRoute)=><ReviewV3RouteReviewPanel {...props}
       route={liveRoute} onOpenCustomAuthor={open}/>}
     renderAuthor={(draft)=><ReviewV3AuthorWizard key={scope+'::'+(draft?.templateId??'blank')}
-      {...props.author} initialDraft={draft??props.author.initialDraft}
-      initialRevision={draft?0:props.author.initialRevision}/>}
+      {...props.author} initialDraft={draft}
+      initialRevision={0}/>}
   />
   if(section==='author')return <div className="space-y-3"
     data-testid="review-v3-b1-b3-author-entry">
