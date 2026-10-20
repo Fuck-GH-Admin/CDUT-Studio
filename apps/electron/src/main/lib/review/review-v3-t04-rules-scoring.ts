@@ -1,0 +1,412 @@
+/**
+ * T04: deterministic rule evaluation for one immutable V3 Plan.
+ * This is a pure proposal adapter: Main remains the only Case/Run writer.
+ * Numeric inputs must be human-confirmed facts, not model-suggested scores.
+ */
+import type { CanonicalPlan, ConditionAST, PlanBinding, RuleSpec, TriState } from '@profer/shared'
+import { evaluateCondition } from './deterministic-engine'
+
+export type T04Value = {
+  value: string | number | boolean | null
+  confirmed: boolean
+  unit?: string
+  sourceRefIds?: string[]
+}
+export type T04Item = { id: string; fields: Record<string, T04Value> }
+export type T04Status = 'compliant' | 'non-compliant' | 'not-applicable' | 'awaiting-confirmation'
+export type T04Operation =
+  | { kind: 'group-score'; calculation: NonNullable<RuleSpec['calculation']>; precision?: number }
+  | { kind: 'weighted-sum'; terms: Array<{ field: string; weight: string }>; precision?: number }
+  | { kind: 'amount-cap'; amountField: string; currencyField: string; cap: string; currency: string; precision?: number }
+  | { kind: 'date-range'; field: string; from?: string; until?: string }
+  | { kind: 'value-limit'; field: string; maximum: string; unit?: string }
+  | { kind: 'level-mapping'; field: string; scoreField: string; levels: Record<string, string> }
+  | { kind: 'unresolved'; reason: string }
+export type T04PolicyClaim = { key: string; rule: RuleSpec; operation: T04Operation }
+export type T04PolicyDecision = {
+  key: string
+  selectedRuleId: string
+  confirmedBy: string
+  reason: string
+}
+export type T04ResolvedClaims = {
+  selected: T04PolicyClaim[]
+  blocked: Array<{ key: string; ruleIds: string[]; reason: string }>
+  excluded: Array<{ key: string; ruleId: string; selectedRuleId: string }>
+}
+export interface T04Outcome {
+  status: T04Status
+  result: string | null
+  reason: string
+  detailLines: string[]
+  sourceRefIds: string[]
+  missingFields: string[]
+  allocation?: Array<{ itemId: string; counted: string; reason: string }>
+  /** For incomplete currency sets these are estimates for the known subset only. */
+  knownSubtotal?: string
+  excess?: string
+}
+export type T04PlanCheck = {
+  binding: PlanBinding
+  rule: RuleSpec
+  operation: T04Operation
+  items: T04Item[]
+  policyClaimKey?: string
+}
+export type T04PlanProposal = {
+  planFingerprint: string
+  checkKey: string
+  targetKey: string
+  objectKey: string
+  ruleId: string
+  policyVersionId: string
+  sourceVersionIds: string[]
+  outcome: T04Outcome
+}
+
+const SCALE = 1000000n // up to six decimal places; no binary float aggregation
+const pow10 = (x: number): bigint => 10n ** BigInt(x)
+export function decimalT04(input: string | number): bigint {
+  const raw = String(input)
+  if (!/^-?\d+(?:\.\d{1,6})?$/.test(raw)) throw new Error('T04_DECIMAL_INVALID: ' + raw)
+  const negative = raw.startsWith('-')
+  const unsigned = negative ? raw.slice(1) : raw
+  const [whole, fraction = ''] = unsigned.split('.')
+  const n = BigInt(whole!) * SCALE + BigInt(fraction.padEnd(6, '0'))
+  return negative ? -n : n
+}
+export function formatT04(value: bigint, precision = 2, mode: 'half-up' | 'half-even' | 'truncate' = 'half-up'): string {
+  if (!Number.isInteger(precision) || precision < 0 || precision > 6) throw new Error('T04_PRECISION_INVALID')
+  const divisor = pow10(6 - precision)
+  const sign = value < 0n ? '-' : ''
+  const abs = value < 0n ? -value : value
+  let result = abs / divisor
+  const remainder = abs % divisor
+  if (mode !== 'truncate' &&
+      (remainder * 2n > divisor || (remainder * 2n === divisor && (mode === 'half-up' || result % 2n === 1n)))) result++
+  const factor = pow10(precision)
+  const whole = result / factor
+  const fractional = precision ? '.' + String(result % factor).padStart(precision, '0') : ''
+  return (result === 0n ? '' : sign) + String(whole) + fractional
+}
+const unique = (values: string[]): string[] => [...new Set(values)].sort()
+const field = (item: T04Item, key: string): T04Value | undefined => item.fields[key]
+const known = (entry: T04Value | undefined): entry is T04Value & {value: string | number | boolean} =>
+  !!entry && entry.confirmed && entry.value !== null && entry.value !== ''
+const sources = (items: T04Item[], rule: RuleSpec): string[] =>
+  unique([...rule.sourceRefIds, ...items.flatMap(item => Object.values(item.fields).flatMap(x => x.sourceRefIds ?? []))])
+const pending = (reason: string, items: T04Item[], rule: RuleSpec, missingFields: string[] = []): T04Outcome =>
+  ({status: 'awaiting-confirmation', result: null, reason, detailLines: [reason], sourceRefIds: sources(items, rule), missingFields: unique(missingFields)})
+const complete = (status: T04Status, result: string | null, reason: string, lines: string[], items: T04Item[], rule: RuleSpec): T04Outcome =>
+  ({status, result, reason, detailLines: lines, sourceRefIds: sources(items, rule), missingFields: []})
+
+function strictDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const year = Number(value.slice(0, 4)), month = Number(value.slice(5, 7)), day = Number(value.slice(8, 10))
+  if (year < 100 || month < 1 || month > 12 || day < 1 || day > 31) return false
+  const d = new Date(0)
+  d.setUTCFullYear(year, month - 1, day)
+  return d.getUTCFullYear() === year && d.getUTCMonth() + 1 === month && d.getUTCDate() === day
+}
+
+/** Preserve AND/OR/NOT three-value behavior, including exact date-only comparisons. */
+export function conditionT04(ast: ConditionAST, item: T04Item): TriState {
+  if ('all' in ast) {
+    const results = ast.all.map(x => conditionT04(x, item))
+    return results.includes('false') ? 'false' : results.includes('unknown') ? 'unknown' : 'true'
+  }
+  if ('any' in ast) {
+    const results = ast.any.map(x => conditionT04(x, item))
+    return results.includes('true') ? 'true' : results.includes('unknown') ? 'unknown' : 'false'
+  }
+  if ('not' in ast) {
+    const x = conditionT04(ast.not, item)
+    return x === 'unknown' ? 'unknown' : x === 'true' ? 'false' : 'true'
+  }
+  const key = 'field' in ast ? ast.field : ast.fact
+  const x = field(item, key)
+  if (!x || !x.confirmed) return 'unknown'
+  if (ast.op === 'exists') return x.value === null || x.value === '' ? 'false' : 'true'
+  if (!known(x)) return 'unknown'
+  if (typeof x.value === 'string' && typeof ast.value === 'string' &&
+      /^\d{4}-\d{2}-\d{2}/.test(x.value)) {
+    if (!strictDate(x.value) || !strictDate(ast.value)) return 'unknown'
+    if (ast.op === 'gt') return x.value > ast.value ? 'true' : 'false'
+    if (ast.op === 'gte') return x.value >= ast.value ? 'true' : 'false'
+    if (ast.op === 'lt') return x.value < ast.value ? 'true' : 'false'
+    if (ast.op === 'lte') return x.value <= ast.value ? 'true' : 'false'
+  }
+  return evaluateCondition(ast, ref => {
+    const value = field(item, ref.field ?? ref.fact ?? '')
+    return {known: known(value), value: value?.value}
+  })
+}
+
+/** An authored, confirmed RuleSpec can be compiled without inventing a new shared RuleSpec variant. */
+export function compileT04Operation(rule: RuleSpec): T04Operation {
+  if (rule.calculation) return {kind: 'group-score', calculation: rule.calculation}
+  const x = rule.workspaceConstraint
+  if (!x) return {kind: 'unresolved', reason: 'RuleSpec 未提供可执行约束；when 只表示适用性'}
+  if (x.kind === 'max-score' && typeof x.value === 'number')
+    return {kind: 'group-score', calculation: {valueFrom: 'declaredScore', aggregate: 'sum', cap: {value: String(x.value), unit: 'point'}, allocation: 'score-desc-then-subject-id'}}
+  if (x.kind === 'amount-limit' && typeof x.value === 'number')
+    return {kind: 'value-limit', field: 'amount', maximum: String(x.value)}
+  if (x.kind === 'date-range' && (x.dateFrom || x.dateTo))
+    return {kind: 'date-range', field: 'activityDate', ...(x.dateFrom ? {from: x.dateFrom} : {}), ...(x.dateTo ? {until: x.dateTo} : {})}
+  if (x.kind === 'score-value' && typeof x.value === 'number' && x.appliesWhen)
+    return {kind: 'value-limit', field: 'declaredScore', maximum: String(x.value), unit: 'point'}
+  if (x.kind === 'level-mapping' && x.levels && Object.keys(x.levels).length)
+    return {kind: 'level-mapping', field: 'level', scoreField: 'declaredScore', levels: Object.fromEntries(Object.entries(x.levels).map(([key,value]) => [key, String(value)]))}
+  return {kind: 'unresolved', reason: '未实现的结构化约束需人工确认，不能编译为通过'}
+}
+
+/**
+ * Same logical policy claim can be supplied by multiple published sources.
+ * Different operator or numeric cap must be explicitly resolved by a human,
+ * never by iteration order or the latest policy version.
+ */
+export function resolveT04PolicyClaims(claims: T04PolicyClaim[], decisions: T04PolicyDecision[] = []): T04ResolvedClaims {
+  const groups = new Map<string, T04PolicyClaim[]>()
+  for (const claim of claims) groups.set(claim.key, [...(groups.get(claim.key) ?? []), claim])
+  const selected: T04PolicyClaim[] = [], blocked: T04ResolvedClaims['blocked'] = [], excluded: T04ResolvedClaims['excluded'] = []
+  for (const [key, group] of groups) {
+    const ordered = [...group].sort((a,b) => a.rule.id.localeCompare(b.rule.id))
+    const uniqueDefinitions = unique(ordered.map(x => JSON.stringify({operation:x.operation, when:x.rule.when, exceptions:x.rule.exceptions ?? []})))
+    const decision = decisions.find(x => x.key === key && x.confirmedBy.trim() && x.reason.trim() && ordered.some(y => y.rule.id === x.selectedRuleId))
+    if (uniqueDefinitions.length > 1 && !decision) {
+      blocked.push({key, ruleIds: ordered.map(x => x.rule.id), reason: '多依据同一约束不一致，缺少具名优先关系确认'})
+      continue
+    }
+    const chosen = decision ? ordered.find(x => x.rule.id === decision.selectedRuleId)! : ordered[0]!
+    selected.push(chosen)
+    for (const x of ordered) if (x !== chosen) excluded.push({key, ruleId:x.rule.id, selectedRuleId:chosen.rule.id})
+  }
+  return {selected, blocked, excluded}
+}
+
+/** Per-item eligibility uses the existing RuleSpec condition; unknown cannot disappear. */
+function eligible(rule: RuleSpec, items: T04Item[]): {accepted:T04Item[]; missing:string[]; excluded:string[]} {
+  const accepted:T04Item[] = [], missing:string[] = [], excluded:string[] = []
+  for (const item of items) {
+    const ok = conditionT04(rule.when, item)
+    const exceptions = (rule.exceptions ?? []).map(x => conditionT04(x.when, item))
+    if (ok === 'unknown' || exceptions.includes('unknown')) {missing.push(item.id + ':when/exception'); continue}
+    if (ok === 'false' || exceptions.includes('true')) {excluded.push(item.id); continue}
+    accepted.push(item)
+  }
+  return {accepted,missing,excluded}
+}
+
+function groupScore(rule: RuleSpec, op: Extract<T04Operation,{kind:'group-score'}>, items:T04Item[]):T04Outcome {
+  const c=op.calculation, precision=op.precision ?? 2
+  let cap:bigint | undefined
+  try { if (c.cap) {cap=decimalT04(c.cap.value); if (cap < 0n) throw Error('negative cap')} }
+  catch {return pending('规则上限不是可用的非负十进制值',items,rule)}
+  type Candidate = { item:T04Item; value:bigint; key:string }
+  const entries:Candidate[] = [], missing:string[]=[]
+  for (const item of items) {
+    const value=field(item,c.valueFrom)
+    if (!known(value)) {missing.push(item.id+':'+c.valueFrom);continue}
+    if (value.unit && c.cap?.unit && value.unit !== c.cap.unit) {missing.push(item.id+':unit');continue}
+    const keys:string[]=[]
+    for (const k of c.deduplicateBy ?? []) {
+      const x=field(item,k)
+      if (!known(x)) missing.push(item.id+':'+k)
+      else keys.push(String(x.value))
+    }
+    try {
+      if (typeof value.value !== 'string' && typeof value.value !== 'number') throw Error('not decimal')
+      const n=decimalT04(value.value)
+      if (n < 0n) throw Error('negative')
+      entries.push({item,value:n,key:JSON.stringify(keys)})
+    } catch {missing.push(item.id+':'+c.valueFrom)}
+  }
+  if (missing.length) return pending('计分数据/去重键/单位未确认，不将未知视为 0',items,rule,missing)
+  if (!entries.length) return complete('not-applicable',null,'没有适用的计分事项',[],items,rule)
+  const kept:Candidate[]=[], dropped:Candidate[]=[]
+  if (c.deduplicateBy?.length) {
+    const byKey=new Map<string,Candidate>()
+    for (const entry of entries) {
+      const old=byKey.get(entry.key)
+      if (!old || entry.value>old.value || (entry.value===old.value && entry.item.id<old.item.id)) byKey.set(entry.key,entry)
+    }
+    for (const entry of entries) (byKey.get(entry.key)===entry ? kept : dropped).push(entry)
+  } else kept.push(...entries)
+  kept.sort((a,b)=>a.value===b.value?a.item.id.localeCompare(b.item.id):(a.value>b.value?-1:1))
+  if (c.select==='single' && kept.length!==1)
+    return pending('single 规则出现多个有效候选，不能擅自计分',items,rule)
+  if (c.select==='highest-eligible-score' && !c.deduplicateBy?.length) dropped.push(...kept.splice(1))
+  if (c.aggregate==='max' && kept.length>1) dropped.push(...kept.splice(1))
+  const raw=kept.reduce((sum,x)=>sum+x.value,0n)
+  const total=cap!==undefined && raw>cap?cap:raw
+  let remaining=total
+  const allocation:T04Outcome['allocation']=[]
+  for (const entry of kept) {
+    const counted=entry.value<remaining?entry.value:remaining
+    remaining-=counted
+    allocation.push({itemId:entry.item.id,counted:formatT04(counted,precision),reason:counted===entry.value?'全额计入':'组上限截断'})
+  }
+  for (const entry of dropped) allocation.push({itemId:entry.item.id,counted:formatT04(0n,precision),reason:'同键择高/择单项未计入'})
+  allocation.sort((a,b)=>a.itemId.localeCompare(b.itemId))
+  const detail=['规则 '+rule.id+'，政策版本 '+rule.policyVersionId,'候选原值 '+formatT04(raw,precision),'组计入 '+formatT04(total,precision),
+    ...allocation.map(x=>x.itemId+': '+x.counted+'（'+x.reason+'）')]
+  return {...complete('compliant',formatT04(total,precision),'规则组计分已完成',detail,items,rule),allocation}
+}
+
+function weighted(rule:RuleSpec,op:Extract<T04Operation,{kind:'weighted-sum'}>,items:T04Item[]):T04Outcome {
+  if (items.length!==1) return pending('权重公式要求一个确定的目标对象',items,rule)
+  const item=items[0]!, missing:string[]=[]
+  let weights=0n,score=0n
+  const detail:string[]=[]
+  try {
+    for(const term of op.terms) {
+      const x=field(item,term.field)
+      if (!known(x)|| (typeof x.value!=='number'&&typeof x.value!=='string')) {missing.push(term.field);continue}
+      const w=decimalT04(term.weight),v=decimalT04(x.value)
+      if(w<0n||v<0n)throw Error('weight/value negative')
+      weights+=w
+      score+=v*w
+      detail.push(term.field+'='+String(x.value)+' × '+term.weight)
+    }
+    if(missing.length)return pending('权重项缺失或未确认，不把缺失视为零',items,rule,missing)
+    if(weights!==SCALE) return pending('权重总和不为 1，需确认模板配置',items,rule)
+    // exact half-up rounding at 6 decimal places before final display
+    const scaled=(score+SCALE/2n)/SCALE
+    return complete('compliant',formatT04(scaled,op.precision??2),'加权计算完成',detail,items,rule)
+  } catch {return pending('权重/分值非法，需人工确认',items,rule)}
+}
+
+function amount(rule:RuleSpec,op:Extract<T04Operation,{kind:'amount-cap'}>,items:T04Item[]):T04Outcome {
+  let cap:bigint
+  try {cap=decimalT04(op.cap);if(cap<0n)throw Error('negative')}catch{return pending('货币限额配置无效',items,rule)}
+  const precision=op.precision??2,missing:string[]=[]
+  let sum=0n
+  const detail:string[]=[]
+  for(const item of items) {
+    const x=field(item,op.amountField),currency=field(item,op.currencyField)
+    if(!known(x)||!known(currency)||currency.value!==op.currency|| (x.unit&&x.unit!==op.currency)) {
+      missing.push(item.id+':amount/currency')
+      continue
+    }
+    try {
+      if(typeof x.value!=='string'&&typeof x.value!=='number')throw Error('not number')
+      const n=decimalT04(x.value)
+      if(n<0n)throw Error('negative')
+      sum+=n
+      detail.push(item.id+': '+formatT04(n,precision)+' '+op.currency)
+    } catch {missing.push(item.id+':'+op.amountField)}
+  }
+  const counted=sum>cap?cap:sum,excess=sum>cap?sum-cap:0n
+  const knownSubtotal=formatT04(sum,precision)
+  const result=formatT04(counted,precision)
+  const base=complete(missing.length?'awaiting-confirmation':'compliant',missing.length?null:result,
+    missing.length?'仅已确认同币种小计，含待确认金额':'同币种限额计算完成',
+    [...detail,'已知小计 '+knownSubtotal,'上限 '+formatT04(cap,precision),'已知超额 '+formatT04(excess,precision)],items,rule)
+  return {...base,missingFields:unique(missing),knownSubtotal,excess:formatT04(excess,precision)}
+}
+
+function dateRange(rule:RuleSpec,op:Extract<T04Operation,{kind:'date-range'}>,items:T04Item[]):T04Outcome {
+  if((op.from&&!strictDate(op.from))||(op.until&&!strictDate(op.until)))
+    return pending('规则日期边界非法或含不明确时区',items,rule)
+  const missing:string[]=[],failed:string[]=[],lines:string[]=[]
+  for(const item of items) {
+    const x=field(item,op.field)
+    if(!known(x)||typeof x.value!=='string'||!strictDate(x.value)) {missing.push(item.id+':'+op.field);continue}
+    const pass=(!op.from||x.value>=op.from)&&(!op.until||x.value<=op.until)
+    lines.push(item.id+': '+x.value+' → '+(pass?'范围内':'范围外'))
+    if(!pass)failed.push(item.id)
+  }
+  if(missing.length)return pending('部分日期未确认或非无时区纯日期',items,rule,missing)
+  return complete(failed.length?'non-compliant':'compliant',null,
+    failed.length?'超出日期范围: '+failed.join(','):'全部日期在含首尾边界的范围内',lines,items,rule)
+}
+
+function valueLimit(rule:RuleSpec,op:Extract<T04Operation,{kind:'value-limit'}>,items:T04Item[]):T04Outcome {
+  let maximum:bigint
+  try {maximum=decimalT04(op.maximum)}catch{return pending('数值上限配置不合法',items,rule)}
+  const failed:string[]=[],missing:string[]=[],lines:string[]=[]
+  for(const item of items) {
+    const v=field(item,op.field)
+    if(!known(v)||(op.unit&&v.unit&&v.unit!==op.unit)) {missing.push(item.id+':'+op.field);continue}
+    try {
+      if(typeof v.value!=='string'&&typeof v.value!=='number')throw Error('non-decimal')
+      const value=decimalT04(v.value)
+      lines.push(item.id+': '+String(v.value)+' <= '+op.maximum)
+      if(value>maximum)failed.push(item.id)
+    }catch {missing.push(item.id+':'+op.field)}
+  }
+  if(missing.length)return pending('比较数值/单位未知',items,rule,missing)
+  return complete(failed.length?'non-compliant':'compliant',null,failed.length?'超出上限: '+failed.join(','):'全部值符合上限',lines,items,rule)
+}
+
+function mapping(rule:RuleSpec,op:Extract<T04Operation,{kind:'level-mapping'}>,items:T04Item[]):T04Outcome {
+  const missing:string[]=[],lines:string[]=[],failed:string[]=[]
+  for(const item of items) {
+    const level=field(item,op.field),score=field(item,op.scoreField)
+    if(!known(level)||!known(score)) {missing.push(item.id+':level/score');continue}
+    try {
+      const expected=op.levels[String(level.value)]
+      if(expected===undefined)throw Error('no level')
+      const good=decimalT04(expected)===decimalT04(String(score.value))
+      lines.push(item.id+': '+String(level.value)+' 应为 '+expected+'，实为 '+String(score.value))
+      if(!good)failed.push(item.id)
+    }catch {missing.push(item.id+':level/score')}
+  }
+  if(missing.length)return pending('等级映射未知，待核对',items,rule,missing)
+  return complete(failed.length?'non-compliant':'compliant',null,failed.length?'等级分值不一致':'等级分值一致',lines,items,rule)
+}
+
+/** Evaluate one confirmed rule. Applicability and exceptions precede arithmetic. */
+export function evaluateT04Rule(rule:RuleSpec,operation:T04Operation,items:T04Item[]):T04Outcome {
+  if(rule.confirmation!=='confirmed')return pending('政策规则尚未确认或存在冲突：'+rule.id,items,rule)
+  if(rule.execution!=='deterministic')return pending('该规则不是确定性执行类型：'+rule.id,items,rule)
+  if(operation.kind==='unresolved')return pending(operation.reason,items,rule)
+  const split=eligible(rule,items)
+  if(split.missing.length)return pending('适用条件/例外有未知事实，不能静默排除',items,rule,split.missing)
+  if(split.accepted.length===0)return complete('not-applicable',null,'所有对象均不适用或命中例外',split.excluded,items,rule)
+  switch(operation.kind) {
+    case 'group-score':return groupScore(rule,operation,split.accepted)
+    case 'weighted-sum':return weighted(rule,operation,split.accepted)
+    case 'amount-cap':return amount(rule,operation,split.accepted)
+    case 'date-range':return dateRange(rule,operation,split.accepted)
+    case 'value-limit':return valueLimit(rule,operation,split.accepted)
+    case 'level-mapping':return mapping(rule,operation,split.accepted)
+  }
+}
+
+/**
+ * Evaluate ONLY bindings already present in the immutable CanonicalPlan.
+ * Binding→rule/inputs mapping is supplied by the authoritative caller;
+ * this code neither creates a Plan nor assumes a rule id from checkKey.
+ * SourceVersionIds and target membership are verified by C Main on consumption.
+ */
+export function evaluateT04Plan(
+  plan:CanonicalPlan,checks:T04PlanCheck[],decisions:T04PolicyDecision[]=[],
+):T04PlanProposal[] {
+  const byKey=new Map(checks.map(c=>[c.binding.checkKey,c]))
+  const allowed=new Map(plan.bindings.map(x=>[x.checkKey,x]))
+  const claims=checks.filter(c=>c.policyClaimKey).map(c=>({key:c.policyClaimKey!,rule:c.rule,operation:c.operation}))
+  const resolution=resolveT04PolicyClaims(claims,decisions)
+  const blocked=new Set(resolution.blocked.map(x=>x.key))
+  const excluded=new Set(resolution.excluded.map(x=>x.ruleId))
+  return plan.bindings.map(binding=>{
+    const check=byKey.get(binding.checkKey)
+    if (!check || !allowed.has(binding.checkKey)) throw new Error('T04_CHECK_BINDING_MISSING: '+binding.checkKey)
+    if(check.binding.targetKey!==binding.targetKey||check.binding.objectKey!==binding.objectKey||
+       check.binding.subjectId!==binding.subjectId)throw new Error('T04_BINDING_TARGET_MISMATCH: '+binding.checkKey)
+    let outcome:T04Outcome
+    if(binding.applicability==='unknown')outcome=pending('Plan 已将适用性标为 unknown',check.items,check.rule)
+    else if(binding.applicability==='not-applicable')
+      outcome=complete('not-applicable',null,'Plan 已确认不适用',[],check.items,check.rule)
+    else if(check.policyClaimKey&&blocked.has(check.policyClaimKey))
+      outcome=pending('多政策限额冲突，须具名确定优先规则',check.items,check.rule)
+    else if(excluded.has(check.rule.id))
+      outcome=complete('not-applicable',null,'相同约束已有具名优先政策，当前规则不计入',[],check.items,check.rule)
+    else outcome=evaluateT04Rule(check.rule,check.operation,check.items)
+    return {
+      planFingerprint:plan.fingerprint,checkKey:binding.checkKey,targetKey:binding.targetKey,objectKey:binding.objectKey,
+      ruleId:check.rule.id,policyVersionId:check.rule.policyVersionId,
+      sourceVersionIds:[...binding.sourceVersionIds],outcome,
+    }
+  })
+}
