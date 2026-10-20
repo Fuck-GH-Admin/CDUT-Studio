@@ -19,7 +19,7 @@ import {assertC2PhysicalOriginalBytes} from './review-v3-main-trust-port'
 import {ReviewB2StagingService,type B2MainContext,type B2MaterialCandidate} from './review-intake-adapter-v3-b2'
 import {decodeReviewB2Zip} from './review-zip-intake-v3-b2'
 import {readB30AllCurrentMaterials} from './review-v3-b30-current-materials-read'
-import {ReviewB3OwnerBoundRouteSession,type B3ManualCatalogEntry,type B3RouteState} from './review-intake-routing-adapter-v3-b3'
+import {ReviewB3OwnerBoundRouteSession,type B3ManualCatalogEntry,type B3RouteState,type B3RouteSuggestion} from './review-intake-routing-adapter-v3-b3'
 import {listTemplateVersions} from './template-store'
 import {prepareB29UnmatchedAuthorDraft,type B29HumanAuthorIntent,
   type B29UnmatchedAuthorDraft} from './review-v3-b3-unmatched-author-bootstrap'
@@ -148,8 +148,25 @@ function catalog():B3ManualCatalogEntry[] {
 function evaluate(s:Session,items:B3ManualCatalogEntry[]):B3RouteState {
   const ids=s.staging.listScopedCandidateIds(s.ctx)
   const all=ids.map(id=>s.staging.getCandidate(s.ctx,id))
+  // Only a CURRENT native Case with a concrete locally published template
+  // provides a defensible 20-second technical route. No model/filename
+  // guess, candidate-held policy or school authority is inferred.
+  const installed=readAggregate(s.ctx.caseCandidateId)?.caseV2
+  const selected=items.find(x=>x.templateId===installed?.templateId&&
+    x.templateVersion===String(installed?.templateVersion)&&
+    x.availability==='authorized-for-technical-selection')
+  const scoped=all.length>0&&all.filter(x=>x.role==='application').length===1&&
+    all.every(x=>x.role!=='unassigned'&&Boolean(x.subjectId))&&
+    new Set(all.map(x=>x.subjectId)).size===1
+  const suggestions:B3RouteSuggestion[]=selected&&scoped?[{
+    templateId:selected.templateId,templateVersion:selected.templateVersion,
+    availability:'authorized-for-technical-selection',
+    confidence:1,caseCandidateId:s.ctx.caseCandidateId,
+    evidence:all.map(x=>({materialCandidateId:x.candidateId,rawSha256:x.rawSha256,
+      reason:'已绑定本机当前案卷模板及完整原件，仅供技术候选'})),
+  }]:[]
   return s.router.evaluate(s.ctx,{
-    automaticSelectionEnabled:true,materialCandidates:all,suggestions:[],
+    automaticSelectionEnabled:true,materialCandidates:all,suggestions,
     manualCatalog:items,userInterrupted:s.interrupted,
     ...(s.chosen?{userChoseTemplateId:s.chosen.templateId,
       userChoseTemplateVersion:s.chosen.templateVersion}:{}),
