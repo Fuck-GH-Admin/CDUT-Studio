@@ -137,7 +137,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   return <div className="mx-auto max-w-5xl space-y-4 px-4 pb-8">
     <div className="space-y-3 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">新建本地审核案卷与原件导入</h2>
-      <p className="text-xs text-muted-foreground">调用已有 C 原生案卷存储与系统文件选择器。候选模板与原生案卷目前分别保存，未签学校政策，也不自动生成正式 Run。</p>
+      <p className="text-xs text-muted-foreground">调用已有 C 原生案卷存储与系统文件选择器。原生案卷保存材料和已选择的已发布模板；候选作者草稿单独保存，需完成模板选择后再运行 Pi。</p>
       <div className="flex flex-wrap gap-2">
         <input aria-label="本地案卷标题" value={caseTitle} onChange={e=>setCaseTitle(e.target.value)}
           className="min-w-44 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm" placeholder="案卷标题"/>
