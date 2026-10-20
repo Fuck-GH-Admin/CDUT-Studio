@@ -131,7 +131,8 @@ export function registerReviewIpc(): void {
         title: string
         type: ReviewCaseType
         applicant: string
-        academicYear: string
+        /** 通用 V3 草稿案卷可省略；综测等按学年组织评审的领域仍必须提供。 */
+        academicYear?: string
         domainPackId?: string
         reviewTemplate?: { templateId: string; version: number } | null
       },
@@ -158,7 +159,10 @@ export function registerReviewIpc(): void {
         title: requireString(input.title, 'title'),
         type: input.type,
         applicant: requireString(input.applicant, 'applicant'),
-        academicYear: requireString(input.academicYear, 'academicYear'),
+        // 学年按领域判定（见 createNativeWorkspaceCaseV3），此处不再全局强制
+        ...(input.academicYear === undefined
+          ? {}
+          : { academicYear: requireString(input.academicYear, 'academicYear') }),
         ...(input.domainPackId ? { domainPackId: input.domainPackId } : {}),
         ...(input.reviewTemplate !== undefined ? { reviewTemplate: input.reviewTemplate } : {}),
       }, undefined, () => assertC0ReviewMainSender(event))

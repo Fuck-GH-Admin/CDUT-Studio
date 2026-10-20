@@ -30,9 +30,29 @@ export type NativeCreateWorkspaceInputV3 = {
   title: string
   type: ReviewCaseType
   applicant: string
-  academicYear: string
+  /**
+   * 适用学年。
+   *
+   * 通用 V3 草稿案卷（非综测等按学年组织评审的业务）不强制提供；
+   * 需要学年的领域仍必须给出，由 requireAcademicYearForDomain 统一判定。
+   * 缺省时不会自动编造学年。
+   */
+  academicYear?: string
   domainPackId?: string
   reviewTemplate?: { templateId: string; version: number } | null
+}
+
+/**
+ * 哪些领域包的业务本身按学年组织评审。
+ *
+ * 综测细则逐学年发布，学年是业务主键的一部分；通用技术预审（D4/D2 候选、
+ * 自定义模板草稿）与学年无关，不应被迫填写。
+ */
+const ACADEMIC_YEAR_DOMAINS: ReadonlySet<string> = new Set(['comprehensive-assessment'])
+
+/** 该领域是否必须提供学年（缺省领域包视为不强制）。 */
+export function domainRequiresAcademicYear(domain: string | undefined): boolean {
+  return domain !== undefined && ACADEMIC_YEAR_DOMAINS.has(domain)
 }
 
 export function isNativeWorkspaceCaseV3(aggregate: CaseAggregateV2 | undefined): boolean {
@@ -75,9 +95,10 @@ export function nativeWorkspaceProjectionV3(aggregate: CaseAggregateV2 | undefin
       !Array.isArray(state.subjects)) return undefined
   const type = value(state, 'legacyReviewType')
   const applicant = value(state, 'applicant')
-  const academicYear = value(state, 'academicYear')
+  // 学年对通用 V3 草稿案卷可为空：投影降级为空串，而不是让整份旧兼容投影失效。
+  const academicYear = value(state, 'academicYear') ?? ''
   const domainPackId = value(state, 'legacyDomainPackId')
-  if (!type || !TYPES.has(type) || applicant === undefined || academicYear === undefined ||
+  if (!type || !TYPES.has(type) || applicant === undefined ||
       !domainPackId || !state.id) return undefined
   // V1's three columns have no 'attachment' role. Never mislabel a native
   // attachment as verified evidence; it remains visible in the V2 ledger.
@@ -212,15 +233,20 @@ export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceIn
   if (!input || typeof input !== 'object' || !TYPES.has(input.type) ||
       typeof input.title !== 'string' || input.title.length === 0 ||
       typeof input.applicant !== 'string' || !input.applicant.trim() ||
-      typeof input.academicYear !== 'string' || !input.academicYear.trim() ||
+      (input.academicYear !== undefined && typeof input.academicYear !== 'string') ||
       (input.domainPackId !== undefined && typeof input.domainPackId !== 'string')) {
-    throw new CommandValidationError('VALIDATION_FAILED', '新建案卷缺少标题、类型、申请人或学年')
+    throw new CommandValidationError('VALIDATION_FAILED', '新建案卷缺少标题、类型或申请人')
   }
   if (actor.actorSource !== 'local' || actor.role !== 'reviewer')
     throw new CommandValidationError('VALIDATION_FAILED', '只有受信本地审核人可建案')
   if (!isKnownDomainPack(input.domainPackId))
     throw new CommandValidationError('VALIDATION_FAILED', '未知审核领域不能静默回退综测并创建正式业务案卷')
   const domain = resolveDomainPack(input.domainPackId).id
+  const academicYear = input.academicYear?.trim() ?? ''
+  // 综测等按学年组织评审的业务仍必须提供学年；通用技术预审不强制，也不编造。
+  if (domainRequiresAcademicYear(domain) && !academicYear) {
+    throw new CommandValidationError('VALIDATION_FAILED', '该审核领域按学年组织评审，必须填写适用学年')
+  }
   const template = input.reviewTemplate === null ? undefined : resolvedTemplate(domain, input.reviewTemplate)
   const caseId = `case-${randomUUID().replace(/-/g, '')}`
   const now = new Date().toISOString()
@@ -229,7 +255,8 @@ export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceIn
     templateVersion: template?.version ?? 0,
     title: input.title.trim() || '未命名案卷', objectType: template?.objectType ?? 'document',
     caseFields: {
-      applicant: txt(input.applicant.trim()), academicYear: txt(input.academicYear.trim()),
+      applicant: txt(input.applicant.trim()),
+      ...(academicYear ? { academicYear: txt(academicYear) } : {}),
       legacyReviewType: txt(input.type), legacyDomainPackId: txt(domain),
     },
     subjects: [], documents: [], stage: 'draft', revision: 0, createdAt: now, updatedAt: now,
@@ -238,7 +265,7 @@ export async function createNativeWorkspaceCaseV3(input: NativeCreateWorkspaceIn
     requestId: `native-create-${caseId}`, type: NATIVE_CREATE_RECEIPT_V3,
     payloadHash: payloadHash(NATIVE_CREATE_RECEIPT_V3, {
       title: state.title, type: input.type, applicant: input.applicant.trim(),
-      academicYear: input.academicYear.trim(), domainPackId: domain,
+      academicYear, domainPackId: domain,
       templateId: state.templateId, templateVersion: state.templateVersion,
     }), revision: 0, at: now, summary: 'Main 原生建案，未发布任何校方政策或正式 Plan', actor,
   }
