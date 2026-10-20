@@ -245,8 +245,19 @@ export class V3ABackgroundTechnicalCoordinator {
              completedSteps:result.executed}
       })
     }catch(error){
+      // Keep common user-actionable failure classes visible to C's local
+      // recovery workbench, without leaking Provider response bodies/tokens.
+      // Even a missing model or quota failure does NOT authorize redispatch
+      // of an already persisted SDK intent.
+      const message=error instanceof Error?error.message:''
       const reason=abort.signal.aborted
         ?'STOP_OR_PROVIDER_COMPLETION_UNCONFIRMED'
+        :/EXTERNAL_PROVIDER_NOT_CONFIGURED|MAIN_MODEL_CHANNEL_NOT_INSTALLED|MAIN_FROZEN_PI_SELECTION_MISSING/.test(message)
+          ?'EXTERNAL_PROVIDER_NOT_CONFIGURED'
+        :/PROVIDER_PROTOCOL_NOT_YET_SUPPORTED|PROVIDER_HTTPS_REQUIRED/.test(message)
+          ?'PROVIDER_PROTOCOL_NOT_SUPPORTED'
+        :/(?:429|rate.limit|quota|insufficient.credits)/i.test(message)
+          ?'PROVIDER_QUOTA_OR_RATE_LIMIT_REQUIRES_REVIEW'
         :'EXECUTION_OR_PROVIDER_EFFECT_UNCONFIRMED'
       try{
         return this.transition(caseId,task.requestId,prev=>({

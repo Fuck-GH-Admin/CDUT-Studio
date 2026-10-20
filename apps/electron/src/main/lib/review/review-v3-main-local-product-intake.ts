@@ -21,6 +21,8 @@ import {decodeReviewB2Zip} from './review-zip-intake-v3-b2'
 import {readB30AllCurrentMaterials} from './review-v3-b30-current-materials-read'
 import {ReviewB3OwnerBoundRouteSession,type B3ManualCatalogEntry,type B3RouteState} from './review-intake-routing-adapter-v3-b3'
 import {listTemplateVersions} from './template-store'
+import {prepareB29UnmatchedAuthorDraft,type B29HumanAuthorIntent,
+  type B29UnmatchedAuthorDraft} from './review-v3-b3-unmatched-author-bootstrap'
 import type {B20MainReadScope} from './review-v3-b1-b2-main-read-bundle-v3-b'
 import type {B32ProductRead} from '../../../renderer/components/review-v3-dev-b/review-v3-product-workflow'
 
@@ -180,6 +182,27 @@ export function installC11LocalNativeProductIntake():void {
       const {s}=session(event,caseId)
       s.interrupted=true
       return read(event,caseId)
+    })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_UNMATCHED_V3,
+    (event:IpcMainInvokeEvent,input:{
+      caseId:string;intent:B29HumanAuthorIntent
+    }):B29UnmatchedAuthorDraft=>{
+      if(!input||typeof input.caseId!=='string')
+        throw new Error('C11_NATIVE_UNMATCHED_CASE_REQUIRED')
+      const {data,s}=session(event,input.caseId)
+      const route=evaluate(s,catalog())
+      if(route.status!=='unmatched')
+        throw new Error('C11_NATIVE_UNMATCHED_ROUTE_NOT_CURRENT')
+      const materials=s.staging.listScopedCandidateIds(s.ctx)
+        .map(id=>s.staging.getCandidate(s.ctx,id))
+      const candidate=prepareB29UnmatchedAuthorDraft(route,materials,input.intent)
+      // Independent C authority and exact native original bytes are rechecked
+      // even though B29 is candidate-only and does not issue a formal Case write.
+      if(local(event,input.caseId).signature!==data.signature)
+        throw new Error('C11_NATIVE_SOURCE_CHANGED_DURING_AUTHOR_PREPARE')
+      for(const doc of data.aggregate.caseV2.documents.filter(x=>x.active!==false))
+        assertC2PhysicalOriginalBytes(data.aggregate,doc.versionId)
+      return candidate
     })
   ipcMain.handle(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_MANUAL_CHOICE_V3,
     (event:IpcMainInvokeEvent,input:{

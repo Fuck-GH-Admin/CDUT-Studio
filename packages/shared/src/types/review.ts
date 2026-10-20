@@ -518,6 +518,7 @@ export const REVIEW_IPC_CHANNELS = {
   LOCAL_PRODUCT_CURRENT_V3: 'review-v3:local-product-current',
   LOCAL_PRODUCT_INTERRUPT_V3: 'review-v3:local-product-interrupt',
   LOCAL_PRODUCT_MANUAL_CHOICE_V3: 'review-v3:local-product-manual-choice',
+  LOCAL_PRODUCT_UNMATCHED_V3: 'review-v3:local-product-unmatched',
   /** C Main-only current B20 physical candidate preview; never a published Plan. */
   B20_CANDIDATE_READ_V3: 'review-v3:b20-candidate-read',
   /** User requests Main to show native ZIP picker for one CURRENT B20 selected archive. */

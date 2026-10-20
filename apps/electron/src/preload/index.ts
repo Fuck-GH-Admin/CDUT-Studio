@@ -4035,6 +4035,10 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_INTERRUPT_V3,caseId) as Promise<import('../main/lib/review/review-v3-main-local-product-intake').C11MainLocalProductRead>,
   chooseLocalNativeProductTemplateV3: (input:{caseId:string;templateId:string;templateVersion:string}) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_MANUAL_CHOICE_V3,input) as Promise<import('../main/lib/review/review-v3-main-local-product-intake').C11MainLocalTechnicalChoiceAck>,
+  prepareLocalNativeUnmatchedV3: (input:{
+    caseId:string;intent:import('../main/lib/review/review-v3-b3-unmatched-author-bootstrap').B29HumanAuthorIntent
+  })=>ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_UNMATCHED_V3,input) as Promise<
+    import('../main/lib/review/review-v3-b3-unmatched-author-bootstrap').B29UnmatchedAuthorDraft>,
   /** C Main-only B20 source view; requires separate trusted picker, B vault/ledger and current Owner. */
   readCurrentB20CandidateV3: (templateId:string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.B20_CANDIDATE_READ_V3,{templateId}) as Promise<{

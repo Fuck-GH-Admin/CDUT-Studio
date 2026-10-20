@@ -215,7 +215,12 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
             window.reviewAPI.freezeLocalCandidateAuthorV3({document,expectedRevision}),
           onReadLatestCandidate:async id=>readLatest(id),
         }}
-        product={{onReadCurrent:readProduct}}
+        product={{
+          onReadCurrent:readProduct,
+          onPrepareUnmatchedDraft:intent=>window.reviewAPI.prepareLocalNativeUnmatchedV3({
+            caseId:localCaseId,intent,
+          }),
+        }}
       />}
     </div>}
     <ReviewV3LocalManualItem key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />

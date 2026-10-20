@@ -29,6 +29,17 @@ export interface A24BatchResult {
   readonly completed:number
   readonly notStarted:number
 }
+/** Main can poll this during a running physical batch. This is NOT a C Batch ACK. */
+export interface A24BatchProgress {
+  readonly version:'v3-dev-a-batch-progress/1'
+  readonly state:'idle'|'running'|'stopping'
+  readonly queued:readonly {caseId:string;requestId:string}[]
+  readonly active:readonly {caseId:string;requestId:string;
+    task:A22BackgroundTask|null}[]
+  readonly finished:readonly A24CaseResult[]
+  readonly started:number
+  readonly total:number
+}
 const deny=(why:string):never=>{
   throw new C0ContractError('RECOVERY_REQUIRED','A24_BATCH: '+why)
 }
@@ -37,6 +48,11 @@ export class A24BoundedTechnicalBatchScheduler {
   private busy=false
   private stopped=false
   private readonly active=new Map<string,string>()
+  private jobs:readonly A24ScheduledCase[]=[]
+  private finished:(A24CaseResult|undefined)[]=[]
+  private cursor=0
+  private started=0
+  private readonly cancelledCases=new Set<string>()
   constructor(
     private readonly coordinator:V3ABackgroundTechnicalCoordinator,
     private readonly maxConcurrentCases=4,
@@ -51,6 +67,37 @@ export class A24BoundedTechnicalBatchScheduler {
     }
   }
   activeCaseIds():readonly string[]{return [...this.active.keys()]}
+  /** Read-only technical task status for a local progress view. */
+  progress():A24BatchProgress {
+    const active=[...this.active].map(([caseId,requestId])=>({
+      caseId,requestId,task:this.coordinator.inspect(caseId),
+    }))
+    const queued=this.jobs.slice(this.cursor).map(x=>({
+      caseId:x.caseId,requestId:x.request.requestId,
+    })).filter(x=>!this.cancelledCases.has(x.caseId))
+    return {version:'v3-dev-a-batch-progress/1',
+      state:!this.busy?'idle':this.stopped?'stopping':'running',
+      queued,active,finished:this.finished.filter(
+        (x):x is A24CaseResult=>!!x).map(x=>structuredClone(x)),
+      started:this.started,total:this.jobs.length}
+  }
+  /**
+   * Stop one active Case or prevent its queued task from launching.
+   * Never treat a Provider that completes after this stop as successful.
+   */
+  stopCase(caseId:string):boolean {
+    if(!this.busy||!this.jobs.some(x=>x.caseId===caseId))
+      return false
+    const alreadyFinished=this.finished.some(x=>x?.caseId===caseId)
+    if(alreadyFinished)return false
+    this.cancelledCases.add(caseId)
+    const requestId=this.active.get(caseId)
+    if(requestId){
+      try{this.coordinator.stop(caseId,requestId)}
+      catch{ /* Original A22 spool remains observable for manual recovery. */ }
+    }
+    return true
+  }
   /**
    * Cancel all queued-but-unstarted work and request a stop for active Cases.
    * A stop does not attest that a previously sent Provider request was undone.
@@ -87,6 +134,11 @@ export class A24BoundedTechnicalBatchScheduler {
     }))
     const results:(A24CaseResult|undefined)[]=Array(jobs.length).fill(undefined)
     let cursor=0,started=0,completed=0
+    this.jobs=jobs
+    this.finished=results
+    this.cursor=0
+    this.started=0
+    this.cancelledCases.clear()
     this.busy=true
     this.stopped=false
     const onAbort=()=>this.stop()
@@ -97,21 +149,31 @@ export class A24BoundedTechnicalBatchScheduler {
         // JS sync queue acquisition makes each index unique in this process.
         if(this.stopped||cursor>=jobs.length)return
         const i=cursor++
+        this.cursor=cursor
         const job=jobs[i]!
         const {caseId,request}=job
+        if(this.cancelledCases.has(caseId)){
+          results[i]={caseId,requestId:request.requestId,
+            outcome:'not-started',
+            reason:'CASE_CANCELLED_BEFORE_PROVIDER_DISPATCH'}
+          continue
+        }
         this.active.set(caseId,request.requestId)
         started++
+        this.started=started
         try {
           const task=await this.coordinator.run(request)
           if(task.caseId!==caseId||task.requestId!==request.requestId){
             deny('Main scheduler Case/technical receipt mismatch')
           }
-          if(this.stopped&&task.state==='completed-technical'){
-            // A stopped batch is not allowed to report a new technical PASS
-            // based solely on a late completion from an unchecked port.
+          if(task.state==='recovery-required'||task.state==='stopping'||
+             task.state==='running'||this.stopped||
+             this.cancelledCases.has(caseId)){
+            // A stopped, unresolved or cancelled Provider task is NEVER a
+            // successful batch item, including a late terminal callback.
             results[i]={caseId,requestId:request.requestId,
               outcome:'recovery-required',
-              reason:'BATCH_CANCELLED_LATE_RESULT_REQUIRES_RECONCILIATION'}
+              reason:task.reason??'PROVIDER_OUTCOME_REQUIRES_MANUAL_REVIEW'}
           }else{
             results[i]={caseId,requestId:request.requestId,
               outcome:'technical',task}
@@ -146,7 +208,7 @@ export class A24BoundedTechnicalBatchScheduler {
       signal?.removeEventListener('abort',onAbort)
       this.active.clear()
       this.busy=false
-      // A fresh explicitly submitted batch may use the instance again.
+      // Keep last finished results visible for UI until the next explicit batch.
       this.stopped=false
     }
   }
