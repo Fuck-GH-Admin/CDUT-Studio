@@ -21,6 +21,7 @@ export type T04Operation =
   | { kind: 'date-range'; field: string; from?: string; until?: string }
   | { kind: 'value-limit'; field: string; maximum: string; unit?: string }
   | { kind: 'value-equals'; field: string; expected: string; unit?: string }
+  | { kind: 'mutual-exclusion'; groupField: string; selectionField?: string }
   | { kind: 'level-mapping'; field: string; scoreField: string; levels: Record<string, string> }
   | { kind: 'unresolved'; reason: string }
 export type T04PolicyClaim = { key: string; rule: RuleSpec; operation: T04Operation }
@@ -160,6 +161,8 @@ export function compileT04Operation(rule: RuleSpec): T04Operation {
     return {kind: 'date-range', field: 'activityDate', ...(x.dateFrom ? {from: x.dateFrom} : {}), ...(x.dateTo ? {until: x.dateTo} : {})}
   if (x.kind === 'score-value' && typeof x.value === 'number' && x.appliesWhen)
     return {kind: 'value-equals', field: 'declaredScore', expected: String(x.value), unit: 'point'}
+  if (x.kind === 'mutual-exclusion' && x.exclusionGroup)
+    return {kind: 'mutual-exclusion', groupField: x.exclusionGroup}
   if (x.kind === 'level-mapping' && x.levels && Object.keys(x.levels).length)
     return {kind: 'level-mapping', field: 'level', scoreField: 'declaredScore', levels: Object.fromEntries(Object.entries(x.levels).map(([key,value]) => [key, String(value)]))}
   return {kind: 'unresolved', reason: '未实现的结构化约束需人工确认，不能编译为通过'}
@@ -207,6 +210,51 @@ function eligible(rule: RuleSpec, items: T04Item[]): {accepted:T04Item[]; missin
     accepted.push(item)
   }
   return {accepted,missing,excluded}
+}
+
+/** Group only on real, confirmed field keys; never merge unknown keys into one group. */
+export function partitionT04Items(rule:RuleSpec,items:T04Item[]):{
+  groups:Array<{key:string;items:T04Item[]}>;
+  unknownItems:string[];
+} {
+  const grouped=new Map<string,T04Item[]>(),unknownItems:string[]=[]
+  const keys=rule.groupBy??[]
+  for(const item of items) {
+    const values:string[]=[]
+    let missing=false
+    for(const key of keys) {
+      const v=field(item,key)
+      if(!known(v)){missing=true;break}
+      values.push(String(v.value))
+    }
+    if(missing){unknownItems.push(item.id);continue}
+    const key=keys.length?JSON.stringify(values):'all'
+    grouped.set(key,[...(grouped.get(key)??[]),item])
+  }
+  return {groups:[...grouped].sort(([a],[b])=>a.localeCompare(b))
+    .map(([key,group])=>({key,items:group.sort((a,b)=>a.id.localeCompare(b.id))})),
+    unknownItems:unknownItems.sort()}
+}
+
+function exclusive(rule:RuleSpec,op:Extract<T04Operation,{kind:'mutual-exclusion'}>,items:T04Item[]):T04Outcome {
+  const groups=new Map<string,string[]>(),missing:string[]=[]
+  for(const item of items) {
+    const x=field(item,op.groupField)
+    if(!known(x)) {missing.push(item.id+':'+op.groupField);continue}
+    if(op.selectionField) {
+      const flag=field(item,op.selectionField)
+      if(!known(flag)||typeof flag.value!=='boolean'){missing.push(item.id+':'+op.selectionField);continue}
+      if(!flag.value)continue
+    }
+    const key=String(x.value)
+    groups.set(key,[...(groups.get(key)??[]),item.id])
+  }
+  if(missing.length)return pending('互斥组归属或选择状态未确认',items,rule,missing)
+  const conflicts=[...groups].filter(([,ids])=>ids.length>1)
+  const details=[...groups].sort(([a],[b])=>a.localeCompare(b))
+    .map(([key,ids])=>key+': '+ids.sort().join(','))
+  return complete(conflicts.length?'non-compliant':'compliant',null,
+    conflicts.length?'同一互斥组出现多项被选择，必须处理':'互斥检查通过',details,items,rule)
 }
 
 function groupScore(rule: RuleSpec, op: Extract<T04Operation,{kind:'group-score'}>, items:T04Item[]):T04Outcome {
@@ -407,6 +455,7 @@ export function evaluateT04Rule(rule:RuleSpec,operation:T04Operation,items:T04It
     case 'date-range':return dateRange(rule,operation,split.accepted)
     case 'value-limit':return valueLimit(rule,operation,split.accepted)
     case 'value-equals':return equalsValue(rule,operation,split.accepted)
+    case 'mutual-exclusion':return exclusive(rule,operation,split.accepted)
     case 'level-mapping':return mapping(rule,operation,split.accepted)
   }
 }
