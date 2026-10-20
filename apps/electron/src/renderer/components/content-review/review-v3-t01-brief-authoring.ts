@@ -50,7 +50,7 @@ const pick = (text: string, label: string): string | undefined => {
   return line?.replace(new RegExp('^\\s*(?:' + label + ')\\s*[:：]\\s*'), '').trim()
 }
 const tokens = (text: string): string[] => text
-  .replace(/和(?=(?:预算|名单|材料|负责人|联系人|参加人数|参与人数|使用日期|使用时段|用途|金额|活动名称|组织名称))/g, '、')
+  .replace(/和(?=(?:预算|参与名单|成员名单|名单|材料|证明|附件|负责人|联系人|参加人数|参与人数|使用日期|使用时段|用途|金额|活动名称|组织名称))/g, '、')
   .split(/[、，,；;]+/).map(clean).filter(Boolean)
 function sourceKey(label: string, used: Set<string>): string {
   const known = fieldKeys.find(([re]) => re.test(label))?.[1]
@@ -104,7 +104,7 @@ function stagePlan(raw: string): WorkflowStageSpec[] {
     workflowOwner: 'local',
   }))
 }
-const wordLimit = /(?:参加人数|参与人数|人数|预算|金额|名额|费用)(?:不得|不能|不可|不应)?(?:超过|高于|大于)\s*(\d+(?:\.\d+)?)/g
+const wordLimit = /(?:参加人数|参与人数|人数|预算|金额|名额|费用)(?:不得|不能|不可|不应|不)?(?:超过|高于|大于)\s*(\d+(?:\.\d+)?)/g
 const labeledRequirement = /(?:规则|审核要求|检查要求|标准)\s*[:：]\s*([^\n]+)/
 
 /** Only explicit statements become editable draft data. No fabricated policy refs. */
