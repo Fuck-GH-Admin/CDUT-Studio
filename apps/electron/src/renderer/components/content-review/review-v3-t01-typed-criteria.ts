@@ -164,3 +164,23 @@ export function collectT01RequiredMaterials(template: TemplateVersion): T01Publi
     ...(slot.requiredWhen ? { requiredWhen: slot.requiredWhen } : {}),
   }))
 }
+
+/**
+ * Imported/model-generated text is untrusted authoring input, never an already
+ * authenticated owner-statement. Preserve the numeric clause, but require the
+ * local template owner to inspect and confirm it before publication.
+ */
+export function resetT01ImportedConfirmations(template: TemplateVersion): TemplateVersion {
+  return {
+    ...template,
+    sections: template.sections?.map(section => ({
+      ...section,
+      criteria: section.criteria.map(criterion => {
+        const { deterministicConstraint, ...rest } = criterion as T01CriterionWithConstraint
+        return deterministicConstraint
+          ? { ...rest, deterministicConstraint: { ...deterministicConstraint, ownerStatement: undefined } }
+          : rest
+      }),
+    })),
+  }
+}
