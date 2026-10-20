@@ -169,6 +169,23 @@ describe('V3 R01 T03 Run evidence gate (pure business contract)', () => {
     expect(gate('stage-pass', run([check('people')], { status: 'partially-completed' })).allowed).toBe(false)
   })
 
+  test('a pending check with a genuine human disposition can pass without changing immutable Run', () => {
+    const pending = run([check('c1', 'awaiting-confirmation')], {
+      coverage: { documents: [], plannedChecks: 1, completedChecks: 1, effectiveVerdicts: 0, pendingChecks: 1 },
+    })
+    const data = aggregate({ dispositions: [{
+      findingKey: 'c1', runId: 'run-real-lab-01',
+      disposition: 'human-confirmed-compliant',
+      actor: { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' },
+      reason: '根据实际原件已具名核验符合', at: '2026-10-21T00:00:00.000Z',
+    }] })
+    expect(gate('stage-pass', pending, data).allowed).toBe(true)
+    const staleDisposition = aggregate({ dispositions: [{
+      ...data.dispositions[0], runId: 'older-run',
+    }] })
+    expect(gate('stage-pass', pending, staleDisposition).allowed).toBe(false)
+  })
+
   test('not-applicable requires an explicit reason; an open supplement is still blocking', () => {
     expect(gate('stage-pass', run([check('n/a', 'not-applicable', '')])).allowed).toBe(false)
     expect(gate('stage-pass', run(), aggregate({ supplements: [{ id: 'sup-1', status: 'responded' }] })).allowed).toBe(false)
