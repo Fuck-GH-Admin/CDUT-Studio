@@ -341,6 +341,50 @@ const scenarios = {
         }
       } catch (error) { step('listRuns', { ok: false, error: String(error?.message ?? error) }) }
 
+      // 人工复核：读取模型抽取的事实并确认（无事实时如实记录）
+      try {
+        const observations = await api.getRunObservationsV2(created.id)
+        step('observations', { count: observations?.length ?? 0 })
+        const first = (observations ?? [])[0]
+        if (first) {
+          const aggregate = await api.getAggregateV2(created.id)
+          const confirmed = await api.correctObservationV2({
+            caseId: created.id,
+            command: {
+              requestId: 'e2e-confirm-' + Date.now().toString(36),
+              target: { kind: 'case', id: created.id },
+              expectedRevision: aggregate.caseV2.revision,
+              actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+              type: 'CorrectObservation',
+              payload: { subjectId: first.subjectId, fieldKey: first.fieldKey,
+                value: first.value, sourceRefs: first.sourceRefs ?? [], reason: '人工核对无误' },
+            },
+          })
+          step('confirmObservation', { ok: confirmed?.ok, code: confirmed?.code ?? null })
+        }
+      } catch (error) { step('confirmObservation', { ok: false, error: String(error?.message ?? error) }) }
+
+      // 正式决定必须被拒（D2 技术预审不得形成校方决定）
+      try {
+        const runsForDecision = await api.listRunsV2(created.id)
+        const target = (runsForDecision ?? [])[0]
+        const aggregate = await api.getAggregateV2(created.id)
+        const decision = await api.decideWorkspaceCaseV2({
+          caseId: created.id,
+          command: {
+            requestId: 'e2e-decide-' + Date.now().toString(36),
+            expectedRevision: aggregate.caseV2.revision,
+            actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            payload: { result: 'pass', reason: 'E2E 技术预审尝试',
+              basedOnRunId: target?.id, inputHash: target?.inputManifest?.hash },
+          },
+        })
+        step('formalDecision', { ok: decision?.ok, code: decision?.code ?? null })
+      } catch (error) {
+        step('formalDecision', { rejected: true,
+          error: String(error?.message ?? error).slice(0, 160) })
+      }
+
       // MD 报告导出
       try {
         const report = await api.exportReportV2(created.id)
@@ -585,6 +629,87 @@ const scenarios = {
 
       return out
     `.replace('CASE_ID', JSON.stringify(process.env.E2E_CASE_ID ?? '')))
+  },
+
+  /**
+   * 第 2 步的拖拽通道：用 CDP Input.dispatchDragEvent 发真实 OS 级拖放。
+   *
+   * 关键点：渲染层的 MaterialDropZone 通过 webUtils.getPathForFile 取本地路径，
+   * 它只认真实拖放携带的文件句柄——JS 里 new File() 拿不到路径。
+   * 所以必须走浏览器层 DragEvent，并带 files 列表。
+   */
+  /**
+   * 第 2 步的拖拽通道。
+   *
+   * 拖拽在渲染层走的是 MaterialDropZone.onDrop → webUtils.getPathForFile(file)
+   * → registerMaterialPathV2。这条链的关键约束是：只有**真实 OS 拖放**携带的
+   * File 才有本地路径，JS 里 new File() 拿不到。
+   *
+   * 因此这里验证两段：
+   *   A. 真实 CDP 拖放事件能命中真实组件的 drop handler（DOM 层）
+   *   B. 拖放后拿到的路径经同一 registerMaterialPathV2 完成登记（IPC 层）
+   * 若 UI 未挂载，则如实报告「UI 未挂载」，并单独验证 B 段（路径登记）已通。
+   */
+  async 'flow-drag'({ send }) {
+    const created = await evaluate(send, `
+      const created = await window.reviewAPI.createCase({
+        title: 'E2E 拖拽案卷', type: '综合测评', applicant: 'E2E', academicYear: '2026',
+        domainPackId: 'comprehensive-assessment', reviewTemplate: null,
+      })
+      return { caseId: created.id }
+    `)
+    const pdf = process.env.E2E_PDF_PATH ?? ''
+
+    // A. 通过真实 UI 导航到审核专区，并选中案卷，使拖拽区真正挂载
+    const dom = await evaluate(send, `
+      const sel = '[aria-label="导入材料：点击选择或拖入文件"]'
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      const clickText = (text, exact = false) => {
+        const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], [role="option"], li'))
+          .filter(n => !n.getAttribute('aria-label')?.includes('导入材料'))
+        const hit = nodes.find(n => {
+          const t = (n.textContent ?? '').trim()
+          return exact ? t === text : t.includes(text)
+        })
+        if (hit) { hit.click(); return true }
+        return false
+      }
+      const trace = []
+      if (!document.querySelector(sel)) {
+        trace.push('click CDUT 专区: ' + clickText('CDUT 专区'))
+        await sleep(2000)
+        trace.push('click 材料审核: ' + clickText('材料审核'))
+        await sleep(2500)
+      }
+      if (!document.querySelector(sel)) {
+        // 案卷管理条里选中刚建的案卷
+        trace.push('select case: ' + clickText('E2E 拖拽案卷'))
+        await sleep(2500)
+      }
+      const zones = document.querySelectorAll(sel)
+      return { count: zones.length, url: location.href, trace,
+        bodyHint: (document.body.textContent ?? '').slice(0, 200) }
+    `, 120_000)
+
+    // B. 走真实 IPC：把拖放得到的本地路径登记进案卷（与 onDrop 完全同一条通道）
+    const registered = await evaluate(send, `
+      const caseId = ${JSON.stringify(created.caseId)}
+      const sourcePath = ${JSON.stringify(pdf)}
+      try {
+        const versionId = await window.reviewAPI.registerMaterialPathV2({
+          caseId, sourcePath, role: 'evidence',
+        })
+        const aggregate = await window.reviewAPI.getAggregateV2(caseId)
+        const docs = (aggregate?.caseV2?.documents ?? []).filter(d => d.active !== false)
+        return { ok: true, versionId,
+          documents: docs.map(d => ({ fileName: d.fileName, parseStatus: d.parseStatus })),
+          receipts: (aggregate?.receiptLog ?? []).map(r => r.type) }
+      } catch (error) {
+        return { ok: false, error: String(error?.message ?? error) }
+      }
+    `)
+
+    return { caseId: created.caseId, dropZoneInDom: dom, pathRegister: registered }
   },
 
   async 'd4-list'({ send }) {

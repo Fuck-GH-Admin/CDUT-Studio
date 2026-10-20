@@ -73,6 +73,9 @@ const settingsPath = join(CONFIG_DIR, 'settings.json')
 const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {}
 settings.agentChannelId = target.id
 settings.agentModelId = MODEL_ID
+// 关掉首次引导，否则新配置根会停在欢迎页，审核专区无法导航
+settings.onboardingCompleted = true
+settings.introCompleted = true
 writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
 
 writeFileSync(
