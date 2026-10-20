@@ -90,7 +90,7 @@ describe('T01 author-confirmed numeric rule contract', () => {
     expect(validateT01TypedCriteria(template).join(' ')).toContain('比较符或阈值无效')
     template.sections![0]!.criteria[0] = { ...criterion,execution:'manual' }
     expect(validateT01TypedCriteria(template).join(' ')).toContain('执行方式')
-    template.sections![0]!.criteria[0] = { ...criterion, deterministicConstraint:undefined }
+    template.sections![0]!.criteria[0] = { ...criterion, deterministicConstraint:undefined } as typeof criterion
     expect(validateT01TypedCriteria(template).join(' ')).toContain('尚未配置')
   })
 })
