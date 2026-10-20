@@ -2,7 +2,7 @@
 
 **基线**：`main` @ `8b72b4415`（含本轮 4 个修复提交）
 **环境**：Linux / Electron 43.7.7 / xvfb 虚拟屏 1600×1000×24 / Bun 1.4.0
-**渠道**：赞助渠道 `https://liufengzi.qd.je/v1`，模型 `minimax-m3`（真实 Provider，非 mock）
+**渠道**：第三方赞助测试渠道（OpenAI 兼容中转，地址不公开），模型 `minimax-m3`（真实 Provider，非 mock）
 **材料**：`work/e2e/materials/evidence.pdf`（6 页真实 PDF，含文本层）、`evidence.docx`（合法 OOXML，含标题与表格），均为合成数据
 
 ## handoff §4 逐步结果

@@ -2967,8 +2967,14 @@ export class AgentOrchestrator {
                   /* 忽略 */
                 }
                 runEndedWithError = true
+                // 终态失败必须把真实原因交给运行回调（P0-C：失败可追踪）。
+                // 只置 runEndedWithError 时，owner 侧只能拿到 endReasonLabel（「执行出错」），
+                // 真实原因只留在消息流里；后台审核这类 owner 会把「执行出错」写进运行记录，
+                // 等于失败不可诊断。与上方 empty_output 分支保持同一写法。
                 completeRun(getAgentSessionMessages(sessionId), {
                   startedAt: streamStartedAt,
+                  resultSubtype: 'error_during_execution',
+                  resultErrors: [typedError.message],
                 })
                 return
               }
