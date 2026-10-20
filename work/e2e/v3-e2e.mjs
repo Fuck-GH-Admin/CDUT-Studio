@@ -852,6 +852,99 @@ const scenarios = {
     `)
   },
 
+  /**
+   * 带字段的已发布业务模板：验证事实抽取（observation）真实可用。
+   *
+   * D2 候选壳没有字段，observations 必然为 0；而 T03/T05/T08 都建立在
+   * 「带 FieldSpec 的业务模板能抽事实」之上。此场景用内置综测模板绑定案卷，
+   * 跑真实审核并检查 observations 与 check 结论。
+   */
+  async 'flow-fielded'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+
+      // 与真实启动一致：先跑 boot check 播种内置模板草稿
+      let boot = null
+      try { boot = await api.bootCheckV2() } catch (error) { boot = { error: String(error?.message ?? error) } }
+      step('bootCheck', { seeded: boot?.templatesSeeded ?? null, published: boot?.templatesPublished ?? null })
+
+      let templates = await api.listTemplatesV2()
+      let published = (templates ?? []).filter(t => t.status === 'published' && (t.fields?.length ?? 0) > 0)
+      // 没有已发布带字段模板时，按用户真实操作发布一个内置模板
+      if (published.length === 0) {
+        const draftable = (templates ?? []).filter(t => t.status === 'draft' && (t.fields?.length ?? 0) > 0)
+        if (draftable[0]) {
+          try {
+            await api.publishTemplateV2(draftable[0].templateId, draftable[0].version)
+            templates = await api.listTemplatesV2()
+            published = (templates ?? []).filter(t => t.status === 'published' && (t.fields?.length ?? 0) > 0)
+            step('publishBuiltin', { templateId: draftable[0].templateId, version: draftable[0].version })
+          } catch (error) { step('publishBuiltin', { ok: false, error: String(error?.message ?? error) }) }
+        }
+      }
+      step('templatePick', { total: templates?.length ?? 0, publishedWithFields: published.length,
+        picked: published[0]?.templateId ?? null })
+
+      const tpl = published[0]
+      if (!tpl) return { ...out, error: '没有带字段的已发布模板' }
+
+      const created = await api.createCase({
+        title: 'E2E 带字段案卷', type: '综合测评', applicant: 'E2E', academicYear: '2026',
+        domainPackId: 'comprehensive-assessment',
+        reviewTemplate: { templateId: tpl.templateId, version: tpl.version },
+      })
+      out.caseId = created.id
+      step('createCase', { ok: Boolean(created.id), templateId: tpl.templateId, version: tpl.version })
+
+      try {
+        const doc = await api.importDocumentFromPath({ caseId: created.id,
+          sourcePath: __PDF__, role: 'evidence' })
+        step('importMaterial', { fileName: doc?.fileName, parseStatus: doc?.parseStatus })
+      } catch (error) { step('importMaterial', { ok: false, error: String(error?.message ?? error) }) }
+
+      let state = null
+      try {
+        state = await api.startBackgroundPiReviewV2({ caseId: created.id })
+        step('startPiReview', { phase: state?.phase, runId: state?.runId ?? null })
+      } catch (error) { step('startPiReview', { ok: false, error: String(error?.message ?? error) }) }
+
+      const deadline = Date.now() + Number(__POLL__ ?? 360000)
+      let last = null
+      while (state && Date.now() < deadline) {
+        try { last = await api.getBackgroundPiReviewStateV2(created.id) } catch {}
+        const p = last?.phase
+        if (p && ['completed','failed','incomplete','stopped','cancelled','error'].includes(p)) break
+        await new Promise(r => setTimeout(r, 3000))
+      }
+      step('piReviewOutcome', { phase: last?.phase, runId: last?.runId ?? null,
+        error: last?.error ?? null })
+
+      // 事实抽取：这是带字段模板的核心产出
+      try {
+        const observations = await api.getRunObservationsV2(created.id)
+        step('observations', { count: observations?.length ?? 0,
+          sample: (observations ?? []).slice(0, 5).map(o => ({ fieldKey: o.fieldKey, value: o.value })) })
+      } catch (error) { step('observations', { ok: false, error: String(error?.message ?? error) }) }
+
+      try {
+        const runs = await api.listRunsV2(created.id)
+        const run = (runs ?? [])[0]
+        step('run', { status: run?.status, checks: run?.checks?.length ?? 0 })
+      } catch (error) { step('run', { ok: false, error: String(error?.message ?? error) }) }
+
+      try {
+        const report = await api.exportReportV2(created.id)
+        step('exportReport', { file: report?.file ?? null })
+      } catch (error) { step('exportReport', { ok: false, error: String(error?.message ?? error) }) }
+
+      return out
+    `
+      .replace('__PDF__', JSON.stringify(process.env.E2E_PDF_PATH ?? ''))
+      .replace('__POLL__', JSON.stringify(process.env.E2E_POLL_MS ?? '360000')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()
