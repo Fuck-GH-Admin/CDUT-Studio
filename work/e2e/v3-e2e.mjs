@@ -1820,6 +1820,190 @@ const scenarios = {
     `.replace('__CASE__', JSON.stringify(process.env.E2E_CASE_ID ?? '')))
   },
 
+  /**
+   * A15 S3-01 补件两轮：
+   * 首轮用「不清楚的计划书」→ 要求补件 → 第一次回复仍不足（insufficient）
+   * → 第二次回复为更正版新 DocumentVersion → 判定 satisfied → 重新审核产生新 Run
+   * → 旧 Run 与旧 DocumentVersion 均保留。
+   */
+  async 'flow-a15-s3-supplement'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+      const templateId = 'a15-lab-application'
+      const now = new Date().toISOString()
+
+      let existing = null
+      try { existing = await api.getTemplateV2(templateId, 1) } catch {}
+      if (!existing || existing.status !== 'published') {
+        await api.saveTemplateDraftV2({
+          templateId, version: 1, schemaVersion: 2,
+          name: '实验室使用申请（A15）', displayName: { template: '{{organizationName}} 实验室使用申请' },
+          objectType: 'organization', status: 'draft', createdAt: now,
+          fields: [
+            { key: 'organizationName', label: '组织名称', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'responsiblePerson', label: '负责人', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'applicantCount', label: '使用人数', kind: 'number', required: true, visibility: 'public', scope: 'case', min: 1, max: 20 },
+            { key: 'usageDate', label: '使用日期', kind: 'date', required: true, visibility: 'public', scope: 'case' },
+            { key: 'usageTime', label: '使用时段', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'purpose', label: '用途', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          ],
+          sections: [{ id: 'lab', name: '实验室使用', order: 0, required: true, criteria: [
+            { id: 'headcount', title: '人数不超上限', requirement: '使用人数不得超过 20 人', execution: 'deterministic', targetScope: 'case' },
+            { id: 'plan', title: '计划书齐备', requirement: '必须提交实验室使用计划书', execution: 'semantic', targetScope: 'case' },
+          ] }],
+          materialSlots: [{ id: 'lab-use-plan', name: '实验室使用计划书', minCount: 1, requiredAt: 'submission' }],
+          policyVersionIds: [], policyRefs: [],
+          stages: [
+            { id: 'initial-review', name: '初审', kind: 'manual-review', executorRole: 'reviewer', nextStageId: 'final-review' },
+            { id: 'final-review', name: '终审', kind: 'manual-review', executorRole: 'teacher' },
+          ],
+          outputs: [{ id: 'feedback', kind: 'item-feedback', audience: 'reviewer' }],
+        })
+        await api.publishTemplateV2(templateId, 1)
+      }
+
+      const created = await api.createCase({ title: 'A15 S3-01 补件案卷', type: '自定义审核', applicant: 'E2E',
+        domainPackId: 'contract-review', reviewTemplate: { templateId, version: 1 } })
+      const caseId = created.id
+      out.caseId = caseId
+
+      // 12 人（A15-MISSING-PLAN 场景）＋ 首轮不清楚的计划书
+      const agg0 = await api.getAggregateV2(caseId)
+      await api.updateFieldsV2({ caseId, command: {
+        requestId: 's301-fields-' + Date.now(), expectedRevision: agg0.caseV2.revision,
+        target: { kind: 'case', id: caseId },
+        actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' }, type: 'UpdateFields',
+        payload: { caseFieldValues: { organizationName: '地球物理学院', responsiblePerson: '李老师', applicantCount: 12,
+          usageDate: '2026-11-08', usageTime: '09:00-11:00', purpose: '开放实验' } },
+      }})
+      const first = await api.registerMaterialPathV2({ caseId, sourcePath: __UNCLEAR__, role: 'evidence', materialSlotId: 'lab-use-plan' })
+      step('firstDocument', { ok: true, documentId: first })
+
+      await api.startBackgroundPiReviewV2({ caseId })
+      const deadline = Date.now() + Number(__POLL__ ?? 900000)
+      let phase = null
+      while (Date.now() < deadline) {
+        try { phase = (await api.getBackgroundPiReviewStateV2(caseId))?.phase } catch {}
+        if (phase && ['completed','failed','incomplete','stopped','cancelled','error'].includes(phase)) break
+        await new Promise(r => setTimeout(r, 3000))
+      }
+      const runs1 = await api.listRunsV2(caseId)
+      const run1 = runs1[0]
+      step('run1', { phase, status: run1?.status ?? null, id: run1?.id ?? null,
+        checks: (run1?.checks ?? []).map(c => ({ id: c.checkId, status: c.status })) })
+      if (!run1) return out
+
+      // 开补件（首轮 Run 里挑一项待确认/待补件；没有就用 T05 直接要求补件）
+      const agg1 = await api.getAggregateV2(caseId)
+      const pendingCheck = (run1.checks ?? []).find(c => c.status === 'awaiting-supplement' || c.status === 'awaiting-confirmation')
+      let supplementId = null
+      if (pendingCheck) {
+        try {
+          const r = await api.openWorkspaceSupplementV2({ caseId, command: {
+            requestId: 's301-open-' + Date.now(), expectedRevision: agg1.caseV2.revision,
+            target: { kind: 'case', id: caseId },
+            actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            type: 'OpenWorkspaceSupplement',
+            payload: { findingKey: pendingCheck.checkId, runId: run1.id, inputHash: run1.inputManifest?.hash,
+              requiredElements: ['完整的实验室使用计划书'], reason: '计划书内容不足以核验' },
+          }})
+          supplementId = r?.aggregate?.supplements?.at(-1)?.id ?? null
+          step('openSupplement', { via: 'run-check', supplementId })
+        } catch (e) { step('openSupplement', { via: 'run-check', ok: false, error: String(e?.message ?? e).slice(0, 140) }) }
+      } else {
+        // 无待办时由 T05 直接开补件（不伪造 Run）
+        try {
+          await api.submitCaseV2(caseId)
+          const aggT = await api.getAggregateV2(caseId)
+          const task = (aggT?.tasks ?? []).find(t => t.status === 'open' && t.stageId === 'initial-review')
+          const r = await api.recordT05StageDecision({ caseId, claim: { role: 'reviewer' },
+            templateId, version: 1, expectedRevision: aggT.caseV2.revision, taskId: task.id,
+            action: 'return-for-supplement', reason: '计划书内容不足',
+            supplementRequiredElements: ['完整的实验室使用计划书'], supplementReason: '请补交完整计划书',
+            requestId: 's301-t05sup-' + Date.now() })
+          supplementId = r.supplementId ?? null
+          step('openSupplement', { via: 't05', supplementId })
+        } catch (e) { step('openSupplement', { via: 't05', ok: false, error: String(e?.message ?? e).slice(0, 140) }) }
+      }
+      if (!supplementId) return out
+
+      // 第一轮回复：仍用不清楚的版本 → insufficient
+      try {
+        const agg2 = await api.getAggregateV2(caseId)
+        await api.respondSupplementV2({ caseId, command: {
+          requestId: 's301-resp1-' + Date.now(), expectedRevision: agg2.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'RespondSupplement',
+          payload: { supplementId, note: '先补一版说明',
+            documentVersionIds: (agg2.caseV2.documents ?? []).filter(d => d.active !== false).map(d => d.versionId) },
+        }})
+        const agg3 = await api.getAggregateV2(caseId)
+        await api.resolveSupplementV2({ caseId, command: {
+          requestId: 's301-res1-' + Date.now(), expectedRevision: agg3.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'ResolveSupplement',
+          payload: { supplementId, outcome: 'insufficient', reason: '内容仍不足以核验计划安排' },
+        }})
+        const agg4 = await api.getAggregateV2(caseId)
+        step('round1', { supplement: (agg4.supplements ?? []).find(s => s.id === supplementId)?.status,
+          stage: agg4.caseV2.stage, documents: (agg4.caseV2.documents ?? []).filter(d => d.active !== false).length })
+      } catch (e) { step('round1', { ok: false, error: String(e?.message ?? e).slice(0, 160) }) }
+
+      // 第二轮：更正版新原件 → satisfied
+      let correctedVersion = null
+      try {
+        correctedVersion = await api.registerMaterialPathV2({ caseId, sourcePath: __CORRECTED__, role: 'evidence', materialSlotId: 'lab-use-plan' })
+        const agg5 = await api.getAggregateV2(caseId)
+        await api.respondSupplementV2({ caseId, command: {
+          requestId: 's301-resp2-' + Date.now(), expectedRevision: agg5.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'RespondSupplement',
+          payload: { supplementId, note: '补交更正版计划书',
+            documentVersionIds: (agg5.caseV2.documents ?? []).filter(d => d.active !== false).map(d => d.versionId) },
+        }})
+        const agg6 = await api.getAggregateV2(caseId)
+        await api.resolveSupplementV2({ caseId, command: {
+          requestId: 's301-res2-' + Date.now(), expectedRevision: agg6.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+          type: 'ResolveSupplement',
+          payload: { supplementId, outcome: 'satisfied', reason: '更正版计划书已满足要求' },
+        }})
+        const agg7 = await api.getAggregateV2(caseId)
+        step('round2', { supplement: (agg7.supplements ?? []).find(s => s.id === supplementId)?.status,
+          stage: agg7.caseV2.stage, documents: (agg7.caseV2.documents ?? []).filter(d => d.active !== false).length,
+          correctedVersion })
+      } catch (e) { step('round2', { ok: false, error: String(e?.message ?? e).slice(0, 160) }) }
+
+      // 重新审核：应产生新 Run，旧 Run 保留
+      try {
+        await api.startBackgroundPiReviewV2({ caseId })
+        const deadline2 = Date.now() + Number(__POLL__ ?? 900000)
+        let phase2 = null
+        while (Date.now() < deadline2) {
+          try { phase2 = (await api.getBackgroundPiReviewStateV2(caseId))?.phase } catch {}
+          if (phase2 && ['completed','failed','incomplete','stopped','cancelled','error'].includes(phase2)) break
+          await new Promise(r => setTimeout(r, 3000))
+        }
+        const runs2 = await api.listRunsV2(caseId)
+        step('run2', { phase: phase2, count: runs2.length,
+          ids: runs2.map(r => ({ id: r.id, status: r.status })),
+          oldRunStillPresent: runs2.some(r => r.id === run1.id),
+          oldRunStatus: runs2.find(r => r.id === run1.id)?.status ?? null })
+      } catch (e) { step('run2', { ok: false, error: String(e?.message ?? e).slice(0, 160) }) }
+
+      return out
+    `
+      .replace('__UNCLEAR__', JSON.stringify(process.env.E2E_A15_UNCLEAR ?? ''))
+      .replace('__CORRECTED__', JSON.stringify(process.env.E2E_A15_CORRECTED ?? ''))
+      .replace(/__POLL__/g, JSON.stringify(process.env.E2E_POLL_MS ?? '900000')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

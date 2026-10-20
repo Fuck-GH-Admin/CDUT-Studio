@@ -1,3 +1,69 @@
+## 架构收口 R01 第二轮：T01–T04 续作接收与 S2 规则桥接
+
+**依据**：`LOCAL-L-T01-T04-INTEGRATION-A15-R01`（`408d86984`）
+**开工 main**：`9ebfb0f0f`（含 36cb1dcd1 的 D2/D3 与 A15 S3-02 实机）
+
+### 接收（四份独立三方合并，零冲突）
+
+| PR | 来源固定 SHA | 合并 | 说明 |
+|---|---|---|---|
+| #181 T02 | `ee0b787d8` | 独立 merge | OCR 来源几何 / PPTX 媒体关系 / 页面 bbox（5 文件增量） |
+| #183 T01 | `f5ae8bb1e` | 独立 merge | `ReviewV3T01NumberRuleEditor` + `deterministicConstraint` 作者态 |
+| #182 T04 | `e39cbbd26` | 独立 merge | `compilePublishedTemplateReviewPlan` + `material-min-count` |
+| #184 T03 | `1f3e2ce15` | 独立 merge | `assessT03RunAction` / `selectT03CurrentRun` 纯领域模块 |
+
+四份均与主线改动**零文件交叠**，无覆盖性冲突。
+
+### CI 共同故障修复（共享测试缺陷）
+
+主线与三个 PR 的 CI 都因 `review-v3-t05-business-mode.test.ts` 两处
+`TS2339: Property 'caseV2' does not exist on type 'never'` 失败。根因是夹具
+`aggregate()` 用 `as never` 返回，属性访问被推断为 never。改为真实类型
+（`ReviewCaseV2` / `CaseAggregateV2` / `ReviewRunV2`），断言与语义未变。
+
+### T03 模块自身缺陷（PR 内 CI 本就 FAILURE）
+
+修完类型后 T03 仍有 3 项自测失败，根因两类，均属其自身不一致：
+1. 原件校验消息不含「原件」字样，与测试期望不符 → 改为
+   「Run 输入已过期：当前原件版本或内容哈希与运行快照不一致」；
+2. 测试用 `gate(..., undefined)` 表达「没有 Run/证据」，但默认参数会把显式
+   `undefined` 换成默认值 → 改为直接调用 `assessT03RunAction`，保持原意。
+**Main 未接入 T03 模块**：`36cb1dcd1` 的 D3 已覆盖同等能力，按 R01 §4.4
+「新旧等价则复用旧 Main，不为接入新模块增加重复抽象」，T03 仅作源码并入。
+
+### S2 规则桥接（Local-L Main 实现）
+
+新增 `review-v3-main-template-plan-bridge.ts`：
+
+- `adaptT01ConstraintsToT04`：只把负责人**已确认**的 `field-number-limit{lte}`
+  无损映射为 T04 既有 `field-maximum`；`gte` 无对应算子 → `unresolved`，不猜语义；
+  字段必须真实存在于该模板版本，不硬编码任何字段名；`policyVersionId` 统一采用
+  `resolveEffectiveRules` 的 `template:<id>@<version>`，`template-owner:` 仅作发布证据。
+- `buildT04TargetFromCase`：字段值、当前有效原件版本、材料槽状态全部来自真实案卷；
+  缺失来源即空数组，**不虚构 SourceRef**；`confirmed` 反映是否人工确认。
+- `compileTemplatePlanForCase`：存在未映射约束时**不返回可执行计划**（宁可
+  BLOCKED_OWNER，也不拿不完整计划跑审核）。
+
+**单位一致性**：T04 的 `value-limit` 要求字段值与规则单位一致，否则判为比较依据
+未知。桥接把负责人确认约束里的单位写入目标字段值，使 18/21 能真实比较。
+
+### S2 四案例定向测试（`review-v3-main-template-plan-bridge.test.ts`）
+
+| 案例 | 结果 |
+|---|---|
+| 18 人 | **compliant**（"全部值符合上限"） |
+| 21 人 | **non-compliant** |
+| 人数未知 | **awaiting-confirmation**（不当作 0） |
+| 缺计划书 | 材料检查非 compliant，`sourceVersionIds` 为空 |
+| `gte` 下限 | `unresolved`，不冒充上限 |
+| 未确认约束 | `unresolved`，不进入正式计划 |
+
+**尚未做的**：把编译结果安装进正式案卷并写真实 `ReviewRunV2`（下一步）；
+四项用例目前经 `evaluateT04Plan` 得出，尚未走 Electron 真机。
+
+**验证**：typecheck 通过；`bun test --isolate` **4857 pass / 0 fail / 5 skip**。
+
+---
 ## 架构收口 R01（Main 侧第一阶段）
 
 **裁决依据**：`docs/design/review-agent/acceptance/v3-core-architecture-closure-r01/V3-CORE-ARCHITECTURE-CLOSURE-R01.md`（提交 `078318058`）
