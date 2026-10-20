@@ -15,6 +15,8 @@ export interface D4ClientTemplate {
   conditions: string[]
   selection: D2ScenarioSelection
   controlledStudentFixture: boolean
+  /** 缺件/损坏时该候选的不可用原因；非空表示不可选，selection 只是空占位，不是真实选择。 */
+  selectionIssue?: string
 }
 export interface D4ClientSelection {
   selection: D2ScenarioSelection
