@@ -64,10 +64,10 @@ export function previewT06PhysicalImport(source: T06PhysicalSelection, options: 
     const rootFile = parts.length === 1
     const explicit = options.rootFileGroups?.[file.entry.entryId]?.trim()
     const unassigned = rootFile && !explicit
-    const name = unassigned ? '未归属：' + parts[0] : (rootFile ? explicit! : parts[0])
+    const name = unassigned ? '未归属：' + parts[0]! : (rootFile ? explicit! : parts[0]!)
     const groupId = unassigned ? 'unassigned:' + file.entry.entryId : 'group:' + name
     if (unassigned) unassignedCount++
-    const group = groups.get(groupId) ?? { groupId, name, entries: [], unassigned }
+    const group: T06PhysicalGroup = groups.get(groupId) ?? { groupId, name, entries: [], unassigned }
     group.entries.push(file.entry)
     groups.set(groupId, group)
   }
