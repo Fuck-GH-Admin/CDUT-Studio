@@ -933,11 +933,18 @@ export function registerReviewIpc(): void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, async (_e, input: { caseId: string; sourcePath: string; role: 'application' | 'evidence' | 'rule' | 'attachment'; materialSlotId?: string; fileName?: string; replacesVersionIds?: string[] }) => {
     assertC0ReviewMainSender(_e)
     if (!input || typeof input.sourcePath !== 'string' || !input.sourcePath) throw new Error('参数 sourcePath 非法')
-    // Main-frame provenance is not proof that arbitrary Renderer path text
-    // came from a physical OS file picker/drop. Native-first Cases must not
-    // accept this legacy unsealed path channel without B2 bytes capability.
-    if (isNativeWorkspaceCaseV3(readAggregate(input.caseId)))
-      throw new Error('SOURCE_CAPABILITY_REQUIRED: 原生案卷请使用受信系统文件选择器；拖拽能力签发待接线')
+    // Electron's existing webUtils.getPathForFile resolves the dropped OS
+    // file in Preload. Route native V3 cases through the SAME C-owned physical
+    // material importer as the system file picker (no second Case or storage).
+    if (isNativeWorkspaceCaseV3(readAggregate(input.caseId))) {
+      if (input.role !== 'application' && input.role !== 'evidence' && input.role !== 'rule')
+        throw new Error('原生案卷材料角色不支持：' + input.role)
+      const document = await registerNativeWorkspaceMaterialV3(
+        input.caseId, input.sourcePath, input.role, undefined,
+        () => assertC0ReviewMainSender(_e),
+      )
+      return document.id
+    }
     if (input.fileName !== undefined) {
       const { basename } = require('node:path') as typeof import('node:path')
       if (typeof input.fileName !== 'string' || !input.fileName || basename(input.fileName) !== input.fileName) throw new Error('参数 fileName 非法')
