@@ -15,7 +15,6 @@ import { CommandValidationError, createAggregate, payloadHash, readAggregate, su
 import { getTemplate, isAuthoringCandidateDraft } from './template-store'
 import { hashEffectiveRuleSet, resolveEffectiveRules } from './effective-rules'
 import { computeRunInputHash } from './run-service-v2'
-import { isNativeWorkspaceCaseV3 } from './native-workspace-case-v3'
 import { validateD2GuardSubmission } from './review-d2-execution-gates'
 import { compileD4Generic } from './review-d4-common'
 
@@ -375,7 +374,7 @@ export function attachD2RuntimePlan(input: {
       }
       // Native V3 cases are created unbound: attach the selected candidate
       // and its entire D2 plan in one existing Case transaction.
-      const nativeUnbound = isNativeWorkspaceCaseV3(aggregate) &&
+      const nativeUnbound = aggregate.receiptLog[0]?.type === 'CreateNativeWorkspaceCaseV3' &&
         aggregate.caseV2.templateId === 'pending-template-v3' &&
         aggregate.caseV2.templateVersion === 0
       const templateId = nativeUnbound ? payload.selection.templateId : aggregate.caseV2.templateId

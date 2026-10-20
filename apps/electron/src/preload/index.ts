@@ -4028,6 +4028,13 @@ const reviewAPI = {
   /** Freeze only the persisted, still-current B1 revision in the local candidate vault. */
   freezeLocalCandidateAuthorV3: (input: {document:import('../main/lib/review/review-template-plan-adapter-v3-b1').B1AuthorDocument;expectedRevision:number}) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.AUTHOR_FREEZE_LOCAL_V3,input) as Promise<{fingerprint:string}>,
+  /** Reuse frozen D4 G01–G08 candidates with explicit object/scenario selection. */
+  listD4Templates: () =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_D4_LIST_V3) as Promise<import('@profer/shared').D4ClientTemplate[]>,
+  attachD4TechnicalPlanV3: (input:{caseId:string;d4:import('@profer/shared').D4ClientSelection}) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_D4_ATTACH_PLAN_V3,input) as Promise<{
+      caseId:string;templateId:string;templateVersion:number;checks:number;fingerprint:string
+    }>,
   /** Native Main Case source bytes rehashed and staged into real B2/B30 candidate read. */
   readLocalNativeProductV3: (caseId:string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_CURRENT_V3,caseId) as Promise<import('../main/lib/review/review-v3-main-local-product-intake').C11MainLocalProductRead>,

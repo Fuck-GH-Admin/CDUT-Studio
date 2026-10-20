@@ -8,6 +8,8 @@ import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { reviewV2AggregateAtom } from './V2CasePanel'
 import { ReviewV3LocalManualItem } from './ReviewV3LocalManualItem'
 import { ReviewV3LocalPiControls } from './ReviewV3LocalPiControls'
+import { D4CaseSetup } from './D4CaseSetup'
+import type { D4ClientSelection } from '@profer/shared'
 import { ReviewV3CandidateIntakeSurface } from '../review-v3-dev-b/ReviewV3CandidateIntakeSurface'
 import type { C11MainLocalProductRead } from '../../../main/lib/review/review-v3-main-local-product-intake'
 import { ReviewV3AuthorWizard, emptyB1AuthorDocument } from '../review-v3-dev-b/ReviewV3AuthorWizard'
@@ -22,6 +24,9 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   const [caseYear,setCaseYear]=React.useState(String(new Date().getFullYear()))
   const [localCaseId,setLocalCaseId]=React.useState('')
   const [savedCases,setSavedCases]=React.useState<Array<{id:string;title:string}>>([])
+  const [d4Selection,setD4Selection]=React.useState<D4ClientSelection|undefined>(undefined)
+  const [d4Notice,setD4Notice]=React.useState('')
+  const [d4Error,setD4Error]=React.useState('')
   const [materialsEpoch,setMaterialsEpoch]=React.useState(0)
   const [product,setProduct]=React.useState<C11MainLocalProductRead|null>(null)
   const [productError,setProductError]=React.useState('')
@@ -90,6 +95,19 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       setSavedCases([])
       setCaseNotice('本机原生案卷已创建：'+created.id+'；未绑定校方模板，请先导入材料并人工审核。')
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
+    finally{setCaseBusy(false)}
+  }
+  const installD4=async():Promise<void>=>{
+    if(caseBusy||!localCaseId||!d4Selection)return
+    setCaseBusy(true);setD4Error('');setD4Notice('')
+    try{
+      const ack=await window.reviewAPI.attachD4TechnicalPlanV3({
+        caseId:localCaseId,d4:d4Selection,
+      })
+      setD4Notice('D4 '+ack.templateId+'@'+ack.templateVersion+
+        ' 已写入同一原生案卷，固定 '+ack.checks+' 项检查。现在可以从下方运行 Pi。')
+      setMaterialsEpoch(x=>x+1)
+    }catch(e){setD4Error(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
   const importMaterial=async (role:'application'|'evidence'):Promise<void>=>{
@@ -172,6 +190,17 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       {caseNotice&&<p role="status" className="text-xs">{caseNotice}</p>}
       {caseError&&<p role="alert" className="text-xs text-red-600">{caseError}</p>}
     </div>
+    {localCaseId&&<div className="space-y-3 rounded-lg border border-border p-4">
+      <h2 className="text-base font-semibold">使用已有 50 套 D4 模板生成本案审核任务</h2>
+      <p className="text-xs text-muted-foreground">复用 G01–G08 冻结候选和原有 D2 规则编译器。明确选择对象/场景后，一次性把技术预审 Plan 写入当前原生案卷；不另外创建案卷，不代表校方审批。已添加人工事项或已固定 Plan 的案卷请另建新案卷。</p>
+      <D4CaseSetup onChange={setD4Selection}/>
+      <button type="button" className="rounded border border-border px-3 py-2 text-sm disabled:opacity-50"
+        disabled={caseBusy||!d4Selection} onClick={()=>void installD4()}>
+        在当前案卷编译并固定 D4 技术审核任务
+      </button>
+      {d4Notice&&<p role="status" className="text-xs">{d4Notice}</p>}
+      {d4Error&&<p role="alert" className="text-xs text-red-600">{d4Error}</p>}
+    </div>}
     <div className="space-y-2 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">本地候选审核模板 · 第 51 套</h2>
       <p className="text-xs text-muted-foreground">自定义审核目的不在既有 50 套时，可直接编辑、编译、保存和冻结候选。所有记录仅在本机，不代表校方发布、学校政策核验或正式审批。</p>

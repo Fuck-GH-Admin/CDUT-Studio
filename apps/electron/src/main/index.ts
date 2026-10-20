@@ -170,6 +170,7 @@ import { createApplicationMenu, installTextContextMenus } from './menu'
 import { registerIpcHandlers, setRendererReadyHandler, stopAllGoalsForProcessExit } from './ipc'
 import { installC11LocalAuthorWorkbench } from './lib/review/review-v3-main-local-author-workbench'
 import { installC11LocalNativeProductIntake } from './lib/review/review-v3-main-local-product-intake'
+import { installC11NativeD4TechnicalPlan } from './lib/review/review-v3-main-d4-local-plan'
 import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from './lib/remote-service'
 import { startAgentFabricService, stopAgentFabricService } from './lib/agent-fabric/agent-fabric-service'
 import { createTray, destroyTray, getTray } from './tray'
@@ -899,6 +900,7 @@ async function bootstrap(): Promise<void> {
   // Tests which register standalone review IPC retain their uninstalled baseline.
   installC11LocalAuthorWorkbench()
   installC11LocalNativeProductIntake()
+  installC11NativeD4TechnicalPlan()
 
   // 远程服务（remote-service）：显式启动参数 PROFER_REMOTE=1 兼容保留；
   // 设置页开启「启用移动端连接」后，下次启动自动恢复监听（正式版与开发版一致）。
