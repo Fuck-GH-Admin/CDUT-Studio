@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx'
+import AdmZip from 'adm-zip'
+import { stageReviewB2TrustedZip } from './review-zip-staging-v3-b2'
 import { describe, expect, test } from 'bun:test'
 import { ReviewB2StagingService, type B2MainContext } from './review-intake-adapter-v3-b2'
 import { previewT02StagedInventory, previewT02StagedSource } from './review-v3-t02-staged-source-preview'
@@ -81,6 +83,24 @@ describe('T02 trusted staged material parsing', () => {
     expect(result.parseStatus).toBe('failed')
     expect(result.blocks).toHaveLength(0)
     expect(result.parseError).toContain('暂不支持')
+  })
+
+  test('real ZIP files with the same basename survive as separate original candidates', async () => {
+    const staging = new ReviewB2StagingService()
+    const archive = new AdmZip()
+    archive.addFile('申请一/证明.txt', Buffer.from('第一份 ZIP 文件'))
+    archive.addFile('申请二/证明.txt', Buffer.from('第二份 ZIP 文件'))
+    const receipt = stageReviewB2TrustedZip(ctx, staging, {
+      physicalArchiveKey: 'native-picked-zip-1', requestId: 'archive-request-1',
+      bytes: archive.toBuffer(),
+    })
+    expect(receipt.candidates).toHaveLength(2)
+    const result = await previewT02StagedInventory(ctx, staging)
+    expect(result.total).toBe(2)
+    expect(result.parsed).toBe(2)
+    expect(new Set(result.sources.map((source) => source.documentVersionId)).size).toBe(2)
+    expect(result.sources.map((source) => source.blocks[0]?.text).sort())
+      .toEqual(['第一份 ZIP 文件', '第二份 ZIP 文件'])
   })
 
   test('all twelve staged image originals are reported, including same-name files', async () => {
