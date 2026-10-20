@@ -3,11 +3,23 @@
  * The saved B1 revision survives app restart; no school publication is implied.
  */
 import * as React from 'react'
+import { useSetAtom } from 'jotai'
+import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
+import { reviewV2AggregateAtom } from './V2CasePanel'
 import { ReviewV3AuthorWizard, emptyB1AuthorDocument } from '../review-v3-dev-b/ReviewV3AuthorWizard'
 import type { B1AuthorDocument } from '../../../main/lib/review/review-template-plan-adapter-v3-b1'
 import type { B1CandidateReadResponse } from '../review-v3-dev-b/review-v3-author-revision-read'
 
 export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
+  const goToCase=useSetAtom(reviewWorkspaceSectionAtom)
+  const showCase=useSetAtom(reviewV2AggregateAtom)
+  const [caseTitle,setCaseTitle]=React.useState('本地人工审核')
+  const [caseApplicant,setCaseApplicant]=React.useState('本机用户')
+  const [caseYear,setCaseYear]=React.useState(String(new Date().getFullYear()))
+  const [localCaseId,setLocalCaseId]=React.useState('')
+  const [caseBusy,setCaseBusy]=React.useState(false)
+  const [caseNotice,setCaseNotice]=React.useState('')
+  const [caseError,setCaseError]=React.useState('')
   const [templateId,setTemplateId]=React.useState('')
   const [loaded,setLoaded]=React.useState<{document:B1AuthorDocument;revision:number}|null>(null)
   const [key,setKey]=React.useState(0)
@@ -32,11 +44,70 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
+  const createCase=async ():Promise<void>=>{
+    if(caseBusy)return
+    setCaseBusy(true);setCaseError('');setCaseNotice('')
+    try{
+      const created=await window.reviewAPI.createCase({
+        title:caseTitle.trim(),type:'自定义审核',
+        applicant:caseApplicant.trim(),academicYear:caseYear.trim(),
+        reviewTemplate:null,
+      })
+      setLocalCaseId(created.id)
+      setCaseNotice('本机原生案卷已创建：'+created.id+'；未绑定校方模板，请先导入材料并人工审核。')
+    }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
+    finally{setCaseBusy(false)}
+  }
+  const importMaterial=async ():Promise<void>=>{
+    if(caseBusy||!localCaseId)return
+    setCaseBusy(true);setCaseError('');setCaseNotice('')
+    try{
+      const imported=await window.reviewAPI.importDocument({caseId:localCaseId,role:'application'})
+      setCaseNotice('已处理本地导入：'+JSON.stringify(imported).slice(0,350))
+    }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
+    finally{setCaseBusy(false)}
+  }
+  const openCase=async ():Promise<void>=>{
+    if(caseBusy||!localCaseId)return
+    setCaseBusy(true);setCaseError('')
+    try{
+      const aggregate=await window.reviewAPI.openAggregateV2(localCaseId)
+      if(!aggregate)throw new Error('未找到该原生案卷；请确认本机案卷 ID。')
+      showCase(aggregate)
+      goToCase('case-v2')
+    }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
+    finally{setCaseBusy(false)}
+  }
   const start=():void=>{
     if(loaded && !window.confirm('新建编辑器会舍弃尚未保存的修改，确定继续？'))return
     setLoaded(null);setKey(k=>k+1);setError('');setMessage('本地未发布候选草稿')
   }
   return <div className="mx-auto max-w-5xl space-y-4 px-4 pb-8">
+    <div className="space-y-3 rounded-lg border border-border p-4">
+      <h2 className="text-base font-semibold">新建本地审核案卷与原件导入</h2>
+      <p className="text-xs text-muted-foreground">调用已有 C 原生案卷存储与系统文件选择器。候选模板与原生案卷目前分别保存，未签学校政策，也不自动生成正式 Run。</p>
+      <div className="flex flex-wrap gap-2">
+        <input aria-label="本地案卷标题" value={caseTitle} onChange={e=>setCaseTitle(e.target.value)}
+          className="min-w-44 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm" placeholder="案卷标题"/>
+        <input aria-label="申请主体" value={caseApplicant} onChange={e=>setCaseApplicant(e.target.value)}
+          className="min-w-32 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm" placeholder="申请主体"/>
+        <input aria-label="学年" value={caseYear} onChange={e=>setCaseYear(e.target.value)}
+          className="w-24 rounded border border-border bg-background px-2 py-1.5 text-sm" placeholder="学年"/>
+        <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          disabled={caseBusy||!caseTitle.trim()||!caseApplicant.trim()||!caseYear.trim()}
+          onClick={()=>void createCase()}>创建原生无绑定案卷</button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input aria-label="当前本机案卷 ID" className="min-w-44 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm"
+          placeholder="本机已有案卷 ID 可直接粘贴重开" value={localCaseId} onChange={e=>setLocalCaseId(e.target.value)}/>
+        <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          disabled={caseBusy||!localCaseId} onClick={()=>void importMaterial()}>选择并导入真实申请材料</button>
+        <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          disabled={caseBusy||!localCaseId} onClick={()=>void openCase()}>打开案卷与人工核查</button>
+      </div>
+      {caseNotice&&<p role="status" className="text-xs">{caseNotice}</p>}
+      {caseError&&<p role="alert" className="text-xs text-red-600">{caseError}</p>}
+    </div>
     <div className="space-y-2 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">本地候选审核模板 · 第 51 套</h2>
       <p className="text-xs text-muted-foreground">自定义审核目的不在既有 50 套时，可直接编辑、编译、保存和冻结候选。所有记录仅在本机，不代表校方发布、学校政策核验或正式审批。</p>
