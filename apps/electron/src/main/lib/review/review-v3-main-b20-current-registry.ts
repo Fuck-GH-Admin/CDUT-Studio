@@ -43,6 +43,13 @@ const caseOK=(x:unknown):x is string=>typeof x==='string'&&
   /^[A-Za-z0-9._:-]{1,128}$/.test(x)
 const digest=/^[a-f0-9]{64}$/
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b)
+/** The physical frame and authenticated owner have ordered-independent fields.
+ * JSON object key insertion order is not an identity property. */
+const sameIdentity=(a:CMainB20ReadIdentity,b:CMainPhysicalArchiveScope):boolean=>
+  a.principalId===b.principalId&&a.sessionId===b.sessionId&&
+  a.windowId===b.windowId&&a.frameId===b.frameId&&
+  a.caseCandidateId===b.caseCandidateId&&a.ownerId===b.ownerId&&
+  a.ownerGeneration===b.ownerGeneration&&a.authorityEpoch===b.authorityEpoch
 
 export interface CMainB20PhysicalHost {
   /**
@@ -103,7 +110,7 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
       assertCurrentArchive:(scope,expected)=>{
         if(this.closed)reject('REGISTRY_CLOSED')
         const current=this.assertCurrent(scope.caseCandidateId)
-        if(!current||!same(current.identity,scope))
+        if(!current||!sameIdentity(current.identity,scope))
           return reject('PHYSICAL_MAIN_ARCHIVE_SCOPE_REVOKED')
         const numeric=this.host.current(current.expected.templateId)?.numeric
         if(!numeric)return reject('NUMERIC_MAIN_SCOPE_ABSENT')
@@ -126,7 +133,7 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
     const registered=this.registered.get(templateId)
     if(!registered)return undefined
     const now=this.host.current(templateId)
-    if(!now||!same(now.identity,registered.identity)||
+    if(!now||!sameIdentity(now.identity,registered.identity)||
        !same(now.grant,registered.grant)||
        !this.host.mayRead(now.identity,templateId))return undefined
     return registered
@@ -196,7 +203,8 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
         this.bSources.vault.inspect(bctx,choice.archiveId)
     }
     const fresh=this.host.current(input.templateId)
-    if(!fresh||!same(fresh,actual)||
+    if(!fresh||!sameIdentity(fresh.identity,actual.identity)||
+       !same(fresh.grant,actual.grant)||!same(fresh.numeric,actual.numeric)||
        !this.host.mayRead(actual.identity,input.templateId))
       return reject('MAIN_SCOPE_CHANGED_DURING_REGISTRATION')
     this.registered.set(input.templateId,{
@@ -242,7 +250,7 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
     archiveId:string,bScope:Readonly<B20MainReadScope>):string|null {
     this.requireOpen()
     const registration=this.assertCurrent(id.caseCandidateId)
-    if(!registration||!same(registration.identity,id)||
+    if(!registration||!sameIdentity(registration.identity,id)||
        registration.identity.ownerId!==bScope.ownerId||
        registration.identity.ownerGeneration!==bScope.ownerGeneration)
       return null
@@ -251,7 +259,7 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
   }
   assertLiveCMainIdentity(identity:CMainB20ReadIdentity):void {
     const current=this.assertCurrent(identity.caseCandidateId)
-    if(!current||!same(current.identity,identity))
+    if(!current||!sameIdentity(current.identity,identity))
       reject('C_MAIN_PRINCIPAL_FRAME_OR_OWNER_REVOKED')
   }
   install():()=>void {

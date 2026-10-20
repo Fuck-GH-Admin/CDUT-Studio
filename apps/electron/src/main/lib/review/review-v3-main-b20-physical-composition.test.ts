@@ -182,7 +182,13 @@ async function setup(){
     currentMainIssuedOriginalKey:(_:CMainB20ReadIdentity,archiveId:string)=>
       archiveId===checkpoint.archiveId?physicalKey:null,
     assertLiveCMainIdentity:(id:CMainB20ReadIdentity)=>{
-      if(!active||JSON.stringify(id)!==JSON.stringify(identity()))
+      const now=identity()
+      if(!active||id.principalId!==now.principalId||
+         id.sessionId!==now.sessionId||id.windowId!==now.windowId||
+         id.frameId!==now.frameId||id.caseCandidateId!==now.caseCandidateId||
+         id.ownerId!==now.ownerId||
+         id.ownerGeneration!==now.ownerGeneration||
+         id.authorityEpoch!==now.authorityEpoch)
         throw Error('C_REAL_MAIN_IDENTITY_REVOKED')
     },
   }
