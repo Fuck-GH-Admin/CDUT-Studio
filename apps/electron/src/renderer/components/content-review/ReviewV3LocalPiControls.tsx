@@ -64,15 +64,18 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
     return()=>{active=false;clearInterval(timer)}
   },[caseId,state?.runStatus,refresh,busy])
 
-  const execute=async(kind:'start'|'stop'|'refresh'):Promise<void>=>{
+  const execute=async(kind:'start'|'restart'|'stop'|'refresh'):Promise<void>=>{
     if(!caseId||busy)return
     setBusy(true);setError('');setNotice('')
     try{
-      if(kind==='start'){
+      if(kind==='start'||kind==='restart'){
         setInspectedRunId('')
-        const next=await window.reviewAPI.startBackgroundPiReviewV2({caseId})
+        const next=await window.reviewAPI.startBackgroundPiReviewV2({
+          caseId,...(kind==='restart'?{mode:'restart' as const}:{})
+        })
         if(next.caseId!==caseId)throw new Error('MAIN_PI_START_CASE_SCOPE_MISMATCH')
-        setNotice('已提交真实 Pi 审核；下方只显示 Main 持久运行记录，不代表审核通过')
+        setNotice(kind==='restart'?'已重新创建独立审核会话并启动新一轮完整 Pi 检查；旧 Run 保留在历史列表':
+          '已提交真实 Pi 审核；下方显示 Main 持久运行记录')
       }else if(kind==='stop'){
         if(!state?.runId)throw new Error('没有 Main 当前 Run ID，不能停止未知运行')
         const next=await window.reviewAPI.stopBackgroundPiReviewV2({caseId,runId:state.runId})
@@ -95,7 +98,9 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
       {' · '}状态：{run?.status??state?.runStatus??'未取得'}</p>
     <div className="flex flex-wrap gap-2">
       <button type="button" className={button} disabled={!caseId||busy}
-        onClick={()=>void execute('start')}>启动真实 Pi 审核</button>
+        onClick={()=>void execute('start')}>继续 / 启动 Pi 审核</button>
+      <button type="button" className={button} disabled={!caseId||busy}
+        onClick={()=>void execute('restart')}>重新审核全部材料（新 Run）</button>
       <button type="button" className={button} disabled={!caseId||busy||!state?.runId||
         !['running','queued','awaiting-input','awaiting-decision'].includes(state?.runStatus??'')}
         onClick={()=>void execute('stop')}>停止当前 Run</button>
