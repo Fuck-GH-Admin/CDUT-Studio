@@ -1621,6 +1621,22 @@ const scenarios = {
     `.replace('__DOCX__', JSON.stringify((process.env.E2E_A15_DOCX ?? ''))))
   },
 
+  /** T01 受控模型起草：真实调用已配置渠道，返回模型原文与实际模型标识 */
+  async 'flow-t01-model'({ send }) {
+    return evaluate(send, `
+      try {
+        const result = await window.reviewAPI.requestT01ModelDraft({
+          system: '你只输出一个 JSON 对象，键为 ok。不要输出任何解释或 Markdown 围栏。',
+          user: '请输出 {"ok":true}',
+        })
+        return { ok: true, channel: result.channelName, model: result.modelId,
+          length: result.raw?.length ?? 0, head: (result.raw ?? '').slice(0, 120) }
+      } catch (error) {
+        return { ok: false, error: String(error?.message ?? error).slice(0, 220) }
+      }
+    `)
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

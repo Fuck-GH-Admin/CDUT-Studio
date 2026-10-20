@@ -4719,6 +4719,11 @@ const reviewAPI = {
     updatedAt: string
     view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
   }>,
+  /** T01 受控模型起草（渠道与凭据在 Main；返回模型原始文本与实际模型标识） */
+  requestT01ModelDraft: (input: { system: string; user: string }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T01_MODEL_DRAFT, input) as Promise<{
+      raw: string; channelName: string; modelId: string
+    }>,
   /** T06 选择物理来源（Main 弹出真实 OS 选择器，渲染层只拿到不透明 entryId） */
   pickT06PhysicalSource: (input: { sourceKind: 'folder' | 'zip' }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T06_PICK_PHYSICAL_SOURCE, input) as Promise<

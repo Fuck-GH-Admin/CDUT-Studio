@@ -353,7 +353,14 @@ export function TemplateWizardPanel(): JSX.Element {
           <span className="font-medium text-foreground">{libraryCounts.reference + libraryCounts.drafts} 套待配置</span>。
           草稿不会直接进入审核，避免未确认的示例标准被当成本校正式规则。
         </div>
-        <ReviewV3T01AuthoringLaunchpad onDraft={(draft) => { setEditing(draft); setMessage([]) }} />
+        <ReviewV3T01AuthoringLaunchpad
+          onDraft={(draft) => { setEditing(draft); setMessage([]) }}
+          // 真实模型端口：渠道与凭据在 Main，界面拿到的是模型原始文本与实际模型标识
+          modelDraftInvoke={async (prompt) => {
+            const result = await window.reviewAPI.requestT01ModelDraft(prompt)
+            return result.raw
+          }}
+        />
         <div className="mt-3 flex flex-wrap gap-1" role="tablist" aria-label="模板库分类">
           {([
             ['all', `全部模板（${libraryCounts.all}）`],

@@ -834,6 +834,13 @@ export function registerReviewIpc(): void {
   })
   // ===== T05 可信阶段事务（Local-L04 R02，CR-T05-04）=====
   // ===== T06 物理入库（Local-L04 R02 桥接：真实选择器 + 幂等提交）=====
+  // ===== T01 受控模型起草（Local-L04 R02 桥接：渠道与凭据不出 Main）=====
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T01_MODEL_DRAFT, async (event, input: { system?: string; user?: string }) => {
+    assertC0ReviewMainSender(event)
+    if (typeof input?.system !== 'string' || typeof input?.user !== 'string') throw new Error('参数非法')
+    const { requestT01ModelDraft } = require('./review-v3-t01-model-draft-service') as typeof import('./review-v3-t01-model-draft-service')
+    return requestT01ModelDraft({ system: input.system, user: input.user })
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T06_PICK_PHYSICAL_SOURCE, async (event, input: { sourceKind?: string }) => {
     assertC0ReviewMainSender(event)
     if (input?.sourceKind !== 'folder' && input?.sourceKind !== 'zip') throw new Error('来源类型非法')
