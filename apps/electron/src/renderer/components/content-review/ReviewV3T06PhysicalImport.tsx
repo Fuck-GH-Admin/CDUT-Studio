@@ -105,6 +105,7 @@ export function ReviewV3T06PhysicalImport({
       {manifestNote && <p className="text-[11px] text-muted-foreground">{manifestNote}</p>}
       <p className="text-xs">{preview.source.entries.length} 份原件 · {preview.groups.length} 组 · 未归属 {preview.unassignedCount}</p>
       {preview.errors.map((e, i) => <p key={i} role="alert" className="text-xs text-destructive">{e}</p>)}
+      {preview.source.warnings?.map((e, i) => <p key={'skip-' + i} role="status" className="text-xs text-amber-700 dark:text-amber-300">未导入原件：{e}</p>)}
       <div className="max-h-72 space-y-2 overflow-y-auto">
         {preview.groups.map(group => {
           const choice: T06GroupChoice = selected[group.groupId] ?? { action: 'create', title: group.name, applicant: '' }
