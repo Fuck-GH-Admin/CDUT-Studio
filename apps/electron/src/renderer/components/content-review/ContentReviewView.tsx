@@ -73,6 +73,7 @@ export function ContentReviewView(): React.ReactElement {
   const section = useAtomValue(reviewWorkspaceSectionAtom)
   const setSection = useSetAtom(reviewWorkspaceSectionAtom)
   const setV2Aggregate = useSetAtom(reviewV2AggregateAtom)
+  const businessAggregate = useAtomValue(reviewV2AggregateAtom)
   const channels = useAtomValue(channelsAtom)
   const activePane = useAtomValue(reviewActivePaneAtom)
   const setActivePane = useSetAtom(reviewActivePaneAtom)
@@ -87,14 +88,18 @@ export function ContentReviewView(): React.ReactElement {
 
   // 与独立的 V2 办理模块共用同一份真实案卷；只读取现有 Main 聚合。
   const openBusinessCase = React.useCallback(async (): Promise<void> => {
-    if (reviewCase) {
-      try {
-        const aggregate = await window.reviewAPI.openAggregateV2(reviewCase.id)
-        if (aggregate) setV2Aggregate(aggregate)
-        else toast.error('当前案卷的业务记录暂不可读取')
-      } catch (error) {
-        toast.error(`读取案卷办理记录失败：${error instanceof Error ? error.message : String(error)}`)
-      }
+    if (!reviewCase) {
+      setV2Aggregate(null)
+      setSection('case-v2')
+      return
+    }
+    setV2Aggregate(null)
+    try {
+      const aggregate = await window.reviewAPI.openAggregateV2(reviewCase.id)
+      if (aggregate) setV2Aggregate(aggregate)
+      else toast.error('当前案卷的业务记录暂不可读取')
+    } catch (error) {
+      toast.error(`读取案卷办理记录失败：${error instanceof Error ? error.message : String(error)}`)
     }
     setSection('case-v2')
   }, [reviewCase, setSection, setV2Aggregate])
@@ -113,6 +118,13 @@ export function ContentReviewView(): React.ReactElement {
       setExporting(false)
     }
   }
+
+  // 旧业务面板里的开案、补件、决定仍使用原有事务；
+  // 只在该面板激活时把最新聚合反映到同一案卷的审核工作台，不复制造库逻辑。
+  React.useEffect(() => {
+    if (section !== 'case-v2' || !businessAggregate) return
+    void actions.selectCase(businessAggregate.caseV2.id)
+  }, [section, businessAggregate?.caseV2.id, businessAggregate?.caseV2.revision, actions])
 
   // 设置面板覆盖工作台而不卸载它；渠道变化时也需刷新出口徽标。
   React.useEffect(() => { void actions.initialize() }, [actions, channels])
@@ -266,7 +278,7 @@ export function ContentReviewView(): React.ReactElement {
       </main>
 
       <section aria-label="当前案卷业务办理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'case-v2' && 'hidden')}>
-        <V2CasePanel onCaseOpened={(caseId) => { void actions.selectCase(caseId) }} />
+        <V2CasePanel />
       </section>
       <section aria-label="审核模板编排" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'templates' && 'hidden')}>
         <TemplateWizardPanel />
