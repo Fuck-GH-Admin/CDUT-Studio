@@ -38,14 +38,38 @@ describe('DocumentCapabilityLibrary', () => {
     const inventory = library.listDocuments()[0]!
     expect(inventory).not.toHaveProperty('imageAssetPath')
     expect(inventory).toMatchObject({ fileName: 'proof.pdf', imageBlocks: [{ blockId: 'page-1' }] })
+    expect(inventory).toMatchObject({
+      imageBlockCount: 1,
+      imageAssetsMissingCount: 0,
+      imagesAwaitingInspection: 1,
+    })
     const cells = library.read({ documentVersionId: source.versionId, sheetName: '成员', fromRow: 1, toRow: 1, limit: 10 })
     expect(cells.blocks.map((block) => block.blockId)).toEqual(['cell-a1', 'cell-b1'])
     expect(cells.fullyRead).toBeFalse()
     expect(source.usage).toBe('partially-read')
     expect(library.isFullyRead(source.versionId)).toBe(false)
     library.markImageRead(source.versionId, 'page-1')
+    expect(library.listDocuments()[0]?.imagesAwaitingInspection).toBe(0)
     expect(source.usage).toBe('read')
     expect(library.isFullyRead(source.versionId)).toBe(true)
+  })
+
+  test('Office 图形只有版面块、没有图像资产时，材料目录明确统计缺失及未核验图片', () => {
+    const source = document([
+      { blockId: 'slide-2-picture', text: '', kind: 'image', location: { kind: 'paragraph', index: 4 } },
+      { blockId: 'slide-2-title', text: '技术项目', kind: 'text', location: { kind: 'paragraph', index: 5 } },
+    ])
+    source.fileName = '申请介绍.pptx'
+    source.parseStatus = 'partial'
+    source.parseError = '图片未提取'
+    const inventory = new DocumentCapabilityLibrary({ caseId: 'case-1', caseRoot: '/tmp/case', documents: [source] }).listDocuments()[0]
+    expect(inventory).toMatchObject({
+      parseStatus: 'partial',
+      imageBlockCount: 1,
+      imageAssetsMissingCount: 1,
+      imagesAwaitingInspection: 1,
+      parseError: '图片未提取',
+    })
   })
 
   test('图像只按已登记 blockId 读取，路径受案卷目录约束并校验真实格式', () => {
