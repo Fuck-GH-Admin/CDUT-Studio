@@ -34,6 +34,8 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
   const sources=(aggregate?.caseV2.documents??[]).filter(doc=>
     doc.role==='application'&&doc.active!==false&&
     Number.isSafeInteger(doc.parseRevision)&&doc.parseRevision>=0)
+  const supporting=(aggregate?.caseV2.documents??[]).filter(doc=>
+    doc.role==='evidence'&&doc.active!==false)
   const chosen=sources.find(doc=>doc.versionId===sourceVersionId)
   const refresh=React.useCallback(async():Promise<void>=>{
     if(!caseId){setAggregate(null);setSourceVersionId('');return}
@@ -86,11 +88,11 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
-  const archive=async(documentId:string):Promise<void>=>{
+  const archive=async(documentId:string,role:'application'|'evidence'):Promise<void>=>{
     if(busy||!caseId||!window.confirm('归档这份材料的当前版本？原件、历史记录会保留；它支持的旧证据将失效。'))return
     setBusy(true);setError('');setNotice('')
     try{
-      await window.reviewAPI.removeDocuments({caseId,role:'application',documentIds:[documentId]})
+      await window.reviewAPI.removeDocuments({caseId,role,documentIds:[documentId]})
       setNotice('已归档材料当前版本。原件历史仍保留；补件请使用上方系统选择器重新导入。')
       await refresh()
     }catch(e){setError(e instanceof Error?e.message:String(e))}
@@ -141,7 +143,15 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
       {sources.map(doc=><div key={doc.versionId} className="flex items-center justify-between gap-2 text-xs">
         <span className="min-w-0 flex-1 truncate">{doc.fileName} · 版本 {doc.versionId.slice(0,12)}</span>
         <button type="button" className="rounded border border-border px-2 py-1 disabled:opacity-40"
-          disabled={busy} onClick={()=>void archive(doc.documentId)}>归档旧版</button>
+          disabled={busy} onClick={()=>void archive(doc.documentId,'application')}>归档旧版</button>
+      </div>)}
+    </div>}
+    {supporting.length>0&&<div className="space-y-1 rounded border border-border p-2">
+      <p className="text-xs font-medium">已导入证明材料（{supporting.length}）· 仅作本机来源，不自动确认申报事实</p>
+      {supporting.map(doc=><div key={doc.versionId} className="flex items-center justify-between gap-2 text-xs">
+        <span className="min-w-0 flex-1 truncate">{doc.fileName} · 版本 {doc.versionId.slice(0,12)}</span>
+        <button type="button" className="rounded border border-border px-2 py-1 disabled:opacity-40"
+          disabled={busy} onClick={()=>void archive(doc.documentId,'evidence')}>归档旧版</button>
       </div>)}
     </div>}
     <select aria-label="选用真实申请材料" className="w-full rounded border border-border bg-background p-2 text-sm" value={sourceVersionId}
