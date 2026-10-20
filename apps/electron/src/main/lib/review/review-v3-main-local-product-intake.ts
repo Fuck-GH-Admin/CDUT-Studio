@@ -86,6 +86,9 @@ function sameScope(a:B20MainReadScope,b:B20MainReadScope):boolean {
 function stageOriginals(aggregate:Snapshot,ctx:B20MainReadScope,staging:ReviewB2StagingService):void {
   const active=aggregate.caseV2.documents.filter(doc=>doc.active!==false)
   if(active.length>500)throw new Error('C11_NATIVE_MORE_THAN_500_CURRENT_MATERIALS')
+  // A native Case has no real Subject until its Plan is fixed. For a single
+  // application, use the existing Case as a temporary routing group only.
+  const oneApplication=active.filter(doc=>doc.role==='application').length===1
   for(const doc of active){
     // C's disk verifier resolves, rehashes and verifies the exact Case original.
     assertC2PhysicalOriginalBytes(aggregate,doc.versionId)
@@ -95,7 +98,8 @@ function stageOriginals(aggregate:Snapshot,ctx:B20MainReadScope,staging:ReviewB2
     const associated=aggregate.caseV2.subjects.filter(item=>
       item.sourceRefs.some(source=>source.caseId===aggregate.caseV2.id&&
         source.documentVersionId===doc.versionId&&source.parseRevision===doc.parseRevision))
-    const subjectId=associated.length===1?associated[0]!.id:null
+    const subjectId=associated.length===1?associated[0]!.id:
+      oneApplication?'case-scope-'+aggregate.caseV2.id:null
     const role:B2MaterialCandidate['role']=doc.role==='application'?'application':
       doc.role==='evidence'?'supporting':'unassigned'
     const add=(fileName:string,bytes:Uint8Array,physicalSourceKey:string,requestId:string,
@@ -176,12 +180,20 @@ function evaluate(s:Session,items:B3ManualCatalogEntry[]):B3RouteState {
   const scoped=all.length>0&&all.filter(x=>x.role==='application').length===1&&
     all.every(x=>x.role!=='unassigned'&&Boolean(x.subjectId))&&
     new Set(all.map(x=>x.subjectId)).size===1
-  const suggestions:B3RouteSuggestion[]=selected&&scoped?[{
-    templateId:selected.templateId,templateVersion:selected.templateVersion,
+  // Exact explicitly named local business type can safely use the 20-second
+  // automatic technical route. No fuzzy filename-only or unknown-policy route.
+  const exactTitle=installed?.title.trim().toLocaleLowerCase()??''
+  const matches=!selected&&scoped?items.filter(item=>
+    item.availability==='authorized-for-technical-selection'&&
+    (item.name.trim().toLocaleLowerCase()===exactTitle||
+     item.templateId.toLocaleLowerCase()===exactTitle)):[]
+  const auto=selected??(matches.length===1?matches[0]:undefined)
+  const suggestions:B3RouteSuggestion[]=auto&&scoped?[{
+    templateId:auto.templateId,templateVersion:auto.templateVersion,
     availability:'authorized-for-technical-selection',
     confidence:1,caseCandidateId:s.ctx.caseCandidateId,
     evidence:all.map(x=>({materialCandidateId:x.candidateId,rawSha256:x.rawSha256,
-      reason:'已绑定本机当前案卷模板及完整原件，仅供技术候选'})),
+      reason:selected?'已绑定当前案卷本地模板':'案卷标题精确匹配唯一完整模板名称或编号'})),
   }]:[]
   return s.router.evaluate(s.ctx,{
     automaticSelectionEnabled:true,materialCandidates:all,suggestions,
