@@ -13,6 +13,8 @@ import { reviewV2BusyAtom } from './V2CasePanel'
 import { BatchGroupActionDialog } from './BatchGroupActionDialog'
 import { BatchAutomationDialog } from './BatchAutomationDialog'
 import { batchAutomationDisplay, reviewBusinessError, summarizeBatchExecution } from './batch-ui-feedback'
+import { ReviewV3T06BatchIntakePreview } from './ReviewV3T06BatchIntakePreview'
+import { buildBatchSummaryCsv } from './review-v3-t06-batch-intake'
 
 type CaseIndexItem = Awaited<ReturnType<typeof window.reviewAPI.listCasesV2>>[number]
 type ReviewRunV2 = Awaited<ReturnType<typeof window.reviewAPI.listRunsV2>>[number]
@@ -23,6 +25,7 @@ interface BatchProjectRow {
   applicant: string
   updatedAt: string
   entryStatus: BatchStateV2['cases'][number]['status']
+  error?: string
   stage?: CaseIndexItem['stage']
   run?: ReviewRunV2
 }
@@ -93,6 +96,9 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
   const [batchName, setBatchName] = useState('')
   const [templateKey, setTemplateKey] = useState('')
   const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([])
+  const [queueQuery, setQueueQuery] = useState('')
+  const [queueFilter, setQueueFilter] = useState('all')
+  const [selectedRetryIds, setSelectedRetryIds] = useState<string[]>([])
 
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -144,6 +150,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         applicant: legacy?.applicant || '未填写',
         updatedAt: indexItem?.updatedAt ?? legacy?.updatedAt ?? selectedBatch.batch.createdAt,
         entryStatus: entry.status,
+        error: entry.error,
         stage: indexItem?.stage,
         run: runs[entry.caseId],
       }
@@ -217,6 +224,66 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
   const triageByCase = useMemo(() => new Map(triageInputs.map((input) =>
     [input.caseId, triageBatchCase(input)])), [triageInputs])
   const issueGroups = useMemo(() => groupBatchIssues(triageInputs), [triageInputs])
+  const retryableCaseIds = useMemo(() => new Set(rows.filter((row) =>
+    row.entryStatus === 'failed' || row.entryStatus === 'paused'
+    || (row.entryStatus === 'done' && triageByCase.get(row.caseId)?.route === 'technical-exception'),
+  ).map((row) => row.caseId)), [rows, triageByCase])
+  const visibleRows = useMemo(() => rows.filter((row) => {
+    const query = queueQuery.trim().toLocaleLowerCase()
+    const searchable = [row.title, row.applicant, row.caseId, row.error ?? ''].join(' ').toLocaleLowerCase()
+    if (query && !searchable.includes(query)) return false
+    const route = triageByCase.get(row.caseId)?.route
+    if (queueFilter === 'all') return true
+    if (queueFilter === 'retryable') return retryableCaseIds.has(row.caseId)
+    if (queueFilter === 'failed' || queueFilter === 'paused' || queueFilter === 'queued' || queueFilter === 'running' || queueFilter === 'done') {
+      return row.entryStatus === queueFilter
+    }
+    return route === queueFilter
+  }), [rows, queueQuery, queueFilter, retryableCaseIds, triageByCase])
+  const visibleRetryableIds = visibleRows.filter((row) => retryableCaseIds.has(row.caseId)).map((row) => row.caseId)
+
+  useEffect(() => {
+    setSelectedRetryIds([])
+    setQueueQuery('')
+    setQueueFilter('all')
+  }, [selectedBatchId])
+  const retrySelected = async (): Promise<void> => {
+    if (!selectedBatch || handlingBatch || executing || selectedBatch.status === 'running' || selectedBatch.status === 'finalized') return
+    const ids = selectedRetryIds.filter((caseId) => retryableCaseIds.has(caseId))
+    if (!ids.length) return
+    setHandlingBatch(true)
+    try {
+      await window.reviewAPI.batchActionV2({ action: 'retry', batchId: selectedBatch.batch.id, caseIds: ids })
+      toast.success('已将 ' + ids.length + ' 个明确选中的案卷重新加入审核队列')
+      setSelectedRetryIds([])
+      await refresh()
+    } catch (cause) {
+      toast.error('批量重试失败：' + reviewBusinessError(cause))
+    } finally { setHandlingBatch(false) }
+  }
+
+  const exportBatchSummary = (): void => {
+    if (!selectedBatch) return
+    const csv = buildBatchSummaryCsv(rows.map((row) => {
+      const route = triageByCase.get(row.caseId)
+      return {
+        caseId: row.caseId, title: row.title, applicant: row.applicant,
+        status: row.entryStatus, route: route ? TRIAGE_LABELS[route.route] : '未知',
+        completed: row.run?.coverage?.completedChecks ?? '',
+        planned: row.run?.coverage?.plannedChecks ?? '',
+        pending: row.run?.coverage?.pendingChecks ?? '',
+        error: row.error ?? '',
+      }
+    }))
+    const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'batch-' + selectedBatch.batch.id + '-status.csv'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
   const issueDraft = useMemo(() => openedGroupKey
     ? prepareBatchIssueActionDraft(triageInputs, openedGroupKey)
     : null, [triageInputs, openedGroupKey])
@@ -402,12 +469,57 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
           </Button>
         </div>
 
+        {selectedBatch && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/80 bg-card p-2">
+            <input type="search" value={queueQuery} onChange={(event) => setQueueQuery(event.target.value)}
+              aria-label="筛选批次案卷" placeholder="搜索案卷、申报人或错误原因"
+              className="h-8 min-w-[160px] flex-1 rounded-md border border-input bg-background px-2 text-xs" />
+            <select aria-label="筛选执行与分流状态" value={queueFilter}
+              onChange={(event) => setQueueFilter(event.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs">
+              <option value="all">所有状态</option>
+              <option value="queued">待执行</option>
+              <option value="running">执行中</option>
+              <option value="done">检查已结束</option>
+              <option value="failed">执行失败</option>
+              <option value="paused">已暂停</option>
+              <option value="retryable">可重试</option>
+              <option value="manual-review">需要人工判断</option>
+              <option value="technical-exception">技术异常</option>
+              <option value="awaiting-supplement">等待补件</option>
+              <option value="auto-pass-candidate">通过候选</option>
+              <option value="auto-return-candidate">退回候选</option>
+              <option value="already-decided">已作业务决定</option>
+            </select>
+            <span className="text-xs text-muted-foreground">显示 {visibleRows.length}/{rows.length} 案</span>
+            <Button type="button" size="sm" variant="outline" onClick={exportBatchSummary}>
+              导出状态 CSV
+            </Button>
+            <Button type="button" size="sm" variant="outline"
+              disabled={executing || handlingBatch || selectedBatch.status === 'running' || selectedBatch.status === 'finalized'
+                || selectedRetryIds.filter((caseId) => retryableCaseIds.has(caseId)).length === 0}
+              onClick={() => void retrySelected()}>
+              重试选中（{selectedRetryIds.filter((caseId) => retryableCaseIds.has(caseId)).length}）
+            </Button>
+          </div>
+        )}
+
         {selectedBatch ? (
           <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1000px] border-collapse text-left text-xs">
+              <table className="w-full min-w-[1100px] border-collapse text-left text-xs">
                 <thead className="bg-muted/45 text-[11px] font-medium text-muted-foreground">
                   <tr>
+                    <th className="px-2 py-3">
+                      <input type="checkbox" aria-label="选择当前筛选中所有可重试案卷"
+                        disabled={!visibleRetryableIds.length || executing || handlingBatch || selectedBatch.status === 'running' || selectedBatch.status === 'finalized'}
+                        checked={visibleRetryableIds.length > 0 && visibleRetryableIds.every((id) => selectedRetryIds.includes(id))}
+                        onChange={(event) => {
+                          setSelectedRetryIds((previous) => event.target.checked
+                            ? [...new Set([...previous, ...visibleRetryableIds])]
+                            : previous.filter((id) => !visibleRetryableIds.includes(id)))
+                        }} />
+                    </th>
                     <th className="px-3 py-3">项目</th>
                     <th className="px-3 py-3">申报人</th>
                     <th className="px-3 py-3">审核进度</th>
@@ -418,7 +530,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/70">
-                  {rows.map((row) => {
+                  {visibleRows.map((row) => {
                     const status = caseStatus(row, selectedBatch)
                     const coverage = row.run?.coverage
                     const triage = triageByCase.get(row.caseId)
@@ -429,6 +541,14 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
                     )
                     return (
                       <tr key={row.caseId} className="transition-colors hover:bg-muted/25">
+                        <td className="px-2 py-3">
+                          {retryableCaseIds.has(row.caseId) && <input type="checkbox" aria-label={'选择重试 ' + row.title}
+                            disabled={executing || handlingBatch || selectedBatch.status === 'running' || selectedBatch.status === 'finalized'}
+                            checked={selectedRetryIds.includes(row.caseId)}
+                            onChange={(event) => setSelectedRetryIds((previous) => event.target.checked
+                              ? [...new Set([...previous, row.caseId])]
+                              : previous.filter((id) => id !== row.caseId))} />}
+                        </td>
                         <td className="max-w-[360px] px-3 py-3">
                           <button type="button" className="block max-w-full truncate text-left text-foreground/90 hover:text-primary hover:underline" title={row.title} onClick={() => void openProject(row.caseId)}>{row.title}</button>
                         </td>
@@ -437,6 +557,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
                         <td className="px-3 py-3 tabular-nums text-muted-foreground">{coverage ? coverage.pendingChecks : '—'}</td>
                         <td className="px-3 py-3">
                           <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${status.tone}`}>{status.label}</span>
+                          {row.error && <p className="mt-1 max-w-[180px] truncate text-[11px] text-destructive" title={row.error}>{row.error}</p>}
                           {(row.entryStatus === 'failed' || row.entryStatus === 'paused' || (row.entryStatus === 'done' && triage?.route === 'technical-exception')) && selectedBatch.status !== 'running' && selectedBatch.status !== 'finalized' && (
                             <button type="button" className="ml-2 text-[11px] text-primary hover:underline"
                               disabled={executing || handlingBatch}
@@ -454,7 +575,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
                       </tr>
                     )
                   })}
-                  {rows.length === 0 && <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-muted-foreground">这个批次还没有纳入审核项目。</td></tr>}
+                  {visibleRows.length === 0 && <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-muted-foreground">{rows.length ? '当前筛选条件下没有案卷。' : '这个批次还没有纳入审核项目。'}</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -547,6 +668,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         legacyById={legacyById}
         selectedCaseIds={selectedCaseIds}
         onToggleCase={toggleCase}
+        onApplyCaseIds={setSelectedCaseIds}
         onCreate={createBatch}
       />
     </div>
@@ -568,7 +690,7 @@ function SummaryCard({ label, value, hint, icon, tone }: { label: string; value:
 
 function CreateBatchDialog({
   open, onOpenChange, creating, batchName, onBatchNameChange, templates, templateKey, onTemplateKeyChange,
-  availableCases, legacyById, selectedCaseIds, onToggleCase, onCreate,
+  availableCases, legacyById, selectedCaseIds, onToggleCase, onApplyCaseIds, onCreate,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -582,6 +704,7 @@ function CreateBatchDialog({
   legacyById: Map<string, ReviewCaseSummary>
   selectedCaseIds: string[]
   onToggleCase: (caseId: string) => void
+  onApplyCaseIds: (ids: string[]) => void
   onCreate: (event: React.FormEvent<HTMLFormElement>) => void
 }): JSX.Element {
   const selectedTemplate = templates.find((template) => `${template.templateId}@${template.version}` === templateKey)
@@ -589,7 +712,7 @@ function CreateBatchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>新建审核批次</DialogTitle>
           <DialogDescription>为一组使用同一模板版本的审核项目建立批次。项目可继续在辅助审核中单独处理。</DialogDescription>
@@ -607,6 +730,13 @@ function CreateBatchDialog({
             </select>
             {selectedTemplate && <p className="text-xs text-muted-foreground">批次固定模板 v{selectedTemplate.version}；纳入 {(selectedTemplate.policyRefs?.length ?? selectedTemplate.policyVersionIds.length)} 个审核依据版本。</p>}
           </div>
+          {selectedTemplate && (
+            <ReviewV3T06BatchIntakePreview key={templateKey}
+              availableCases={availableCases.map((item) => ({
+                caseId: item.caseId, title: item.title, applicant: legacyById.get(item.caseId)?.applicant,
+              }))}
+              onApply={onApplyCaseIds} />
+          )}
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <Label>纳入项目</Label>
