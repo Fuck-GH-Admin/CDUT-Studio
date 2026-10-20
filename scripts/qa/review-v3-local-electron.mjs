@@ -86,7 +86,7 @@ try{
  await step('E2 real native Case create and reopen',async()=>{
   await fill('本地案卷标题','V3 native GUI '+Date.now());await click('创建原生无绑定案卷')
   await wait('case created','document.body?.innerText?.includes("本机原生案卷已创建：")')
-  caseId=await evalJs('document.querySelector("input[aria-label=当前本机案卷 ID]")?.value')
+  caseId=await evalJs('document.querySelector('+JSON.stringify('input[aria-label="当前本机案卷 ID"]')+')?.value')
   const data=await evalJs('(async()=>{const x=await window.reviewAPI.getAggregateV2('+JSON.stringify(caseId)+');return {id:x?.caseV2?.id,stage:x?.caseV2?.stage}})()')
   if(!caseId||data.id!==caseId||data.stage!=='draft')throw Error('CASE_NOT_DURABLE '+JSON.stringify(data))
   return data
@@ -121,7 +121,7 @@ try{
   await click('导出本地 MD 报告')
   await wait('report','document.body?.innerText?.includes("已生成本地 Markdown 报告")')
   await click('列出本机历史案卷')
-  await wait('local history','document.querySelector("select[aria-label=从历史案卷重开]")?.innerText?.includes('+JSON.stringify(caseId)+')')
+  await wait('local history','document.querySelector('+JSON.stringify('select[aria-label="从历史案卷重开"]')+')?.innerText?.includes('+JSON.stringify(caseId)+')')
   return {report:true,inHistory:true,caseId}
  })
 }catch(e){process.exitCode=1;console.error('GATE_E_REAL_ELECTRON_FAILURE',e)}
