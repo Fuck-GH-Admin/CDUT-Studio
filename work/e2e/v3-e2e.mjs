@@ -1771,6 +1771,55 @@ const scenarios = {
       .replace('__POLL__', JSON.stringify(process.env.E2E_POLL_MS ?? '900000')))
   },
 
+  /** A15 S3 后半段：teacher 本地模拟终审 → final 决定，核对两段决定与真实 Run 关联 */
+  async 'flow-a15-s3-final'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const caseId = __CASE__
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+      const agg = await api.getAggregateV2(caseId)
+      if (!agg) return { error: '案卷不存在', caseId }
+      step('before', { stage: agg.caseV2.stage,
+        openTasks: (agg.tasks ?? []).filter(t => t.status === 'open').map(t => ({ id: t.id, stage: t.stageId, role: t.assigneeRole })),
+        decisions: (agg.decisions ?? []).map(d => ({ result: d.result, finality: d.finality, actor: d.actor?.role, basedOnRunId: d.basedOnRunId })) })
+
+      const finalTask = (agg.tasks ?? []).find(t => t.status === 'open' && t.stageId === 'final-review')
+      if (!finalTask) return { ...out, error: '没有开放终审任务' }
+
+      // 能力投影：teacher 角色应看到可办理动作
+      try {
+        const cap = await api.getT05StageCapability({ caseId, claim: { role: 'teacher' } })
+        step('teacherCapability', { mode: cap.mode, role: cap.actorRole, eligible: cap.eligibleTaskIds.length,
+          hasRun: cap.hasCurrentRun, allowed: cap.allowedActions })
+      } catch (e) { step('teacherCapability', { error: String(e?.message ?? e).slice(0, 150) }) }
+
+      // reviewer 冒充 teacher 必须被拒（角色由任务判定，不由自称决定）
+      try {
+        await api.recordT05StageDecision({ caseId, claim: { role: 'reviewer' },
+          templateId: 'a15-lab-application', version: 1, expectedRevision: agg.caseV2.revision,
+          taskId: finalTask.id, action: 'stage-pass', reason: '冒面试探', requestId: 's3-fake-' + Date.now() })
+        step('reviewerClaimFinal', { unexpected: '不应成功' })
+      } catch (e) { step('reviewerClaimFinal', { rejected: true, error: String(e?.message ?? e).slice(0, 160) }) }
+
+      // teacher 终审通过
+      try {
+        const current = await api.getAggregateV2(caseId)
+        const r = await api.recordT05StageDecision({ caseId, claim: { role: 'teacher' },
+          templateId: 'a15-lab-application', version: 1, expectedRevision: current.caseV2.revision,
+          taskId: finalTask.id, action: 'stage-pass', reason: '材料齐备、人数 18 未超限，终审通过',
+          requestId: 's3-final-' + Date.now() })
+        const after = await api.getAggregateV2(caseId)
+        step('finalPass', { ok: true, revision: r.revision, stage: after?.caseV2?.stage,
+          finality: r.proposal?.decisionFinality ?? null,
+          decisions: (after?.decisions ?? []).map(d => ({ result: d.result, finality: d.finality, actor: d.actor?.role, basedOnRunId: d.basedOnRunId })),
+          openTasks: (after?.tasks ?? []).filter(t => t.status === 'open').length })
+      } catch (e) { step('finalPass', { ok: false, error: String(e?.message ?? e).slice(0, 200) }) }
+
+      return out
+    `.replace('__CASE__', JSON.stringify(process.env.E2E_CASE_ID ?? '')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

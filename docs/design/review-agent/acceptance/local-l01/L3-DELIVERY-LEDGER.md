@@ -101,7 +101,8 @@
 | **S0** | **PASS**（历史） | `flow-t01-bind`：旧样例发布/绑案、无学年。**不是完整 A15** |
 | **S1** | **PASS** | `flow-a15-s1`：`objectType=organization`；6 字段（organizationName/responsiblePerson/applicantCount(max=20)/usageDate/usageTime/purpose）；材料槽 `lab-use-plan`；阶段 `initial-review:reviewer → final-review:teacher`；**无 academicYear 字段**；复用建 2 案均 `academicYear=""` |
 | **S2** | **BLOCKED_OWNER:T01/T04** | 缺 `TemplateVersion → CanonicalPlan/PlanBinding` 编译合同。`UPGRADE_CANONICAL_PLAN_V3` 需 `planWriter` + `C2MainPublishedPlanProvenance`（特权发布权威 + 固定产物根），均未安装；仓库内不存在 `TemplateVersion → CanonicalPlan` 函数。**不用假 CheckResult 代替** |
-| **S3** | **PARTIAL** | `flow-a15-s3`：能力投影 `local-business/reviewer`；提交后任务 `reviewer/initial-review`；**无 Run 时 `stage-pass` 被 `T05_CURRENT_REAL_RUN_REQUIRED` 拒绝**；**补件可在无 Run 时创建**（stage=`awaiting-supplement`，decisions=0，未伪造 Run/Decision）。终审因初审需 Run 而无法推进，断点同 S2 |
+| **S3** | **PASS（S3-02 两段阶段）** | `flow-a15-s3`：无 Run 时 `stage-pass` 被 `T05_CURRENT_REAL_RUN_REQUIRED` 拒绝、补件可在无 Run 时创建（decisions=0）。`flow-a15-s3-run`（真实 Run）：A15 案卷填字段 18 人 → 按槽位导入真实 DOCX → Pi 审核 `completed`，**2 checks 全 compliant，`effectiveRuleIds` 两条规则各产出 1 项（覆盖完整）** → 初审 `stage-pass` 成功（stage=reviewing，`finality=stage`，`basedOnRunId=run-pi-mvh7e7rl-k76ff`）→ 生成 teacher 终审任务。`flow-a15-s3-final`：**reviewer 冒充终审被 `T05_ACTOR_NOT_ASSIGNED_TO_STAGE` 拒绝**；teacher（本地模拟，非学校身份）终审通过 → stage=`decided`、`finality=final`，两段决定均绑定同一真实 Run。**冷重启后 stage/decisions/Run 完整保留** |
+| **S3-01（补件两轮）** | **NOT_RUN** | 需要先有真实 Run 触发缺件，再用 `lab-12-unclear-reply.docx` / `lab-12-corrected-reply.docx` 两轮回复 |
 | **S4** | **NOT_RUN** | 依赖 S2/S3 |
 
 ### S2 最小缺失（交回 Owner）
