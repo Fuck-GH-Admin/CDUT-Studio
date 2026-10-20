@@ -4,7 +4,7 @@
  */
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import type { FieldValue, SourceRef } from '@profer/shared'
+import type { CaseAggregateV2, FieldValue, SourceRef } from '@profer/shared'
 import { reviewWorkspaceAggregateAtom, reviewWorkspaceExtractedObservationsAtom, reviewWorkspaceRunAtom } from '@/atoms/review-atoms'
 import { useReviewWorkspaceActions } from './use-review-workspace-actions'
 import { parseT03Correction, planT03Recheck, projectT03Evidence, projectT03Facts, type T03ExtractedFact } from '../../../main/lib/review/review-v3-t03-fact-workflow'
@@ -22,12 +22,21 @@ function show(value: FieldValue): string {
   return String(value.value)
 }
 /** Preserve canonical refs only; a quote without location is not a fabricated SourceRef. */
-function readRef(raw: unknown, caseId: string): SourceRef | null {
+function readRef(raw: unknown, aggregate: CaseAggregateV2): SourceRef | null {
   if (!raw || typeof raw !== 'object') return null
   const ref = raw as Partial<SourceRef>
-  if (ref.caseId !== caseId || typeof ref.documentVersionId !== 'string' ||
-      !Number.isSafeInteger(ref.parseRevision) || !ref.location) return null
-  return ref as SourceRef
+  if (typeof ref.documentVersionId !== 'string') return null
+  const doc = aggregate.caseV2.documents.find(d => d.versionId === ref.documentVersionId && d.active !== false)
+  if (!doc) return null
+  // Use a canonical FILE locator when extraction only supplied an opaque document
+  // or a quote. Never invent a paragraph/sheet/page from the quote itself.
+  const exact = ref.caseId === aggregate.caseV2.id &&
+    ref.parseRevision === doc.parseRevision && ref.location
+  return {
+    caseId: aggregate.caseV2.id, documentVersionId: doc.versionId,
+    parseRevision: doc.parseRevision, location: exact ? ref.location! : { kind: 'file' },
+    ...(typeof ref.quote === 'string' ? { quote: ref.quote } : {}),
+  }
 }
 export function ReviewV3T03FactWorkbench(): React.ReactElement {
   const aggregate = useAtomValue(reviewWorkspaceAggregateAtom)
@@ -49,7 +58,7 @@ export function ReviewV3T03FactWorkbench(): React.ReactElement {
       const item = raw as Record<string, unknown>
       if (typeof item.subjectId !== 'string' || typeof item.fieldKey !== 'string') return []
       const refs = Array.isArray(item.sourceRefs)
-        ? item.sourceRefs.map(ref => readRef(ref, aggregate.caseV2.id)).filter((ref): ref is SourceRef => !!ref)
+        ? item.sourceRefs.map(ref => readRef(ref, aggregate)).filter((ref): ref is SourceRef => !!ref)
         : []
       return [{ subjectId: item.subjectId, fieldKey: item.fieldKey, value: asValue(item.value),
         sourceRefs: refs, confidence: typeof item.confidence === 'number' ? item.confidence : undefined }]
