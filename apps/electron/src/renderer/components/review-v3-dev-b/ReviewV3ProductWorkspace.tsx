@@ -14,6 +14,25 @@ import type { B3RouteState } from '../../../main/lib/review/review-intake-routin
 import type { B1AuthorDocument } from '../../../main/lib/review/review-template-plan-adapter-v3-b1'
 import { prepareB33PristineReopenLookup } from './review-v3-b33-author-reopen'
 
+/** C Main owns this durable candidate-only observation. A resolved void is not proof of persistence. */
+export interface B32RemediationReceipt {
+ schemaVersion:'review-v3-b32-remediation-receipt/1'
+ issueId:string;currentSnapshot:string;receiptId:string
+ persisted:true;candidateOnly:true;publicationAllowed:false
+}
+/** Only a matching, durable C Main acknowledgement can label a proposal persisted. */
+export function assertB32RemediationReceipt(
+ receipt:B32RemediationReceipt|void,issueId:string,snapshot:string,
+):boolean {
+ if(receipt===undefined)return false
+ if(receipt.schemaVersion!=='review-v3-b32-remediation-receipt/1'||
+    receipt.issueId!==issueId||receipt.currentSnapshot!==snapshot||
+    typeof receipt.receiptId!=='string'||!receipt.receiptId.trim()||
+    receipt.persisted!==true||receipt.candidateOnly!==true||
+    receipt.publicationAllowed!==false)
+  throw new Error('B_PRODUCT_REMEDIATION_ACK_INVALID')
+ return true
+}
 export interface B32ProductPorts {
  /** C Main read: B30 complete materials + B20 author/Source + B27 + B26. */
  onReadCurrent?:()=>Promise<B32ProductRead>
@@ -23,7 +42,7 @@ export interface B32ProductPorts {
  onProposeRemediation?:(request:{
   issueId:string;currentSnapshot:string;observation:string;
   candidateOnly:true;businessWriteAllowed:false
- })=>Promise<void>
+ })=>Promise<B32RemediationReceipt|void>
 }
 export interface ReviewV3ProductWorkspaceProps {
  scope:string;caseCandidateId:string
@@ -73,6 +92,7 @@ export function ReviewV3ProductWorkspace({
  const [selectedIssue,setSelectedIssue]=useState('')
  const [observation,setObservation]=useState('')
  const [localEvents,setLocalEvents]=useState<string[]>([])
+ const [repairStatus,setRepairStatus]=useState<'unsubmitted'|'awaiting-main'|'persisted'|'unconfirmed'>('unsubmitted')
  const [editor,setEditor]=useState<{key:string;document:B1AuthorDocument|undefined}|null>(null)
  const [authorIntent,setAuthorIntent]=useState({
   templateId:'',name:'',purpose:'',scenario:'',objectKey:'',
@@ -85,7 +105,7 @@ export function ReviewV3ProductWorkspace({
  useEffect(()=>{
   generation.current+=1
   setTab('materials');setRead(null);setError('');setNotice('')
-  setEditor(null);setLocalEvents([]);setSelectedIssue('')
+  setEditor(null);setLocalEvents([]);setSelectedIssue('');setRepairStatus('unsubmitted')
   setCheckPage(0);setSourcePage(0);setMaterialPage(0)
  },[scope])
  const fetchCurrent=async():Promise<void>=>{
@@ -124,29 +144,39 @@ export function ReviewV3ProductWorkspace({
      !issue||!observation.trim()||operation.current){
    setError('B_PRODUCT_REPAIR_PORT_OR_HUMAN_EVIDENCE_REQUIRED');return
   }
-  operation.current=true;setBusy(true);setError('');setNotice('')
+  operation.current=true;setBusy(true);setError('');setNotice('');setRepairStatus('awaiting-main')
   const startScope=currentScope.current,epoch=generation.current
+  let proposalSent=false,confirmedPersisted=false
   try{
    const before=await ports.onReadCurrent()
    if(startScope!==currentScope.current||epoch!==generation.current)return
    assertB32StillCurrent(read,before)
    if(!before.historical||!before.historical.issues.some(x=>x.id===issue.id))
     throw new Error('B_PRODUCT_ISSUE_NO_LONGER_CURRENT')
-   await ports.onProposeRemediation({
+   proposalSent=true
+   const receipt=await ports.onProposeRemediation({
      issueId:issue.id,currentSnapshot:before.historical.snapshotSha256,
      observation:observation.trim(),candidateOnly:true,businessWriteAllowed:false,
    })
+   const persisted=assertB32RemediationReceipt(receipt,issue.id,before.historical.snapshotSha256)
+   confirmedPersisted=persisted
+   if(startScope!==currentScope.current||epoch!==generation.current)return
+   setRepairStatus(persisted?'persisted':'unconfirmed')
    // Re-read after the proposal; old preview is never marked "fixed".
    const after=await ports.onReadCurrent()
    if(startScope!==currentScope.current||epoch!==generation.current)return
    buildB32ProductView(after)
    setRead(after);setObservation('');setSelectedIssue('')
    setLocalEvents(prev=>[
-    '已提交待复核技术观察：'+issue.id+'；之后已重新读取当前来源；不代表审核或 Gold 通过',
+    (persisted&&receipt?'Main 已持久化技术观察 '+receipt.receiptId:'未取得 Main 持久回执，保存状态待确认')+
+    ' · '+issue.id+' · UNKNOWN 仍待人工/权威证据核验',
     ...prev].slice(0,50))
-   setNotice('已完成技术修复提案并重新读取；UNKNOWN 只有权威证据才可真正解除')
+   setNotice(persisted?'Main 已确认保存候选技术观察；未改变 UNKNOWN、Gold 或审批状态':
+    'Main 未返回持久化回执：提交结果尚未确认，请通过 Main 历史核对后再处理')
   }catch(e){if(startScope===currentScope.current){
-   setRead(null);setError(e instanceof Error?e.message:String(e))
+   setRepairStatus(confirmedPersisted?'persisted':proposalSent?'unconfirmed':'unsubmitted')
+   if(confirmedPersisted)setNotice('Main 已返回持久回执；但重新读取当前来源失败，请手动刷新，不能认为 UNKNOWN 已解决')
+   setError(e instanceof Error?e.message:String(e))
   }}finally{operation.current=false;if(startScope===currentScope.current)setBusy(false)}
  }
  const createTemporary=async():Promise<void>=>{
@@ -198,6 +228,11 @@ export function ReviewV3ProductWorkspace({
   }catch(e){if(startScope===currentScope.current)
     setError(e instanceof Error?e.message:String(e))
   }finally{operation.current=false;if(startScope===currentScope.current)setBusy(false)}
+ }
+ const openBlankAuthor=():void=>{
+  if(editor){setTab('author');setError('B_PRODUCT_ACTIVE_AUTHOR_MUST_SAVE_OR_BACKUP_BEFORE_SWITCH');return}
+  setEditor({key:'unbound-'+scope,document:undefined});setTab('author')
+  setError('');setNotice('已打开无绑定本地候选草稿。可编辑字段、对象、条件和 Check；保存/预览/冻结须由 C Main 作者端口确认，导出 JSON 可独立使用。')
  }
  const openAuthor=():void=>{
   if(editor){setTab('author');setError('B_PRODUCT_ACTIVE_AUTHOR_MUST_SAVE_OR_BACKUP_BEFORE_SWITCH');return}
@@ -296,7 +331,7 @@ export function ReviewV3ProductWorkspace({
    </div>
    <p>筛选后 {issueList.total} 条，按任务粒度分页展示。</p>
    {issueList.items.map(x=><button key={x.id} type="button" className="block w-full rounded border border-border p-3 text-left text-sm hover:bg-muted"
-    onClick={()=>{setSelectedIssue(x.id);setObservation('')}}>
+    onClick={()=>{setSelectedIssue(x.id);setObservation('');setRepairStatus('unsubmitted')}}>
     <strong>{x.domain} · {x.templateId} · {kindNames[x.kind]}</strong>
     <p>{x.checkId??'整个模板'} · {x.sourceId??x.ruleId??'无明细来源'}</p>
     <p>{x.reason} · {x.state}</p>
@@ -315,6 +350,7 @@ export function ReviewV3ProductWorkspace({
     <button type="button" className={btn}
      disabled={busy||!ports.onProposeRemediation||!ports.onReadCurrent||!connected||!observation.trim()}
      onClick={()=>void recordRepair()}>提交技术观察并重新读取（不作学校审批）</button>
+    <p role="status" className="text-xs">技术观察：{repairStatus==='unsubmitted'?'未提交':repairStatus==='awaiting-main'?'待 C 主进程确认':repairStatus==='persisted'?'C Main 已返回持久回执（不代表缺口解除）':'持久化未确认；需 Main 核对'}</p>
     {!ports.onProposeRemediation&&<p className="text-xs">人工修复持久化接口未安装；本界面不会虚构处理历史。</p>}
    </div>}
    {localEvents.length>0&&<div className="space-y-1">
@@ -325,7 +361,7 @@ export function ReviewV3ProductWorkspace({
   <div hidden={tab!=='author'} className="space-y-3">
    <h3 className="font-semibold">第 51 套自建候选 / 既有 B1 编辑器</h3>
    {!editor&&<div className="space-y-2 rounded border border-border p-3">
-    <p className="text-sm">仅当完整真实材料确实 unmatched，且用户主动确认时，才能从本批材料生成独立候选。模板名称、目的、对象、条件、Check 均可在生成后继续使用原有 B1 编辑器修改。</p>
+    <p className="text-sm">绑定本批原件的第 51 套候选需要真实 Main 全量材料且路由 unmatched；无 Main 时仍可下方创建不绑定原件的草稿。模板名称、目的、对象、条件和 Check 可在 B1 编辑器继续修改。</p>
     {([
      ['templateId','候选模板 ID'],['name','名称'],['purpose','审核目的'],
      ['scenario','业务场景'],['objectKey','本次审核对象'],
@@ -342,6 +378,12 @@ export function ReviewV3ProductWorkspace({
       第 51 套真实 Main/B2 输入适配尚未接线。不能从 Renderer 填写的材料 ID 自行伪造模板来源。
     </p>}
    </div>}
+   <div className="rounded border border-border p-3 space-y-2">
+    <h4 className="font-medium">空白候选：不依赖 Main 或校方授权</h4>
+    <p className="text-xs">从零填写字段、对象、来源说明、条件和 Check，支持导出 JSON。未读取任何真实原件，不能冒充绑定了本次申请的审核模板；正式保存和冻结需要可信作者服务。</p>
+    <button type="button" className={btn} disabled={busy||editor!==null}
+     onClick={openBlankAuthor}>新建不绑定原件的本地作者草稿</button>
+   </div>
    <div className="rounded border border-border p-3 space-y-2">
     <h4 className="font-medium">重开已保存的第 51 套或其它候选修订</h4>
     <p className="text-xs">仅打开未编辑的候选 ID 查询页。进入后由用户在原 B1 作者界面主动点击读取最新修订，C Main 必须验证持久作者链；不直接导入浏览器旧快照。</p>
