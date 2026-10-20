@@ -394,7 +394,7 @@ function valueLimit(rule:RuleSpec,op:Extract<T04Operation,{kind:'value-limit'}>,
   const failed:string[]=[],missing:string[]=[],lines:string[]=[]
   for(const item of items) {
     const v=field(item,op.field)
-    if(!known(v)||(op.unit&&v.unit&&v.unit!==op.unit)) {missing.push(item.id+':'+op.field);continue}
+    if(!known(v)||(op.unit&&v.unit!==op.unit)) {missing.push(item.id+':'+op.field);continue}
     try {
       if(typeof v.value!=='string'&&typeof v.value!=='number')throw Error('non-decimal')
       const value=decimalT04(v.value)
