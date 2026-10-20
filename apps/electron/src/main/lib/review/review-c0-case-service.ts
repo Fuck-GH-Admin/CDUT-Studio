@@ -6,6 +6,7 @@ import {
   type Principal, type Actor,
 } from '@profer/shared'
 import { payloadHash, readAggregate, CommandValidationError } from './case-store-v2'
+import { getTemplate } from './template-store'
 import {
   createCaseFromTemplate, updateFields, correctObservation, setEvidenceLink,
   type CreateCasePayload, type UpdateFieldsPayload,
@@ -56,12 +57,32 @@ export async function createCaseC0(
   }
 }
 
+/**
+ * 字段写入的类型权威来自**已发布**模板版本。
+ *
+ * 此前的实现从不传 template，`updateFields` 便退化成「一律当文本」，
+ * 数字、日期等字段被静默当字符串写入——这正是 T08 报告的非 text 字段缺陷。
+ *
+ * 规则：
+ * - 案卷绑定版本的模板存在且已发布 → 用它的 FieldSpec 校验 kind/scope/选项并按类型写入；
+ * - 模板存在但未发布 → 拒绝（草稿的字段定义随时会变，不能作为类型权威）；
+ * - 完全没有模板记录（历史/合成案卷）→ 保持原有文本回退，避免破坏既有数据。
+ */
 export function updateFieldsC0(command: AuthorizedCaseCommand<UpdateFieldsPayload>) {
   assertC0CaseAuthorization(command, 'UPDATE_FIELDS_V2')
+  const aggregate = readAggregate(command.caseId)
+  let template = aggregate
+    ? getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+    : undefined
+  if (aggregate && template && template.status !== 'published') {
+    throw new CommandValidationError('INVALID_TRANSITION',
+      '案卷绑定的模板版本尚未发布，字段类型无权威来源，暂不允许写入')
+  }
+  if (!aggregate) template = undefined
   return updateFields(command.caseId, {
     requestId: command.requestId, expectedRevision: command.expectedRevision,
     payload: command.payload, actor: actorOf(command.principal),
-  })
+  }, template)
 }
 export function correctObservationC0(command: AuthorizedCaseCommand<CorrectObservationPayload>) {
   assertC0CaseAuthorization(command, 'CORRECT_OBSERVATION_V2')

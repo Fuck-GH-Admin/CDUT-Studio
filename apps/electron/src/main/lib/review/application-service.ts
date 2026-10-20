@@ -200,9 +200,15 @@ export function validateFieldValuesV2(
 }
 
 /** 将输入值规范化为 FieldValue（保持类型 kind 与数值精度） */
+/**
+ * 按 FieldSpec.kind 生成 FieldValue。
+ *
+ * 与建案时的 `fieldValueOf` 必须同源：此前这里只处理 number，
+ * 日期/布尔/枚举/多选/附件在**更新**时全被降级成 text，
+ * 造成同一字段建案时是 date、更新后变 text 的类型漂移。
+ */
 export function toFieldValueV2(spec: { kind: string }, value: unknown): FieldValue {
-  if (spec.kind === 'number') return { kind: 'number', value: Number(value) }
-  return { kind: 'text', value: String(value) }
+  return fieldValueOf({ kind: spec.kind } as TemplateVersion['fields'][number], value)
 }
 
 // ===== UpdateFields =====
