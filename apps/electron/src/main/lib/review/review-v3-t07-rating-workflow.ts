@@ -30,6 +30,7 @@ export type T07Round = {
   divergenceReasons: Record<string, string>
   /** Organizer-defined priority order for each still-tied group; key: sorted case IDs joined by | */
   tieOrders: Record<string, string[]>
+  reopenedFrom?: { round: number; by: string; at: string; reason: string }
   finalized?: T07Freeze
 }
 export type T07State = {
@@ -109,6 +110,7 @@ export function applyT07Action(state: T07State, action: T07Action, context: T07C
       .map((a) => ({ ...a, id: a.id + '-r' + (round.number + 1), status: 'assigned' as const }))
     return { ...state, rounds: [...state.rounds, {
       number: round.number + 1, assignments, votes: [], divergenceReasons: {}, tieOrders: {},
+      reopenedFrom: { round: round.number, by: context.actor.actorId, at: context.at, reason: action.reason.trim() },
     }] }
   }
   assertOpen(round)
@@ -267,11 +269,13 @@ export function computeT07Ranking(state: T07State): T07RankingRow[] {
 }
 
 /** Only safe projection enters a judge renderer / independent package. No roster, other votes, totals or real names. */
-export type T07SafeCaseMaterial = { caseId: string; summary: string; documents: Array<{ id: string; title: string }> }
+export type T07SafeCaseMaterial = { caseId: string; summary: string; documents: Array<{ id: string; title: string }>;
+  /** Confirmed by T04/Main rule evaluation for this case and round. */
+  naEligibleDimensionIds?: string[] }
 export type T07JudgeView = {
   role: 'judge'; batchId: string; round: number; rubric: RubricSpec; finalized: boolean
   tasks: Array<{ assignmentId: string; caseId: string; blindLabel: string; status: T07Assignment['status'];
-    summary: string; documents: Array<{ id: string; title: string }>; ownVote?: T07Vote }>
+    summary: string; documents: Array<{ id: string; title: string }>; naEligibleDimensionIds: string[]; ownVote?: T07Vote }>
 }
 export type T07OrganizerView = {
   role: 'organizer'; state: T07State; ranking: T07RankingRow[]
@@ -291,6 +295,7 @@ export function projectT07View(
       return {
         assignmentId: a.id, caseId: a.caseId, blindLabel: entry.blindLabel, status: a.status,
         summary: safe?.summary ?? '', documents: safe?.documents.map((d) => ({ id: d.id, title: d.title })) ?? [],
+        naEligibleDimensionIds: safe?.naEligibleDimensionIds?.filter((id) => state.rubric.dimensions.some((d) => d.id === id && !!d.naWhen)) ?? [],
         ownVote: round.votes.find((v) => v.assignmentId === a.id),
       }
     }),
