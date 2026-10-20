@@ -129,7 +129,7 @@ describe('C-R09 Case-CAS durable Run-wide Host fencing (non-SDK business ledger)
       reason:'corrupt repeated entry',fencedAt:new Date().toISOString(),
     }]
     writeAggregate(agg)
-    expect(()=>isC2RunDurablyFenced(run)).toThrow('corrupt')
-    expect(()=>assertC2HostRunNotFenced(readAggregate(id)!,run)).toThrow('corrupt')
+    expect(()=>isC2RunDurablyFenced(run)).toThrow('Host Run fence')
+    expect(()=>assertC2HostRunNotFenced(readAggregate(id)!,run)).toThrow('Host Run fence')
   })
 })
