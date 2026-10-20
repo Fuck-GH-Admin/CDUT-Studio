@@ -53,6 +53,7 @@ import { LeftPanel } from './LeftPanel'
 import { RightPanel } from './RightPanel'
 import { reviewV2AggregateAtom, V2CasePanel } from './V2CasePanel'
 import { TemplateWizardPanel } from './TemplateWizardPanel'
+import { ReviewV3LocalCandidateWorkbench } from './ReviewV3LocalCandidateWorkbench'
 import { BatchPanel } from './BatchPanel'
 import { useReviewActions } from './use-review-actions'
 
@@ -138,6 +139,7 @@ export function ContentReviewView(): React.ReactElement {
               ['workbench', '预审工作台'],
               ['case-v2', 'V2 案卷'],
               ['templates', '模板编排'],
+              ['local-candidates', '本地候选模板'],
               ['batches', '批次管理'],
             ] as Array<[ReviewWorkspaceSection, string]>).map(([id, label]) => (
               <Button
@@ -244,6 +246,9 @@ export function ContentReviewView(): React.ReactElement {
       </section>
       <section aria-label="审核模板编排" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'templates' && 'hidden')}>
         <TemplateWizardPanel />
+      </section>
+      <section aria-label="本地候选模板作者工作台" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'local-candidates' && 'hidden')}>
+        <ReviewV3LocalCandidateWorkbench />
       </section>
       <section aria-label="审核批次管理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'batches' && 'hidden')}>
         <BatchPanel
