@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Actor, CaseAggregateV2, TemplateVersion } from '@profer/shared'
-import { planT05LocalStageAction, planT05SupplementReentry } from './review-v3-t05-local-stage-plan'
+import { applyT05LocalStageProposal, planT05LocalStageAction, planT05SupplementReentry } from './review-v3-t05-local-stage-plan'
 
 const reviewer: Actor = { actorId: 'reviewer-1', actorSource: 'local', role: 'reviewer' }
 const teacher: Actor = { actorId: 'teacher-2', actorSource: 'local', role: 'teacher' }
@@ -89,6 +89,49 @@ describe('T05 local-business stage planning for A15', () => {
     expect(planT05LocalStageAction(act({
       aggregate:current,actor:teacher,taskId:'task-final',action:'return-to-previous-stage',
     }))).toMatchObject({returnToStageId:'initial',nextAssigneeRole:'reviewer',decisionFinality:'stage'})
+  })
+})
+
+
+describe('T05 real append-only stage mutations (Main-owned persistence)', () => {
+  const ids = { decisionId:'dec-real-001', nextTaskId:'task-final-001', supplementId:'sup-real-001', at:'2026-10-21T02:00:00Z' }
+  test('initial pass completes initial task, appends real Run decision, opens final teacher task', () => {
+    const current = aggregate()
+    const planned = planT05LocalStageAction(act({aggregate:current}))
+    const result = applyT05LocalStageProposal(current,planned,reviewer,ids)
+    expect(result.caseStage).toBe('reviewing')
+    expect(result.addedDecision).toMatchObject({stageId:'initial',finality:'stage',basedOnRunId:'run-real-001'})
+    expect(result.addedTask).toMatchObject({stageId:'final',assigneeRole:'teacher',status:'open',round:1})
+    expect(result.tasks.find(x=>x.id==='task-initial')?.status).toBe('completed')
+    expect(current.tasks[0]?.status).toBe('open')
+    expect(current.decisions).toHaveLength(0)
+  })
+  test('final teacher decision is final, no new task, original decisions unchanged', () => {
+    const current=aggregate()
+    current.tasks=[{id:'task-final',stageId:'final',assigneeRole:'teacher',round:1,status:'open'}] as typeof current.tasks
+    const planned=planT05LocalStageAction(act({aggregate:current,actor:teacher,taskId:'task-final'}))
+    const result=applyT05LocalStageProposal(current,planned,teacher,ids)
+    expect(result.caseStage).toBe('decided')
+    expect(result.addedDecision?.finality).toBe('final')
+    expect(result.addedTask).toBeUndefined()
+  })
+  test('missing material makes a durable supplement without a fake decision or Run', () => {
+    const current=aggregate()
+    const planned=planT05LocalStageAction(act({aggregate:current,action:'return-for-supplement',
+      verifiedRun:undefined,requiredElements:['计划书','明确人数'],supplementReason:'补齐材料'}))
+    const result=applyT05LocalStageProposal(current,planned,reviewer,ids)
+    expect(result.caseStage).toBe('awaiting-supplement')
+    expect(result.addedSupplement).toMatchObject({originTaskId:'task-initial',originStageId:'initial',
+      responsibleRole:'student',status:'open'})
+    expect(result.addedDecision).toBeUndefined()
+    expect(result.decisions).toHaveLength(0)
+    expect(result.tasks[0]?.status).toBe('completed')
+  })
+  test('changed revision rejects stale prepared mutation', () => {
+    const current=aggregate()
+    const planned=planT05LocalStageAction(act({aggregate:current}))
+    current.caseV2.revision+=1
+    expect(() => applyT05LocalStageProposal(current,planned,reviewer,ids)).toThrow('T05_STAGE_REVISION_CHANGED')
   })
 })
 
