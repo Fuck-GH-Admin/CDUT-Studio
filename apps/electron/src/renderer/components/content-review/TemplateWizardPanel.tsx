@@ -1,6 +1,6 @@
 /** 审核模板库与编辑器：案卷字段、材料槽、综测分项、审核标准与流程均可在界面配置。 */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FieldSpec, MaterialSlotSpec, RubricSpec, TemplateCriterionSpec, TemplateSectionSpec, TemplateVersion, WorkflowStageSpec } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { toast } from 'sonner'
@@ -11,6 +11,7 @@ import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { T01_SCENARIOS, createT01Scenario, type T01ScenarioId } from './review-v3-t01-business-presets'
 import { ReviewV3T01TrialPanel } from './ReviewV3T01TrialPanel'
 import { ReviewV3T01ConditionEditor } from './ReviewV3T01ConditionEditor'
+import { exportT01Template, importT01Template } from './review-v3-t01-template-portability'
 
 type EditableFieldKind = 'text' | 'number' | 'date' | 'boolean' | 'enum'
 type TemplateLibraryFilter = 'all' | 'published' | 'reference' | 'drafts'
@@ -138,6 +139,7 @@ export function TemplateWizardPanel(): JSX.Element {
   const [loading, setLoading] = useState(false)
   const [libraryFilter, setLibraryFilter] = useState<TemplateLibraryFilter>('all')
   const [scenarioChoice,setScenarioChoice]=useState<T01ScenarioId>('laboratory')
+  const importPicker=useRef<HTMLInputElement|null>(null)
 
   const refreshTemplates = useCallback(async (): Promise<void> => {
     try {
@@ -163,6 +165,26 @@ export function TemplateWizardPanel(): JSX.Element {
     const next=createT01Scenario(scenarioChoice,generatedId('t01-scenario'),new Date().toISOString())
     setEditing(next)
     setMessage([])
+  }
+
+  const importConfiguration = async (file:File):Promise<void> => {
+    try {
+      if(file.size>2_000_000)throw Error('配置文件超过2MB')
+      const template=importT01Template(await file.text(),generatedId('t01-import'),new Date().toISOString())
+      setEditing(template)
+      setMessage([])
+      toast.success('已导入可编辑草稿，确认依据后保存/发布')
+    } catch(error) {toast.error('导入失败：'+(error instanceof Error?error.message:String(error)))}
+  }
+  const exportConfiguration = ():void => {
+    if(!editing)return
+    const blob=new Blob([exportT01Template(editing)],{type:'application/json;charset=utf-8'})
+    const url=URL.createObjectURL(blob)
+    const a=document.createElement('a')
+    a.href=url
+    a.download=editing.templateId+'.template.json'
+    a.click()
+    setTimeout(()=>URL.revokeObjectURL(url),1000)
   }
 
   const openTemplate = (template: TemplateVersion): void => {
@@ -320,6 +342,9 @@ export function TemplateWizardPanel(): JSX.Element {
               </select>
             </label>
             <Button size="sm" variant="outline" onClick={startScenario}>创建可编辑示例草稿</Button>
+            <input ref={importPicker} type="file" accept=".json,application/json" className="hidden" aria-label="导入模板配置文件"
+              onChange={event=>{const file=event.target.files?.[0];if(file)void importConfiguration(file);event.target.value=''}} />
+            <Button size="sm" variant="ghost" onClick={()=>importPicker.current?.click()}>导入模板配置</Button>
           </div>
         </div>
         <div className="mt-3 rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2 text-xs leading-5 text-muted-foreground">
@@ -387,7 +412,10 @@ export function TemplateWizardPanel(): JSX.Element {
               <h3 className="text-sm font-semibold">{editing.status === 'draft' ? '编辑草稿' : '已发布模板'}</h3>
               <p className="mt-1 text-xs text-muted-foreground">{editing.templateId} · v{editing.version}{editing.status !== 'draft' ? ' · 正在编辑新草稿' : ''}</p>
             </div>
-            <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>关闭</Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={exportConfiguration}>导出配置</Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>关闭</Button>
+            </div>
           </div>
 
           {editing.sections?.some((section) => section.name.startsWith('综测分项')) && (
