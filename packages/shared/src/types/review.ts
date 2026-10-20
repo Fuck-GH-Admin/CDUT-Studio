@@ -510,6 +510,10 @@ export const REVIEW_IPC_CHANNELS = {
   RESTORE_CASE_V3: 'review-v3:restore-case',
   /** C Main candidate author latest-revision READ ONLY. No implied publication. */
   AUTHOR_READ_LATEST_V3: 'review-v3:author-read-latest',
+  /** Local-only B1 author workbench; never a school-published rule. */
+  AUTHOR_SAVE_LOCAL_V3: 'review-v3:author-save-local',
+  AUTHOR_PREVIEW_LOCAL_V3: 'review-v3:author-preview-local',
+  AUTHOR_FREEZE_LOCAL_V3: 'review-v3:author-freeze-local',
   /** C Main-only current B20 physical candidate preview; never a published Plan. */
   B20_CANDIDATE_READ_V3: 'review-v3:b20-candidate-read',
   /** User requests Main to show native ZIP picker for one CURRENT B20 selected archive. */

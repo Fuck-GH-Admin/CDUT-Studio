@@ -4019,6 +4019,15 @@ const reviewAPI = {
       schemaVersion:'review-v3-author-current-read/1';templateId:string;revision:number;
       sourceDigest:string;document:unknown;state:'candidate-held';displayOnly:true
     }>,
+  /** Append-only local candidate author revision; Main supplies identity and revision CAS. */
+  saveLocalCandidateAuthorV3: (input: {document:import('../main/lib/review/review-template-plan-adapter-v3-b1').B1AuthorDocument;expectedRevision:number}) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.AUTHOR_SAVE_LOCAL_V3,input) as Promise<{revision:number}>,
+  /** B1 rules compile locally for preview, without publishing school policy. */
+  previewLocalCandidateAuthorV3: (input: {document:import('../main/lib/review/review-template-plan-adapter-v3-b1').B1AuthorDocument}) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.AUTHOR_PREVIEW_LOCAL_V3,input) as Promise<import('../main/lib/review/review-template-plan-adapter-v3-b1').ImmutablePlanDescriptorB1>,
+  /** Freeze only the persisted, still-current B1 revision in the local candidate vault. */
+  freezeLocalCandidateAuthorV3: (input: {document:import('../main/lib/review/review-template-plan-adapter-v3-b1').B1AuthorDocument;expectedRevision:number}) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.AUTHOR_FREEZE_LOCAL_V3,input) as Promise<{fingerprint:string}>,
   /** C Main-only B20 source view; requires separate trusted picker, B vault/ledger and current Owner. */
   readCurrentB20CandidateV3: (templateId:string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.B20_CANDIDATE_READ_V3,{templateId}) as Promise<{
