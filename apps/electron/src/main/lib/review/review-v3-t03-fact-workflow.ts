@@ -194,8 +194,10 @@ export function planT03Recheck(
     const sourceHit = check.sourceRefs.some(ref => docs.has(ref.documentVersionId)) ||
       check.basis?.sourceRefs.some(ref => docs.has(ref.documentVersionId)) ||
       check.basis?.evidenceLinkIds.some(id => links.has(id))
-    const fieldHit = !dependencies || impactedRules.has(check.ruleId)
-    return Boolean(sourceHit || (subjectHit && fieldHit))
+    const fieldHit = !dependencies || fields.size === 0 || impactedRules.has(check.ruleId)
+    return Boolean(sourceHit || (subjectHit && fieldHit) ||
+      check.basis?.observationIds.some(id => aggregate.observations.some(ob => ob.id === id &&
+        changedSubjects.has(ob.subjectId) && (fields.size === 0 || fields.has(ob.fieldKey)))))
   })
   if (!run) reasons.push('暂无旧 Run；变更后需要首次审核')
   if (run && !dependencies) reasons.push('旧 Run 无规则字段依赖；按主体保守标记检查')
