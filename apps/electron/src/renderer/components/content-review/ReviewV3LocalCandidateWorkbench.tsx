@@ -40,7 +40,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   React.useEffect(()=>{
     const route=product?.read.route
     const choice=route?.status==='default-selected'?route.chosen:undefined
-    if(!choice)return
+    if(!choice||!product)return
     if(product.catalog.some(item=>item.templateId===choice.templateId&&
       item.templateVersion===choice.templateVersion)){
       setRoutedD4TemplateId(choice.templateId)
