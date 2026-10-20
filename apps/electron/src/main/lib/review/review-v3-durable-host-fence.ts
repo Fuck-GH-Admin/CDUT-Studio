@@ -12,7 +12,7 @@ import {
   type Actor, type CaseAggregateV2, type ReviewCommandResult,
   type RunEvidenceIdentity,
 } from '@profer/shared'
-import {CommandValidationError,readAggregate,submitCommand} from './case-store-v2'
+import {CommandValidationError,payloadHash,readAggregate,submitCommand} from './case-store-v2'
 
 export type C2MainAuthorizeRunFence =
   (aggregate:CaseAggregateV2,run:RunEvidenceIdentity,reason:string)=>void
@@ -36,6 +36,13 @@ function records(aggregate:CaseAggregateV2):NonNullable<CaseAggregateV2['v3HostR
     assertC0RunEvidenceIdentity(item.run)
     if(item.run.caseId!==aggregate.caseV2.id||
        seen.has(item.run.runId))return refuse('Host Run fence case or run identity corrupt')
+    const matching=aggregate.receiptLog.filter(receipt=>
+      receipt.type==='FenceV3HostRun' &&
+      receipt.requestId===item.requestId &&
+      receipt.payloadHash===payloadHash('FenceV3HostRun',{
+        run:item.run,reason:item.reason,
+      }) && receipt.actor?.actorId===item.operatorPrincipalId)
+    if(matching.length!==1)return refuse('Host Run fence lacks unique authoritative Case Receipt')
     seen.add(item.run.runId)
   }
   return r

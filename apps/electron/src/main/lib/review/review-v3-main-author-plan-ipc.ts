@@ -35,6 +35,9 @@ import {
   CMainRemovalConsentGate, type CMainRemovalWitnessSource,
 } from './review-v3-main-removal-consent'
 import {
+  createCMainElectronRemovalObserver,
+} from './review-v3-main-native-removal-observer'
+import {
   CMainB20TrustedCandidateRead,
   type CMainB20PinnedExpectation,
   type CMainB20ReadIdentity,
@@ -146,6 +149,27 @@ export function installCMainV3PlanUpgradeAuthorities(
   return ()=>{
     if(planUpgradeInstallation===installed)planUpgradeInstallation=undefined
     installed.removalGate?.close()
+  }
+}
+/**
+ * Native Main composition of physical human consent; only a caller already
+ * holding the REAL published Plan source and C Principal/Owner grant may use it.
+ * This does not synthesize a school issuer. A rejected installation closes
+ * the observer and leaves all existing Main registration unchanged.
+ */
+export function installCMainV3NativePlanUpgradeAuthorities(
+  source:Omit<CMainV3PlanUpgradeAuthorities,'removalConsentSource'>,
+):()=>void {
+  if(planUpgradeInstallation)refuse('PLAN_WRITER_ALREADY_INSTALLED')
+  const observer=createCMainElectronRemovalObserver()
+  try {
+    const dispose=installCMainV3PlanUpgradeAuthorities({
+      ...source,removalConsentSource:observer,
+    })
+    return ()=>{dispose();observer.close()}
+  }catch(error){
+    observer.close()
+    throw error
   }
 }
 /** Legacy combined installer is atomic and cannot silently take over an
