@@ -42,6 +42,7 @@ export type T07State = {
 export type T07Action =
   | { type: 'assign'; caseId: string; reviewerId: string; assignmentId: string }
   | { type: 'recuse'; assignmentId: string; reason: string }
+  | { type: 'self-recuse'; assignmentId: string; reason: string }
   | { type: 'mark-missing'; assignmentId: string; reason: string }
   | { type: 'submit'; assignmentId: string; scores: T07Score[]; publicFeedback: string; internalNotes?: string }
   | { type: 'resolve-divergence'; caseId: string; reason: string }
@@ -127,13 +128,17 @@ export function applyT07Action(state: T07State, action: T07Action, context: T07C
       rubricVersion: state.rubricVersion, status: 'assigned',
     }] })
   }
-  if (action.type === 'recuse' || action.type === 'mark-missing') {
-    requireOrganizer(context)
+  if (action.type === 'recuse' || action.type === 'self-recuse' || action.type === 'mark-missing') {
+    if (action.type !== 'self-recuse') requireOrganizer(context)
+    else if (context.actor.role !== 'judge') throw new Error('只有对应评委能够自报回避')
     if (!action.reason.trim()) throw new Error('回避或标记缺评必须说明原因')
     const target = round.assignments.find((a) => a.id === action.assignmentId)
     if (!target || target.status !== 'assigned') throw new Error('该分配不可回避或标记缺评')
+    if (action.type === 'self-recuse' && target.reviewerId !== context.actor.actorId) {
+      throw new Error('只能对本人分配的任务声明回避')
+    }
     return withRound(state, { ...round, assignments: round.assignments.map((a) => a.id === target.id
-      ? { ...a, status: action.type === 'recuse' ? 'recused' : 'missing', reason: action.reason.trim() } : a) })
+      ? { ...a, status: action.type === 'mark-missing' ? 'missing' : 'recused', reason: action.reason.trim() } : a) })
   }
   if (action.type === 'submit') {
     if (context.actor.role !== 'judge') throw new Error('只有被分配的评委能提交本人评分')
