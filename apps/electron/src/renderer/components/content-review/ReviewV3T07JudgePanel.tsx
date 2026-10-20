@@ -56,8 +56,9 @@ function T07JudgeTasks({ view, busy, onSubmit, onOpenDocument }: {
   const [draft, setDraft] = useState<Record<string, { raw: string; na: boolean; comment: string }>>({})
   const [publicFeedback, setPublicFeedback] = useState('')
   const [internalNotes, setInternalNotes] = useState('')
+  const [recuseReason, setRecuseReason] = useState('')
   useEffect(() => {
-    setDraft({}); setPublicFeedback(''); setInternalNotes('')
+    setDraft({}); setPublicFeedback(''); setInternalNotes(''); setRecuseReason('')
   }, [active?.assignmentId, view.round])
   const dimensionRows = view.rubric.dimensions
   const isEditable = active?.status === 'assigned' && !view.finalized
@@ -152,6 +153,13 @@ function T07JudgeTasks({ view, busy, onSubmit, onOpenDocument }: {
                   rows={2} className="w-full rounded-md border bg-background p-2" />
               </label>
               <Button type="button" disabled={busy || !canSubmit} onClick={() => void submit()}>提交本人独立评分</Button>
+              <div className="space-y-2 border-t pt-3">
+                <p className="text-xs text-muted-foreground">与项目存在利益关联、无法独立评审时，请先声明回避；回避不计为零分。</p>
+                <input aria-label="本人回避原因" value={recuseReason} disabled={busy} onChange={(e) => setRecuseReason(e.target.value)}
+                  placeholder="回避原因" className="h-9 w-full rounded-md border bg-background px-2" />
+                <Button type="button" size="sm" variant="outline" disabled={busy || !recuseReason.trim()}
+                  onClick={() => void onSubmit({ type: 'self-recuse', assignmentId: active.assignmentId, reason: recuseReason })}>声明本人回避</Button>
+              </div>
             </div>
           )}
         </>
