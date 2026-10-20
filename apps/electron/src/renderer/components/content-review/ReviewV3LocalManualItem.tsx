@@ -195,7 +195,7 @@ export function ReviewV3LocalManualItem({caseId}:{caseId:string}):React.ReactEle
         </div>
       </div>}
     </div>}
-    {notice&&<p role="status" className="text-xs">{notice}</p>
+    {notice&&<p role="status" className="text-xs">{notice}</p>}
     {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
     {aggregate?.caseV2.stage!=='draft'&&<p className="text-xs text-muted-foreground">当前不是可编辑草稿，不能新增事项，请走正式变更或重审流程。</p>}
   </section>
