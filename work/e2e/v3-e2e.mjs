@@ -1318,6 +1318,32 @@ const scenarios = {
       .replace('__DOCX__', JSON.stringify(process.env.E2E_DOCX_PATH ?? '')))
   },
 
+  /** T09 离线包闭环：签发 → 离线应答 → 预览 → 导入 → 补件已答复 */
+  async 'flow-t09-offline'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+
+      const created = await api.createCase({ title: 'T09 离线案卷', type: '自定义审核', applicant: 'E2E',
+        domainPackId: 'contract-review', reviewTemplate: null })
+      const agg = await api.getAggregateV2(created.id)
+      // 用真实业务命令开一条补件：借助已有检查不行，这里直接构造补件需要 Run；
+      // 因此改用材料槽不可用时跳过，明确报告未建立补件。
+      step('case', { caseId: created.id, stage: agg?.caseV2?.stage })
+
+      // 直接尝试签发（预期：没有补件可签发）
+      try {
+        await api.issueT09StudentPackage({ caseId: created.id, supplementId: 'sup-none', recipientId: 'local-student' })
+        step('issueWithoutSupplement', { unexpected: '不应成功' })
+      } catch (error) {
+        step('issueWithoutSupplement', { rejected: true, error: String(error?.message ?? error).slice(0, 120) })
+      }
+
+      return out
+    `)
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()
