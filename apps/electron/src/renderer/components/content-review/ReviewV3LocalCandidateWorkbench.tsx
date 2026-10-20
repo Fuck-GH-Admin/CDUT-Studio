@@ -19,6 +19,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   const [caseYear,setCaseYear]=React.useState(String(new Date().getFullYear()))
   const [localCaseId,setLocalCaseId]=React.useState('')
   const [savedCases,setSavedCases]=React.useState<Array<{id:string;title:string}>>([])
+  const [materialsEpoch,setMaterialsEpoch]=React.useState(0)
   const [caseBusy,setCaseBusy]=React.useState(false)
   const [caseNotice,setCaseNotice]=React.useState('')
   const [caseError,setCaseError]=React.useState('')
@@ -76,7 +77,13 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     setCaseBusy(true);setCaseError('');setCaseNotice('')
     try{
       const imported=await window.reviewAPI.importDocument({caseId:localCaseId,role:'application'})
-      setCaseNotice('已处理本地导入：'+JSON.stringify(imported).slice(0,350))
+      if(imported.canceled){setCaseNotice('已取消选择，没有导入原件')}
+      else{
+        setMaterialsEpoch(x=>x+1)
+        setCaseNotice('成功导入 '+imported.documents.length+' 份原件；失败 '+imported.failures.length+' 份')
+        if(imported.failures.length)
+          setCaseError(imported.failures.map(x=>x.fileName+': '+x.message).join('；').slice(0,500))
+      }
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
@@ -156,7 +163,7 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       {message&&<p role="status" className="text-xs">{message}</p>}
       {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
     </div>
-    <ReviewV3LocalManualItem caseId={localCaseId} />
+    <ReviewV3LocalManualItem key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
     <ReviewV3AuthorWizard key={key} initialDraft={loaded?.document??emptyB1AuthorDocument()}
       initialRevision={loaded?.revision??0}
       onSaveDraft={(document,expectedRevision)=>
