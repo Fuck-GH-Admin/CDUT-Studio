@@ -40,6 +40,8 @@ export type T04PublishedConstraint = {
   policyVersionId: string
   confirmedBy: string
   confirmedAt: string
+  /** Same logical policy limit across versions; T04 conflict resolution requires a named decision. */
+  claimKey?: string
   constraint: { kind: 'field-maximum'; fieldKey: string; maximum: string; unit?: string }
 }
 
@@ -129,7 +131,8 @@ export function compilePublishedTemplateReviewPlan(input: T04PublishedPlanInput)
     const key = identity(c.policyVersionId, c.ruleId)
     const rule = ruleByIdentity.get(key)
     if (typed.has(key) || c.templateId !== template.templateId || c.templateVersion !== template.version ||
-        !nonempty(c.confirmedBy) || !nonempty(c.confirmedAt) || !rule ||
+        !nonempty(c.confirmedBy) || !nonempty(c.confirmedAt) ||
+        (c.claimKey !== undefined && !nonempty(c.claimKey)) || !rule ||
         rule.execution !== 'deterministic' || rule.confirmation !== 'confirmed' ||
         c.constraint.kind !== 'field-maximum')
       return reject('Confirmed typed constraint must match a deterministic published RuleSpec: ' + key)
@@ -205,7 +208,8 @@ export function compilePublishedTemplateReviewPlan(input: T04PublishedPlanInput)
         binding.applicability = 'not-applicable'
       planBindings.push(binding)
       bindings.push({binding,rule,operation,policyVersionId:rule.policyVersionId})
-      checks.push({binding,rule,operation,items:[item]})
+      checks.push({binding,rule,operation,items:[item],
+        ...(constraint?.claimKey ? {policyClaimKey:constraint.claimKey} : {})})
     }
   }
   const bindingLedgerHash = digest(bindings.map(x=>({
