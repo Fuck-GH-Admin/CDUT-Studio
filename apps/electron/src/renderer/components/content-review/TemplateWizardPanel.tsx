@@ -10,6 +10,7 @@ import { useStore } from 'jotai'
 import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { T01_SCENARIOS, createT01Scenario, type T01ScenarioId } from './review-v3-t01-business-presets'
 import { ReviewV3T01TrialPanel } from './ReviewV3T01TrialPanel'
+import { ReviewV3T01ConditionEditor } from './ReviewV3T01ConditionEditor'
 
 type EditableFieldKind = 'text' | 'number' | 'date' | 'boolean' | 'enum'
 type TemplateLibraryFilter = 'all' | 'published' | 'reference' | 'drafts'
@@ -447,6 +448,11 @@ export function TemplateWizardPanel(): JSX.Element {
                     <input type="number" className="rounded border px-2 py-1 text-xs" placeholder="最小值（可选）" value={field.min ?? ''} onChange={(event) => updateTemplate((current) => ({ ...current, fields: current.fields.map((item, i) => i === index ? { ...item, min: event.target.value === '' ? undefined : Number(event.target.value) } : item) }))} />
                     <input type="number" className="rounded border px-2 py-1 text-xs" placeholder="最大值（可选）" value={field.max ?? ''} onChange={(event) => updateTemplate((current) => ({ ...current, fields: current.fields.map((item, i) => i === index ? { ...item, max: event.target.value === '' ? undefined : Number(event.target.value) } : item) }))} />
                   </div>}
+                  <div className="sm:col-span-5 rounded border border-border/60 p-2">
+                    <ReviewV3T01ConditionEditor label="条件必填" value={field.conditionRequired}
+                      fields={editing.fields.filter(candidate=>candidate.key!==field.key&&candidate.scope==='case')}
+                      onChange={condition=>updateTemplate(current=>({...current,fields:current.fields.map((item,i)=>i===index?{...item,required:condition?false:item.required,conditionRequired:condition}:item)}))}/>
+                  </div>
                 </div>
               ))}
             </div>
@@ -563,6 +569,11 @@ export function TemplateWizardPanel(): JSX.Element {
                     <label className="text-xs text-muted-foreground">最多份数<input type="number" min={1} className="mt-1 w-full rounded border bg-background px-2 py-1 text-xs text-foreground" value={slot.maxCount} onChange={(event) => updateTemplate((current) => ({ ...current, materialSlots: current.materialSlots.map((item, i) => i === index ? { ...item, maxCount: Math.max(1, Number(event.target.value) || 1) } : item) }))} /></label>
                     <label className="text-xs text-muted-foreground">要求提交时间<select className="mt-1 w-full rounded border bg-background px-2 py-1 text-xs text-foreground" value={slot.requiredAt ?? 'submission'} onChange={(event) => updateTemplate((current) => ({ ...current, materialSlots: current.materialSlots.map((item, i) => i === index ? { ...item, requiredAt: event.target.value as MaterialSlotSpec['requiredAt'] } : item) }))}><option value="submission">提交时</option><option value="decision">定稿前</option></select></label>
                     <label className="mt-4 flex items-center gap-1 text-xs"><input type="checkbox" checked={slot.allowReuseAcrossSubjects} onChange={(event) => updateTemplate((current) => ({ ...current, materialSlots: current.materialSlots.map((item, i) => i === index ? { ...item, allowReuseAcrossSubjects: event.target.checked } : item) }))} />允许事项共用</label>
+                  </div>
+                  <div className="md:col-span-5 rounded border border-border/60 p-2">
+                    <ReviewV3T01ConditionEditor label="条件要求材料" value={slot.requiredWhen}
+                      fields={editing.fields.filter(candidate=>candidate.scope==='case')}
+                      onChange={condition=>updateTemplate(current=>({...current,materialSlots:current.materialSlots.map((item,i)=>i===index?{...item,requiredWhen:condition}:item)}))}/>
                   </div>
                 </div>
               ))}
