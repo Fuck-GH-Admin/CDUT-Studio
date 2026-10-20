@@ -37,6 +37,16 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     templateId:string;templateVersion:number;checks:number;fingerprint:string
   }|null>(null)
   const [productError,setProductError]=React.useState('')
+  React.useEffect(()=>{
+    const choice=product?.read.route.status==='default-selected'
+      ?product.read.route.chosen:undefined
+    if(!choice)return
+    if(product.catalog.some(item=>item.templateId===choice.templateId&&
+      item.templateVersion===choice.templateVersion)){
+      setRoutedD4TemplateId(choice.templateId)
+      setD4Notice('倒计时结束，已建议 '+choice.templateId+'。请核对真实审核对象与条件，再固定 Plan。')
+    }
+  },[product])
   const readProduct=React.useCallback(async()=>{
     if(!localCaseId)throw new Error('请先创建或选择本机案卷')
     const data=await window.reviewAPI.readLocalNativeProductV3(localCaseId)
