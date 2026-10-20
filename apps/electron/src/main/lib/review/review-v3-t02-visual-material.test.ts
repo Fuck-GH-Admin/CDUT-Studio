@@ -57,6 +57,22 @@ describe('T02 physically grounded PPTX image coverage', () => {
     }
   })
 
+  test('accepts package-absolute PPTX media relationship without mistaking it for an external image', async () => {
+    const zip = await JSZip.loadAsync(await examplePptx())
+    zip.file('ppt/slides/_rels/slide2.xml.rels',
+      '<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" ' +
+      'Target="/ppt/media/pic2.png"/></Relationships>')
+    const original = join(root, '绝对媒体关系.pptx')
+    writeFileSync(original, await zip.generateAsync({ type: 'nodebuffer' }))
+    const result = await extractT02PptxImages(original, {
+      directory: root, relativeOriginalPath: 'source-docs/绝对媒体关系.pptx',
+    })
+    expect(result.warnings).toEqual([])
+    expect(result.slideCount).toBe(2)
+    expect(result.images.map(image => image.page)).toEqual([1, 2])
+    expect(result.images[0]?.imageAssetPath).toContain('t02-ppt-slide-1')
+  })
+
   test('real image-only deck exposes image source blocks rather than falsely claiming parsed text', async () => {
     const original = join(root, '图像简报.pptx')
     writeFileSync(original, await examplePptx())
