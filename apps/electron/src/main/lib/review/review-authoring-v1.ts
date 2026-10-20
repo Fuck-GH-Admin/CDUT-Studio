@@ -11,6 +11,8 @@ import type {
 import { previewDemo, projectSimpleDemoDraft, validateDemoState, type DemoState, type DemoPreview } from './semantic-module-demo'
 import { resolveEffectiveRules, hashEffectiveRuleSet } from './effective-rules'
 import { validateTemplate } from './template-store'
+import { validateD3WorkspaceLocks } from './review-d3-workspace-locks'
+import { validateD2ExecutionGate } from './review-d2-execution-gates'
 
 const ID = /^[a-z][a-z0-9-]{0,79}$/
 const sha = (value: unknown): string => createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex')
@@ -26,17 +28,17 @@ const sourceUsableInCandidate = (source: ReviewAuthoringSourceV1): boolean =>
   (source.kind === 'synthetic' || source.kind === 'user-request') &&
   source.applicability === 'request-scope'
 const STRUCTURE_KEYS = {
-  workspace: ['schemaVersion', 'workspaceId', 'revision', 'definitions', 'sources', 'sourceBindings', 'advanced'],
+  workspace: ['schemaVersion', 'workspaceId', 'revision', 'definitions', 'sources', 'sourceBindings', 'sharedModuleLocks', 'advanced'],
   definitions: ['modules', 'templates'],
   module: ['moduleId', 'version', 'name', 'purpose', 'scope', 'limits', 'source', 'tasks', 'parameters', 'references'],
-  template: ['templateId', 'version', 'name', 'purpose', 'limits', 'source', 'scenarios', 'modules', 'localTasks'],
+  template: ['templateId', 'version', 'name', 'purpose', 'limits', 'source', 'scenarios', 'genericScenarioAxes', 'modules', 'localTasks'],
   responsibility: ['id', 'title', 'requirement', 'completion', 'limits'],
   use: ['id', 'moduleId', 'version', 'scenario', 'objectKey', 'bindings'],
   parameter: ['key', 'description', 'defaultValue'],
   source: ['sourceId', 'kind', 'label', 'reference', 'verification', 'applicability', 'note'],
   inlineSource: ['kind', 'note'],
   documentReference: ['documentVersionId', 'locator', 'excerpt'],
-  binding: ['checkId', 'sourceIds', 'applicabilityNote'],
+  binding: ['checkId', 'sourceIds', 'applicabilityNote', 'gate', 'studentScope', 'genericScope', 'caseScopeJustification'],
   advanced: ['objectRoleKeys', 'claimKeys', 'evidenceRelations'],
   evidenceRelation: ['claimKey', 'requiredSourceIds'],
 } as const
@@ -76,12 +78,54 @@ export function validateReviewAuthoringV1(workspace: ReviewAuthoringWorkspaceV1)
     checkKnownFields(template.source, STRUCTURE_KEYS.inlineSource, template.templateId + '.source', issues)
     for (const task of template.localTasks ?? []) checkKnownFields(task, STRUCTURE_KEYS.responsibility, template.templateId + '/' + task.id, issues)
     for (const use of template.modules ?? []) checkKnownFields(use, STRUCTURE_KEYS.use, template.templateId + '/' + use.id, issues)
+    if (template.genericScenarioAxes) {
+      const axes = template.genericScenarioAxes
+      checkKnownFields(axes, ['primary', 'conditions'], template.templateId + '.genericScenarioAxes', issues)
+      const primary = axes.primary, conditions = axes.conditions
+      if (!Array.isArray(primary) || !Array.isArray(conditions) || !primary.length ||
+          primary.length > 13 || conditions.length > 13 ||
+          [...primary, ...conditions].some(x => typeof x !== 'string' || !ID.test(x)) ||
+          new Set([...primary, ...conditions]).size !== primary.length + conditions.length ||
+          new Set([...primary, ...conditions]).size !== (template.scenarios ?? []).length ||
+          [...primary, ...conditions].some(x => !(template.scenarios ?? []).includes(x))) {
+        issues.push(template.templateId + ': D2_GENERIC_AXES_INVALID')
+      }
+    }
   }
   for (const source of workspace.sources) {
     checkKnownFields(source, STRUCTURE_KEYS.source, source.sourceId, issues)
     checkKnownFields(source.reference, STRUCTURE_KEYS.documentReference, source.sourceId + '.reference', issues)
   }
-  for (const link of workspace.sourceBindings) checkKnownFields(link, STRUCTURE_KEYS.binding, link.checkId, issues)
+  for (const link of workspace.sourceBindings) {
+    checkKnownFields(link, STRUCTURE_KEYS.binding, link.checkId, issues)
+    if (link.gate) issues.push(...validateD2ExecutionGate(link.gate).map(msg => link.checkId + ': ' + msg))
+    if (link.caseScopeJustification !== undefined && (typeof link.caseScopeJustification !== 'string' || link.caseScopeJustification.trim().length < 12 || link.studentScope || link.genericScope)) {
+      issues.push(link.checkId + ': D2_STUDENT_CASE_SCOPE_INVALID')
+    }
+    if (link.genericScope) {
+      const scope = link.genericScope
+      checkKnownFields(scope, ['businessTypes', 'evidenceFacts'], link.checkId + '.genericScope', issues)
+      if (link.studentScope || !Array.isArray(scope.businessTypes) || !scope.businessTypes.length ||
+          scope.businessTypes.length > 32 || new Set(scope.businessTypes).size !== scope.businessTypes.length ||
+          scope.businessTypes.some(x => typeof x !== 'string' || !ID.test(x)) ||
+          !Array.isArray(scope.evidenceFacts) || !scope.evidenceFacts.length ||
+          scope.evidenceFacts.length > 32 || new Set(scope.evidenceFacts).size !== scope.evidenceFacts.length ||
+          scope.evidenceFacts.some(x => typeof x !== 'string' || !/^[a-zA-Z][a-zA-Z0-9:._-]{0,119}$/.test(x))) {
+        issues.push(link.checkId + ': D2_GENERIC_SCOPE_INVALID')
+      }
+    }
+    if (link.studentScope) {
+      const scope = link.studentScope
+      checkKnownFields(scope, ['fieldKeys', 'intents', 'enrollmentStatuses'], link.checkId + '.studentScope', issues)
+      for (const [name, values] of [['fieldKeys', scope.fieldKeys], ['intents', scope.intents], ['enrollmentStatuses', scope.enrollmentStatuses ?? []]] as const) {
+        if (!Array.isArray(values) || (name !== 'enrollmentStatuses' && !values.length) ||
+          values.length > 32 || new Set(values).size !== values.length ||
+          values.some(value => typeof value !== 'string' || !ID.test(value))) {
+          issues.push(link.checkId + ': D2_STUDENT_SCOPE_INVALID ' + name)
+        }
+      }
+    }
+  }
   if (workspace.advanced) {
     checkKnownFields(workspace.advanced, STRUCTURE_KEYS.advanced, '作者态高级约束', issues)
     for (const relation of workspace.advanced.evidenceRelations ?? []) {
@@ -89,6 +133,7 @@ export function validateReviewAuthoringV1(workspace: ReviewAuthoringWorkspaceV1)
     }
   }
   issues.push(...validateDemoState(toDemo(workspace)))
+  issues.push(...validateD3WorkspaceLocks(workspace))
   const sourceMap = new Map<string, ReviewAuthoringSourceV1>()
   for (const source of workspace.sources) {
     if (!ID.test(source.sourceId)) issues.push('来源 ID 非法：' + source.sourceId)
@@ -166,6 +211,11 @@ export function compileReviewAuthoringCandidateV1(
   if (workspace.advanced && Object.values(workspace.advanced).some((value) => Array.isArray(value) && value.length > 0)) {
     throw new Error('UNMAPPABLE_ADVANCED: 高级角色/Claim/Evidence 关系尚未映射至有效规则，不得静默投影')
   }
+  if (workspace.sourceBindings.some(binding => binding.gate)) {
+    throw new Error('D1_UNMAPPABLE_EXECUTION_GATE: 结构化条件必须通过 D2 固定案卷执行，不能丢失条件后降级成 D1 无条件候选')
+  }
+  const lockIssues = validateD3WorkspaceLocks(workspace, true)
+  if (lockIssues.length) throw new Error('D3_FROZEN_LOCK_INVALID: ' + lockIssues.join('；'))
   // 先递归审查全部引用树是否能无损落到旧模板，再按当前情景生成候选任务。
   const template = projectSimpleDemoDraft(toDemo(workspace), templateId, version)
   const preview = previewDemo(toDemo(workspace), templateId, version)

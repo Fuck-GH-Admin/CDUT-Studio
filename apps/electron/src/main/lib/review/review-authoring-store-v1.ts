@@ -108,6 +108,7 @@ export function diffReviewAuthoringRevisionsV1(before: ReviewAuthoringWorkspaceV
   changedTemplates: string[]
   changedSources: string[]
   changedBindings: string[]
+  changedSharedModuleLocks: string[]
 } {
   if (before.workspaceId !== after.workspaceId) throw new Error('不能比较不同作者态工作区')
   const changed = <T>(left: T[], right: T[], key: (item: T) => string): string[] => {
@@ -121,5 +122,7 @@ export function diffReviewAuthoringRevisionsV1(before: ReviewAuthoringWorkspaceV
     changedTemplates: changed(before.definitions.templates, after.definitions.templates, (template) => template.templateId + '@' + template.version),
     changedSources: changed(before.sources, after.sources, (source) => source.sourceId),
     changedBindings: changed(before.sourceBindings, after.sourceBindings, (link) => link.checkId),
+    changedSharedModuleLocks: changed(before.sharedModuleLocks ?? [], after.sharedModuleLocks ?? [],
+      (lock) => lock.moduleId + '@' + lock.version),
   }
 }
