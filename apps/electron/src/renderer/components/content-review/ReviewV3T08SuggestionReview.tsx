@@ -23,7 +23,10 @@ interface Props {
 export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion, stale, onClose }: Props): React.ReactElement {
   const actions = useReviewWorkspaceActions()
   const targets = React.useMemo(() => getT08FieldTargets(aggregate, template), [aggregate, template])
+  const [mode, setMode] = React.useState<'field' | 'supplement'>('field')
   const [targetId, setTargetId] = React.useState('')
+  const [requiredElements, setRequiredElements] = React.useState('')
+  const [supplementReason, setSupplementReason] = React.useState('')
   const [draft, setDraft] = React.useState('')
   const [confirmed, setConfirmed] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
@@ -32,18 +35,29 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
   const sources = opinion.sourceRefs.map((ref) => resolveT08Source(ref, aggregate))
   const located = sources.filter((ref) => ref.state === 'located').length
 
-  React.useEffect(() => { setConfirmed(false) }, [targetId, draft])
+  React.useEffect(() => { setConfirmed(false) }, [mode, targetId, draft, requiredElements, supplementReason])
 
   const apply = async (): Promise<void> => {
-    if (!target || !confirmed || stale || busy) return
+    if (!confirmed || stale || busy || (mode === 'field' && !target)) return
     setBusy(true); setNotice('')
     try {
-      const value = parseT08FieldDraft(target.field, draft)
       const fresh = await window.reviewAPI.getAggregateV2(aggregate.caseV2.id)
       if (!fresh || fresh.caseV2.revision !== aggregate.caseV2.revision)
         throw new Error('案卷在审阅期间已经修改；请刷新案卷后重新核对修改前后的值')
       if (await window.reviewAPI.getWorkspaceRunValidityV2({ caseId: aggregate.caseV2.id, runId: run.id }))
         throw new Error('关联的审核 Run 已过期，不允许以旧建议修改当前案卷')
+      if (mode === 'supplement') {
+        const elements = [...new Set(requiredElements.split(/[,，、\n]+/).map(item => item.trim()).filter(Boolean))]
+        if (!elements.length || !supplementReason.trim()) throw new Error('请明确补件要素和原因')
+        await actions.openSupplement({ findingKey: opinion.id, requiredElements: elements, reason: supplementReason.trim() })
+        setNotice('补件任务已经由 Main 业务事务记录；尚需申请人回复与审核员复核，不等于自动批准。')
+        setConfirmed(false)
+        setRequiredElements('')
+        setSupplementReason('')
+        return
+      }
+      if (!target) throw new Error('请先选择字段')
+      const value = parseT08FieldDraft(target.field, draft)
       const update = makeT08FieldUpdate(target, value)
       const response = await window.reviewAPI.updateFieldsV2({
         caseId: aggregate.caseV2.id,
@@ -76,7 +90,11 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
     <p className="text-muted-foreground">关联 Run：{run.id}；当前案卷 revision {aggregate.caseV2.revision}。准确定位来源 {located}/{sources.length}，无法核对的来源不得视作证据。</p>
     {sources.map((source, index) => <p key={index} className="text-muted-foreground">{source.label} · {source.state}</p>)}
     {stale && <p className="text-amber-700">本次 Run 已过期；刷新并重新核查后才能应用。</p>}
-    {!targets.length ? <p>当前没有可供人工修改的已发布模板字段；必须先配置真实模板，不接受 AI 自造字段。</p> : <>
+    <div className="flex flex-wrap gap-2">
+      <button type="button" className={'rounded border px-2 py-1 ' + (mode === 'field' ? 'bg-primary text-primary-foreground' : '')} onClick={() => setMode('field')}>审阅字段修改</button>
+      <button type="button" className={'rounded border px-2 py-1 ' + (mode === 'supplement' ? 'bg-primary text-primary-foreground' : '')} onClick={() => setMode('supplement')}>审阅补件建议</button>
+    </div>
+    {mode === 'field' && (!targets.length ? <p>当前没有可供人工修改的已发布模板字段；必须先配置真实模板，不接受 AI 自造字段。</p> : <>
       <label className="block space-y-1">
         <span>选择实际修改目标（不自动猜测）</span>
         <select className="w-full rounded border bg-background p-2" value={targetId} onChange={(event) => { setTargetId(event.target.value); setDraft(''); setNotice('') }}>
@@ -111,7 +129,24 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
           {busy ? '正在保存…' : '人工确认并保存至案卷'}
         </button>
       </div>}
-    </>}
+    </>)}
+    {mode === 'supplement' && <div className="space-y-2">
+      <label className="block space-y-1">需要补交的材料或要素（逗号或换行分隔）
+        <textarea className="w-full rounded border bg-background p-2" value={requiredElements}
+          onChange={event => setRequiredElements(event.target.value)} placeholder="例如：清晰扫描件、申请计划书" />
+      </label>
+      <label className="block space-y-1">人工核验后的补件原因
+        <textarea className="w-full rounded border bg-background p-2" value={supplementReason}
+          onChange={event => setSupplementReason(event.target.value)} placeholder="明确指出缺少的证据，不能只复制模型结论" />
+      </label>
+      <label className="flex items-start gap-2">
+        <input type="checkbox" className="mt-1" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />
+        <span>我已核对本次 Run 和材料，决定发起补件任务。该操作需要申请人回复，不等于最终审核决定。</span>
+      </label>
+      <button type="button" className="rounded bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50"
+        disabled={stale || busy || !confirmed || !requiredElements.trim() || !supplementReason.trim()}
+        onClick={() => void apply()}>{busy ? '正在保存…' : '确认并创建补件任务'}</button>
+    </div>}
     {notice && <p role="status">{notice}</p>}
   </section>
 }
