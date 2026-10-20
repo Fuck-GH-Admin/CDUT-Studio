@@ -43,6 +43,8 @@ T10 的 `onCaseOpened`（7 处）、「案卷办理」标题、折叠区、条�
 | 旅程 | 结果 | 证据 |
 |---|---|---|
 | A15 起点（T01 模板 → 无学年绑案） | **PASS** | `saveDraft` → `publish` → `createCase`（contract-review 领域、无学年）→ 学年为空、`templateBound=e2e-t01-lab-request` |
+| A15 业务阶段（提交→初审→终审） | **PASS（止于终审）** | `flow-a15` 真机：T01 模板（人数上限 20 字段 + 必需材料槽 + 初审 reviewer/终审 teacher）→ 无学年建案 → 按槽位登记真实 PDF → `submitCaseV2` 成功（stage=submitted，生成初审任务）→ 初审 `stage-pass` 由本地审核员通过（stage=reviewing，decision actor=reviewer）→ **终审被 `INVALID_TRANSITION` 拒绝**（需 teacher，本地无此身份，正确安全边界）→ 报告导出成功 |
+| A15 确定性规则计算 | **BLOCKED_OWNER** | 模板的 `deterministic` 判据需 T04 执行，但 T04 缺 B1-check→RuleSpec 合同；本轮 A15 只覆盖业务阶段链，不声称确定性检查已跑通 |
 | A15 完整（初审/终审/决定/报告） | NOT_RUN | 依赖 T04 规则执行入口与 T05 阶段决定在真实案卷上的联调 |
 | A09 补件闭环 | **PASS** | `flow-a09` 真机：建案(带字段模板) → 真实 PDF → 审核 `completed/12 checks` → 要求补件 → 导入真实 DOCX 新原件 → 答复 → 判定 satisfied → 阶段回到 `reviewing`、补件状态 `satisfied`、**旧 Run 仍 completed 且 runCount=1（未被改写）** |
 | A09 申诉复审 | **BLOCKED_BY_DESIGN** | `resolveAppealV2` 要求 `actor.role === 'teacher'`（"申诉更正必须由经过授权的复核教师完成"），本地入口经 `bindLocalReviewerCommand` 固定为 reviewer。本地无法完成改判是**正确的安全边界**，不是缺口；T05 UI 在缺端口时如实提示「填写内容只保存在当前表单，不会假称已提交」 |
