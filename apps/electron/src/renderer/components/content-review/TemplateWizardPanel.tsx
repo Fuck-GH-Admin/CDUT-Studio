@@ -8,6 +8,8 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { templatesRefreshAtom, reviewV2BusyAtom } from './V2CasePanel'
 import { useStore } from 'jotai'
 import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
+import { T01_SCENARIOS, createT01Scenario, type T01ScenarioId } from './review-v3-t01-business-presets'
+import { ReviewV3T01TrialPanel } from './ReviewV3T01TrialPanel'
 
 type EditableFieldKind = 'text' | 'number' | 'date' | 'boolean' | 'enum'
 type TemplateLibraryFilter = 'all' | 'published' | 'reference' | 'drafts'
@@ -134,6 +136,7 @@ export function TemplateWizardPanel(): JSX.Element {
   const [message, setMessage] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [libraryFilter, setLibraryFilter] = useState<TemplateLibraryFilter>('all')
+  const [scenarioChoice,setScenarioChoice]=useState<T01ScenarioId>('laboratory')
 
   const refreshTemplates = useCallback(async (): Promise<void> => {
     try {
@@ -152,6 +155,12 @@ export function TemplateWizardPanel(): JSX.Element {
 
   const startNew = (kind: 'blank' | 'comprehensive'): void => {
     setEditing(newTemplate(kind))
+    setMessage([])
+  }
+
+  const startScenario = (): void => {
+    const next=createT01Scenario(scenarioChoice,generatedId('t01-scenario'),new Date().toISOString())
+    setEditing(next)
     setMessage([])
   }
 
@@ -303,10 +312,17 @@ export function TemplateWizardPanel(): JSX.Element {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => startNew('blank')}>新建空白模板</Button>
+            <label className="flex items-center gap-1 text-xs">
+              <span>从模拟业务起草</span>
+              <select aria-label="选择模拟业务" className="rounded border bg-background px-2 py-1.5 text-xs" value={scenarioChoice} onChange={event=>setScenarioChoice(event.target.value as T01ScenarioId)}>
+                {T01_SCENARIOS.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+            <Button size="sm" variant="outline" onClick={startScenario}>创建可编辑示例草稿</Button>
           </div>
         </div>
         <div className="mt-3 rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2 text-xs leading-5 text-muted-foreground">
-          当前有 <span className="font-medium text-foreground">{libraryCounts.published} 套可载入</span>、
+          新增的七种模拟场景（含实验室无评分双级审核）只生成可编辑草稿，不自动认定学校制度，也不自行安装到原生 V3 Case。当前有 <span className="font-medium text-foreground">{libraryCounts.published} 套可载入</span>、
           <span className="font-medium text-foreground">{libraryCounts.reference + libraryCounts.drafts} 套待配置</span>。
           草稿不会直接进入审核，避免未确认的示例标准被当成本校正式规则。
         </div>
@@ -386,6 +402,10 @@ export function TemplateWizardPanel(): JSX.Element {
                 <option value="person">个人</option><option value="organization">组织</option><option value="project">项目</option><option value="document">文件</option><option value="transaction">交易</option><option value="custom">自定义</option>
               </select>
             </label>
+            <label className="text-xs md:col-span-2">案卷展示名模板
+              <input className="mt-1 w-full rounded-md border bg-background px-2 py-1.5 text-sm" value={editing.displayName.template}
+                onChange={event=>updateTemplate(current=>({...current,displayName:{template:event.target.value}}))} placeholder="{{organization}} · {{activityName}}" />
+            </label>
             <label className="text-xs md:col-span-2">模板用途说明
               <textarea className="mt-1 w-full rounded-md border bg-background px-2 py-1.5 text-sm" rows={2} value={editing.description ?? ''} onChange={(event) => updateTemplate((current) => ({ ...current, description: event.target.value }))} placeholder="说明适用对象、流程范围和需要负责人确认的规则边界" />
             </label>
@@ -419,6 +439,11 @@ export function TemplateWizardPanel(): JSX.Element {
                     <Button size="sm" variant="ghost" onClick={() => updateTemplate((current) => ({ ...current, fields: current.fields.filter((_, i) => i !== index) }))}>删除</Button>
                   </div>
                   {field.kind === 'enum' && <input className="sm:col-span-5 rounded border px-2 py-1 text-xs" placeholder="选项，以中文逗号分隔" value={(field.options ?? []).map((option) => option.label).join('，')} onChange={(event) => {
+                  {field.kind === 'number' && <div className="sm:col-span-5 flex flex-wrap gap-3 rounded border p-2 text-xs">
+                    <label>最小值 <input type="number" className="ml-1 w-24 rounded border bg-background px-2 py-1" value={field.min ?? ''} onChange={event=>updateTemplate(current=>({...current,fields:current.fields.map((item,i)=>i===index?{...item,min:event.target.value===''?undefined:Number(event.target.value)}:item)}))} /></label>
+                    <label>最大值 <input type="number" className="ml-1 w-24 rounded border bg-background px-2 py-1" value={field.max ?? ''} onChange={event=>updateTemplate(current=>({...current,fields:current.fields.map((item,i)=>i===index?{...item,max:event.target.value===''?undefined:Number(event.target.value)}:item)}))} /></label>
+                    <label>单位 <input className="ml-1 w-24 rounded border bg-background px-2 py-1" value={field.unit ?? ''} onChange={event=>updateTemplate(current=>({...current,fields:current.fields.map((item,i)=>i===index?{...item,unit:event.target.value||undefined}:item)}))} /></label>
+                  </div>}
                     const options = event.target.value.split(/[，,]/).map((label) => label.trim()).filter(Boolean).map((label) => ({ value: label, label }))
                     updateTemplate((current) => ({ ...current, fields: current.fields.map((item, i) => i === index ? { ...item, options } : item) }))
                   }} />}
@@ -614,6 +639,7 @@ export function TemplateWizardPanel(): JSX.Element {
             <Button size="sm" variant="outline" className="mt-2" onClick={() => updateTemplate((current) => ({ ...current, stages: [...current.stages, newStage(`审核节点 ${current.stages.length + 1}`, 'manual-review', 'reviewer')] }))}>添加流程节点</Button>
           </details>
 
+          <ReviewV3T01TrialPanel key={editing.templateId + ':' + editing.version} template={editing} />
           {message.length > 0 && <ul className="mt-3 list-disc rounded-lg bg-red-500/10 px-8 py-2 text-xs text-red-700 dark:text-red-300">{message.map((item, index) => <li key={index}>{item}</li>)}</ul>}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-muted-foreground">草稿可继续修改；发布后版本不可覆盖，后续修改会创建新版本。</p>
