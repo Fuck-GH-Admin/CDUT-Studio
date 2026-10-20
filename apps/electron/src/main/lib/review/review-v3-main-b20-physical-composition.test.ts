@@ -26,6 +26,8 @@ import {
   installCMainV3PhysicalB20Sources,
   CMainB20NumericEpoch,
 } from './review-v3-main-b20-physical-composition'
+import {CMainB20CurrentRegistry}
+  from './review-v3-main-b20-current-registry'
 import type {CMainB20ReadIdentity} from './review-v3-main-b20-trusted-candidate-read'
 
 const root=mkdtempSync(join(tmpdir(),'c-r10-real-physical-b20-'))
@@ -185,7 +187,7 @@ async function setup(){
     },
   }
   return {path,bytes,templateId,checkpoint,author,ctx,staging,vault,ledger,parser,
-    picker,entry,pinned,physicalKey,archiveExpectation,reads:()=>physicalReads,
+    picker,entry,pinned,selections,physicalKey,archiveExpectation,reads:()=>physicalReads,
     select:()=>picker.pickForBVault(archiveExpectation,physicalKey,
       checkpoint.physicalArchiveKeyDigest),
     expire:()=>{active=false},rotate:()=>{grantEpoch='main-epoch-5'},
@@ -280,6 +282,60 @@ describe('C R10 real C Main registered IPC × B R23 B1/B2/B19/B20 physical compo
       await expect(invoke({templateId:f.templateId}))
         .rejects.toThrow('CURRENT_NATIVE_REPICK_REQUIRED')
     }finally{dispose();f.picker.close()}
+  })
+  test('real Main-local current candidate registration+native repick is the single B20 runtime source',async()=>{
+    const f=await setup()
+    const current=(templateId:string)=>{
+      const grant=f.entry.currentCandidate('local-reviewer',templateId)?.grant
+      if(!grant)return undefined
+      const identity:CMainB20ReadIdentity={
+        principalId:'local-reviewer',
+        sessionId:'local-main-webcontents:91',
+        windowId:'main-webcontents:91',frameId:'777:3',
+        caseCandidateId:f.ctx.caseCandidateId,
+        ownerId:grant.ownerId,ownerGeneration:grant.generation,
+        authorityEpoch:grant.authorityEpoch,
+      }
+      return {identity,grant,numeric:{senderId:91,frameId:3}}
+    }
+    const host={
+      current,
+      mayRead:(id:CMainB20ReadIdentity,tid:string)=>
+        tid===f.templateId&&id.principalId==='local-reviewer',
+      currentNativeScope:()=>current(f.templateId)?.identity,
+      mainIssuedPhysicalKey:(_:CMainB20ReadIdentity,archiveId:string)=>
+        archiveId===f.checkpoint.archiveId?f.physicalKey:null,
+      nativePickZipPath:()=>f.path,
+    }
+    const registry=new CMainB20CurrentRegistry(host,f.entry.bSources)
+    expect(()=>registry.registerFromTrustedMain({
+      templateId:f.templateId,caseCandidateId:f.ctx.caseCandidateId,
+      expected:f.pinned,selections:[
+        {...f.selections[0]!,sourceId:'forged-source-not-in-author'},
+      ],
+    })).toThrow('B19_SELECTION_NOT_IN_FROZEN_AUTHOR')
+    registry.registerFromTrustedMain({
+      templateId:f.templateId,caseCandidateId:f.ctx.caseCandidateId,
+      expected:f.pinned,selections:f.selections,
+    })
+    expect(()=>registry.registerFromTrustedMain({
+      templateId:f.templateId,caseCandidateId:f.ctx.caseCandidateId,
+      expected:f.pinned,selections:f.selections,
+    })).toThrow('REGISTRATION_EXISTS_REVOKE_FIRST')
+    const uninstall=registry.install()
+    try{
+      await expect(repick({templateId:f.templateId,
+        archiveId:f.checkpoint.archiveId}))
+        .resolves.toMatchObject({status:'picked-for-candidate-only'})
+      const preview=await invoke({templateId:f.templateId}) as {
+        candidateProvenance:{bindings:{state:string}[]}
+      }
+      expect(preview.candidateProvenance.bindings.every(b=>b.state==='linked-candidate'))
+        .toBe(true)
+      registry.revoke(f.templateId)
+      await expect(invoke({templateId:f.templateId}))
+        .rejects.toThrow('MAIN_IDENTITY_NOT_INSTALLED')
+    }finally{uninstall();registry.close()}
   })
   test('monotonic local numeric epoch is independent of string C epoch and revocation closed',()=>{
     const epoch=new CMainB20NumericEpoch()
