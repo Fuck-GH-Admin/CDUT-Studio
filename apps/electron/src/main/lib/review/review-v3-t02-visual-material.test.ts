@@ -191,6 +191,7 @@ describe('T02 trusted B2 image OCR preview', () => {
     })
     expect(result.ocrText[0]).toMatchObject({
       text: '原件申请者 A', page: 1, confidence: 0.88,
+      bbox: [0.01, 0.01, 0.13, 0.09],
     })
     expect(result.ocrText[0]?.sourceBlockKey).toContain(image.documentVersionId)
     staging.revoke(ctx)
