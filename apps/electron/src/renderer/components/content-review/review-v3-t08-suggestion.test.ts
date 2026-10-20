@@ -16,10 +16,9 @@ const aggregate = {
 test('T08 only exposes actual template fields and preserves scope', () => {
   const targets = getT08FieldTargets(aggregate, template)
   expect(targets.map(item => item.label)).toEqual(['实验室申请 · 人数', '案卷 · 备注'])
-  const change = makeT08FieldUpdate(targets[0]!, { kind: 'number', value: 20 })
-  expect(change).toEqual({ subjectFieldValues: [{ subjectId: 'lab-use', values: { count: { kind: 'number', value: 20 } } }] })
+  expect(() => makeT08FieldUpdate(targets[0]!, { kind: 'number', value: 20 })).toThrow('Main 的模板类型')
   expect(makeT08FieldUpdate(targets[1]!, { kind: 'text', value: '人工更正' }))
-    .toEqual({ caseFieldValues: { remark: { kind: 'text', value: '人工更正' } } })
+    .toEqual({ caseFieldValues: { remark: '人工更正' } })
   expect(getT08FieldTargets(aggregate, { ...template, version: 2 })).toEqual([])
 })
 
