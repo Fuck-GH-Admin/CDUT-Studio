@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx'
 import { describe, expect, test } from 'bun:test'
 import { ReviewB2StagingService, type B2MainContext } from './review-intake-adapter-v3-b2'
 import { previewT02StagedInventory, previewT02StagedSource } from './review-v3-t02-staged-source-preview'
@@ -45,6 +46,21 @@ describe('T02 trusted staged material parsing', () => {
     expect(first.blocks[0]?.sourceBlockKey).not.toBe(second.blocks[0]?.sourceBlockKey)
     expect(first.blocks[0]?.text).toBe('第一次')
     expect(second.blocks[0]?.text).toBe('第二次')
+  })
+
+  test('a real XLSX workbook retains worksheet and cell precision in a staged preview', async () => {
+    const staging = new ReviewB2StagingService()
+    const workbook = XLSX.utils.book_new()
+    const sheet = XLSX.utils.aoa_to_sheet([['学号', '分值'], ['00031', '10']])
+    XLSX.utils.book_append_sheet(workbook, sheet, '综测清单')
+    const bytes = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+    const candidate = stage(staging, '登记.xlsx', bytes, 'native-xlsx-1')
+    const result = await previewT02StagedSource(ctx, staging, candidate.candidateId)
+    expect(result.parseStatus).toBe('parsed')
+    expect(result.sheets).toContain('综测清单')
+    expect(result.blocks.some((b) =>
+      b.text === '00031' && b.table?.sheet === '综测清单' && b.table.row === 2,
+    )).toBeTrue()
   })
 
   test('an image remains partial and awaiting inspection, not magically parsed as text', async () => {
