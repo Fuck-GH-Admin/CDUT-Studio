@@ -102,7 +102,7 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
       const reply=await props.onManualChoice(proposal)
       const confirmed=assertB3TechnicalChoiceAck(reply,proposal)
       if(scopeRef.current===startScope)
-        setNotice(confirmed?'Main 已确认技术模板选择；仍未创建正式案卷或学校审批':
+        setNotice(confirmed?'Main 已将所选模板写入当前本机案卷；现在可以继续配置材料与运行审核（不代表学校审批）':
           '选择请求已发送，但 Main 尚未返回已记录回执；请重新读取当前路由状态')
     }catch(reason){
       if(scopeRef.current===startScope)
@@ -168,7 +168,7 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
         </select>
       </label>
       <button type="button" className={action} disabled={!selected||busy}
-        onClick={()=>void manual()}>提交选择给 Main 再核验（不建案）</button>
+        onClick={()=>void manual()}>确认并绑定到当前本机案卷</button>
       <p className="text-xs text-muted-foreground">匹配 {options.length+held.length} / 共 {view.eligible.length+view.held.length} 套候选版本；其中可提交 {options.length} 套，待人工复核 {held.length} 套。</p>
       {options.length+held.length===0&&<p className="text-xs">未找到符合关键词的模板；清空检索可恢复全部候选。</p>}
       {held.length>0 && <details className="rounded border border-border p-3 text-sm">
@@ -185,7 +185,7 @@ export function ReviewV3RouteReviewPanel(props:B3RoutePanelProps):ReactNode {
     {error && <p role="alert" className="text-sm text-red-500">提交失败：{error}</p>}
     {notice && <p role="status" className="text-sm">{notice}</p>}
     <p className="text-xs text-muted-foreground">
-      所有选择均为 input-only / candidate-held 技术操作。材料角色、Subject 和政策权限不得从此界面推断。
+      已发布的本地模板可绑定当前原生案卷；模板选择不会自动通过审核，也不会赋予学校审批权限。
     </p>
   </section>
 }
