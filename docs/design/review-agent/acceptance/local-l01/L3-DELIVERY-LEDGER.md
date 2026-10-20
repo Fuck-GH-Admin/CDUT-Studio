@@ -1,3 +1,33 @@
+### A15 S2 真机四案例（`flow-a15-s2` + `flow-a15-s2-gate`）
+
+模板：`a15-s2-lab@1`（organization，6 字段，`applicantCount` 无数值上限表单限制，
+规则由负责人确认的 `field-number-limit{lte 20, unit 人}` 表达，材料槽 `lab-use-plan`）。
+
+| 案例 | Run | 人数检查 | 材料检查 |
+|---|---|---|---|
+| 18 人 | `run-tpl-mvh95ah3-4a507413` | **compliant**「全部值符合上限」 | compliant |
+| 21 人 | `run-tpl-mvh95al2-44ca0bf2` | **non-compliant**「超出上限」 | compliant |
+| 人数未知 | `run-tpl-mvh95aof-399abba0` | **awaiting-confirmation**「比较数值/单位未知」 | compliant |
+| 缺计划书 | `run-tpl-mvh95aqp-c5fcc637` | compliant | **awaiting-supplement**「缺少必交材料」 |
+
+四个 Run 各自冻结不同 `planFingerprint`（`045997fd…` / `7ff93a37…` / `77dd5c21…` / `4074ae49…`），
+说明指纹确实随目标快照变化，不是常量。
+
+**门禁真机验证（`flow-a15-s2-gate`）**：
+- 21 人案卷 `stage-pass` **被拒**：`存在未解释的非合规项：t04:[...]`；
+- 21 人案卷 `return-for-supplement` **允许**（拒绝/退回不是通过）；
+- 18 人案卷 `stage-pass` **通过**，能力投影同时开放
+  `stage-pass / final-reject / return-for-supplement / return-to-previous-stage`。
+
+**实现归属**：`review-v3-main-template-run.ts`（Main 安装与 Run 写入）+ IPC
+`TEMPLATE_RULE_RUN_V3`。计划编译复用 `review-v3-main-template-plan-bridge`，
+检查计算复用 T04 既有 `evaluateT04Plan`/`toT04CheckResult`，Run 写入复用
+`run-store-v2`。**未新建 PlanStore/RunStore/规则引擎**。
+
+**仍未闭环**：S2 的 UI 入口（目前经 IPC 触发，尚未在工作台放按钮）；`gte` 下限算子
+与 `policyVersionId` 身份仍待 T01/T04 Owner。
+
+---
 ## 架构收口 R01 第二轮：T01–T04 续作接收与 S2 规则桥接
 
 **依据**：`LOCAL-L-T01-T04-INTEGRATION-A15-R01`（`408d86984`）
@@ -166,7 +196,7 @@
 |---|---|---|
 | **S0** | **PASS**（历史） | `flow-t01-bind`：旧样例发布/绑案、无学年。**不是完整 A15** |
 | **S1** | **PASS** | `flow-a15-s1`：`objectType=organization`；6 字段（organizationName/responsiblePerson/applicantCount(max=20)/usageDate/usageTime/purpose）；材料槽 `lab-use-plan`；阶段 `initial-review:reviewer → final-review:teacher`；**无 academicYear 字段**；复用建 2 案均 `academicYear=""` |
-| **S2** | **BLOCKED_OWNER:T01/T04** | 缺 `TemplateVersion → CanonicalPlan/PlanBinding` 编译合同。`UPGRADE_CANONICAL_PLAN_V3` 需 `planWriter` + `C2MainPublishedPlanProvenance`（特权发布权威 + 固定产物根），均未安装；仓库内不存在 `TemplateVersion → CanonicalPlan` 函数。**不用假 CheckResult 代替** |
+| **S2** | **PASS（四案例真机）** | 见下节。已发布模板 + 负责人确认 `lte 20` → `compilePublishedTemplateReviewPlan` → 冻结 `planFingerprint` → T04 `evaluateT04Plan` → **真实 `ReviewRunV2`**（`run-tpl-*`）。18 人 `compliant`、21 人 `non-compliant`、人数未知 `awaiting-confirmation`、缺计划书 `awaiting-supplement`。Run 内经 `inputManifest` 冻结 `planFingerprint` / `effectiveRuleIds` / `documentVersions` |
 | **S3** | **PASS（S3-02 两段阶段）** | `flow-a15-s3`：无 Run 时 `stage-pass` 被 `T05_CURRENT_REAL_RUN_REQUIRED` 拒绝、补件可在无 Run 时创建（decisions=0）。`flow-a15-s3-run`（真实 Run）：A15 案卷填字段 18 人 → 按槽位导入真实 DOCX → Pi 审核 `completed`，**2 checks 全 compliant，`effectiveRuleIds` 两条规则各产出 1 项（覆盖完整）** → 初审 `stage-pass` 成功（stage=reviewing，`finality=stage`，`basedOnRunId=run-pi-mvh7e7rl-k76ff`）→ 生成 teacher 终审任务。`flow-a15-s3-final`：**reviewer 冒充终审被 `T05_ACTOR_NOT_ASSIGNED_TO_STAGE` 拒绝**；teacher（本地模拟，非学校身份）终审通过 → stage=`decided`、`finality=final`，两段决定均绑定同一真实 Run。**冷重启后 stage/decisions/Run 完整保留** |
 | **S3-01（补件两轮）** | **NOT_RUN** | 需要先有真实 Run 触发缺件，再用 `lab-12-unclear-reply.docx` / `lab-12-corrected-reply.docx` 两轮回复 |
 | **S4** | **NOT_RUN** | 依赖 S2/S3 |

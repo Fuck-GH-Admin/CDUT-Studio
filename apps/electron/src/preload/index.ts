@@ -4719,6 +4719,13 @@ const reviewAPI = {
     updatedAt: string
     view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
   }>,
+  /** 已发布模板规则运行：编译冻结计划 → T04 确定性检查 → 真实 ReviewRunV2 */
+  runTemplateRuleReview: (input: { caseId: string; phase?: 'submission' | 'decision' }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.TEMPLATE_RULE_RUN_V3, input) as Promise<{
+      runId: string; planFingerprint: string; status: 'completed' | 'partially-completed'
+      ruleIds: string[]
+      checks: Array<{ checkId: string; ruleId: string; status: string; reason: string }>
+    }>,
   /** T01 受控模型起草（渠道与凭据在 Main；返回模型原始文本与实际模型标识） */
   requestT01ModelDraft: (input: { system: string; user: string }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T01_MODEL_DRAFT, input) as Promise<{

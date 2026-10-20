@@ -495,6 +495,11 @@ export interface ReviewRunV2 {
     effectiveRuleSetHash?: string
     /** 每条有效规则依赖的事实字段；语义规则使用 * 表示依赖材料中的事实。 */
     effectiveRuleDependencies?: Array<{ ruleId: string; fieldKeys: string[] }>
+    /**
+     * 本次运行冻结的已发布模板计划指纹（ARCH-CLOSURE-R01 D1）。
+     * 旧运行没有该字段表示「未绑定计划」，不得据此推断计划已通过。
+     */
+    planFingerprint?: string
   }
   status: RunV2Status
   checkpoints: CheckpointRecord[]

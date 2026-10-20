@@ -602,6 +602,8 @@ export const REVIEW_IPC_CHANNELS = {
   T07_APPLY_ACTION: 'review-v3:t07-apply-action',
   /** T07 建立评分轮次（仅组织者、仅首次） */
   T07_INIT_STATE: 'review-v3:t07-init-state',
+  /** 已发布模板规则运行（编译冻结计划 → T04 检查 → 真实 ReviewRunV2） */
+  TEMPLATE_RULE_RUN_V3: 'review-v3:template-rule-run',
   /** T01 受控模型起草（渠道与凭据留在 Main，渲染层只给 prompt 文本） */
   T01_MODEL_DRAFT: 'review-v3:t01-model-draft',
   /** T06 物理来源选择（Main 弹真实 OS 选择器，返回不透明 entryId） */

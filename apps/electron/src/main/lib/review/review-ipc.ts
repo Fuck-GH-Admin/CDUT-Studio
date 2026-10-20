@@ -835,6 +835,19 @@ export function registerReviewIpc(): void {
   // ===== T05 可信阶段事务（Local-L04 R02，CR-T05-04）=====
   // ===== T06 物理入库（Local-L04 R02 桥接：真实选择器 + 幂等提交）=====
   // ===== T01 受控模型起草（Local-L04 R02 桥接：渠道与凭据不出 Main）=====
+  // ===== 已发布模板规则运行（ARCH-CLOSURE-R01：冻结计划 → 确定性检查 → 真实 Run）=====
+  ipcMain.handle(REVIEW_IPC_CHANNELS.TEMPLATE_RULE_RUN_V3, async (event, input: {
+    caseId: string; phase?: 'submission' | 'decision'
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId) throw new Error('参数 caseId 非法')
+    if (input.phase && input.phase !== 'submission' && input.phase !== 'decision') throw new Error('参数 phase 非法')
+    const { runTemplateRuleReview } = require('./review-v3-main-template-run') as typeof import('./review-v3-main-template-run')
+    return runTemplateRuleReview({
+      caseId: input.caseId,
+      ...(input.phase ? { phase: input.phase } : {}),
+    })
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T01_MODEL_DRAFT, async (event, input: { system?: string; user?: string }) => {
     assertC0ReviewMainSender(event)
     if (typeof input?.system !== 'string' || typeof input?.user !== 'string') throw new Error('参数非法')
