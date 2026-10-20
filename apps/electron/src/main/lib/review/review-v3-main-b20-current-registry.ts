@@ -104,7 +104,7 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
         if(this.closed)reject('REGISTRY_CLOSED')
         const current=this.assertCurrent(scope.caseCandidateId)
         if(!current||!same(current.identity,scope))
-          reject('PHYSICAL_MAIN_ARCHIVE_SCOPE_REVOKED')
+          return reject('PHYSICAL_MAIN_ARCHIVE_SCOPE_REVOKED')
         const numeric=this.host.current(current.expected.templateId)?.numeric
         if(!numeric)return reject('NUMERIC_MAIN_SCOPE_ABSENT')
         const bctx:B2MainContext={
@@ -161,7 +161,7 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
        actual.grant.generation!==actual.identity.ownerGeneration||
        actual.grant.authorityEpoch!==actual.identity.authorityEpoch||
        !this.host.mayRead(actual.identity,input.templateId))
-      reject('CURRENT_MAIN_GRANT_NOT_INSTALLED')
+      return reject('CURRENT_MAIN_GRANT_NOT_INSTALLED')
     const latest=readB1AuthorRevision(input.templateId)
     const frozen=readB1FrozenCandidate(input.templateId,input.expected.frozenFingerprint)
     if(!latest||!frozen||latest.revision!==input.expected.revision||
@@ -169,7 +169,7 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
        frozen.revision!==latest.revision||
        frozen.descriptor.canonicalPlan.fingerprint!==input.expected.frozenFingerprint||
        frozen.status!=='candidate-held')
-      reject('REAL_B1_FROZEN_CURRENT_SOURCE_REQUIRED')
+      return reject('REAL_B1_FROZEN_CURRENT_SOURCE_REQUIRED')
     verifyReviewB1Descriptor(latest.document,frozen.descriptor)
     const bctx:B2MainContext={
       senderId:actual.numeric.senderId,frameId:actual.numeric.frameId,
@@ -198,7 +198,7 @@ export class CMainB20CurrentRegistry implements CMainB20PhysicalSources {
     const fresh=this.host.current(input.templateId)
     if(!fresh||!same(fresh,actual)||
        !this.host.mayRead(actual.identity,input.templateId))
-      reject('MAIN_SCOPE_CHANGED_DURING_REGISTRATION')
+      return reject('MAIN_SCOPE_CHANGED_DURING_REGISTRATION')
     this.registered.set(input.templateId,{
       identity:structuredClone(actual.identity),
       grant:structuredClone(actual.grant),
