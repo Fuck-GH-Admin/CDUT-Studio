@@ -15,7 +15,8 @@ import {
   type ReviewCommandResult, type RunEvidenceIdentity,
 } from '@profer/shared'
 import {
-  fenceC2HostRunDurably, type C2MainAuthorizeRunFence,
+  fenceC2HostRunDurably, isC2RunDurablyFenced,
+  type C2MainAuthorizeRunFence,
 } from './review-v3-durable-host-fence'
 import {
   createC2MainTrustedRunPort,
@@ -66,7 +67,9 @@ export class C2MainTrustedExecutionAssembly {
       this.requireOpen()
       return authority.assertPublishedPlan(aggregate, run)
     }
-    this.registry = new C2MainPhysicalHostReceiptRegistry(inputs)
+    this.registry = new C2MainPhysicalHostReceiptRegistry(inputs, {
+      isRunFenced: isC2RunDurablyFenced,
+    })
     this.pi = new C2MainPiAgentSessionFactory({
       trustedOrigin: authority.trustedOrigin,
       assertPublishedPlan: published,

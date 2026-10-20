@@ -15,7 +15,12 @@ import {
 import type {
   C2MainHostWitness, C2MainOwnerWitness,
 } from './review-v3-main-trust-port'
-import {isC2RunDurablyFenced} from './review-v3-durable-host-fence'
+/** Durable fence check belongs to C's privileged execution assembly, not A's
+ * process-local technical registry test fixtures. The Case CAS guards still
+ * independently validate a persisted fence at every Run mutation. */
+export interface C2HostDurableFenceReader {
+  isRunFenced(run:RunEvidenceIdentity):boolean
+}
 
 export interface C2MainPhysicalHostSource {
   /** An independently instrumented A Host/SDK Main observer, NOT proposal JSON. */
@@ -85,7 +90,10 @@ export class C2MainPhysicalHostReceiptRegistry {
   private readonly invalidatedRuns = new Set<string>()
   private closed = false
 
-  constructor(private readonly observer: C2MainPhysicalHostSource) {
+  constructor(
+    private readonly observer: C2MainPhysicalHostSource,
+    private readonly durable?: C2HostDurableFenceReader,
+  ) {
     if (!observer || typeof observer.getObservedPhysicalReceipt !== 'function' ||
         typeof observer.getCurrentOwner !== 'function') {
       throw new C0ContractError('ACTOR_UNTRUSTED', 'Independent Main Host observer required')
@@ -100,7 +108,7 @@ export class C2MainPhysicalHostReceiptRegistry {
       return refuse('No independently observed physical Host result for this ID')
     }
     if (this.invalidatedRuns.has(runTombstoneKey(observed.run)) ||
-        isC2RunDurablyFenced(observed.run))
+        this.durable?.isRunFenced(observed.run))
       return refuse('Run invalidated: late or unknown physical Host receipt denied')
     live(this.observer, observed)
     const previous = this.receipts.get(receiptId)
@@ -121,7 +129,7 @@ export class C2MainPhysicalHostReceiptRegistry {
     const recorded = this.receipts.get(receiptId)
     if (!recorded) return undefined // No "recover from event" fallback.
     if (this.invalidatedRuns.has(runTombstoneKey(recorded.run))) return undefined
-    try { if (isC2RunDurablyFenced(recorded.run)) return undefined }
+    try { if (this.durable?.isRunFenced(recorded.run)) return undefined }
     catch { return undefined }
     const latest = this.observer.getObservedPhysicalReceipt(receiptId)
     if (!latest || !equal(latest, recorded)) return undefined
