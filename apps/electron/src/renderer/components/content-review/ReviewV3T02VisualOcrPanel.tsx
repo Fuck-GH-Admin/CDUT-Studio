@@ -36,7 +36,7 @@ export function ReviewV3T02VisualOcrPanel({
                 第 {item.page} 页 · 来源块 {item.sourceBlockKey}
                 {' · '}OCR 置信度 {item.confidence === null ? '未知' : (item.confidence * 100).toFixed(0) + '%'}
                 {item.bbox && (
-                  <span> · 原图区域 {item.bbox.map(value => (value * 100).toFixed(1) + '%').join(' / ')}</span>
+                  <span> · 原图区域（左/上/右/下）{item.bbox.map(value => (value * 100).toFixed(1) + '%').join(' / ')}</span>
                 )}
               </p>
               <p className="whitespace-pre-wrap break-words text-sm">{item.text}</p>
