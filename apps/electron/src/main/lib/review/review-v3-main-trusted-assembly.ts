@@ -10,7 +10,13 @@
  * Closing this assembly revokes EVERY exposed entrypoint, including callbacks
  * already captured by the ledger before an asynchronous transaction.
  */
-import { C0ContractError, type RunEvidenceIdentity } from '@profer/shared'
+import {
+  C0ContractError, type Actor, type CaseAggregateV2,
+  type ReviewCommandResult, type RunEvidenceIdentity,
+} from '@profer/shared'
+import {
+  fenceC2HostRunDurably, type C2MainAuthorizeRunFence,
+} from './review-v3-durable-host-fence'
 import {
   createC2MainTrustedRunPort,
   type C2MainTrustedInputs,
@@ -93,6 +99,23 @@ export class C2MainTrustedExecutionAssembly {
   invalidateRun(run: RunEvidenceIdentity): void {
     this.requireOpen()
     this.registry.invalidateRun(run)
+  }
+
+  /**
+   * C-only durable Run invalidation. The Case CAS+Receipt is committed FIRST.
+   * Never use an A technical proposal/SDK transport receipt as the authorizer.
+   * If CAS fails, the in-memory registry is not signed as durably revoked.
+   */
+  async invalidateRunDurably(run: RunEvidenceIdentity, command:{
+    requestId:string;actor:Actor;expectedRevision:number;
+    payload:{run:RunEvidenceIdentity;reason:string}
+  }, authorize:C2MainAuthorizeRunFence):Promise<ReviewCommandResult> {
+    this.requireOpen()
+    if(command.payload.run.caseId!==run.caseId || command.payload.run.runId!==run.runId)
+      throw new C0ContractError('RECOVERY_REQUIRED','fence command targets different Run')
+    const result=await fenceC2HostRunDurably(run.caseId,command,authorize)
+    if(result.ok) this.registry.invalidateRun(run)
+    return result
   }
 
   /** Inert SDK factory, after C run admission and physical original checks. */

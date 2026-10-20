@@ -373,6 +373,19 @@ export interface CaseAggregateV2 {
     }>
     terminalStatus?: import('./review-v3-execution').V3TechnicalTerminal
   }
+  /**
+   * C-owned irreversible Run-wide PHYSICAL Host admission fences.
+   * Stored in this same Case CAS transaction+Receipt, never in A SDK journal.
+   * Every historical runId remains prohibited across PID/attempt/generation.
+   */
+  v3HostRunFences?: Array<{
+    schemaVersion: 'review-v3-host-run-fence/1'
+    run: import('./review-v3-c0').RunEvidenceIdentity
+    requestId: string
+    operatorPrincipalId: string
+    reason: string
+    fencedAt: string
+  }>
   /** C2 Main-only, sealed immutable Run evidence (not ReviewRunV2 shadow). */
   v3ReviewRun?: import('./review-v3-run').ReviewRunRecordV3
   /** 事项最终认定（可选，兼容既有 state.v2.json）。 */

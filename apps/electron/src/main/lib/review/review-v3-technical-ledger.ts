@@ -14,6 +14,7 @@ import {
 } from '@profer/shared'
 import { CommandValidationError, payloadHash, submitCommand } from './case-store-v2'
 import { executionProposalId, validateV3ExecutionProposal } from './review-v3-execution-contract'
+import { assertC2HostRunNotFenced } from './review-v3-durable-host-fence'
 import type { V3TrustedConsumptionContext, V3VerifiedHostReceipt } from './review-v3-execution-contract'
 
 // V3TrustedConsumptionContext and receipt types are defined in C Main,
@@ -147,6 +148,7 @@ export function digestV3TechnicalEventChain(aggregate: CaseAggregateV2): string 
 
 function assertPreparedPlan(aggregate: CaseAggregateV2, run: RunEvidenceIdentity): CanonicalPlan {
   stageGuard(aggregate)
+  assertC2HostRunNotFenced(aggregate, run)
   const plan = aggregate.canonicalPlan
   if (!plan || aggregate.d2RuntimePlan)
     throw new CommandValidationError('DEPENDENCY_UNRESOLVED',
@@ -221,6 +223,7 @@ export function recordV3TechnicalProposal(
       throw new CommandValidationError('VALIDATION_FAILED',
         '技术事件 requestId 必须是完整事件 eventId，禁止绕过精确幂等回执')
     const journal = assertV3TechnicalJournalIntegrity(aggregate)
+    assertC2HostRunNotFenced(aggregate, journal.run)
     const plan = aggregate.canonicalPlan
     if (!plan) throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '绑定的 CanonicalPlan 不存在')
     if (!sameRun(event.run, journal.run) ||

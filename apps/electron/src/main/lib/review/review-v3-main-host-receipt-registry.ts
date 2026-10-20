@@ -15,6 +15,7 @@ import {
 import type {
   C2MainHostWitness, C2MainOwnerWitness,
 } from './review-v3-main-trust-port'
+import {isC2RunDurablyFenced} from './review-v3-durable-host-fence'
 
 export interface C2MainPhysicalHostSource {
   /** An independently instrumented A Host/SDK Main observer, NOT proposal JSON. */
@@ -98,7 +99,8 @@ export class C2MainPhysicalHostReceiptRegistry {
     if (!observed || observed.hostReceiptId !== receiptId) {
       return refuse('No independently observed physical Host result for this ID')
     }
-    if (this.invalidatedRuns.has(runTombstoneKey(observed.run)))
+    if (this.invalidatedRuns.has(runTombstoneKey(observed.run)) ||
+        isC2RunDurablyFenced(observed.run))
       return refuse('Run invalidated: late or unknown physical Host receipt denied')
     live(this.observer, observed)
     const previous = this.receipts.get(receiptId)
@@ -119,6 +121,8 @@ export class C2MainPhysicalHostReceiptRegistry {
     const recorded = this.receipts.get(receiptId)
     if (!recorded) return undefined // No "recover from event" fallback.
     if (this.invalidatedRuns.has(runTombstoneKey(recorded.run))) return undefined
+    try { if (isC2RunDurablyFenced(recorded.run)) return undefined }
+    catch { return undefined }
     const latest = this.observer.getObservedPhysicalReceipt(receiptId)
     if (!latest || !equal(latest, recorded)) return undefined
     try { live(this.observer, latest) }

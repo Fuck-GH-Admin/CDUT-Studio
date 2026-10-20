@@ -22,6 +22,7 @@ import {
   rawV3TechnicalEventChainDigest,
 } from './review-v3-technical-ledger'
 import { currentSourceValidityBlockers } from './source-current-validity-v3'
+import { assertC2HostRunNotFenced } from './review-v3-durable-host-fence'
 
 export type VerifyV3RunClosureAtCommit = (
   aggregate: CaseAggregateV2,
@@ -154,6 +155,7 @@ export function sealV3ReviewRun(
           '只有处于 reviewing 状态的案卷才可封存正式运行证据')
       }
       const journal = assertV3TechnicalJournalIntegrity(aggregate)
+      assertC2HostRunNotFenced(aggregate, journal.run)
       const plan = aggregate.canonicalPlan!
       if (!payload || payload.runId !== journal.run.runId ||
           !payload.terminalEventId || journal.events.length === 0) {
