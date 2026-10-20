@@ -82,7 +82,11 @@ export function ReviewV3T10WorkspaceOverview({
   let nextDetail = '先打开一个审核项目，材料、检查和办理会跟随同一案卷。'
   let goNext = onOpenReview
   if (caseV2 || legacy) {
-    if (caseV2?.templateId === 'pending-template-v3') {
+    if (caseV2?.stage === 'decided') {
+      nextLabel = '查看本案办理记录'
+      nextDetail = '查看决定、历史和报告；已完成决定不表示每项 AI 发现均被确认。'
+      goNext = onOpenBusiness
+    } else if (caseV2?.templateId === 'pending-template-v3') {
       nextLabel = '配置本案模板'
       nextDetail = '本案还没有绑定已核验的审核方案，不能将草稿当成正式规则。'
       goNext = onOpenTemplates
@@ -97,18 +101,14 @@ export function ReviewV3T10WorkspaceOverview({
     } else if (!run || runStale) {
       nextLabel = runStale && matchesSelected ? '按当前材料重新审核' : '进入审核工作台'
       nextDetail = matchesSelected ? '在当前案卷核对材料并启动审核。' : '当前办理的是历史案卷，请先在审核工作台选择对应案卷。'
-      goNext = onOpenReview
+      goNext = matchesSelected ? onOpenTasks : onOpenReview
     } else if (pending > 0) {
       nextLabel = `处理待确认事项（${pending}）`
       nextDetail = view?.pendingActions[0]?.title ?? '核对原件、处理问题或登记补件。'
       goNext = onOpenTasks
-    } else if (caseV2?.stage !== 'decided') {
+    } else {
       nextLabel = '查看业务办理与决定'
       nextDetail = '自动检查完成不等于正式决定；请由有权的本地人员处理。'
-      goNext = onOpenBusiness
-    } else {
-      nextLabel = '查看本案办理记录'
-      nextDetail = '查看决定、历史和报告；已完成决定不表示每项 AI 发现均被确认。'
       goNext = onOpenBusiness
     }
   }
