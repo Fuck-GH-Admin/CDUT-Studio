@@ -93,6 +93,8 @@ export class MockSchoolAdapter implements SchoolReadPort {
   /** 测试注入口：把某案卷的外部版本拨到指定值（制造冲突） */
   seedRevision(caseId: string, revision: number): void {
     this.revisions.set(caseId, revision)
+    const found = this.cases.get(caseId)
+    if (found) this.cases.set(caseId, { ...found, revision })
   }
 
   async push(payload: PushPayload): Promise<SyncReceipt> {
@@ -112,20 +114,22 @@ export class MockSchoolAdapter implements SchoolReadPort {
         externalSystem: 'mock-school',
         caseId: payload.caseId,
         expectedExternalRevision: payload.baseExternalRevision,
-        payloadHash: '',
+        payloadHash: currentHash,
         status: 'conflict',
         externalReceipt: { receivedAt: new Date().toISOString(), message: `外部版本已推进：当前 ${current}，推送方持有 ${payload.baseExternalRevision}` },
       }
       return receipt
     }
     this.revisions.set(payload.caseId, current + 1)
+    const caseView = this.cases.get(payload.caseId)
+    if (caseView) this.cases.set(payload.caseId, { ...caseView, revision: current + 1 })
     const receipt: SyncReceipt = {
       id: `rcp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       actionId: payload.actionId,
       externalSystem: 'mock-school',
       caseId: payload.caseId,
       expectedExternalRevision: current,
-      payloadHash: String(payload.body.hash ?? ''),
+      payloadHash: currentHash,
       status: 'accepted',
       externalReceipt: { receivedAt: new Date().toISOString(), externalId: `ext-${payload.caseId}-${current + 1}` },
     }
