@@ -13,13 +13,14 @@ export type T04Value = {
   sourceRefIds?: string[]
 }
 export type T04Item = { id: string; fields: Record<string, T04Value> }
-export type T04Status = 'compliant' | 'non-compliant' | 'not-applicable' | 'awaiting-confirmation'
+export type T04Status = 'compliant' | 'non-compliant' | 'not-applicable' | 'awaiting-confirmation' | 'awaiting-supplement'
 export type T04Operation =
   | { kind: 'group-score'; calculation: NonNullable<RuleSpec['calculation']>; precision?: number }
   | { kind: 'weighted-sum'; terms: Array<{ field: string; weight: string }>; precision?: number }
   | { kind: 'amount-cap'; amountField: string; currencyField: string; cap: string; currency: string; precision?: number }
   | { kind: 'date-range'; field: string; from?: string; until?: string }
   | { kind: 'value-limit'; field: string; maximum: string; unit?: string }
+  | { kind: 'material-min-count'; field: string; minimum: number }
   | { kind: 'value-equals'; field: string; expected: string; unit?: string }
   | { kind: 'mutual-exclusion'; groupField: string; selectionField?: string }
   | { kind: 'level-mapping'; field: string; scoreField: string; levels: Record<string, string> }
@@ -405,6 +406,26 @@ function valueLimit(rule:RuleSpec,op:Extract<T04Operation,{kind:'value-limit'}>,
   return complete(failed.length?'non-compliant':'compliant',null,failed.length?'超出上限: '+failed.join(','):'全部值符合上限',lines,items,rule)
 }
 
+/** Counts originate from Main-verified active DocumentVersions, not freeform text. */
+function materialMinCount(rule:RuleSpec,op:Extract<T04Operation,{kind:'material-min-count'}>,items:T04Item[]):T04Outcome {
+  if(!Number.isSafeInteger(op.minimum)||op.minimum<0) return pending('材料数量规则非法',items,rule)
+  const missing:string[]=[],insufficient:string[]=[],lines:string[]=[]
+  for(const item of items) {
+    const value=field(item,op.field)
+    if(!known(value) || typeof value.value!=='number' ||
+       !Number.isSafeInteger(value.value) || value.value<0) {
+      missing.push(item.id+':'+op.field)
+      continue
+    }
+    lines.push(item.id+': '+value.value+' / 至少 '+op.minimum+' 份有效材料')
+    if(value.value<op.minimum)insufficient.push(item.id)
+  }
+  if(missing.length)return pending('材料登记状态尚未确认，不能假定零份或齐全',items,rule,missing)
+  return complete(insufficient.length?'awaiting-supplement':'compliant',null,
+    insufficient.length?'缺少必交材料: '+insufficient.join(','):'已登记有效材料达到最低数量',
+    lines,items,rule)
+}
+
 function equalsValue(rule:RuleSpec,op:Extract<T04Operation,{kind:'value-equals'}>,items:T04Item[]):T04Outcome {
   let expected:bigint
   try {expected=decimalT04(op.expected)}catch{return pending('固定分值配置不合法',items,rule)}
@@ -454,6 +475,7 @@ export function evaluateT04Rule(rule:RuleSpec,operation:T04Operation,items:T04It
     case 'amount-cap':return amount(rule,operation,split.accepted)
     case 'date-range':return dateRange(rule,operation,split.accepted)
     case 'value-limit':return valueLimit(rule,operation,split.accepted)
+    case 'material-min-count':return materialMinCount(rule,operation,split.accepted)
     case 'value-equals':return equalsValue(rule,operation,split.accepted)
     case 'mutual-exclusion':return exclusive(rule,operation,split.accepted)
     case 'level-mapping':return mapping(rule,operation,split.accepted)
