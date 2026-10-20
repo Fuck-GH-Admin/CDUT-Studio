@@ -36,6 +36,7 @@ export interface C11MainLocalProductRead {
 export interface C11MainLocalTechnicalChoiceAck {
   candidateOnly:true;technicalChoiceRecorded:true
   caseCandidateId:string;templateId:string;templateVersion:string
+  requiresPlanSetup?:true
 }
 interface Session {
   signature:string
@@ -155,7 +156,7 @@ function catalog():B3ManualCatalogEntry[] {
       templateId:entry.templateId,
       templateVersion:String(entry.templateVersion),
       name:loadD4UnifiedWorkspace(entry).definitions.templates[0]!.name,
-      availability:'candidate-held' as const,
+      availability:'authorized-for-technical-selection' as const,
     }))
   }
   const existing=new Set(published.map(x=>x.templateId+'@'+x.templateVersion))
@@ -260,6 +261,14 @@ export function installC11LocalNativeProductIntake():void {
       const version=Number(input.templateVersion)
       if(!Number.isSafeInteger(version)||version<1)
         throw new Error('C11_NATIVE_TEMPLATE_VERSION_INVALID')
+      // D4 author candidates route to visible scenario setup. A temporary
+      // route choice is not a published template or fixed Case Plan.
+      if(loadD4UnifiedCatalog().templates.some(item=>
+        item.templateId===input.templateId&&item.templateVersion===version)){
+        return {candidateOnly:true,technicalChoiceRecorded:true,requiresPlanSetup:true,
+          caseCandidateId:input.caseId,templateId:input.templateId,
+          templateVersion:input.templateVersion}
+      }
       await updateNativeWorkspaceSettingsV3(input.caseId,{
         caseId:input.caseId,
         reviewTemplate:{templateId:input.templateId,version},
