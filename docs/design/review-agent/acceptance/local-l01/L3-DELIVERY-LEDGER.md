@@ -26,7 +26,7 @@
 | T01 | `ac2947fc6` | `ecc00e66b` | **WIRED** | `TemplateWizardPanel`（条件编辑、试跑、导入导出） |
 | T02 | `36687a952` | `1babad8e7` | **BLOCKED_BRIDGE** | `ReviewV3T02MaterialCoveragePanel` 无生产引用；缺 Main 派生 `B2MainContext` 的只读 IPC（`previewT02StagedSource/Inventory` 需要 staging 服务单例 + 按 sender 派生 ctx） |
 | T03 | `28528b02b` | `fae977a17` + 接线 `4bf3d4404` | **WIRED** | `V2CasePanel` → `ReviewV3T03FactWorkbench`（与观察项面板同案卷上下文） |
-| T04 | `54678e8ee` | `5df23c6da` | **BLOCKED_BRIDGE** | `evaluateT04Plan` 仅文件内自用；缺「冻结 Plan binding + 已确认事实/政策选择」的 Main 调用入口 |
+| T04 | `54678e8ee` | `5df23c6da` | **BLOCKED_OWNER** | `evaluateT04Plan` 需要 `CanonicalPlan` + 每 binding 的 `RuleSpec`。但 A15 模板绑定路径（T01/T10）**不产生 CanonicalPlan**；B1 候选路径虽有 CanonicalPlan，其 `modules[].checks[]` 只有 `requirement` 而无 `RuleSpec`（无 execution/policyVersionId/targetScope）。缺的是 B1-check→RuleSpec 合同，属 Owner 决策，L 线不自行发明业务语义 |
 | T05 | `41c3f2fa9` | B2 合入 | **WIRED** | `V2CasePanel` → `ReviewV3T05HumanWorkflow` + `RunDecision`（替换旧 `BusinessFlowSection`） |
 | T06 | `9ac93052f` | B2 合入 | **WIRED** | `BatchPanel` → `ReviewV3T06BatchIntakePreview` |
 | T07 | `37c6d3212` | B2 合入 + 桥接 `e4e4d50f3` | **JOURNEY_VERIFIED** | `BatchPanel` 区 → `ReviewV3T07Workbench` → `ReviewV3T07JudgePanel`；桥接新增 `review-v3-t07-state-store`（原子写 + revision 乐观锁）、`review-v3-t07-main-service`（Main 派生 actor / 投影 / 动作）、IPC `T07_GET_VIEW`/`T07_APPLY_ACTION`/`T07_INIT_STATE` |
@@ -46,7 +46,8 @@ T10 的 `onCaseOpened`（7 处）、「案卷办理」标题、折叠区、条�
 | A15 完整（初审/终审/决定/报告） | NOT_RUN | 依赖 T04 规则执行入口与 T05 阶段决定在真实案卷上的联调 |
 | A09 补件/复审 | NOT_RUN | T05 已接线，但需真实材料往返与申诉复核联测 |
 | A12+A14 批次/评委 | **PASS（评委链路）** | `flow-t07-judging` 真机：2 案 → 批次 → 轮次 rev1 → 4 次分配 rev5 → 双评委各 2 项评分 rev9 → 组织者排名（各 2 有效评委、total 5）→ 定稿 rev10 |
-| 冷重启恢复 | NOT_RUN | 待 T 线状态持久化后复验 |
+| 冷重启恢复（T07 状态） | **PASS** | `phase-t07-prepare`（新进程 A）建批次+轮次+4 分配+2 票 → `phase-t07-verify`（新进程 B）读回 revision 7、assignments 4、votes 2；缺评时 `rank=null`，门控未因重启失效 |
+| 冷重启恢复（Case/Plan/D4） | **PASS** | 早前 `phase-prepare`/`phase-verify`：案卷、2 份材料、60 项 Plan、4 条回执链完整恢复 |
 | 原基线不回归 | **PASS** | `bun test --isolate` 4747 pass / 0 fail / 5 skip；D4 50 套、学年解耦、看门狗用例均在 |
 
 ## 接收流程（每次）

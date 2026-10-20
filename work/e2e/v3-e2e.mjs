@@ -1109,6 +1109,64 @@ const scenarios = {
     `)
   },
 
+  /** T07 阶段 A：建批次与评分轮次，记录 batchId 供重启后核对 */
+  async 'phase-t07-prepare'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const caseIds = []
+      for (const name of ['T07 重启案 A', 'T07 重启案 B']) {
+        const created = await api.createCase({ title: name, type: '自定义审核', applicant: 'E2E',
+          domainPackId: 'contract-review', reviewTemplate: null })
+        caseIds.push(created.id)
+      }
+      const batchId = 'batch-t07-restart-' + Date.now()
+      await api.createBatchV2({ id: batchId, name: 'T07 重启批次', templateId: 'e2e', templateVersion: 1,
+        caseIds, createdAt: new Date().toISOString() })
+      const rubric = { id: 'r', name: '评分表', version: 1, strategy: 'weighted-mean',
+        dimensions: [{ id: 'quality', name: '质量', weight: 1, min: 0, max: 5 },
+                     { id: 'impact', name: '影响', weight: 1, min: 0, max: 5 }],
+        minEffectiveJudges: 2, conversion: { mode: 'linear', targetMax: 100 } }
+      let revision = (await api.initT07State({ batchId, claim: { role: 'organizer' },
+        state: { batchId, rubricVersion: 1, rubric,
+          cases: caseIds.map((id, i) => ({ caseId: id, blindLabel: '案件 ' + String.fromCharCode(65 + i) })),
+          rounds: [{ number: 1, assignments: [], votes: [], divergenceReasons: {}, tieOrders: {} }] } })).revision
+      for (const [i, caseId] of caseIds.entries()) {
+        for (const judge of ['local-judge-1', 'local-judge-2']) {
+          revision = (await api.applyT07Action({ batchId, claim: { role: 'organizer' }, expectedRevision: revision,
+            action: { type: 'assign', caseId, reviewerId: judge, assignmentId: judge + '-' + i } })).revision
+        }
+      }
+      // 一名评委先评分，另一名留缺评，用来验证重启后门控仍生效
+      const view = await api.getT07View({ batchId, claim: { role: 'judge', reviewerId: 'local-judge-1' } })
+      for (const task of view.view?.tasks ?? []) {
+        revision = (await api.applyT07Action({ batchId, claim: { role: 'judge', reviewerId: 'local-judge-1' },
+          expectedRevision: revision, action: { type: 'submit', assignmentId: task.assignmentId,
+            publicFeedback: '完成', scores: [{ dimensionId: 'quality', score: 4, na: false },
+              { dimensionId: 'impact', score: 5, na: false }] } })).revision
+      }
+      return { batchId, caseIds, revision }
+    `)
+  },
+
+  /** T07 阶段 B：冷重启后核对轮次、分配、票与门控 */
+  async 'phase-t07-verify'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const batchId = BATCH_ID
+      const org = await api.getT07View({ batchId, claim: { role: 'organizer' } })
+      const view = org.view
+      const round = view?.state?.rounds?.[view.state.rounds.length - 1]
+      return {
+        batchId,
+        revision: org.revision,
+        round: round?.number ?? null,
+        assignments: round?.assignments?.length ?? 0,
+        votes: round?.votes?.length ?? 0,
+        ranking: (view?.ranking ?? []).map(r => ({ rank: r.rank, total: r.total, judges: r.effectiveJudges })),
+      }
+    `.replace('BATCH_ID', JSON.stringify(process.env.E2E_BATCH_ID ?? '')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()
