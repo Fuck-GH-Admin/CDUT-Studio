@@ -2127,6 +2127,153 @@ const scenarios = {
       .replace('__C18__', JSON.stringify(process.env.E2E_C18 ?? '')))
   },
 
+  /**
+   * A15 S3-01 补件两轮（用确定性规则 Run，秒级）：
+   * 缺计划书 → 待补件 → 第一次补不清楚的版本判定 insufficient
+   * → 第二次补更正版（新 DocumentVersion）判定 satisfied → 重新检查产生新 Run
+   * → 旧 Run 与旧 DocumentVersion 均保留。
+   */
+  async 'flow-a15-s3-01'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+      const templateId = 'a15-s2-lab'
+
+      // 自举：确保 S2 模板已发布（避免依赖上一场景残留配置）
+      let tpl = null
+      try { tpl = await api.getTemplateV2(templateId, 1) } catch {}
+      if (!tpl || tpl.status !== 'published') {
+        const now = new Date().toISOString()
+        await api.saveTemplateDraftV2({
+          templateId, version: 1, schemaVersion: 2, name: '实验室使用申请（S2）',
+          displayName: { template: '{{organizationName}} 实验室使用申请' },
+          objectType: 'organization', status: 'draft', createdAt: now,
+          fields: [
+            { key: 'organizationName', label: '组织名称', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'responsiblePerson', label: '负责人', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'applicantCount', label: '使用人数', kind: 'number', required: true, visibility: 'public', scope: 'case' },
+            { key: 'usageDate', label: '使用日期', kind: 'date', required: true, visibility: 'public', scope: 'case' },
+            { key: 'usageTime', label: '使用时段', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+            { key: 'purpose', label: '用途', kind: 'text', required: true, visibility: 'public', scope: 'case' },
+          ],
+          sections: [{ id: 'lab', name: '实验室使用', order: 0, required: true, criteria: [{
+            id: 'headcount', title: '人数不超上限', requirement: '使用人数不得超过 20 人',
+            execution: 'deterministic', targetScope: 'case',
+            deterministicConstraint: { schemaVersion: 1, kind: 'field-number-limit', fieldKey: 'applicantCount',
+              fieldScope: 'case', operator: 'lte', threshold: 20, unit: '人',
+              ownerStatement: { actorId: 'local-organizer', confirmedAt: now, statement: '负责人确认：使用人数不超过 20' } },
+          }] }],
+          materialSlots: [{ id: 'lab-use-plan', name: '实验室使用计划书', minCount: 1, requiredAt: 'submission' }],
+          policyVersionIds: [], policyRefs: [],
+          stages: [
+            { id: 'initial-review', name: '初审', kind: 'manual-review', executorRole: 'reviewer', nextStageId: 'final-review' },
+            { id: 'final-review', name: '终审', kind: 'manual-review', executorRole: 'teacher' },
+          ],
+          outputs: [{ id: 'feedback', kind: 'item-feedback', audience: 'reviewer' }],
+        })
+        await api.publishTemplateV2(templateId, 1)
+      }
+
+      const created = await api.createCase({ title: 'A15 S3-01 补件两轮', type: '自定义审核', applicant: 'E2E',
+        domainPackId: 'contract-review', reviewTemplate: { templateId, version: 1 } })
+      const caseId = created.id
+      out.caseId = caseId
+
+      const agg0 = await api.getAggregateV2(caseId)
+      await api.updateFieldsV2({ caseId, command: {
+        requestId: 's301-fields', expectedRevision: agg0.caseV2.revision,
+        target: { kind: 'case', id: caseId },
+        actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' }, type: 'UpdateFields',
+        payload: { caseFieldValues: { organizationName: '地球物理学院', responsiblePerson: '李老师',
+          applicantCount: 12, usageDate: '2026-11-08', usageTime: '09:00-11:00', purpose: '开放实验' } },
+      }})
+
+      // 缺计划书 → 第一轮 Run 应给出待补件
+      const run1 = await api.runTemplateRuleReview({ caseId })
+      const pendingCheck = (run1.checks ?? []).find(c => c.status === 'awaiting-supplement')
+      step('run1', { runId: run1.runId, status: run1.status,
+        checks: (run1.checks ?? []).map(c => ({ rule: c.ruleId, status: c.status })) })
+      if (!pendingCheck) return { ...out, error: '首轮没有产生待补件检查' }
+
+      // 打开补件
+      const agg1 = await api.getAggregateV2(caseId)
+      let supplementId = null
+      try {
+        const r = await api.openWorkspaceSupplementV2({ caseId, command: {
+          requestId: 's301-open', expectedRevision: agg1.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' }, type: 'OpenWorkspaceSupplement',
+          payload: { findingKey: pendingCheck.checkId, runId: run1.runId,
+            inputHash: run1.inputHash,
+            requiredElements: ['实验室使用计划书'], reason: '缺少必交材料' },
+        }})
+        supplementId = r?.aggregate?.supplements?.at(-1)?.id ?? null
+        step('open', { supplementId, ok: Boolean(supplementId) })
+      } catch (e) { step('open', { ok: false, error: String(e?.message ?? e).slice(0, 160) }) }
+      if (!supplementId) return out
+
+      // 第一次：不清楚的版本 → insufficient
+      try {
+        await api.registerMaterialPathV2({ caseId, sourcePath: __UNCLEAR__, role: 'evidence', materialSlotId: 'lab-use-plan' })
+        const a = await api.getAggregateV2(caseId)
+        await api.respondSupplementV2({ caseId, command: {
+          requestId: 's301-resp1', expectedRevision: a.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' }, type: 'RespondSupplement',
+          payload: { supplementId, note: '先补一版', documentVersionIds: (a.caseV2.documents ?? []).filter(d => d.active !== false).map(d => d.versionId) },
+        }})
+        const b = await api.getAggregateV2(caseId)
+        await api.resolveSupplementV2({ caseId, command: {
+          requestId: 's301-res1', expectedRevision: b.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' }, type: 'ResolveSupplement',
+          payload: { supplementId, outcome: 'insufficient', reason: '计划书内容仍不完整' },
+        }})
+        const c = await api.getAggregateV2(caseId)
+        step('round1', { supplement: (c.supplements ?? []).find(x => x.id === supplementId)?.status,
+          stage: c.caseV2.stage, docs: (c.caseV2.documents ?? []).filter(d => d.active !== false).length })
+      } catch (e) { step('round1', { ok: false, error: String(e?.message ?? e).slice(0, 160) }) }
+
+      // 第二次：更正版 → satisfied
+      try {
+        await api.registerMaterialPathV2({ caseId, sourcePath: __CORRECTED__, role: 'evidence', materialSlotId: 'lab-use-plan' })
+        const d = await api.getAggregateV2(caseId)
+        await api.respondSupplementV2({ caseId, command: {
+          requestId: 's301-resp2', expectedRevision: d.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' }, type: 'RespondSupplement',
+          payload: { supplementId, note: '补交更正版', documentVersionIds: (d.caseV2.documents ?? []).filter(x => x.active !== false).map(x => x.versionId) },
+        }})
+        const e2 = await api.getAggregateV2(caseId)
+        await api.resolveSupplementV2({ caseId, command: {
+          requestId: 's301-res2', expectedRevision: e2.caseV2.revision,
+          target: { kind: 'case', id: caseId },
+          actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' }, type: 'ResolveSupplement',
+          payload: { supplementId, outcome: 'satisfied', reason: '更正版计划书已满足' },
+        }})
+        const f = await api.getAggregateV2(caseId)
+        step('round2', { supplement: (f.supplements ?? []).find(x => x.id === supplementId)?.status,
+          stage: f.caseV2.stage, docs: (f.caseV2.documents ?? []).filter(x => x.active !== false).length,
+          versions: (f.caseV2.documents ?? []).filter(x => x.active !== false).map(x => x.versionId) })
+      } catch (e) { step('round2', { ok: false, error: String(e?.message ?? e).slice(0, 160) }) }
+
+      // 重新检查：新 Run，旧 Run 保留
+      try {
+        const run2 = await api.runTemplateRuleReview({ caseId })
+        const runs = await api.listRunsV2(caseId)
+        step('run2', { runId: run2.runId, status: run2.status,
+          checks: (run2.checks ?? []).map(c => ({ rule: c.ruleId, status: c.status })),
+          totalRuns: runs.length,
+          oldRunPreserved: runs.some(r => r.id === run1.runId),
+          oldRunStatus: runs.find(r => r.id === run1.runId)?.status ?? null })
+      } catch (e) { step('run2', { ok: false, error: String(e?.message ?? e).slice(0, 160) }) }
+
+      return out
+    `.replace('__UNCLEAR__', JSON.stringify(process.env.E2E_A15_UNCLEAR ?? ''))
+      .replace('__CORRECTED__', JSON.stringify(process.env.E2E_A15_CORRECTED ?? '')))
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

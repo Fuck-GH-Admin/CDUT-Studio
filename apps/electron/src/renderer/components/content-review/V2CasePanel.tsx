@@ -16,6 +16,7 @@ import { ReviewAssignmentCard } from './ReviewAssignmentCard'
 import { CaseTimelinePanel } from './CaseTimelinePanel'
 import { ReviewV3T02CoverageSection } from './ReviewV3T02CoverageSection'
 import { ReviewV3T03FactWorkbench } from './ReviewV3T03FactWorkbench'
+import { ReviewV3TemplateRuleRun } from './ReviewV3TemplateRuleRun'
 import { ReviewV3T05HumanWorkflow } from './ReviewV3T05HumanWorkflow'
 import { ReviewV3T09OfflineSection } from './ReviewV3T09OfflineSection'
 import { ReviewV3T05RunDecision } from './ReviewV3T05RunDecision'
@@ -431,6 +432,8 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
             <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
             <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
+            {/* 已发布模板规则检查：编译冻结计划 → T04 检查 → 真实 Run */}
+            <ReviewV3TemplateRuleRun caseId={current.caseV2.id} />
             {/* T09 离线任务包：签发 / 预览 / 幂等导入 */}
             <ReviewV3T09OfflineSection />
             {/* T02 材料来源覆盖（只读暂存预览，不产生原件） */}

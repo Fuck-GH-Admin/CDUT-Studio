@@ -24,8 +24,11 @@
 检查计算复用 T04 既有 `evaluateT04Plan`/`toT04CheckResult`，Run 写入复用
 `run-store-v2`。**未新建 PlanStore/RunStore/规则引擎**。
 
-**仍未闭环**：S2 的 UI 入口（目前经 IPC 触发，尚未在工作台放按钮）；`gte` 下限算子
-与 `policyVersionId` 身份仍待 T01/T04 Owner。
+**S2 UI 入口**：`ReviewV3TemplateRuleRun` 已挂到案卷办理区（按钮「按模板规则检查」），
+点击后由 Main 编译、计算并写入真实 Run，界面只展示结果。
+
+**仍未闭环**：`gte` 下限算子与 `policyVersionId` 身份仍待 T01/T04 Owner；
+S4 的完整用户旅程（真实点击 + 报告 + 冷重启）尚未一次性跑通。
 
 ---
 ## 架构收口 R01 第二轮：T01–T04 续作接收与 S2 规则桥接
@@ -198,7 +201,7 @@
 | **S1** | **PASS** | `flow-a15-s1`：`objectType=organization`；6 字段（organizationName/responsiblePerson/applicantCount(max=20)/usageDate/usageTime/purpose）；材料槽 `lab-use-plan`；阶段 `initial-review:reviewer → final-review:teacher`；**无 academicYear 字段**；复用建 2 案均 `academicYear=""` |
 | **S2** | **PASS（四案例真机）** | 见下节。已发布模板 + 负责人确认 `lte 20` → `compilePublishedTemplateReviewPlan` → 冻结 `planFingerprint` → T04 `evaluateT04Plan` → **真实 `ReviewRunV2`**（`run-tpl-*`）。18 人 `compliant`、21 人 `non-compliant`、人数未知 `awaiting-confirmation`、缺计划书 `awaiting-supplement`。Run 内经 `inputManifest` 冻结 `planFingerprint` / `effectiveRuleIds` / `documentVersions` |
 | **S3** | **PASS（S3-02 两段阶段）** | `flow-a15-s3`：无 Run 时 `stage-pass` 被 `T05_CURRENT_REAL_RUN_REQUIRED` 拒绝、补件可在无 Run 时创建（decisions=0）。`flow-a15-s3-run`（真实 Run）：A15 案卷填字段 18 人 → 按槽位导入真实 DOCX → Pi 审核 `completed`，**2 checks 全 compliant，`effectiveRuleIds` 两条规则各产出 1 项（覆盖完整）** → 初审 `stage-pass` 成功（stage=reviewing，`finality=stage`，`basedOnRunId=run-pi-mvh7e7rl-k76ff`）→ 生成 teacher 终审任务。`flow-a15-s3-final`：**reviewer 冒充终审被 `T05_ACTOR_NOT_ASSIGNED_TO_STAGE` 拒绝**；teacher（本地模拟，非学校身份）终审通过 → stage=`decided`、`finality=final`，两段决定均绑定同一真实 Run。**冷重启后 stage/decisions/Run 完整保留** |
-| **S3-01（补件两轮）** | **NOT_RUN** | 需要先有真实 Run 触发缺件，再用 `lab-12-unclear-reply.docx` / `lab-12-corrected-reply.docx` 两轮回复 |
+| **S3-01（补件两轮）** | **PASS** | `flow-a15-s3-01`：缺计划书 → 首轮 Run `partially-completed`（材料 `awaiting-supplement`）→ 开补件 → 第一次 `insufficient`（stage=`awaiting-supplement`，1 份原件）→ 第二次 `satisfied`（stage=`reviewing`，2 份原件，新增 `doc-2-mvh99etc-v1`）→ **新 Run `run-tpl-mvh99ev4-823ca317` completed**，旧 Run `run-tpl-mvh99eos-b75dffe5` 保留且状态仍为 `partially-completed`（未被改写） |
 | **S4** | **NOT_RUN** | 依赖 S2/S3 |
 
 ### S2 最小缺失（交回 Owner）

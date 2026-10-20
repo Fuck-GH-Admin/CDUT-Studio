@@ -27,6 +27,8 @@ const MAIN_ACTOR: Actor = { actorId: 'local-reviewer', actorSource: 'local', rol
 export interface TemplateRuleRunResult {
   runId: string
   planFingerprint: string
+  /** 与 Run.inputManifest.hash 一致，供调用方在不重新读取时关联补件 */
+  inputHash: string
   checks: CheckResult[]
   status: 'completed' | 'partially-completed'
   ruleIds: string[]
@@ -147,7 +149,7 @@ export function runTemplateRuleReview(input: {
   }
   saveRunV2(run)
   return {
-    runId: run.id, planFingerprint,
+    runId: run.id, planFingerprint, inputHash: run.inputManifest.hash,
     checks: results, status: run.status as 'completed' | 'partially-completed', ruleIds,
   }
 }
