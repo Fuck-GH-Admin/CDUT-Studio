@@ -68,6 +68,18 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
+  const exportLocalMd=async ():Promise<void>=>{
+    if(caseBusy||!localCaseId)return
+    setCaseBusy(true);setCaseError('');setCaseNotice('')
+    try{
+      const fresh=await window.reviewAPI.getAggregateV2(localCaseId)
+      if(!fresh||fresh.caseV2.id!==localCaseId)
+        throw new Error('案卷不存在；请重新读取当前原生案卷')
+      const exported=await window.reviewAPI.exportReportV2(localCaseId)
+      setCaseNotice('已生成本地 Markdown 报告（草稿未审核不代表审批）：'+exported.file)
+    }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
+    finally{setCaseBusy(false)}
+  }
   const openCase=async ():Promise<void>=>{
     if(caseBusy||!localCaseId)return
     setCaseBusy(true);setCaseError('')
@@ -104,7 +116,9 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
           disabled={caseBusy||!localCaseId} onClick={()=>void importMaterial()}>选择并导入真实申请材料</button>
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
-          disabled={caseBusy||!localCaseId} onClick={()=>void openCase()}>打开案卷与人工核查</button>
+          disabled={caseBusy||!localCaseId} onClick={()=>void openCase()}>打开案卷历史/人工流程</button>
+        <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          disabled={caseBusy||!localCaseId} onClick={()=>void exportLocalMd()}>导出本地 MD 报告</button>
       </div>
       {caseNotice&&<p role="status" className="text-xs">{caseNotice}</p>}
       {caseError&&<p role="alert" className="text-xs text-red-600">{caseError}</p>}
