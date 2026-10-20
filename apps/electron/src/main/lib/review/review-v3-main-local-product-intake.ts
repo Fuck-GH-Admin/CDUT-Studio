@@ -22,7 +22,7 @@ import {readB30AllCurrentMaterials} from './review-v3-b30-current-materials-read
 import {ReviewB3OwnerBoundRouteSession,type B3ManualCatalogEntry,type B3RouteState} from './review-intake-routing-adapter-v3-b3'
 import {listTemplateVersions} from './template-store'
 import type {B20MainReadScope} from './review-v3-b1-b2-main-read-bundle-v3-b'
-import type {B32ProductRead} from '../../renderer/components/review-v3-dev-b/review-v3-product-workflow'
+import type {B32ProductRead} from '../../../renderer/components/review-v3-dev-b/review-v3-product-workflow'
 
 type Snapshot = NonNullable<ReturnType<typeof readAggregate>>
 export interface C11MainLocalProductRead {
