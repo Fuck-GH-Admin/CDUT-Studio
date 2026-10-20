@@ -27,13 +27,15 @@ export type T04PolicyClaim = { key: string; rule: RuleSpec; operation: T04Operat
 export type T04PolicyDecision = {
   key: string
   selectedRuleId: string
+  /** Required when multiple policy versions reuse the same local rule id. */
+  selectedPolicyVersionId?: string
   confirmedBy: string
   reason: string
 }
 export type T04ResolvedClaims = {
   selected: T04PolicyClaim[]
   blocked: Array<{ key: string; ruleIds: string[]; reason: string }>
-  excluded: Array<{ key: string; ruleId: string; selectedRuleId: string }>
+  excluded: Array<{ key: string; ruleId: string; policyVersionId: string; selectedRuleId: string; selectedPolicyVersionId: string }>
 }
 export interface T04Outcome {
   status: T04Status
@@ -53,6 +55,8 @@ export type T04PlanCheck = {
   operation: T04Operation
   items: T04Item[]
   policyClaimKey?: string
+  /** The caller's explicit evaluation date; never the machine clock. */
+  asOfDate?: string
 }
 export type T04PlanProposal = {
   planFingerprint: string
@@ -171,17 +175,23 @@ export function resolveT04PolicyClaims(claims: T04PolicyClaim[], decisions: T04P
   for (const claim of claims) groups.set(claim.key, [...(groups.get(claim.key) ?? []), claim])
   const selected: T04PolicyClaim[] = [], blocked: T04ResolvedClaims['blocked'] = [], excluded: T04ResolvedClaims['excluded'] = []
   for (const [key, group] of groups) {
-    const byRule = new Map(group.map(claim => [claim.rule.id, claim]))
-    const ordered = [...byRule.values()].sort((a,b) => a.rule.id.localeCompare(b.rule.id))
+    const byRule = new Map(group.map(claim => [claim.rule.policyVersionId + '::' + claim.rule.id, claim]))
+    const ordered = [...byRule.values()].sort((a,b) => (a.rule.policyVersionId + '::' + a.rule.id).localeCompare(b.rule.policyVersionId + '::' + b.rule.id))
     const uniqueDefinitions = unique(ordered.map(x => JSON.stringify({operation:x.operation, when:x.rule.when, exceptions:x.rule.exceptions ?? []})))
-    const decision = decisions.find(x => x.key === key && x.confirmedBy.trim() && x.reason.trim() && ordered.some(y => y.rule.id === x.selectedRuleId))
+    const matching = (decision:T04PolicyDecision):T04PolicyClaim[] =>
+      ordered.filter(x=>x.rule.id===decision.selectedRuleId &&
+        (decision.selectedPolicyVersionId===undefined||x.rule.policyVersionId===decision.selectedPolicyVersionId))
+    const decision = decisions.find(x => x.key === key && x.confirmedBy.trim() && x.reason.trim() && matching(x).length===1)
     if (uniqueDefinitions.length > 1 && !decision) {
-      blocked.push({key, ruleIds: ordered.map(x => x.rule.id), reason: '多依据同一约束不一致，缺少具名优先关系确认'})
+      blocked.push({key, ruleIds: ordered.map(x => x.rule.policyVersionId+'::'+x.rule.id), reason: '多依据同一约束不一致，缺少具名优先关系确认'})
       continue
     }
-    const chosen = decision ? ordered.find(x => x.rule.id === decision.selectedRuleId)! : ordered[0]!
+    const chosen = decision ? matching(decision)[0]! : ordered[0]!
     selected.push(chosen)
-    for (const x of ordered) if (x !== chosen) excluded.push({key, ruleId:x.rule.id, selectedRuleId:chosen.rule.id})
+    for (const x of ordered) if (x !== chosen) excluded.push({
+      key, ruleId:x.rule.id, policyVersionId:x.rule.policyVersionId,
+      selectedRuleId:chosen.rule.id, selectedPolicyVersionId:chosen.rule.policyVersionId,
+    })
   }
   return {selected, blocked, excluded}
 }
@@ -412,7 +422,7 @@ export function evaluateT04Plan(
   const claims=checks.filter(c=>c.policyClaimKey).map(c=>({key:c.policyClaimKey!,rule:c.rule,operation:c.operation}))
   const resolution=resolveT04PolicyClaims(claims,decisions)
   const blocked=new Set(resolution.blocked.map(x=>x.key))
-  const excluded=new Set(resolution.excluded.map(x=>x.ruleId))
+  const excluded=new Set(resolution.excluded.map(x=>x.policyVersionId+'::'+x.ruleId))
   return plan.bindings.map(binding=>{
     const check=byKey.get(identity(binding))
     if (!check || !allowed.has(identity(binding))) throw new Error('T04_CHECK_BINDING_MISSING: '+binding.checkKey)
@@ -424,8 +434,15 @@ export function evaluateT04Plan(
       outcome=complete('not-applicable',null,'Plan 已确认不适用',[],check.items,check.rule)
     else if(check.policyClaimKey&&blocked.has(check.policyClaimKey))
       outcome=pending('多政策限额冲突，须具名确定优先规则',check.items,check.rule)
-    else if(excluded.has(check.rule.id))
+    else if(excluded.has(check.rule.policyVersionId+'::'+check.rule.id))
       outcome=complete('not-applicable',null,'相同约束已有具名优先政策，当前规则不计入',[],check.items,check.rule)
+    else if((check.rule.effectiveFrom||check.rule.effectiveUntil) &&
+      (!check.asOfDate||!strictDate(check.asOfDate)))
+      outcome=pending('规则有效日期缺失/不明确，不能凭系统时间判断',check.items,check.rule)
+    else if(check.asOfDate &&
+      ((check.rule.effectiveFrom&&check.asOfDate<check.rule.effectiveFrom)||
+       (check.rule.effectiveUntil&&check.asOfDate>check.rule.effectiveUntil)))
+      outcome=complete('not-applicable',null,'指定日期不在规则有效期内',[],check.items,check.rule)
     else outcome=evaluateT04Rule(check.rule,check.operation,check.items)
     return {
       planFingerprint:plan.fingerprint,checkKey:binding.checkKey,targetKey:binding.targetKey,objectKey:binding.objectKey,
