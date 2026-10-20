@@ -720,6 +720,47 @@ export function registerReviewIpc(): void {
     const { decideWorkspaceCaseV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return decideWorkspaceCaseV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof decideWorkspaceCaseV2>[1])
   })
+  // ===== T07 独立评委评分（Local-L04 桥接：Main 派生 actor + 持久化修订号） =====
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T07_GET_VIEW, (event, input: {
+    batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
+    safeMaterials?: import('./review-v3-t07-rating-workflow').T07SafeCaseMaterial[]
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input || typeof input.batchId !== 'string' || !input.batchId) throw new Error('参数 batchId 非法')
+    const { getT07View } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
+    return getT07View(input.batchId, input.claim, input.safeMaterials ?? [])
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T07_APPLY_ACTION, (event, input: {
+    batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
+    action: import('./review-v3-t07-rating-workflow').T07Action
+    expectedRevision: number
+    initialState?: import('./review-v3-t07-rating-workflow').T07State
+    safeMaterials?: import('./review-v3-t07-rating-workflow').T07SafeCaseMaterial[]
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input || typeof input.batchId !== 'string' || !input.batchId) throw new Error('参数 batchId 非法')
+    if (!input.action || typeof input.action.type !== 'string') throw new Error('参数 action 非法')
+    if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
+      throw new Error('参数 expectedRevision 非法')
+    }
+    const { applyT07MainAction } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
+    return applyT07MainAction({
+      batchId: input.batchId, claim: input.claim, action: input.action,
+      expectedRevision: input.expectedRevision,
+      ...(input.initialState ? { initialState: input.initialState } : {}),
+      ...(input.safeMaterials ? { safeMaterials: input.safeMaterials } : {}),
+    })
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T07_INIT_STATE, (event, input: {
+    batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
+    state: import('./review-v3-t07-rating-workflow').T07State
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input || typeof input.batchId !== 'string' || !input.batchId) throw new Error('参数 batchId 非法')
+    if (!input.state || typeof input.state !== 'object') throw new Error('参数 state 非法')
+    const { initT07MainState } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
+    return initT07MainState({ batchId: input.batchId, claim: input.claim, state: input.state })
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_SUBJECT_ADJUDICATION_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { recordWorkspaceSubjectAdjudicationV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return recordWorkspaceSubjectAdjudicationV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordWorkspaceSubjectAdjudicationV2>[1])

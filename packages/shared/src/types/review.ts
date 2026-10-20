@@ -596,6 +596,12 @@ export const REVIEW_IPC_CHANNELS = {
   RECORD_WORKSPACE_SUBJECT_ADJUDICATION_V2: 'review-v2:record-workspace-subject-adjudication',
   GET_WORKSPACE_RUN_VALIDITY_V2: 'review-v2:get-workspace-run-validity',
   CAST_RATING_V2: 'review-v2:cast-rating',
+  /** T07 评分视图读取（actor 由 Main 派生，Renderer 只声明角色） */
+  T07_GET_VIEW: 'review-v3:t07-get-view',
+  /** T07 评分动作（分配/回避/评分/同分/冻结/重开），要求 expectedRevision */
+  T07_APPLY_ACTION: 'review-v3:t07-apply-action',
+  /** T07 建立评分轮次（仅组织者、仅首次） */
+  T07_INIT_STATE: 'review-v3:t07-init-state',
   RUN_BATCH_V2: 'review-v2:run-batch',
   SUBMIT_APPEAL_V2: 'review-v2:submit-appeal',
   RESOLVE_APPEAL_V2: 'review-v2:resolve-appeal',

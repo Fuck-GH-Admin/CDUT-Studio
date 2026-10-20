@@ -1001,6 +1001,114 @@ const scenarios = {
     `)
   },
 
+  /**
+   * T07 评分链路（A12+A14 的评委基础）：
+   * 建两个真实案卷 → 建批次 → 初始化评分轮次 → 分配 → 两名评委评分 → 排名可见。
+   * 不伪造校方身份：actor 由 Main 派生为 local，角色仅声明。
+   */
+  async 'flow-t07-judging'({ send }) {
+    return evaluate(send, `
+      const api = window.reviewAPI
+      const out = { steps: [] }
+      const step = (name, data) => out.steps.push({ name, ...data })
+
+      const caseIds = []
+      for (const name of ['A14 评委案 A', 'A14 评委案 B']) {
+        const created = await api.createCase({
+          title: name, type: '自定义审核', applicant: 'E2E',
+          domainPackId: 'contract-review', reviewTemplate: null,
+        })
+        caseIds.push(created.id)
+      }
+      step('createCases', { count: caseIds.length })
+
+      // 批次：复用现有 BatchStateV2 权威
+      let batchId = null
+      try {
+        const state = await api.createBatchV2({
+          id: 'batch-e2e-' + Date.now(), name: 'A14 评分批次',
+          templateId: 'e2e-judging', templateVersion: 1, caseIds,
+          createdAt: new Date().toISOString(),
+        })
+        batchId = state?.batch?.id ?? null
+        step('createBatch', { batchId, cases: state?.batch?.caseIds?.length ?? 0 })
+      } catch (error) { step('createBatch', { ok: false, error: String(error?.message ?? error) }) }
+      out.batchId = batchId
+      if (!batchId) return out
+
+      // 初始化评分轮次（仅组织者、仅首次）
+      const rubric = {
+        id: 'e2e-rubric', name: '默认评分表', version: 1, strategy: 'weighted-mean',
+        dimensions: [
+          { id: 'quality', name: '质量', weight: 1, min: 0, max: 5 },
+          { id: 'impact', name: '影响', weight: 1, min: 0, max: 5 },
+        ],
+        minEffectiveJudges: 2,
+        conversion: { mode: 'linear', targetMax: 100 },
+      }
+      const state = {
+        batchId, rubricVersion: 1, rubric,
+        cases: caseIds.map((id, i) => ({ caseId: id, blindLabel: '案件 ' + String.fromCharCode(65 + i) })),
+        rounds: [{ number: 1, assignments: [], votes: [], divergenceReasons: {}, tieOrders: {} }],
+      }
+      let revision = 0
+      try {
+        const init = await api.initT07State({ batchId, claim: { role: 'organizer' }, state })
+        revision = init.revision
+        step('initRound', { revision, viewRole: init.view?.role })
+      } catch (error) { step('initRound', { ok: false, error: String(error?.message ?? error) }) }
+
+      // 分配两名评委到两个案件
+      for (const [i, caseId] of caseIds.entries()) {
+        for (const judge of ['local-judge-1', 'local-judge-2']) {
+          try {
+            const r = await api.applyT07Action({
+              batchId, claim: { role: 'organizer' }, expectedRevision: revision,
+              action: { type: 'assign', caseId, reviewerId: judge, assignmentId: judge + '-' + i },
+            })
+            revision = r.revision
+          } catch (error) { step('assign', { ok: false, judge, error: String(error?.message ?? error) }) }
+        }
+      }
+      step('assignDone', { revision })
+
+      // 两名评委各自评分
+      for (const judge of ['local-judge-1', 'local-judge-2']) {
+        try {
+          const view = await api.getT07View({ batchId, claim: { role: 'judge', reviewerId: judge } })
+          const tasks = view.view?.tasks ?? []
+          for (const task of tasks) {
+            const r = await api.applyT07Action({
+              batchId, claim: { role: 'judge', reviewerId: judge }, expectedRevision: revision,
+              action: { type: 'submit', assignmentId: task.assignmentId, publicFeedback: '完成',
+                scores: [{ dimensionId: 'quality', score: judge === 'local-judge-1' ? 4 : 5, na: false },
+                         { dimensionId: 'impact', score: judge === 'local-judge-1' ? 5 : 4, na: false }] },
+            })
+            revision = r.revision
+          }
+          step('judgeSubmitted', { judge, tasks: tasks.length })
+        } catch (error) { step('judgeSubmitted', { ok: false, judge, error: String(error?.message ?? error) }) }
+      }
+
+      // 组织者视图：排名与有效评委数
+      try {
+        const org = await api.getT07View({ batchId, claim: { role: 'organizer' } })
+        step('organizerView', { role: org.view?.role, revision: org.revision,
+          ranking: (org.view?.ranking ?? []).map(r => ({ caseId: r.caseId, total: r.total,
+            converted: r.convertedTotal, rank: r.rank, judges: r.effectiveJudges })) })
+      } catch (error) { step('organizerView', { ok: false, error: String(error?.message ?? error) }) }
+
+      // 定稿（两名有效评委满足门控）
+      try {
+        const fin = await api.applyT07Action({ batchId, claim: { role: 'organizer' }, expectedRevision: revision, action: { type: 'finalize' } })
+        revision = fin.revision
+        step('finalize', { revision, ranking: fin.ranking?.map(r => ({ rank: r.rank, selected: r.selected })) })
+      } catch (error) { step('finalize', { ok: false, error: String(error?.message ?? error) }) }
+
+      return out
+    `)
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

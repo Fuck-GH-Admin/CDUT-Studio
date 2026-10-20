@@ -55,6 +55,7 @@ import { ReviewV3T10WorkspaceOverview } from './ReviewV3T10WorkspaceOverview'
 import { TemplateWizardPanel } from './TemplateWizardPanel'
 import { ReviewV3LocalCandidateWorkbench } from './ReviewV3LocalCandidateWorkbench'
 import { BatchPanel } from './BatchPanel'
+import { ReviewV3T07Workbench } from './ReviewV3T07Workbench'
 import { useReviewActions } from './use-review-actions'
 
 /** 窄屏单栏切换的栏目标识 */
@@ -305,6 +306,10 @@ export function ContentReviewView(): React.ReactElement {
             return opened
           }}
         />
+        {/* T07 独立评委评分：挂在批次区下方，评分轮次以批次为单位 */}
+        <div className="mt-4 border-t border-border/60 pt-3">
+          <ReviewV3T07Workbench />
+        </div>
       </section>
 
       {/* ===== 助手抽屉（fixed 到本视图根） ===== */}

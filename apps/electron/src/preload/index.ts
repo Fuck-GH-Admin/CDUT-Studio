@@ -4710,6 +4710,36 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.RESOLVE_SUPPLEMENT_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
   respondSupplementV2: (input: { caseId: string; command: Record<string, unknown> }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.RESPOND_SUPPLEMENT_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
+  /** T07 评分视图（actor 由 Main 派生；Renderer 只声明角色） */
+  getT07View: (input: {
+    batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
+    safeMaterials?: import('../main/lib/review/review-v3-t07-rating-workflow').T07SafeCaseMaterial[]
+  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T07_GET_VIEW, input) as Promise<{
+    revision: number
+    updatedAt: string
+    view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
+  }>,
+  /** T07 建立评分轮次（仅组织者、仅首次） */
+  initT07State: (input: {
+    batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
+    state: import('../main/lib/review/review-v3-t07-rating-workflow').T07State
+  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T07_INIT_STATE, input) as Promise<{
+    revision: number
+    updatedAt: string
+    view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
+  }>,
+  /** T07 评分动作（分配/回避/评分/同分/冻结/重开） */
+  applyT07Action: (input: {
+    batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
+    action: import('../main/lib/review/review-v3-t07-rating-workflow').T07Action
+    expectedRevision: number
+    initialState?: import('../main/lib/review/review-v3-t07-rating-workflow').T07State
+    safeMaterials?: import('../main/lib/review/review-v3-t07-rating-workflow').T07SafeCaseMaterial[]
+  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T07_APPLY_ACTION, input) as Promise<{
+    revision: number
+    view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
+    ranking: import('../main/lib/review/review-v3-t07-rating-workflow').T07RankingRow[]
+  }>,
   recordWorkspaceDispositionV2: (input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_DISPOSITION_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
   openWorkspaceSupplementV2: (input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) =>
