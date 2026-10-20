@@ -171,6 +171,7 @@ import { registerIpcHandlers, setRendererReadyHandler, stopAllGoalsForProcessExi
 import { installC11LocalAuthorWorkbench } from './lib/review/review-v3-main-local-author-workbench'
 import { installC11LocalNativeProductIntake } from './lib/review/review-v3-main-local-product-intake'
 import { installC11NativeD4TechnicalPlan } from './lib/review/review-v3-main-d4-local-plan'
+import { installC11NativeB1TechnicalPlan } from './lib/review/review-v3-main-b1-local-plan'
 import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from './lib/remote-service'
 import { startAgentFabricService, stopAgentFabricService } from './lib/agent-fabric/agent-fabric-service'
 import { createTray, destroyTray, getTray } from './tray'
