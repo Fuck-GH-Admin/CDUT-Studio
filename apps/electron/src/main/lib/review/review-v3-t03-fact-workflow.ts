@@ -33,6 +33,8 @@ export interface T03EvidenceGroup {
   fileName: string
   active: boolean
   links: EvidenceLink[]
+  /** Extracted facts with current document refs; not persisted or confirmed. */
+  suggestions: Array<{ documentVersionId: string; subjectId: string; supportsFact: string; status: 'candidate' }>
   /** Multiple subject candidates on one document are not an identity decision. */
   ambiguousSubjectIds: string[]
 }
@@ -110,15 +112,38 @@ export function projectT03Facts(aggregate: CaseAggregateV2, extracted: readonly 
     a.subjectTitle.localeCompare(b.subjectTitle) || a.fieldKey.localeCompare(b.fieldKey))
 }
 
-export function projectT03Evidence(aggregate: CaseAggregateV2): T03EvidenceGroup[] {
+export function projectT03Evidence(
+  aggregate: CaseAggregateV2,
+  extracted: readonly T03ExtractedFact[] = [],
+): T03EvidenceGroup[] {
+  const knownSubjects = new Set(aggregate.caseV2.subjects.map(subject => subject.id))
   return aggregate.caseV2.documents
-    .filter(doc => doc.role === 'evidence' || aggregate.evidenceLinks.some(link => link.documentVersionId === doc.versionId))
+    .filter(doc => doc.role === 'evidence' || aggregate.evidenceLinks.some(link => link.documentVersionId === doc.versionId) ||
+      extracted.some(fact => fact.sourceRefs?.some(ref => ref.documentVersionId === doc.versionId)))
     .map(doc => {
       const links = aggregate.evidenceLinks.filter(link => link.documentVersionId === doc.versionId)
-      const subjects = [...new Set(links.filter(link => link.status === 'candidate').map(link => link.subjectId))]
+      const suggestions: T03EvidenceGroup['suggestions'] = []
+      const seen = new Set<string>()
+      if (doc.active !== false) for (const fact of extracted) {
+        if (!knownSubjects.has(fact.subjectId) || !fact.sourceRefs?.some(ref =>
+          ref.caseId === aggregate.caseV2.id && ref.documentVersionId === doc.versionId &&
+          ref.parseRevision === doc.parseRevision)) continue
+        const key = JSON.stringify([fact.subjectId, fact.fieldKey])
+        if (seen.has(key) || links.some(link =>
+          link.subjectId === fact.subjectId && link.supportsFact === fact.fieldKey)) continue
+        seen.add(key)
+        suggestions.push({
+          documentVersionId: doc.versionId, subjectId: fact.subjectId,
+          supportsFact: fact.fieldKey, status: 'candidate',
+        })
+      }
+      const subjects = [...new Set([
+        ...links.filter(link => link.status === 'candidate').map(link => link.subjectId),
+        ...suggestions.map(item => item.subjectId),
+      ])]
       return {
         documentVersionId: doc.versionId, fileName: doc.fileName,
-        active: doc.active !== false, links,
+        active: doc.active !== false, links, suggestions,
         ambiguousSubjectIds: subjects.length > 1 ? subjects : [],
       }
     })
