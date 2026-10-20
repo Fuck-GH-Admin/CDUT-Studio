@@ -54,7 +54,7 @@ import type {
   ToolDefinition,
   ExtensionFactory,
 } from '@earendil-works/pi-coding-agent'
-import type { Transport as PiAgentTransport } from '@earendil-works/pi-ai'
+import type { Api, Model, ProviderResponse, Transport as PiAgentTransport } from '@earendil-works/pi-ai'
 import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage } from '@earendil-works/pi-ai/compat'
 import { Type, type TSchema } from 'typebox'
@@ -85,6 +85,12 @@ import {
   sanitizePiContextMessages,
 } from './pi-message-adapter'
 import { DEFAULT_CONTEXT_WINDOW, buildModel, normalizePiApi } from './pi-model-registry'
+import {
+  applyWatchdogTerminalReason,
+  createPiReviewWatchdog,
+  resolvePiReviewWatchdogTimeouts,
+  type PiReviewWatchdog,
+} from './pi-review-watchdog'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
 import { runPiPromptChain, type PiInterruptReservation } from './pi-prompt-chain'
 import { createPiRetryTerminalGate, getPiNativeRetryOutcome, mapPiNativeRetryEvent } from './pi-retry-control'
@@ -104,6 +110,21 @@ type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
 type BashToolOptions = import('@earendil-works/pi-coding-agent').BashToolOptions
 
 const PI_NATIVE_MAX_RETRIES = 8
+
+/**
+ * 能证明「模型/工具链路真的在产出数据」的 Pi 会话事件。
+ * 其余事件（turn_start、queue_update 等）只说明控制流在推进，不能作为首字节信号。
+ */
+const PI_REVIEW_DATA_EVENTS: ReadonlySet<string> = new Set([
+  'message_start',
+  'message_update',
+  'message_end',
+  'tool_execution_start',
+  'tool_execution_update',
+  'tool_execution_end',
+  'compaction_start',
+  'compaction_end',
+])
 const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
 const piToolExecutionContext = new AsyncLocalStorage<{ toolCallId: string }>()
 
@@ -2532,9 +2553,21 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     let unsubscribe: (() => void) | undefined
     let requestProxyDispatcher: Dispatcher | undefined
     let partialAssistantCoalescer: PartialMessageCoalescer<{ message: AssistantMessage; uuid: string }> | undefined
+    // 审核轮次看门狗必须在 try 之外声明：外层 catch 也要能把「无进展」原因写进终态。
+    let reviewWatchdog: PiReviewWatchdog | undefined
+    let reviewWatchdogTimer: ReturnType<typeof setInterval> | undefined
+    let activeReviewRequest: AbortController | undefined
+    let releaseActiveRequestSignal: (() => void) | undefined
 
     const cleanupActiveSession = (): void => {
       try {
+        if (reviewWatchdogTimer) {
+          clearInterval(reviewWatchdogTimer)
+          reviewWatchdogTimer = undefined
+        }
+        releaseActiveRequestSignal?.()
+        releaseActiveRequestSignal = undefined
+        activeReviewRequest = undefined
         unsubscribe?.()
         unsubscribe = undefined
         partialAssistantCoalescer?.dispose()
@@ -2772,19 +2805,92 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       // 全协议净化与瘦身管道：剥离历史 Thinking、折叠历史超长 ToolResult。
       // OpenAI 兼容协议额外做 store/developer/平坦化专属处理。
       const isOpenAICompatiblePayload = normalizePiApi(input.provider, input.baseUrl) === 'openai-completions'
+      /**
+       * 审核轮次看门狗（P0-C：失败可追踪）。
+       *
+       * 只对 review 档案启用：普通编码会话存在长时间无输出的合法命令（构建、测试），
+       * 用同一套「无进展」判据会误杀。审核轮次的每次模型请求都应当持续产出数据。
+       *
+       * 命中后必须做到两件事：立刻中止在途请求，并让本轮终态带上可诊断的中文原因，
+       * 绝不允许 V2 run 无限停在 running。
+       */
+      reviewWatchdog = isReviewProfile
+        ? createPiReviewWatchdog({
+            label: `渠道：${input.channelName ?? input.provider}，模型：${input.model ?? session.model?.id ?? '未知'}`,
+            timeouts: resolvePiReviewWatchdogTimeouts({
+              transportIdleTimeoutMs: settingsManager.getHttpIdleTimeoutMs(),
+            }),
+            logger: (message) => console.error(`${message} session=${input.sessionId}`),
+          })
+        : undefined
+      /** 中止当前审核轮次：先断当前请求；没有在途请求（例如工具卡住）时再断整轮。 */
+      const abortReviewTurn = (reason: string): void => {
+        try {
+          activeReviewRequest?.abort(new Error(reason))
+        } catch { /* AbortController.abort 不会抛，防御性兜底 */ }
+        if (!activeReviewRequest) {
+          void active.session?.abort().catch((error) => {
+            console.error('[Pi 审核看门狗] 中止会话失败:', error)
+          })
+        }
+      }
+      if (reviewWatchdog) {
+        // 闭包内固定已窄化的引用，避免 let 声明在回调里退化为可能 undefined。
+        const watchdog = reviewWatchdog
+        reviewWatchdogTimer = setInterval(() => {
+          const reason = watchdog.evaluate()
+          if (!reason) return
+          // 只触发一次：之后的请求由 streamFunction 直接拒止，避免重试把轮次重新挂起。
+          if (reviewWatchdogTimer) clearInterval(reviewWatchdogTimer)
+          reviewWatchdogTimer = undefined
+          abortReviewTurn(reason)
+        }, 5_000)
+        reviewWatchdogTimer.unref?.()
+      }
       session.agent.streamFunction = (requestModel, context, options) => {
+        // 请求级首字节看门狗：把「长时间无数据返回」变成可诊断的中止，
+        // 而不是等传输层超时后只留下一句 fetch failed。
+        const outerSignal = options?.signal as AbortSignal | undefined
+        const requestController = new AbortController()
+        releaseActiveRequestSignal?.()
+        releaseActiveRequestSignal = undefined
+        if (outerSignal) {
+          if (outerSignal.aborted) requestController.abort()
+          else {
+            const forwardAbort = () => requestController.abort()
+            outerSignal.addEventListener('abort', forwardAbort, { once: true })
+            releaseActiveRequestSignal = () => outerSignal.removeEventListener('abort', forwardAbort)
+          }
+        }
+        activeReviewRequest = requestController
+        // 看门狗已触发过：任何新请求（含原生重试）都必须立即拒止，不能重新挂起轮次。
+        if (reviewWatchdog?.startRequest() === true) requestController.abort()
         const originalOnPayload = options?.onPayload
+        const originalOnResponse = options?.onResponse
         const wrappedOptions = {
           ...options,
+          // 看门狗需要可主动中止的请求级信号；外层 signal 通过监听转发，语义不变。
+          ...(reviewWatchdog ? { signal: requestController.signal } : {}),
           onPayload: async (params: any, model: any) => {
             // 统一进入跨协议净化与瘦身管道
             const cleanedParams = sanitizeContextForInference(params, model, { openAICompatible: isOpenAICompatiblePayload })
+            // 请求组装阶段还没有真正发出 HTTP，只刷新进展，不能算首字节。
+            reviewWatchdog?.noteActivity()
             if (originalOnPayload) {
               const customResult = await originalOnPayload(cleanedParams, model)
               return customResult !== undefined ? customResult : cleanedParams
             }
             return cleanedParams
           },
+          ...(reviewWatchdog
+            ? {
+                // 响应头到达即视为「已开始返回数据」，是首字节看门狗最早的可信信号。
+                onResponse: (response: ProviderResponse, responseModel: Model<Api>) => {
+                  reviewWatchdog?.markFirstByte()
+                  return originalOnResponse?.(response, responseModel)
+                },
+              }
+            : {}),
         }
         return runWithPiRequestProxy(
           requestProxyDispatcher,
@@ -2860,6 +2966,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       }, PI_PARTIAL_UPDATE_INTERVAL_MS)
 
       unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+        // 看门狗进展信号：任何会话事件都证明链路仍在运转，但只有数据类事件
+        // （消息流、工具执行）才算「模型已经开始返回数据」。
+        // 这样不依赖各协议是否实现 onResponse，也不会把 turn_start 误当首字节。
+        if (reviewWatchdog) {
+          if (PI_REVIEW_DATA_EVENTS.has(event.type)) reviewWatchdog.touch()
+          else reviewWatchdog.noteActivity()
+          // assistant 消息结束即该次模型请求结束；工具执行阶段不应再算「请求在途」。
+          if (event.type === 'message_end') reviewWatchdog.endRequest()
+        }
         try {
           for (const lifecycleEvent of mapPiHarnessLifecycleEvent(event)) {
             try {
@@ -2961,6 +3076,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 model.id,
                 input.model ?? session.model?.id,
               )
+              // 看门狗命中：本轮终态必须是带可诊断原因的失败，不能被
+              // 「Request was aborted」之类传输层文案覆盖，更不能报成成功。
+              const watchdogReason = reviewWatchdog?.firedReason()
+              if (watchdogReason) {
+                pendingTerminalResult = applyWatchdogTerminalReason(
+                  pendingTerminalResult as unknown as Record<string, unknown>,
+                  watchdogReason,
+                ) as unknown as SDKMessage
+              }
               break
             }
             case 'auto_retry_end': {
@@ -3196,12 +3320,17 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             persistPiEntryBindings()
             queue.close()
           })
-          .catch((error) => queue.fail(error))
+          .catch((error) => {
+            // 看门狗命中时底层只会留下「Request was aborted」，必须换成可诊断原因。
+            const watchdogReason = reviewWatchdog?.firedReason()
+            queue.fail(watchdogReason ? new Error(watchdogReason) : error)
+          })
           .finally(cleanupActiveSession)
       }
     } catch (error) {
       rejectActiveReady(active, error)
-      queue.fail(error)
+      const watchdogReason = reviewWatchdog?.firedReason()
+      queue.fail(watchdogReason ? new Error(watchdogReason) : error)
     }
 
     try {
