@@ -15,7 +15,9 @@ import {
   reviewWorkspaceRunAtom,
   reviewWorkspaceRunStaleAtom,
   reviewWorkspaceTemplateAtom,
+  reviewWorkspaceSectionAtom,
 } from '@/atoms/review-atoms'
+import { reviewV2AggregateAtom } from './V2CasePanel'
 import { buildReviewWorkspaceViewModel } from './review-workspace-view-model'
 
 const STAGES: Record<string, string> = {
@@ -44,16 +46,23 @@ export function ReviewV3T10WorkspaceOverview({
   onOpenReview, onOpenMaterials, onOpenTasks, onOpenTemplates, onOpenBusiness,
 }: Props): React.ReactElement {
   const legacy = useAtomValue(reviewCaseAtom)
-  const aggregate = useAtomValue(reviewWorkspaceAggregateAtom)
-  const run = useAtomValue(reviewWorkspaceRunAtom)
+  const nativeAggregate = useAtomValue(reviewWorkspaceAggregateAtom)
+  const businessAggregate = useAtomValue(reviewV2AggregateAtom)
+  const section = useAtomValue(reviewWorkspaceSectionAtom)
+  // 较早版本的案卷可能尚无原生 ReviewCase 投影。业务面板激活时显示它正在办理的真实聚合，
+  // 不把另一份当前选中案卷的 Run 或来源混到旧案卷上。
+  const aggregate = section === 'case-v2' ? (businessAggregate ?? nativeAggregate) : nativeAggregate
+  const nativeRun = useAtomValue(reviewWorkspaceRunAtom)
   const runStale = useAtomValue(reviewWorkspaceRunStaleAtom)
   const extracted = useAtomValue(reviewWorkspaceExtractedObservationsAtom)
   const template = useAtomValue(reviewWorkspaceTemplateAtom)
   const execution = useAtomValue(reviewExecutionAtom)
   const running = useAtomValue(reviewRunningAtom)
 
-  const view = aggregate ? buildReviewWorkspaceViewModel(aggregate, run, runStale, extracted, template) : null
   const caseV2 = aggregate?.caseV2
+  const matchesSelected = !caseV2 || caseV2.id === legacy?.id
+  const run = matchesSelected ? nativeRun : null
+  const view = aggregate ? buildReviewWorkspaceViewModel(aggregate, run, matchesSelected && runStale, matchesSelected ? extracted : [], matchesSelected ? template : null) : null
   const documents = caseV2?.documents.filter((document) => document.active !== false).length ?? legacy?.documents.length ?? 0
   const pending = view?.pendingActions.length ?? 0
   const pendingChecks = view?.pendingActions.filter((action) => action.kind === 'check' || action.kind === 'supplement').length ?? 0
@@ -64,7 +73,7 @@ export function ReviewV3T10WorkspaceOverview({
         : caseV2 ? `${caseV2.templateId} · v${caseV2.templateVersion}` : '未选择'
   const executing = running || execution.status === 'running' || execution.status === 'preparing'
   const checkLabel = executing ? '正在运行'
-    : runStale ? '结果已过期，请重审'
+    : runStale && matchesSelected ? '结果已过期，请重审'
       : run ? `${run.checks.length} 项已记录 · ${pendingChecks} 项需处理`
         : '尚无审核记录'
   const stageLabel = caseV2 ? (STAGES[caseV2.stage] ?? caseV2.stage) : '尚无业务案卷'
@@ -86,9 +95,9 @@ export function ReviewV3T10WorkspaceOverview({
       nextDetail = '执行进度与结果保留在当前案卷。'
       goNext = onOpenTasks
     } else if (!run || runStale) {
-      nextLabel = runStale ? '按当前材料重新审核' : '启动本案审核'
-      nextDetail = runStale ? '已有结果只供历史参考，需以当前输入重新检查。' : '运行后，检查结果将关联本案原件和审核依据。'
-      goNext = onOpenTasks
+      nextLabel = runStale && matchesSelected ? '按当前材料重新审核' : '进入审核工作台'
+      nextDetail = matchesSelected ? '在当前案卷核对材料并启动审核。' : '当前办理的是历史案卷，请先在审核工作台选择对应案卷。'
+      goNext = onOpenReview
     } else if (pending > 0) {
       nextLabel = `处理待确认事项（${pending}）`
       nextDetail = view?.pendingActions[0]?.title ?? '核对原件、处理问题或登记补件。'
