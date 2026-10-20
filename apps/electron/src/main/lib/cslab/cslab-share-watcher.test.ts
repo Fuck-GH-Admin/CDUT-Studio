@@ -142,6 +142,13 @@ describe('WebDAV 源安全边界', () => {
     expect(normalizeSharePath('\\\\lab-pc\\XRD\\data').kind).toBe('unc')
     expect(normalizeSharePath('\\\\192.168.1.10\\share').kind).toBe('unc')
   })
+
+  test('单标签保留主机名 WPAD/ISATAP 被拦截，实验室主机名保持可用', async () => {
+    const { normalizeSharePath } = await import('./cslab-share-watcher')
+    expect(() => normalizeSharePath('\\\\wpad\\share')).toThrow('安全拦截')
+    expect(() => normalizeSharePath('smb://isatap/share')).toThrow('安全拦截')
+    expect(normalizeSharePath('\\\\lab-pc\\XRD\\data').kind).toBe('unc')
+  })
 })
 
 describe('内联 PowerShell 参数安全', () => {

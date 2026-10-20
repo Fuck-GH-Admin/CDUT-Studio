@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CsLabLab } from '@profer/shared'
@@ -99,6 +99,13 @@ describe('persistDigitizedFigure', () => {
     const assets = listAssets(lab.id)
     expect(assets.find((asset) => asset.uri === result.figUri)?.layerType).toBe('fig')
     expect(assets.find((asset) => asset.uri === result.tableUri)?.layerType).toBe('table')
+
+    // 表实体字节数必须等于真实 Parquet 体积，而不是框选图的图片大小。
+    const figAsset = assets.find((asset) => asset.uri === result.figUri)
+    const tableAsset = assets.find((asset) => asset.uri === result.tableUri)
+    const parquetPath = join(resolveLabDir(lab.id), tableAsset!.relPath!)
+    expect(tableAsset?.bytes).toBe(statSync(parquetPath).size)
+    expect(tableAsset?.bytes).not.toBe(figAsset?.bytes)
 
     const db = getCsLabDatabase(join(resolveLabDir(lab.id), 'db', 'central_meta.sqlite'))
     expect(listEdgesFrom(db, sourceUri).some((edge) => edge.toUri === result.figUri)).toBe(true)

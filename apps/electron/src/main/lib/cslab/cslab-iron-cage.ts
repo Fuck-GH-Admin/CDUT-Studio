@@ -50,7 +50,7 @@ import {
   sanitizeFileName,
   assertLabId,
 } from './cslab-paths'
-import { buildCsLabUri } from './cslab-uri'
+import { buildCsLabUri, parseCsLabUri } from './cslab-uri'
 import { readDatasetCell, readDatasetPreview, writeDatasetParquet, writeDatasetPreview } from './cslab-columnar'
 import { parseDelimitedText } from './cslab-formats/header-data-separator'
 import { parseMatLevel5, isMatV73, isMatLevel5 } from './cslab-formats/mat-level5'
@@ -184,8 +184,10 @@ async function parseFile(
 function findTableUriFromRaw(db: CsLabDatabase, rawUri: string, rawTitle: string): string | undefined {
   const tableEdge = listEdgesFrom(db, rawUri).find((edge) => edge.toUri.includes('/table/'))
   if (tableEdge) return tableEdge.toUri
-  // 兼容早期版本未记录血缘的沙箱：按同名数据表兜底。
-  return findEntityByTitle(db, rawUri.split('/')[2] ?? '', `${rawTitle} · 数据表`, 'table')?.uri
+  // 兼容早期版本未记录血缘的沙箱：按同名数据表兜底；URI 一律走标准解析，不使用魔法下标。
+  const parsed = parseCsLabUri(rawUri)
+  if (!parsed) return undefined
+  return findEntityByTitle(db, parsed.labId, `${rawTitle} · 数据表`, 'table')?.uri
 }
 
 export interface IngestOptions {
