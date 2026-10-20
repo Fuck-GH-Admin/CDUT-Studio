@@ -514,6 +514,11 @@ export const REVIEW_IPC_CHANNELS = {
   AUTHOR_SAVE_LOCAL_V3: 'review-v3:author-save-local',
   AUTHOR_PREVIEW_LOCAL_V3: 'review-v3:author-preview-local',
   AUTHOR_FREEZE_LOCAL_V3: 'review-v3:author-freeze-local',
+  /** Real Main-scoped native Case physical B2/B30 materials + B3 candidate routing. */
+  LOCAL_PRODUCT_CURRENT_V3: 'review-v3:local-product-current',
+  LOCAL_PRODUCT_INTERRUPT_V3: 'review-v3:local-product-interrupt',
+  LOCAL_PRODUCT_MANUAL_CHOICE_V3: 'review-v3:local-product-manual-choice',
+  LOCAL_PRODUCT_UNMATCHED_V3: 'review-v3:local-product-unmatched',
   /** C Main-only current B20 physical candidate preview; never a published Plan. */
   B20_CANDIDATE_READ_V3: 'review-v3:b20-candidate-read',
   /** User requests Main to show native ZIP picker for one CURRENT B20 selected archive. */

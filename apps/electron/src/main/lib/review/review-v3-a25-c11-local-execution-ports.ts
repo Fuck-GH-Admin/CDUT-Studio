@@ -29,6 +29,9 @@ import {A23ObservedHostTechnicalAdapter,type A23PhysicalExecutor,
   from './review-v3-a23-physical-host-observer'
 import {A24BoundedTechnicalBatchScheduler}
   from './review-v3-a24-bounded-technical-batch'
+import {A26NativeReviewPiSessionFactory,
+  type A26MainReviewPiSelectionPort}
+  from './review-v3-a26-native-pi-session-factory'
 
 export interface A25MainCaseExecutionBinding {
   /** Main-issued scoped submit capability; never accept this from Renderer. */
@@ -41,8 +44,10 @@ export interface A25MainCaseExecutionBinding {
     readonly proposals:OwnerPersistence
     readonly background:OwnerPersistence
   }
-  /** Creates a fresh Pi session on every authorized Provider request. */
-  readonly piSessions:V3APiHttpSingleRequestFactory
+  /** Existing factory, used when C already has a dedicated Pi session adapter. */
+  readonly piSessions?:V3APiHttpSingleRequestFactory
+  /** Preferred: current Main model/channel/tool selection; A constructs real Pi. */
+  readonly piMainSelection?:A26MainReviewPiSelectionPort
   readonly physicalExecutor:A23PhysicalExecutor
   readonly physicalObserver:A23TechnicalPhysicalObserver
 }
@@ -118,8 +123,12 @@ export class A25C11LocalExecutionPorts {
     if(!stores?.turns?.compareAndWrite||!stores.dispatch?.compareAndWrite||
        !stores.proposals?.compareAndWrite||!stores.background?.compareAndWrite)
       reject('FOUR_DURABLE_CASE_CAS_STORES_REQUIRED')
-    if(!input.piSessions?.create)
-      reject('REAL_PI_SESSION_FACTORY_NOT_CONFIGURED')
+    const piSessions=input.piSessions ??
+      (input.piMainSelection
+        ? new A26NativeReviewPiSessionFactory(input.piMainSelection)
+        : undefined)
+    if(!piSessions?.create)
+      return reject('REAL_PI_SESSION_FACTORY_NOT_CONFIGURED')
     const turns=new V3ATurnBudget(stores.turns,input.owners)
     const dispatch=new V3ASDKDispatchFence(stores.dispatch,input.owners)
     const host=new A23ObservedHostTechnicalAdapter(
@@ -132,7 +141,7 @@ export class A25C11LocalExecutionPorts {
     const producer=new V3AProposalProducer(
       stores.proposals,input.owners,host,turns)
     const sdk=new V3APhysicalSDKTurnPort(
-      new V3APiHttpSingleRequestEngine(input.piSessions))
+      new V3APiHttpSingleRequestEngine(piSessions))
     const bridge=new V3ASDKTurnBridge(
       input.owners,turns,producer,sdk,dispatch)
     const driver=new V3ATechnicalSequenceDriver(

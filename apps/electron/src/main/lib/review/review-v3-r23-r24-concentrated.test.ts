@@ -210,4 +210,56 @@ describe('Dev-A R24 bounded hidden/batch Case scheduling (no business finalizer)
       'untrusted hidden/batch mode')
     expect(count).toBe(0)
   })
+  it('R24-04 live progress and cancellation of only one queued Case',async()=>{
+    let releaseFirst:((t:A22BackgroundTask)=>void)|undefined
+    const invoked:string[]=[]
+    const coordinator={
+      run:async ({requestId}:A24ScheduledCase['request'])=>{
+        invoked.push(requestId)
+        if(requestId==='01')
+          return new Promise<A22BackgroundTask>(resolve=>{releaseFirst=resolve})
+        return task('case-'+requestId,requestId)
+      },
+      inspect:(id:string)=>task(id,id.slice(-2)),
+      stop:()=>({state:'stopping'}),
+    } as unknown as V3ABackgroundTechnicalCoordinator
+    const scheduler=new A24BoundedTechnicalBatchScheduler(coordinator,1)
+    const pending=scheduler.runBatch([
+      job('01','case-01'),job('02','case-02'),job('03','case-03'),
+    ])
+    expect(scheduler.progress()).toMatchObject({
+      state:'running',started:1,total:3,
+      active:[{caseId:'case-01',requestId:'01'}],
+      queued:[{caseId:'case-02'},{caseId:'case-03'}],
+    })
+    expect(scheduler.stopCase('case-02')).toBe(true)
+    expect(scheduler.progress().queued.map(x=>x.caseId)).toEqual(['case-03'])
+    releaseFirst?.(task('case-01','01'))
+    const result=await pending
+    expect(result).toMatchObject({started:2,completed:2,notStarted:1})
+    expect(result.results.map(x=>x.outcome)).toEqual([
+      'technical','not-started','technical'])
+    expect(invoked).toEqual(['01','03'])
+    expect(scheduler.progress()).toMatchObject({
+      state:'idle',total:3,started:2,
+    })
+  })
+  it('R24-05 Provider recovery-required cannot count as a successful batch Case',async()=>{
+    const coordinator={
+      run:async ({requestId}:A24ScheduledCase['request'])=>({
+        ...task('case-'+requestId,requestId),
+        state:'recovery-required' as const,
+        reason:'PROVIDER_QUOTA_OR_RECEIPT_UNKNOWN',
+      }),
+      inspect:()=>null,
+      stop:()=>({state:'stopping'}),
+    } as unknown as V3ABackgroundTechnicalCoordinator
+    const scheduler=new A24BoundedTechnicalBatchScheduler(coordinator,2)
+    const result=await scheduler.runBatch([job('01','case-01')])
+    expect(result).toMatchObject({started:1,completed:0,notStarted:0})
+    expect(result.results).toEqual([{
+      caseId:'case-01',requestId:'01',outcome:'recovery-required',
+      reason:'PROVIDER_QUOTA_OR_RECEIPT_UNKNOWN',
+    }])
+  })
 })

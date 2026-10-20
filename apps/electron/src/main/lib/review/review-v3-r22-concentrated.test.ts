@@ -267,4 +267,31 @@ describe('Dev-A R22 actual owner + durable multi-turn background execution',()=>
       expect(coordinator.inspect(a.caseId)?.state).toBe('recovery-required')
     }finally{rmSync(dir,{recursive:true,force:true})}
   },90000)
+  it('R22-C-04: real background status exposes quota failure and never auto-retries',async()=>{
+    const a=fixture('r22-quota-case')
+    let requests=0
+    a.setSDK(async()=>{
+      requests++
+      throw new Error('429 quota exceeded')
+    })
+    const newStore=new Store()
+    const coordinator=new V3ABackgroundTechnicalCoordinator({
+      assertCurrent:()=>a.owner.assertAuthorized(
+        a.call.sessionId,a.call.grantId,a.call.senderKey,a.call.principal,
+        'review_submit_result').runEvidence!,
+      driverForCase:()=>a.driver,
+      storeForCase:()=>newStore,
+    })
+    const result=await coordinator.run({
+      requestId:'quota-01',call:a.call,sequence:a.sequence(['hidden']),
+    })
+    expect(result).toMatchObject({state:'recovery-required',
+      reason:'PROVIDER_QUOTA_OR_RATE_LIMIT_REQUIRES_REVIEW'})
+    expect(coordinator.inspect(a.caseId)?.reason)
+      .toBe('PROVIDER_QUOTA_OR_RATE_LIMIT_REQUIRES_REVIEW')
+    await expect(coordinator.run({
+      requestId:'quota-02',call:a.call,sequence:a.sequence(['hidden']),
+    })).rejects.toThrow('unresolved background technical dispatch')
+    expect(requests).toBe(1)
+  })
 })
