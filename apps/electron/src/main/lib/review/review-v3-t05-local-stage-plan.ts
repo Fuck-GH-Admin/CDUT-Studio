@@ -20,6 +20,8 @@ export interface T05VerifiedRun {
   status: 'completed' | 'partially-completed'
   /** Main confirmed input hash, policy/material revisions and source versions. */
   current: boolean
+  /** Main evaluated all required checks, human dispositions and exemptions. */
+  decisionReadiness: 'ready' | 'blocked'
 }
 
 export interface T05StagePlanningInput {
@@ -107,6 +109,10 @@ export function planT05LocalStageAction(input: T05StagePlanningInput): T05StageP
     throw Error('T05_CURRENT_REAL_RUN_REQUIRED')
   }
   proposal.basedOnRunId = input.verifiedRun.id
+
+  if (action === 'stage-pass' && input.verifiedRun.decisionReadiness !== 'ready') {
+    throw Error('T05_REQUIRED_CHECKS_NOT_RESOLVED')
+  }
 
   if (action === 'stage-pass') {
     if (stage.nextStageId) {
