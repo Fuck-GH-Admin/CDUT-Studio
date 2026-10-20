@@ -12,7 +12,7 @@ export interface T01BriefDraft {
   template: TemplateVersion
   extracted: string[]
   questions: string[]
-  supportedBy: 'explicit-local-brief'
+  supportedBy: 'explicit-local-brief' | 'authorized-model-draft'
 }
 
 const scenarios: Array<[RegExp, T01ScenarioId]> = [
