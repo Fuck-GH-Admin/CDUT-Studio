@@ -3,7 +3,7 @@
  * This is a pure proposal adapter: Main remains the only Case/Run writer.
  * Numeric inputs must be human-confirmed facts, not model-suggested scores.
  */
-import type { CanonicalPlan, ConditionAST, PlanBinding, RuleSpec, TriState } from '@profer/shared'
+import type { CanonicalPlan, CheckResult, ConditionAST, PlanBinding, RuleSpec, SourceRef, TriState } from '@profer/shared'
 import { evaluateCondition } from './deterministic-engine'
 
 export type T04Value = {
@@ -20,6 +20,7 @@ export type T04Operation =
   | { kind: 'amount-cap'; amountField: string; currencyField: string; cap: string; currency: string; precision?: number }
   | { kind: 'date-range'; field: string; from?: string; until?: string }
   | { kind: 'value-limit'; field: string; maximum: string; unit?: string }
+  | { kind: 'value-equals'; field: string; expected: string; unit?: string }
   | { kind: 'level-mapping'; field: string; scoreField: string; levels: Record<string, string> }
   | { kind: 'unresolved'; reason: string }
 export type T04PolicyClaim = { key: string; rule: RuleSpec; operation: T04Operation }
@@ -154,7 +155,7 @@ export function compileT04Operation(rule: RuleSpec): T04Operation {
   if (x.kind === 'date-range' && (x.dateFrom || x.dateTo))
     return {kind: 'date-range', field: 'activityDate', ...(x.dateFrom ? {from: x.dateFrom} : {}), ...(x.dateTo ? {until: x.dateTo} : {})}
   if (x.kind === 'score-value' && typeof x.value === 'number' && x.appliesWhen)
-    return {kind: 'value-limit', field: 'declaredScore', maximum: String(x.value), unit: 'point'}
+    return {kind: 'value-equals', field: 'declaredScore', expected: String(x.value), unit: 'point'}
   if (x.kind === 'level-mapping' && x.levels && Object.keys(x.levels).length)
     return {kind: 'level-mapping', field: 'level', scoreField: 'declaredScore', levels: Object.fromEntries(Object.entries(x.levels).map(([key,value]) => [key, String(value)]))}
   return {kind: 'unresolved', reason: '未实现的结构化约束需人工确认，不能编译为通过'}
@@ -170,7 +171,8 @@ export function resolveT04PolicyClaims(claims: T04PolicyClaim[], decisions: T04P
   for (const claim of claims) groups.set(claim.key, [...(groups.get(claim.key) ?? []), claim])
   const selected: T04PolicyClaim[] = [], blocked: T04ResolvedClaims['blocked'] = [], excluded: T04ResolvedClaims['excluded'] = []
   for (const [key, group] of groups) {
-    const ordered = [...group].sort((a,b) => a.rule.id.localeCompare(b.rule.id))
+    const byRule = new Map(group.map(claim => [claim.rule.id, claim]))
+    const ordered = [...byRule.values()].sort((a,b) => a.rule.id.localeCompare(b.rule.id))
     const uniqueDefinitions = unique(ordered.map(x => JSON.stringify({operation:x.operation, when:x.rule.when, exceptions:x.rule.exceptions ?? []})))
     const decision = decisions.find(x => x.key === key && x.confirmedBy.trim() && x.reason.trim() && ordered.some(y => y.rule.id === x.selectedRuleId))
     if (uniqueDefinitions.length > 1 && !decision) {
@@ -339,6 +341,24 @@ function valueLimit(rule:RuleSpec,op:Extract<T04Operation,{kind:'value-limit'}>,
   return complete(failed.length?'non-compliant':'compliant',null,failed.length?'超出上限: '+failed.join(','):'全部值符合上限',lines,items,rule)
 }
 
+function equalsValue(rule:RuleSpec,op:Extract<T04Operation,{kind:'value-equals'}>,items:T04Item[]):T04Outcome {
+  let expected:bigint
+  try {expected=decimalT04(op.expected)}catch{return pending('固定分值配置不合法',items,rule)}
+  const failed:string[]=[],missing:string[]=[],detail:string[]=[]
+  for(const item of items) {
+    const v=field(item,op.field)
+    if(!known(v)||(op.unit&&v.unit&&v.unit!==op.unit)) {missing.push(item.id+':'+op.field);continue}
+    try {
+      if(typeof v.value!=='string'&&typeof v.value!=='number')throw Error('not numeric')
+      const value=decimalT04(v.value)
+      detail.push(item.id+': '+String(v.value)+' == '+op.expected)
+      if(value!==expected)failed.push(item.id)
+    }catch {missing.push(item.id+':'+op.field)}
+  }
+  if(missing.length)return pending('固定分值未知',items,rule,missing)
+  return complete(failed.length?'non-compliant':'compliant',null,failed.length?'固定分值不一致':'固定分值匹配',detail,items,rule)
+}
+
 function mapping(rule:RuleSpec,op:Extract<T04Operation,{kind:'level-mapping'}>,items:T04Item[]):T04Outcome {
   const missing:string[]=[],lines:string[]=[],failed:string[]=[]
   for(const item of items) {
@@ -370,6 +390,7 @@ export function evaluateT04Rule(rule:RuleSpec,operation:T04Operation,items:T04It
     case 'amount-cap':return amount(rule,operation,split.accepted)
     case 'date-range':return dateRange(rule,operation,split.accepted)
     case 'value-limit':return valueLimit(rule,operation,split.accepted)
+    case 'value-equals':return equalsValue(rule,operation,split.accepted)
     case 'level-mapping':return mapping(rule,operation,split.accepted)
   }
 }
@@ -383,15 +404,18 @@ export function evaluateT04Rule(rule:RuleSpec,operation:T04Operation,items:T04It
 export function evaluateT04Plan(
   plan:CanonicalPlan,checks:T04PlanCheck[],decisions:T04PolicyDecision[]=[],
 ):T04PlanProposal[] {
-  const byKey=new Map(checks.map(c=>[c.binding.checkKey,c]))
-  const allowed=new Map(plan.bindings.map(x=>[x.checkKey,x]))
+  const identity=(x:PlanBinding):string => JSON.stringify([x.checkKey,x.targetKey,x.objectKey,x.subjectId])
+  const byKey=new Map(checks.map(c=>[identity(c.binding),c]))
+  const allowed=new Set(plan.bindings.map(identity))
+  if(byKey.size!==checks.length||allowed.size!==plan.bindings.length||byKey.size!==allowed.size)
+    throw new Error('T04_BINDING_SET_MISMATCH')
   const claims=checks.filter(c=>c.policyClaimKey).map(c=>({key:c.policyClaimKey!,rule:c.rule,operation:c.operation}))
   const resolution=resolveT04PolicyClaims(claims,decisions)
   const blocked=new Set(resolution.blocked.map(x=>x.key))
   const excluded=new Set(resolution.excluded.map(x=>x.ruleId))
   return plan.bindings.map(binding=>{
-    const check=byKey.get(binding.checkKey)
-    if (!check || !allowed.has(binding.checkKey)) throw new Error('T04_CHECK_BINDING_MISSING: '+binding.checkKey)
+    const check=byKey.get(identity(binding))
+    if (!check || !allowed.has(identity(binding))) throw new Error('T04_CHECK_BINDING_MISSING: '+binding.checkKey)
     if(check.binding.targetKey!==binding.targetKey||check.binding.objectKey!==binding.objectKey||
        check.binding.subjectId!==binding.subjectId)throw new Error('T04_BINDING_TARGET_MISMATCH: '+binding.checkKey)
     let outcome:T04Outcome
@@ -409,4 +433,32 @@ export function evaluateT04Plan(
       sourceVersionIds:[...binding.sourceVersionIds],outcome,
     }
   })
+}
+
+
+/**
+ * Presentation adapter for the existing ReviewRunV2 CheckResult contract.
+ * Main supplies the verified SourceRef objects, true target and execution time;
+ * neither policy source-id strings nor model citations are invented here.
+ */
+export function toT04CheckResult(
+  proposal:T04PlanProposal,
+  target:CheckResult['target'],
+  verifiedSources:SourceRef[],
+  executedAt:string,
+):CheckResult {
+  const outcome=proposal.outcome
+  return {
+    checkId:'t04:'+JSON.stringify([proposal.checkKey,proposal.targetKey,proposal.objectKey]),
+    ruleId:proposal.ruleId,
+    target,
+    status:outcome.status,
+    reason:outcome.reason,
+    sourceRefs:[...verifiedSources],
+    ...(outcome.result!==null ? {calculation:{
+      inputs:[], result:outcome.result, detailLines:[...outcome.detailLines],
+    }} : {}),
+    executedBy:'deterministic',
+    executedAt,
+  }
 }
