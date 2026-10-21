@@ -1,3 +1,31 @@
+### 易用性与稳定性收口
+
+**问题**：审核模块包含后台 Pi 运行、规则计算、文件解析等大量异步链路；
+一处遗漏的 catch 若逃逸为 `uncaughtException`，Node 默认会**直接终止主进程**，
+Electron 窗口与所有未保存状态一起丢失。
+
+**已确认的现有防护**：
+
+| 层面 | 现状 |
+|---|---|
+| 渲染层白屏 | 审核视图已由 `CdutZoneErrorBoundary` 包裹（`fallbackTitle="子业务模块渲染异常"`），子模块崩溃只降级该区域，导航与其它功能仍可用 |
+| 发射后不管的 IPC | 全仓扫描 `void window.reviewAPI.*`，**0 处**缺少 `.catch` |
+| 审核运行失败 | 已有 watchdog + `run.error` 上报，运行终态为 `failed` 并带中文诊断 |
+
+**本轮新增（主进程全局兜底 `lib/process-guards.ts`）**：
+- `unhandledRejection` 与 `uncaughtException` 一律记录（类型/消息/栈/时间/重复次数）；
+- **故意不退出进程**：异常留痕但不升级为进程死亡；
+- 按「错误类型 + 消息」指纹节流（首次与每 50 次记录），避免错误循环刷屏；
+- 记录上限 50 条，异常风暴不会吃满内存；读取返回只读副本；
+- 在 `app.whenReady()` 之前安装，覆盖启动期与运行期。
+
+**过程中修掉的一个自身缺陷**：指纹最初纳入调用栈行号，同一错误因调用点不同被
+判成不同错误，节流失效；已改为只按类型 + 消息。
+
+**测试**：`process-guards.test.ts`（5 项：安装幂等、拒绝记录、重复计数、条目上限、
+只读副本）+ `CdutZoneErrorBoundary.test.ts`（3 项：进入降级、异常替换、初始状态干净）。
+
+---
 ### M4 收尾：F15 契约接线（本轮修复的集成缺口）
 
 **发现**：PR #206 引入了 `review-v3-t07-round-setup.ts:createT07RoundFromPublishedTemplate`，
