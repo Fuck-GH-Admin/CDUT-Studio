@@ -76,8 +76,9 @@ async function navigate(){
  }
  await wait('review menu','document.body?.innerText?.includes("材料审核")',60000)
  await click('材料审核')
- await wait('candidate tab','document.body?.innerText?.includes("本地候选模板")')
- await click('本地候选模板')
+ // 该分栏在近期界面调整中改名为「候选方案与技术试跑」，按当前文案定位
+ await wait('candidate tab','document.body?.innerText?.includes("候选方案与技术试跑")')
+ await click('候选方案与技术试跑')
  await wait('create case UI','!!document.querySelector("input[aria-label=本地案卷标题]")')
 }
 try{

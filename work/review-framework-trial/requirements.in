@@ -1,5 +1,0 @@
-# 2026-10-08 核对 PyPI 与官方安装文档后固定；仅用于隔离试用。
-deepagents==0.7.23
-langchain-openai==1.6.7
-# 原生 PDF 和 Office 试用无需安装本地视觉模型。
-docling-slim[convert-core,format-pdf,format-office]==2.135.0
