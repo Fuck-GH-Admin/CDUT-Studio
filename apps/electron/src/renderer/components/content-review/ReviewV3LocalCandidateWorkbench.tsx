@@ -9,6 +9,7 @@ import { reviewV2AggregateAtom } from './V2CasePanel'
 import { ReviewV3LocalManualItem } from './ReviewV3LocalManualItem'
 import { ReviewV3LocalPiControls } from './ReviewV3LocalPiControls'
 import { D4CaseSetup } from './D4CaseSetup'
+import { ReviewV3TemplateRoutingAssistant } from './ReviewV3TemplateRoutingAssistant'
 import type { D4ClientSelection } from '@profer/shared'
 import { ReviewV3CandidateIntakeSurface } from '../review-v3-dev-b/ReviewV3CandidateIntakeSurface'
 import type { C11MainLocalProductRead } from '../../../main/lib/review/review-v3-main-local-product-intake'
@@ -285,6 +286,14 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       {caseNotice&&<p role="status" className="text-xs">{caseNotice}</p>}
       {caseError&&<p role="alert" className="text-xs text-red-600">{caseError}</p>}
     </div>
+    {localCaseId&&!activePlan&&<ReviewV3TemplateRoutingAssistant
+      caseId={localCaseId}
+      onPlanInstalled={plan=>{
+        setActivePlan(plan)
+        setMaterialsEpoch(x=>x+1)
+      }}
+      onTemplateBound={()=>setMaterialsEpoch(x=>x+1)}
+    />}
     {activePlan&&<div className="space-y-2 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">本案已绑定审核计划</h2>
       <p className="text-sm">{activePlan.templateId}@{activePlan.templateVersion} · 已固定 {activePlan.checks} 项检查</p>

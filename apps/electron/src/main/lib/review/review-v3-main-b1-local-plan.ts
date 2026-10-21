@@ -9,6 +9,7 @@ import {assertC0ReviewMainSender} from './review-c0-authority'
 import {getTemplate,isAuthoringCandidateDraft,saveAuthoringCandidateDraft,isSafeTemplateId} from './template-store'
 import {readB1FrozenCandidate,readB1AuthorRevision} from './review-template-author-store-v3-b1'
 import {verifyD2InstalledPlan} from './review-d2-runtime'
+import {assertC2PhysicalOriginalBytes} from './review-v3-main-trust-port'
 
 const sha=(x:unknown)=>createHash('sha256').update(JSON.stringify(x)??'undefined').digest('hex')
 const actor:Actor={actorId:'local-reviewer',actorSource:'local',role:'reviewer'}
@@ -31,6 +32,21 @@ export function installC11NativeB1TechnicalPlan():void{
     if(!latest)throw Error('B1_AUTHOR_REVISION_MISSING')
     const author=latest.document,descriptor=frozen.descriptor,version=Number(author.templateVersion)
     if(!Number.isSafeInteger(version)||version<1)throw Error('B1_NUMERIC_VERSION_REQUIRED')
+    // 公共兜底入口的B29来源最初是瞬态B2 docv-*；装入原生案卷之前必须
+    // 对应到当前案卷实际登记的原件版本，逐份物理验真且覆盖当前全部原件。
+    // 不能仅因同名或同SHA从另一案卷挑选来源，也不能默默遗漏附件。
+    if(author.templateId.startsWith('fallback-')){
+      const active=current.caseV2.documents.filter(doc=>doc.active!==false)
+      const declared=descriptor.sourceLedger.map(source=>source.documentVersionId)
+      const actual=new Set(active.map(doc=>doc.versionId))
+      if(!active.length||active.filter(doc=>doc.role==='application').length!==1||
+        declared.length!==actual.size||new Set(declared).size!==declared.length||
+        declared.some(versionId=>!actual.has(versionId))||
+        descriptor.sourceLedger.some(source=>source.kind!=='user-declared'||
+          source.locator!=='native-document:'+source.documentVersionId))
+        throw Error('B1_FALLBACK_NATIVE_SOURCE_COVERAGE_MISMATCH')
+      for(const doc of active)assertC2PhysicalOriginalBytes(current,doc.versionId)
+    }
     const existing=getTemplate(input.templateId,version)
     if(existing&&(!isAuthoringCandidateDraft(input.templateId,version)||
       !existing.sourceNote?.startsWith('D1_AUTHORING_CANDIDATE: B1')))
@@ -76,6 +92,10 @@ export function installC11NativeB1TechnicalPlan():void{
       const id='d2-'+sha([input.templateId,version,b.checkKey,b.targetKey]).slice(0,20)
       const authority=b.sourceIds.every(s=>sourceMap.get(s)?.kind==='user-declared')
         ? 'request-scope' : 'unverified-policy'
+      // 新公共兜底B1来源已由Main锁定到本案DocumentVersion；把这些真实版本
+      // 写入RuleSpec而非临时作者sourceId，旧B1作者入口继续保留原先映射语义。
+      const physicalSourceIds=author.templateId.startsWith('fallback-')
+        ? [...b.sourceVersionIds]:[...b.sourceIds]
       rules.push({
         id,policyVersionId:'workspace:b1-'+input.templateId+'@'+frozen.revision,
         title:b.responsibility,
@@ -83,11 +103,11 @@ export function installC11NativeB1TechnicalPlan():void{
           '来源：'+b.sourceIds.map(s=>s+'/'+(sourceMap.get(s)?.documentVersionId??'未知')).join('、')].join('\n'),
         when:{all:[]},sectionId:'d2-scope-'+sha(t.objectKey).slice(0,16),
         targetScope:'subject',execution:'semantic',semanticOutputEnum:['compliant','non-compliant'],
-        onFail:'manual-review',onUnknown:'needs-confirmation',sourceRefIds:[...b.sourceIds],
+        onFail:'manual-review',onUnknown:'needs-confirmation',sourceRefIds:physicalSourceIds,
         priority:50000+i,confirmation:authority==='request-scope'?'confirmed':'unconfirmed',
       })
       mapping.push({checkId:b.checkKey+'#'+b.targetKey,ruleId:id,
-        objectKey:t.objectKey,subjectId:t.subjectId,sourceIds:[...b.sourceIds],
+        objectKey:t.objectKey,subjectId:t.subjectId,sourceIds:physicalSourceIds,
         authority,applicability:b.applicability})
     }
     if(!mapping.length)throw Error('B1_PLAN_HAS_NO_CHECKS')
