@@ -77,7 +77,17 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
       })
       if (!response?.ok) throw new Error(response?.message ?? '业务字段保存失败')
       await actions.refresh()
-      setNotice('修改已通过 Main 案卷命令保存。旧 Run 不会被改写，需重新审核受影响的规则。')
+      // 修改后不能继续展示旧 Run 当作最新结论；直接生成新的正式规则 Run。
+      // Main 会按当前案卷和模板重新冻结输入，历史 Run 保留不改写。
+      let reviewMessage = ''
+      try {
+        const nextRun = await window.reviewAPI.runTemplateRuleReview({ caseId: aggregate.caseV2.id })
+        await actions.refresh()
+        reviewMessage = `已重新检查 ${nextRun.checks.length} 项模板规则，旧 Run 保留；AI 语义意见仍需重新运行完整审核。`
+      } catch (recheckError) {
+        reviewMessage = `修改已保存，但自动重审未完成：${recheckError instanceof Error ? recheckError.message : String(recheckError)}。请在规则检查区重新审核。`
+      }
+      setNotice(`字段修改已保存。${reviewMessage}`)
       setConfirmed(false)
       setDraft('')
     } catch (error) {
@@ -136,10 +146,10 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
           }
         </label>
         <div className="rounded bg-background p-2">对比：{showT08FieldValue(target.before)} → <strong>{draft || '待填写'}</strong></div>
-        <p className="text-muted-foreground">保存前由 Main 使用案卷绑定的已发布模板重新校验字段类型与权限；旧 Run 不会因此自动重跑。</p>
+        <p className="text-muted-foreground">保存前由 Main 校验字段与权限；保存后会尝试用当前案卷版本重新运行规则检查，保留旧运行历史。</p>
         <label className="flex items-start gap-2">
           <input type="checkbox" className="mt-1" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
-          <span>我已核对原件和模板，确认仅修改选定字段；这不是自动采纳模型意见，也不是校方审批。修改后原 Run 保留、需重新检查。</span>
+          <span>我已核对原件和模板，确认仅修改选定字段；这不是自动采纳模型意见。保存后将尝试重审，旧 Run 保留。</span>
         </label>
         <button type="button" className="rounded bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50"
           disabled={stale || busy || !draft.trim() || !confirmed} onClick={() => void apply()}>
