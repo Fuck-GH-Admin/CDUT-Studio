@@ -59,7 +59,7 @@ describe('F13 Main 本地申诉闭环', () => {
     expect(aggregate.caseV2.stage).toBe('awaiting-review')
     expect(aggregate.appeals).toHaveLength(1)
     expect(aggregate.tasks.find((task) => task.stageId === 'appeal-review')?.assigneeActorId).toBe('local-teacher')
-    expect(aggregate.receiptLog.at(-1)?.actor.role).toBe('student')
+    expect(aggregate.receiptLog.at(-1)?.actor?.role).toBe('student')
     expect(aggregate.decisions).toHaveLength(1)
 
     const retry = await submitLocalF13Appeal({
@@ -91,7 +91,7 @@ describe('F13 Main 本地申诉闭环', () => {
     expect(aggregate.caseV2.stage).toBe('decided')
     expect(aggregate.tasks[0]?.status).toBe('completed')
     expect(aggregate.decisions).toHaveLength(1)
-    expect(aggregate.receiptLog.at(-1)?.actor.actorId).toBe('local-teacher')
+    expect(aggregate.receiptLog.at(-1)?.actor?.actorId).toBe('local-teacher')
   })
 
   test('Given 申诉新增证据但尚未重审 When 要求改判 Then 禁止修改既有决定', async () => {
@@ -130,6 +130,6 @@ describe('F13 Main 本地申诉闭环', () => {
     expect(aggregate.tasks[0]?.status).toBe('cancelled')
     expect(aggregate.decisions).toHaveLength(1)
     expect(aggregate.caseV2.stage).toBe('decided')
-    expect(aggregate.receiptLog.at(-1)?.actor.actorId).toBe('local-student')
+    expect(aggregate.receiptLog.at(-1)?.actor?.actorId).toBe('local-student')
   })
 })

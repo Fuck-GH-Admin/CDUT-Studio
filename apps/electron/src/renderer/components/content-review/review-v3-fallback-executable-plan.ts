@@ -8,7 +8,7 @@ import type { T01BriefDraft } from './review-v3-t01-brief-authoring'
 export function proposedFallbackChecks(proposal:T01BriefDraft,brief:string):string[] {
   const model=proposal.supportedBy==='authorized-model-draft'
   const statements=(model||proposal.extracted.some(item=>item.startsWith('草拟要求：'))
-    ? proposal.template.sections.flatMap(section=>section.criteria.map(item=>item.requirement.trim()))
+    ? (proposal.template.sections ?? []).flatMap(section=>section.criteria.map(item=>item.requirement.trim()))
     : [])
   const mandatory=(model||proposal.extracted.some(item=>item.startsWith('材料：'))
     ? proposal.template.materialSlots:[]).filter(item=>item.minCount>0)

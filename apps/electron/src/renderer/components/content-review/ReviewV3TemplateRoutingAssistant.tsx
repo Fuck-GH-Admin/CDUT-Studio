@@ -192,7 +192,7 @@ export function ReviewV3TemplateRoutingAssistant({caseId,onPlanInstalled,onTempl
     </div>}
     {caseId&&read&&!installed&&<>
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="rounded-full bg-muted px-2 py-1">真实材料 {read.read.inventory.sources.length} 份</span>
+        <span className="rounded-full bg-muted px-2 py-1">真实材料 {read.read.inventory?.sources?.length ?? 0} 份</span>
         <span className="rounded-full bg-muted px-2 py-1">D4 {d4Catalog.length} 套 + 本机已发布 {known.length} 套</span>
         <span className="rounded-full bg-muted px-2 py-1">{route?.status==='default-selected'?'已匹配':route?.status==='countdown'?'建议确认中':route?.status==='unmatched'?'未匹配':route?.status==='awaiting-evidence'?'缺少可用材料':'需人工选择'}</span>
       </div>

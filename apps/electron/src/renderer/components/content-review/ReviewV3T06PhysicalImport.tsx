@@ -155,7 +155,10 @@ export function ReviewV3T06PhysicalImport({
       <div className="max-h-72 space-y-2 overflow-y-auto">
         {preview.groups.map(group => {
           const choice: T06GroupChoice = selected[group.groupId] ?? { action: 'create', title: group.name, applicant: '' }
-          const caseTemplate = templates.find(t => t.templateId === choice.templateId && t.version === choice.templateVersion)
+          // 'exclude' 分支没有模板字段，统一用收窄后的读取，避免直接访问联合类型成员
+          const choiceTemplateId = choice.action === 'exclude' ? undefined : choice.templateId
+          const choiceTemplateVersion = choice.action === 'exclude' ? undefined : choice.templateVersion
+          const caseTemplate = templates.find(t => t.templateId === choiceTemplateId && t.version === choiceTemplateVersion)
           const suggestion = proposed[group.groupId]
           return <div className="space-y-2 rounded border bg-background p-2" key={group.groupId}>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -164,8 +167,8 @@ export function ReviewV3T06PhysicalImport({
                 aria-label={group.name + ' 分案方式'} onChange={e => {
                   const action = e.target.value
                   choose(group.groupId, action === 'exclude' ? { action: 'exclude' } :
-                    action === 'existing' ? { action: 'existing', caseId: '', templateId: choice.templateId, templateVersion: choice.templateVersion } :
-                    { action: 'create', title: group.name, applicant: '', templateId: choice.templateId, templateVersion: choice.templateVersion })
+                    action === 'existing' ? { action: 'existing', caseId: '', templateId: choiceTemplateId, templateVersion: choiceTemplateVersion } :
+                    { action: 'create', title: group.name, applicant: '', templateId: choiceTemplateId, templateVersion: choiceTemplateVersion })
                 }}>
                 <option value="create">新建案卷</option><option value="existing">绑定已有案卷</option><option value="exclude">排除</option>
               </select>

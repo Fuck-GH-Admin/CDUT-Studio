@@ -80,7 +80,11 @@ export function ReviewV3T03FactWorkbench({ onRestructure }: { onRestructure?: (p
     try {
       await task()
       try {
-        const nextRun = await window.reviewAPI.runTemplateRuleReview({ caseId: aggregate.caseV2.id })
+        // aggregate 可能已被刷新清空，取不到案卷时跳过重查而不是抛错
+        const caseIdForRecheck = aggregate?.caseV2.id
+        const nextRun = caseIdForRecheck
+          ? await window.reviewAPI.runTemplateRuleReview({ caseId: caseIdForRecheck })
+          : { checks: [] }
         await actions.refresh()
         setMessage(`${success}；已重新检查 ${nextRun.checks.length} 项模板规则，旧 Run 保留。涉及 AI 语义判断的事项仍需重新运行完整审核。`)
       } catch (recheckError) {

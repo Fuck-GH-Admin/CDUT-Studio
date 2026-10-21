@@ -30,8 +30,8 @@ export function ReviewV3F13AppealHistory({ aggregate }: { aggregate: CaseAggrega
           {reviewTask && <p className="text-muted-foreground">复审任务：{reviewTask.id} · {reviewTask.assigneeRole}
             {reviewTask.assigneeActorId ? ` / ${reviewTask.assigneeActorId}` : ' / 未指派具体人员'} · {reviewTask.status}</p>}
           <p className="font-medium">处理结果：{outcomeLabel}</p>
-          {reviewReceipt && <p className="text-muted-foreground">复核回执：{reviewReceipt.actor.actorId} · {new Date(reviewReceipt.at).toLocaleString()} · {reviewReceipt.summary}</p>}
-          {withdrawalReceipt && <p className="text-muted-foreground">撤回回执：{withdrawalReceipt.actor.actorId} · {new Date(withdrawalReceipt.at).toLocaleString()}</p>}
+          {reviewReceipt && <p className="text-muted-foreground">复核回执：{reviewReceipt.actor?.actorId ?? '未知操作人'} · {new Date(reviewReceipt.at).toLocaleString()} · {reviewReceipt.summary}</p>}
+          {withdrawalReceipt && <p className="text-muted-foreground">撤回回执：{withdrawalReceipt.actor?.actorId ?? '未知操作人'} · {new Date(withdrawalReceipt.at).toLocaleString()}</p>}
           {amendment && <p>更正后决定：{decisionText[amendment.result] ?? amendment.result} · {amendment.id} · {amendment.reason}
             （{amendment.actor.actorId}，依据运行 {amendment.basedOnRunId}）</p>}
           {warnings.map((warning, index) => <p role="note" className="text-amber-700 dark:text-amber-300" key={`${appeal.id}-${index}`}>待核对：{warning}</p>)}
