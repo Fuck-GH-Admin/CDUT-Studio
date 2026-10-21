@@ -1,6 +1,7 @@
 # 材料审核 · 页面层级与跳转图（现状盘点）
 
 > 用途：供界面重排讨论。只描述**现在实际是什么样**，不包含建议改动。
+> 改版实施请阅读 [材料审核页面重组实施规范](./REVIEW-UI-REORGANIZATION-SPEC.md)：已确定目标导航、每页内容、信息取舍、组件迁移与验收场景；该规范是待实施方案。
 > 代码位置：`apps/electron/src/renderer/components/cdut-zone/CdutZoneView.tsx`、
 > `apps/electron/src/renderer/components/content-review/ContentReviewView.tsx`
 
