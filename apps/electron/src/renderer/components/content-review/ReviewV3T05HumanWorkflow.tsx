@@ -3,6 +3,7 @@
  * Renderer owns drafts and presentation only; all durable actions go through
  * existing reviewAPI commands and the Main-owned actor / revision boundary.
  */
+import { humanizeReviewError } from './review-error-text'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CaseAggregateV2, ReviewCommandResult } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
@@ -204,10 +205,10 @@ export function ReviewV3T05HumanWorkflow({
     try {
       const result = await run()
       onResult(result)
-      if (result && !result.ok) setError(result.message)
+      if (result && !result.ok) setError(humanizeReviewError(result.message))
       return Boolean(result?.ok)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(humanizeReviewError(cause))
       return false
     } finally {
       setBusy(false)

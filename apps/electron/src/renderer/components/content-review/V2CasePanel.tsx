@@ -19,6 +19,7 @@ import { ReviewV3T03FactWorkbench } from './ReviewV3T03FactWorkbench'
 import { ReviewV3TemplateRuleRun } from './ReviewV3TemplateRuleRun'
 import { ReviewV3T05HumanWorkflow } from './ReviewV3T05HumanWorkflow'
 import { ReviewV3T09OfflineSection } from './ReviewV3T09OfflineSection'
+import { humanizeReviewError } from './review-error-text'
 import { ReviewV3T05RunDecision } from './ReviewV3T05RunDecision'
 import { MaterialDropZone } from './MaterialDropZone'
 
@@ -99,7 +100,9 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
     try {
       await action()
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      // 展示层翻译成可执行的一句话；未识别的错误保留原文，避免掩盖真实原因
+      if (error instanceof Error) console.error('[审核] 操作失败原始错误:', error)
+      const message = humanizeReviewError(error)
       setNotice(message)
       toast.error(`操作失败：${message}`)
     } finally {
@@ -248,6 +251,12 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
   const [slotId, setSlotId] = useState('')
   const [runNonce, setRunNonce] = useState(0)
   const currentTemplate = templates.find((template) => template.templateId === current?.caseV2.templateId && template.version === current?.caseV2.templateVersion)
+  // 模板只有一个材料槽时自动选中：普通用户不该先学会「选槽位」才能上传材料
+  useEffect(() => {
+    const slots = currentTemplate?.materialSlots ?? []
+    if (slots.length === 1 && !slotId) setSlotId(slots[0]!.id)
+    if (slots.length > 1 && slotId && !slots.some((slot) => slot.id === slotId)) setSlotId('')
+  }, [currentTemplate?.materialSlots, slotId])
 
   const selectTemplate = (templateKey: string): void => {
     const [templateId, versionText] = templateKey.split('@')
@@ -297,7 +306,7 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
         {' · '}{current.caseV2.documents.filter((item) => item.active !== false).length} 份原件
         {' · '}{current.caseV2.stage === 'decided' ? '已形成业务决定' : '当前阶段：' + current.caseV2.stage}
       </p>}
-      <details className="mb-3 rounded-md border border-border/60 px-3 py-2">
+      <details open={!current} className="mb-3 rounded-md border border-border/60 px-3 py-2">
         <summary className="cursor-pointer text-xs font-medium">打开其他案卷 / 从已发布模板新建</summary>
         <div className="mt-3">
       <div className="mb-2 space-y-1.5 rounded-lg border-t pt-2">

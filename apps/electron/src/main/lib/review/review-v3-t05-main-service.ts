@@ -276,7 +276,11 @@ export function t05ActionEligibility(
     const explained = disposition
       && (disposition.disposition === 'waived' || disposition.disposition === 'human-confirmed-compliant')
     nonCompliant.push(check.checkId)
-    if (!explained) blockers.push(`存在未解释的非合规项：${check.checkId}`)
+    // 面向用户：给出检查的具体理由，而不是内部 checkId（用户看不懂 t04:[...]）
+    if (!explained) {
+      const human = (check.reason ?? '').trim()
+      blockers.push(`存在未解释的非合规项：${human || '有检查明确不符合要求'}`)
+    }
   }
 
   const ready = blockers.length === 0
