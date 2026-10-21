@@ -4,7 +4,7 @@
  */
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
-import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
+import { reviewWorkspaceSectionAtom, selectedCaseIdAtom } from '@/atoms/review-atoms'
 import { reviewV2AggregateAtom } from './V2CasePanel'
 import { ReviewV3LocalManualItem } from './ReviewV3LocalManualItem'
 import { ReviewV3LocalPiControls } from './ReviewV3LocalPiControls'
@@ -21,14 +21,17 @@ import type { B1CandidateReadResponse } from '../review-v3-dev-b/review-v3-autho
 
 export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:string}={}):React.ReactElement {
   const goToCase=useSetAtom(reviewWorkspaceSectionAtom)
+  // 与全局"当前案卷"保持同一来源，避免 localCaseId 与 selectedCaseId 长期分叉
+  const setSelectedCaseId=useSetAtom(selectedCaseIdAtom)
+  const syncSelected=(id:string):void=>{ if(id) setSelectedCaseId(id) }
   const showCase=useSetAtom(reviewV2AggregateAtom)
   const [caseTitle,setCaseTitle]=React.useState('本地人工审核')
   const [caseApplicant,setCaseApplicant]=React.useState('本机用户')
   const [caseYear,setCaseYear]=React.useState(String(new Date().getFullYear()))
   const [localCaseId,setLocalCaseId]=React.useState('')
   React.useEffect(()=>{
-    if (initialCaseId) setLocalCaseId(initialCaseId)
-  },[initialCaseId])
+    if (initialCaseId) { setLocalCaseId(initialCaseId); setSelectedCaseId(initialCaseId) }
+  },[initialCaseId,setSelectedCaseId])
   const [savedCases,setSavedCases]=React.useState<Array<{id:string;title:string}>>([])
   const [d4Selection,setD4Selection]=React.useState<D4ClientSelection|undefined>(undefined)
   const [routedD4TemplateId,setRoutedD4TemplateId]=React.useState<string|undefined>(undefined)
@@ -158,6 +161,7 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
         reviewTemplate:null,
       })
       setLocalCaseId(created.id)
+      syncSelected(created.id)
       setSavedCases([])
       setCaseNotice('本机原生案卷已创建：'+created.id+'；未绑定校方模板，请先导入材料并人工审核。')
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
@@ -253,8 +257,9 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
     try{
       const aggregate=await window.reviewAPI.openAggregateV2(localCaseId)
       if(!aggregate)throw new Error('未找到该原生案卷；请确认本机案卷 ID。')
+      // 留在当前审核，直接在本页下方的工作区继续，不再强制跳到另一个顶层页
       showCase(aggregate)
-      goToCase('case-v2')
+      setSelectedCaseId(localCaseId)
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
@@ -279,7 +284,9 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <input aria-label="当前本机案卷 ID" className="min-w-44 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm"
-          placeholder="本机已有案卷 ID 可直接粘贴重开" value={localCaseId} onChange={e=>setLocalCaseId(e.target.value)}/>
+          placeholder="本机已有案卷 ID 可直接粘贴重开" value={localCaseId}
+          onChange={e=>setLocalCaseId(e.target.value)}
+          onBlur={e=>syncSelected(e.target.value.trim())}/>
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
           disabled={caseBusy} onClick={()=>void listSavedCases()}>列出本机历史案卷</button>
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
@@ -310,7 +317,7 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
         </div>
       </div>}
       {savedCases.length>0&&<select aria-label="从历史案卷重开" value="" 
-        onChange={e=>{setLocalCaseId(e.target.value);setCaseNotice('已选择历史案卷 '+e.target.value) }}
+        onChange={e=>{setLocalCaseId(e.target.value);syncSelected(e.target.value);setCaseNotice('已选择历史案卷 '+e.target.value) }}
         className="w-full rounded border border-border bg-background px-2 py-2 text-sm">
         <option value="">选择一份本机历史案卷</option>
         {savedCases.map(c=><option key={c.id} value={c.id}>{c.title} · {c.id}</option>)}
@@ -332,18 +339,26 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
       <p className="break-all text-xs text-muted-foreground">任务指纹：{activePlan.fingerprint}</p>
       <p className="text-xs">不必重新选择模板。继续导入材料、在下方启动 Pi，或打开案卷进行人工复核。</p>
     </div>}
-    {localCaseId&&!activePlan&&<div className="space-y-3 rounded-lg border border-border p-4">
-      <h2 className="text-base font-semibold">使用已有 50 套 D4 模板生成本案审核任务</h2>
-      <p className="text-xs text-muted-foreground">复用 G01–G08 冻结候选和原有 D2 规则编译器。明确选择对象/场景后，一次性把技术预审 Plan 写入当前原生案卷；不另外创建案卷，不代表校方审批。已添加人工事项或已固定 Plan 的案卷请另建新案卷。</p>
-      <D4CaseSetup onChange={setD4Selection} suggestedTemplateId={routedD4TemplateId}/>
-      <button type="button" className="rounded border border-border px-3 py-2 text-sm disabled:opacity-50"
-        disabled={caseBusy||!d4Selection} onClick={()=>void installD4()}>
-        在当前案卷编译并固定 D4 技术审核任务
-      </button>
-      {d4Notice&&<p role="status" className="text-xs">{d4Notice}</p>}
-      {d4Error&&<p role="alert" className="text-xs text-red-600">{d4Error}</p>}
-    </div>}
-    <div className="space-y-2 rounded-lg border border-border p-4">
+    {localCaseId&&!activePlan&&<details open={Boolean(routedD4TemplateId)} className="rounded-lg border border-border p-3">
+      <summary className="cursor-pointer text-sm font-medium">确认方案参数并固定检查项</summary>
+      <div className="mt-3 space-y-3">
+        <p className="text-xs text-muted-foreground">
+          {routedD4TemplateId
+            ? `已按上方匹配结果选定方案 ${routedD4TemplateId}，这里只需确认对象与场景。`
+            : '在上方「模板匹配」里选择或确认一套方案后，这里用于确认对象与场景；也可以直接在这里手动选择。'}
+        </p>
+        <D4CaseSetup onChange={setD4Selection} suggestedTemplateId={routedD4TemplateId}/>
+        <button type="button" className="rounded border border-border px-3 py-2 text-sm disabled:opacity-50"
+          disabled={caseBusy||!d4Selection} onClick={()=>void installD4()}>
+          在当前案卷编译并固定检查项
+        </button>
+        {d4Notice&&<p role="status" className="text-xs">{d4Notice}</p>}
+        {d4Error&&<p role="alert" className="text-xs text-red-600">{d4Error}</p>}
+      </div>
+    </details>}
+    <details className="rounded-lg border border-border p-3">
+      <summary className="cursor-pointer text-sm font-medium">自定义方案：第 51 套候选作者（不匹配时使用）</summary>
+      <div className="mt-3 space-y-2">
       <h2 className="text-base font-semibold">本地候选审核模板 · 第 51 套</h2>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
@@ -364,7 +379,8 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
       </div>
       {message&&<p role="status" className="text-xs">{message}</p>}
       {error&&<p role="alert" className="text-xs text-red-600">{error}</p>}
-    </div>
+      </div>
+    </details>
     {localCaseId&&!activePlan&&<div className="space-y-2">
       {productError&&<p role="alert" className="text-xs text-red-600">
         当前材料 Main 读取失败：{productError}（未返回候选结果）
@@ -429,10 +445,10 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold">审核完成后核对与交付</h2>
-          <p className="text-xs text-muted-foreground">在原案卷修改证据、处理待办和作出人工决定；报告始终使用真实运行。</p>
+          <p className="text-xs text-muted-foreground">在本页下方「本案办理」即可继续核对、处理待办、作出决定并导出报告，不需要切换页面。</p>
         </div>
         <button type="button" className="rounded border border-primary/50 px-3 py-2 text-sm disabled:opacity-50"
-          disabled={caseBusy} onClick={()=>void openCase()}>打开本案复核与人工办理</button>
+          disabled={caseBusy} onClick={()=>{ void openCase().then(()=>{ document.getElementById('case-workspace-inline')?.scrollIntoView({behavior:'smooth',block:'start'}) }) }}>在下方继续办理</button>
       </div>
       {nativeRun&&<ReviewV3T08ReportPanel aggregate={nativeAggregate} currentRun={nativeRun} currentStale={nativeRunStale} template={null}/>}
       {!nativeRun&&<p className="text-xs text-muted-foreground">本案尚无真实运行，完成审核后可在这里直接下载报告。</p>}

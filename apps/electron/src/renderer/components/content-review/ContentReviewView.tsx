@@ -53,6 +53,7 @@ import { CenterPanel } from './CenterPanel'
 import { LeftPanel } from './LeftPanel'
 import { RightPanel } from './RightPanel'
 import { reviewV2AggregateAtom, V2CasePanel } from './V2CasePanel'
+import { selectedCaseIdAtom } from '@/atoms/review-atoms'
 import { ReviewV3T10WorkspaceOverview } from './ReviewV3T10WorkspaceOverview'
 import { TemplateWizardPanel } from './TemplateWizardPanel'
 import { ReviewV3LocalCandidateWorkbench } from './ReviewV3LocalCandidateWorkbench'
@@ -84,17 +85,26 @@ export function ContentReviewView(): React.ReactElement {
   const assistantOpen = useSetAtom(reviewAssistantOpenAtom)
 
   const actions = useReviewActions()
+  const selectedCaseId = useAtomValue(selectedCaseIdAtom)
 
   const [narrow, setNarrow] = React.useState(
     () => typeof window !== 'undefined' && window.innerWidth < NARROW_BREAKPOINT_PX,
   )
   const [exporting, setExporting] = React.useState(false)
   const [quickCaseId, setQuickCaseId] = React.useState<string | null>(null)
+  // 快速导入建案后：必须把该 ID 设为"当前案卷"，不能只靠 quickCaseId → initialCaseId 传递
   const quickStart = React.useCallback((caseId: string): void => {
-    setQuickCaseId(caseId)
-    setV2Aggregate(null)
-    setSection('local-candidates')
-  }, [setSection, setV2Aggregate])
+    void (async () => {
+      const ok = await actions.selectCase(caseId)
+      if (!ok) {
+        toast.error('案卷已创建，但切换为当前案卷失败；请到「结果与办理」重新打开该案卷')
+        return
+      }
+      setQuickCaseId(caseId)
+      setV2Aggregate(null)
+      setSection('local-candidates')
+    })()
+  }, [actions, setSection, setV2Aggregate])
 
   // 与独立的 V2 办理模块共用同一份真实案卷；只读取现有 Main 聚合。
   const openBusinessCase = React.useCallback(async (): Promise<void> => {
@@ -251,7 +261,15 @@ export function ContentReviewView(): React.ReactElement {
               </Button>
             ))}
             <Button type="button" size="sm" variant="ghost" className="h-7 px-2.5 text-xs font-medium"
-              onClick={() => openPane('right')} title="在当前案卷查看需要核对的检查与人工待办">
+              onClick={() => {
+                if (!reviewCase && !businessAggregate) {
+                  // 没有当前案卷时给出可执行的起点，而不是空白待办面板
+                  setSection('workbench')
+                  toast.info('请先在「导入材料」中选择或新建一份案卷')
+                  return
+                }
+                openPane('right')
+              }} title="在当前案卷查看需要核对的检查与人工待办">
               待办
             </Button>
           </nav>
@@ -280,7 +298,19 @@ export function ContentReviewView(): React.ReactElement {
             size="sm"
             className="h-7 gap-1.5 px-2.5 text-xs"
             disabled={exporting || running || (!businessAggregate && (!run || run.status !== 'completed' || runStale))}
-            onClick={() => businessAggregate ? void openBusinessCase() : void handleExport()}
+            onClick={() => {
+              if (businessAggregate) {
+                // 先切到本案工作区，再定位到真实报告面板；不把"切换页面"伪装成"查看报告"
+                setSection('case-v2')
+                window.setTimeout(() => {
+                  const panel = document.getElementById('case-report-panel')
+                  if (panel) { panel.setAttribute('open', 'true'); panel.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+                  else toast.info('本案还没有可用运行；请先完成一次审核再导出报告')
+                }, 260)
+                return
+              }
+              void handleExport()
+            }}
           >
             <Download size={12} />
             <span>{businessAggregate ? '查看与导出报告' : '导出报告'}</span>
@@ -299,18 +329,17 @@ export function ContentReviewView(): React.ReactElement {
         </div>
       </header>
 
-      <ReviewV3T10WorkspaceOverview
+      {(section === 'workbench' || section === 'local-candidates' || section === 'case-v2') && <ReviewV3T10WorkspaceOverview
         onOpenReview={() => openPane('left')}
         onOpenMaterials={() => openPane('center')}
         onOpenTasks={() => openPane('right')}
         onOpenTemplates={() => setSection('templates')}
         onOpenBusiness={() => void openBusinessCase()}
-      />
+      />}
 
-      {(section === 'templates' || section === 'local-candidates') && (
+      {section === 'templates' && (
         <nav aria-label="模板工作区" className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card/40 px-4 py-1.5 titlebar-no-drag">
-          <Button type="button" data-testid="review-section-templates" size="sm" variant={section === 'templates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('templates')}>模板库与业务配置</Button>
-          <Button type="button" data-testid="review-section-local-candidates" size="sm" variant={section === 'local-candidates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('local-candidates')}>候选方案与技术试跑</Button>
+          <Button type="button" data-testid="review-section-templates" size="sm" variant="secondary" className="h-7 text-xs" onClick={() => setSection('templates')}>模板库与业务配置</Button>
           <Button type="button" data-testid="review-publish-demo-templates" size="sm" variant="outline" className="h-7 text-xs"
             disabled={demoPublishing}
             onClick={() => void publishDemoTemplates()}>
@@ -365,13 +394,28 @@ export function ContentReviewView(): React.ReactElement {
       </main>
 
       <section aria-label="当前案卷业务办理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'case-v2' && 'hidden')}>
-        <V2CasePanel />
+        {section === 'case-v2' && (
+          <div className="space-y-3">
+            {/* 案卷管理：打开其他案卷 / 从已发布模板新建（不承载单案业务操作） */}
+            <V2CasePanel view="manage" onCaseOpened={() => { /* 由聚合 atom 驱动详情刷新 */ }} />
+            {/* 当前案卷工作区：材料、运行、办理、报告、记录 */}
+            <V2CasePanel view="case" caseId={businessAggregate?.caseV2.id ?? selectedCaseId ?? undefined} />
+          </div>
+        )}
       </section>
       <section aria-label="审核模板编排" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'templates' && 'hidden')}>
         <TemplateWizardPanel />
       </section>
       <section aria-label="本地候选模板作者工作台" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'local-candidates' && 'hidden')}>
         <ReviewV3LocalCandidateWorkbench initialCaseId={quickCaseId ?? undefined} />
+        {section === 'local-candidates' && (selectedCaseId ?? quickCaseId) && (
+          <details open id="case-workspace-inline" className="mx-3 mb-3 rounded-xl border bg-card p-3 shadow-sm">
+            <summary className="cursor-pointer text-sm font-semibold">本案办理（材料、运行、办理、报告、记录）</summary>
+            <div className="mt-3">
+              <V2CasePanel view="case" caseId={(selectedCaseId ?? quickCaseId) as string} />
+            </div>
+          </details>
+        )}
       </section>
       <section aria-label="审核批次管理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'batches' && 'hidden')}>
         <BatchPanel
