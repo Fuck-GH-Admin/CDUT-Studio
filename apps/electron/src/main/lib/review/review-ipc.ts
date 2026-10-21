@@ -896,6 +896,22 @@ export function registerReviewIpc(): void {
   // ===== T06 物理入库（Local-L04 R02 桥接：真实选择器 + 幂等提交）=====
   // ===== T01 受控模型起草（Local-L04 R02 桥接：渠道与凭据不出 Main）=====
   // ===== 已发布模板规则运行（ARCH-CLOSURE-R01：冻结计划 → 确定性检查 → 真实 Run）=====
+  // ===== 未匹配业务 → 可编辑模板草稿（M4 公共兜底最小桥接）=====
+  ipcMain.handle(REVIEW_IPC_CHANNELS.FALLBACK_TEMPLATE_DRAFT_V3, async (event, input: {
+    document: import('./review-template-plan-adapter-v3-b1').B1AuthorDocument
+    templateId: string
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.document || typeof input.templateId !== 'string' || !input.templateId.trim()) {
+      throw new Error('参数非法：需要候选文档与模板 ID')
+    }
+    const { fallbackDraftFromB1 } = require('./review-v3-fallback-template-draft') as typeof import('./review-v3-fallback-template-draft')
+    const result = fallbackDraftFromB1(input.document, input.templateId.trim())
+    // 只保存草稿；发布仍走既有 PUBLISH_TEMPLATE_V2 与 T01 负责人确认
+    const { saveDraft } = require('./template-store') as typeof import('./template-store')
+    const saved = saveDraft(result.template)
+    return { template: saved, sourceCandidates: result.sourceCandidates, notes: result.notes }
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.TEMPLATE_RULE_RUN_V3, async (event, input: {
     caseId: string; phase?: 'submission' | 'decision'
   }) => {

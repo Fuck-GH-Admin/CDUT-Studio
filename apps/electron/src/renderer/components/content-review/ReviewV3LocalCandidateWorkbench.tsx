@@ -363,6 +363,15 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
           onPrepareUnmatchedDraft:intent=>window.reviewAPI.prepareLocalNativeUnmatchedV3({
             caseId:localCaseId,intent,
           }),
+          // 未匹配业务 → 可编辑业务模板草稿（只保存 draft，不含政策与确定性规则）
+          onCreateBusinessTemplateDraft:async(document,templateId)=>{
+            const created=await window.reviewAPI.createFallbackTemplateDraft({document,templateId})
+            return {
+              templateId:created.template.templateId,
+              version:created.template.version,
+              notes:created.notes,
+            }
+          },
         }}
       />}
     </div>}

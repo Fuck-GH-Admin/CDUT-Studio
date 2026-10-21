@@ -4719,6 +4719,15 @@ const reviewAPI = {
     updatedAt: string
     view: import('../main/lib/review/review-v3-t07-rating-workflow').T07View
   }>,
+  /** 未匹配业务候选 → 可编辑模板草稿（只保存 draft，不发布） */
+  createFallbackTemplateDraft: (input: {
+    document: import('../main/lib/review/review-template-plan-adapter-v3-b1').B1AuthorDocument
+    templateId: string
+  }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.FALLBACK_TEMPLATE_DRAFT_V3, input) as Promise<{
+    template: import('@profer/shared').TemplateVersion
+    sourceCandidates: Array<{ documentVersionId: string; locator: string }>
+    notes: string[]
+  }>,
   /** 已发布模板规则运行：编译冻结计划 → T04 确定性检查 → 真实 ReviewRunV2 */
   runTemplateRuleReview: (input: { caseId: string; phase?: 'submission' | 'decision' }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.TEMPLATE_RULE_RUN_V3, input) as Promise<{

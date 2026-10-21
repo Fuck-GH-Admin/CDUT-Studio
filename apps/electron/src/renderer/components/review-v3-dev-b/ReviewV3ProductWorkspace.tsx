@@ -38,6 +38,13 @@ export interface B32ProductPorts {
  onReadCurrent?:()=>Promise<B32ProductRead>
  /** C Main must recheck current B2 full set before constructing R29. */
  onPrepareUnmatchedDraft?:(intent:B29HumanAuthorIntent)=>Promise<B29UnmatchedAuthorDraft>
+ /**
+  * 把当前候选作者文档转成**可编辑模板草稿**（M4 公共兜底最小桥接）。
+  * 只保存 draft，不发布、不写政策；发布仍走既有 T01 负责人确认流程。
+  */
+ onCreateBusinessTemplateDraft?:(document:B1AuthorDocument,templateId:string)=>Promise<{
+  templateId:string;version:number;notes:string[]
+ }>
  /** Technical proposal, never a school/Case/Run/SourceLedger mutation. */
  onProposeRemediation?:(request:{
   issueId:string;currentSnapshot:string;observation:string;
@@ -461,6 +468,19 @@ export function ReviewV3ProductWorkspace({
    {/* Keep existing B1 wizard mounted across navigation to protect edits. */}
    {editor&&<div className="space-y-2">
     <p className="text-xs">草稿改动须在原 B1 编辑器明确保存、修订和冻结。刷新 Main 源不会悄悄覆盖作者编辑。</p>
+    {editor.document&&ports.onCreateBusinessTemplateDraft&&<div className="rounded border border-border p-3">
+     <p className="text-xs">未匹配业务目前只到技术候选。可把它转成**可编辑业务模板草稿**，由负责人在模板库里改完并发布；草稿不含任何政策或确定性规则。</p>
+     <button type="button" className={btn} disabled={busy}
+      onClick={()=>void (async()=>{
+       if(!editor.document)return
+       setBusy(true);setError('');setNotice('')
+       try{
+        const result=await ports.onCreateBusinessTemplateDraft!(editor.document,'fallback-'+scope+'-'+Date.now().toString(36))
+        setNotice('已生成可编辑业务模板草稿 '+result.templateId+'@'+result.version+'。'+result.notes.join('；')+'。请到「审核模板」中编辑、确认规则并发布。')
+       }catch(e){setError(e instanceof Error?e.message:String(e))}
+       finally{setBusy(false)}
+      })()}>转为可编辑业务模板草稿</button>
+    </div>}
     <div key={editor.key}>{renderAuthor(editor.document)}</div>
     <button type="button" className={btn} disabled={busy}
      onClick={()=>setConfirmEditorExit(true)}>结束当前作者编辑，返回候选选择</button>

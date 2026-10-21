@@ -38,16 +38,30 @@
 | **50 套 D4 G01–G08** | `d4-unified-r01/catalog.json` **50 条**，50 条均带 `workspaceGitBlobSha`；`review-v3-d4-catalog-attach.test.ts` 逐套挂载**非零技术计划**通过 | **PASS（资产+Plan 安装）**；`candidate-held`/`publicationAllowed=false` 未改动；**学校正式发布 NOT_AUTHORIZED** |
 | **COMMON-01/02** | `review-d4-common.ts:compileD4Generic` 仍在，测试通过 | **PASS（通用编译能力）**；它不是"任意材料可直接审核"的固定模板 |
 | **第 51 套候选** | `ReviewV3LocalCandidateWorkbench` 已挂在「候选方案与技术试跑」；调用 `prepareLocalNativeUnmatchedV3` → `freezeLocalCandidateAuthorV3` → `attachB1TechnicalPlanV3` | **WIRED**；产物是 `candidate-held` 技术计划，**不是已发布业务模板**，按 D2 不能形成正式业务决定 |
-| **公共 catch-all 兜底** | 仓库内**不存在**固定 catch-all Template ID；也没有 `B29UnmatchedAuthorDraft → T01 可编辑 TemplateVersion 草稿` 的转换函数（已确认无 `B1AuthorDocument → TemplateVersion` 转换器） | **FOLLOWUP_REQUIRED（P1）**：未匹配业务目前只能进技术候选，不能直接变成可发布业务模板 |
+| **公共 catch-all 兜底** | 仍**不存在**固定 catch-all Template ID；本轮新增 `fallbackDraftFromB1` 转换与 IPC/UI 入口（见下节） | **WIRED（Main+UI 已通）**：未匹配业务可生成可编辑草稿；真机端到端未跑，仍不算 PASS |
 | **六套完整业务示例** | `T01_STANDARD_EXAMPLES` = student / activity / scholarship / judging / expense / agreement，测试 3 项全过 | **PASS（打包与表单校验）**；**未逐一跑真实业务 Run**，不能据此推断六类业务的补件/评分/报告全通过 |
 
-**公共兜底的最小缺口（交回 F02/路由 Owner）**：
+**公共兜底的最小缺口与已补桥接**：
 `prepareB29UnmatchedAuthorDraft()` 产出 `B1AuthorDocument`（`candidateOnly:true`、
 `publicationAllowed:false`、`schoolPolicyVerified:false`），而正式业务 Run 需要
-`Published TemplateVersion` + 负责人确认的 `deterministicConstraint`。
-缺一个**明确的**转换：`B1AuthorDocument → TemplateVersion(draft)`（字段/分项/材料槽/阶段映射，
-且不得继承候选的 `publicationAllowed`，发布仍需 T01 负责人逐项确认）。
-L 不自行定义该映射的语义，避免把技术候选冒充业务规则。
+`Published TemplateVersion` + 负责人确认的 `deterministicConstraint`。仓库里此前**没有**
+这两者之间的转换，未匹配业务只能停在技术候选。
+
+本轮补了**最小脚手架转换**（不新建模板系统、不虚构政策）：
+`review-v3-fallback-template-draft.ts` 的 `fallbackDraftFromB1(document, templateId)`：
+- 产出 `status:'draft'` 的 `TemplateVersion`，经既有 `template-store.saveDraft` 落盘；
+- `policyVersionIds`/`policyRefs` **一律为空**，B1 来源只作为证据随结果返回；
+- 所有判据强制 `execution:'semantic'`，**不生成任何 `deterministicConstraint`**；
+- 只映射 B1 的手审阶段（technical 阶段不进入业务阶段链），无手审阶段时补一个最小学审阶段；
+- `materialSlots` 留空，由负责人在编辑器里显式声明。
+
+用户入口：候选工作台作者页新增「转为可编辑业务模板草稿」按钮 → IPC
+`FALLBACK_TEMPLATE_DRAFT_V3` → 保存 draft → 提示去「审核模板」编辑/确认/发布。
+**发布仍由既有 `PUBLISH_TEMPLATE_V2` 与 T01 负责人确认完成**，本桥接不发布任何模板。
+
+状态调整：PUBLIC FALLBACK 由 `FOLLOWUP_REQUIRED` 改为 **WIRED（Main+UI 已通，
+真机未跑端到端）**；仍缺「未匹配材料 → 草稿 → 负责人确认 → 发布 → 真实 Run」的
+一次真机证据，需要 B30 物理原件接入才能触发 unmatched。
 
 ### A15 状态（本轮不重做 S1–S3）
 
