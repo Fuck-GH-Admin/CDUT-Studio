@@ -332,7 +332,8 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
     }
     groupIds.add(group.groupId)
     for (const entryId of group.entryIds) {
-      if (!byEntry.has(entryId)) throw new CommandValidationError('VALIDATION_FAILED', '来源中没有原件：' + entryId)
+      // 未知条目交给下面的分组处理：记为该组部分失败并保留案卷，而不是整批回滚
+      if (!byEntry.has(entryId)) continue
       if (assigned.has(entryId)) throw new CommandValidationError('VALIDATION_FAILED', '同一原件不能分配给不同案卷：' + entryId)
       assigned.add(entryId)
     }

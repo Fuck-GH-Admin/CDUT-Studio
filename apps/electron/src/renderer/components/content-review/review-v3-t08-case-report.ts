@@ -169,14 +169,14 @@ export function makeT08CaseReport(input: {
     lines.push('- 已记录的业务决定：' + decision.result + '；' + decision.reason + '（' + decision.at + '）')
     if (internal) lines.push('- 决定主体：' + decision.actor.actorSource + ' / ' + decision.actor.role + '（不等于校方认证授权）')
   } else lines.push('- 未发现基于所选运行作出的业务决定；技术检查不能代替正式决定。')
-  if (!historical && aggregate.appeals.length > 0) {
+  if (!historical && (aggregate.appeals ?? []).length > 0) {
     // 只展示当前案卷有效业务上下文的申诉，不把新申诉状态写入历史 Run 快照。
     lines.push('', '## 申诉与复核记录')
-    for (const appeal of aggregate.appeals) {
+    for (const appeal of aggregate.appeals ?? []) {
       const original = aggregate.decisions.find((item) => item.id === appeal.againstDecisionId)
       const amendment = aggregate.decisions.find((item) => item.id === appeal.reviewDecisionId
         && item.amendsDecisionId === appeal.againstDecisionId)
-      const receipt = aggregate.receiptLog.findLast((item) => item.type === 'ReviewLocalAppealV3'
+      const receipt = (aggregate.receiptLog ?? []).findLast((item) => item.type === 'ReviewLocalAppealV3'
         && item.summary.includes(`申诉 ${appeal.id}：`))
       lines.push('- 申诉 ' + appeal.id + '：' + appeal.status + '；原决定：'
         + (original?.result ?? '原决定不可用')
@@ -230,7 +230,7 @@ export function makeT08CaseReport(input: {
     ...(historical ? {} : {
       supplements: aggregate.supplements.map((s) => ({ reason: s.reason, requiredElements: s.requiredElements, status: s.status })),
       subjects: aggregate.caseV2.subjects.map((s) => ({ title: s.title, fields: publicFields(s.fields) })),
-      appeals: aggregate.appeals.map((appeal) => {
+      appeals: (aggregate.appeals ?? []).map((appeal) => {
         const amended = aggregate.decisions.find((item) => item.id === appeal.reviewDecisionId
           && item.amendsDecisionId === appeal.againstDecisionId)
         return { id: appeal.id, status: appeal.status, resolution: appeal.resolution ?? null,

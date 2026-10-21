@@ -33,9 +33,9 @@ export function buildF13AppealHistory(aggregate: CaseAggregateV2): F13AppealHist
     const candidate = appeal.reviewDecisionId ? decisions.get(appeal.reviewDecisionId) : undefined
     const amendment = candidate?.amendsDecisionId === appeal.againstDecisionId ? candidate : undefined
     const reviewTask = appeal.reviewTaskId ? tasks.get(appeal.reviewTaskId) : undefined
-    const reviewReceipt = aggregate.receiptLog.findLast((receipt) =>
+    const reviewReceipt = (aggregate.receiptLog ?? []).findLast((receipt) =>
       receipt.type === 'ReviewLocalAppealV3' && receipt.summary.includes(`申诉 ${appeal.id}：`))
-    const withdrawalReceipt = aggregate.receiptLog.findLast((receipt) =>
+    const withdrawalReceipt = (aggregate.receiptLog ?? []).findLast((receipt) =>
       receipt.type === 'WithdrawLocalAppealV3' && receipt.summary.endsWith(`撤回申诉 ${appeal.id}，原业务决定保留`))
     const evidence = appeal.newEvidenceDocumentVersionIds.map((id) => ({ id, document: documents.get(id) }))
     const warnings: string[] = []

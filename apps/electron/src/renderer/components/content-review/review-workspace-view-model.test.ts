@@ -8,7 +8,7 @@ const baseCase: CaseAggregateV2['caseV2'] = {
   documents: [], stage: 'reviewing', revision: 1, createdAt: '', updatedAt: '',
 }
 const check = {
-  checkId: 'check-1', ruleId: 'rule-1', target: { scope: 'subject' as const, subjectIds: ['s1'] },
+  checkId: 'check-1', ruleId: 'rule-1', target: { scope: 'case' as const, subjectIds: [] },
   status: 'non-compliant' as const, reason: '申报等级与依据不符', sourceRefs: [], executedBy: 'deterministic' as const, executedAt: '',
 }
 
