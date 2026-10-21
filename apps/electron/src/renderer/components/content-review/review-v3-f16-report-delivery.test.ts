@@ -49,7 +49,7 @@ test('F16 keeps spreadsheet values as text and neutralizes formula-like source s
   const cleaned = f16SafeSpreadsheetSheet(original)
   expect(cleaned.rows[1]).toEqual(["'=1+1", "'@SUM(A1:A2)"])
   expect(cleaned.rows[2]).toEqual(['普通字段', "'+cmd"])
-  expect(original.rows[1][0]).toBe('=1+1')
+  expect(original.rows[1]?.[0]).toBe('=1+1')
 })
 
 test('F16 actually creates readable ZIP with matching digest, no source originals or reply actions', async () => {
@@ -62,7 +62,7 @@ test('F16 actually creates readable ZIP with matching digest, no source original
   expect(await zip.file('report.md')!.async('string')).toBe('# 申请人报告')
   const manifest = JSON.parse(await zip.file('manifest.json')!.async('string')) as { files: Array<{ name: string; sha256: string }> }
   expect(manifest.files.length).toBe(2)
-  const actual = await crypto.subtle.digest('SHA-256', files[0]!.bytes)
+  const actual = await crypto.subtle.digest('SHA-256', Uint8Array.from(files[0]!.bytes))
   expect(manifest.files[0]!.sha256).toBe([...new Uint8Array(actual)].map((b) => b.toString(16).padStart(2, '0')).join(''))
   expect(await zip.file('README.txt')!.async('string')).toContain('不构成业务审批')
   await expect(encodeF16ReportBundle(report, [

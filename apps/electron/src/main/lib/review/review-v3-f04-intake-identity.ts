@@ -38,7 +38,7 @@ export interface F04PhysicalSelectionIdentity {
 export function identifyF04PhysicalSelection(
   kind: 'folder' | 'zip',
   originalEntries: readonly F04PhysicalEntryBytes[],
-  nonce = randomUUID(),
+  nonce: string = randomUUID(),
 ): F04PhysicalSelectionIdentity {
   return identifyF04PhysicalSelectionFromDigests(kind, originalEntries.map(source => {
     if (!(source.bytes instanceof Uint8Array)) throw new Error('F04_ENTRY_BYTES_INVALID')
@@ -54,7 +54,7 @@ export function identifyF04PhysicalSelection(
 export function identifyF04PhysicalSelectionFromDigests(
   kind: 'folder' | 'zip',
   originalEntries: readonly F04PhysicalEntryDigest[],
-  nonce = randomUUID(),
+  nonce: string = randomUUID(),
 ): F04PhysicalSelectionIdentity {
   if (kind !== 'folder' && kind !== 'zip') throw new Error('F04_SOURCE_KIND_INVALID')
   if (originalEntries.length === 0) throw new Error('F04_EMPTY_SELECTION')

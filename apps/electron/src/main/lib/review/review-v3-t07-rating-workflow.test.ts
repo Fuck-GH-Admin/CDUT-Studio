@@ -102,7 +102,7 @@ describe('T07 independent judging A14 / D11', () => {
   })
 
   test('改分后撤销旧分歧处理与同分裁决，不允许旧裁定直接生效', () => {
-    let s = { ...base(['c1', 'c2']), rubric: { ...rubric, minEffectiveJudges: 1, tieBreaker: 'owner-decides' as const, quota: 1 } }
+    let s: T07State = { ...base(['c1', 'c2']), rubric: { ...rubric, minEffectiveJudges: 1, tieBreaker: 'owner-decides' as const, quota: 1 } }
     s = vote(assign(s, 'c1', 'j1'), 'c1', 'j1', 4, 4)
     s = vote(assign(s, 'c2', 'j2'), 'c2', 'j2', 4, 4)
     s = applyT07Action(s, { type: 'set-tie-order', caseIds: ['c1', 'c2'] }, organizer)
@@ -116,7 +116,7 @@ describe('T07 independent judging A14 / D11', () => {
   })
 
   test('无法针对非同分或空批次强制定稿', () => {
-    let s = { ...base(['c1', 'c2']), rubric: { ...rubric, minEffectiveJudges: 1, tieBreaker: 'owner-decides' as const } }
+    let s: T07State = { ...base(['c1', 'c2']), rubric: { ...rubric, minEffectiveJudges: 1, tieBreaker: 'owner-decides' as const } }
     s = vote(assign(s, 'c1', 'j1'), 'c1', 'j1', 3, 3)
     s = vote(assign(s, 'c2', 'j2'), 'c2', 'j2', 5, 5)
     expect(() => applyT07Action(s, { type: 'set-tie-order', caseIds: ['c1', 'c2'] }, organizer)).toThrow('同分')

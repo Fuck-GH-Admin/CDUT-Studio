@@ -81,6 +81,7 @@ export function ReviewV3T07Workbench(): JSX.Element {
     const sequence = refreshSequence.current
     setBusy(true); setError('')
     try {
+      const detail = await window.reviewAPI.getBatchV2(batchId)
       if (!detail?.batch) throw new Error('无法读取该批次的锁定信息')
       const template = await window.reviewAPI.getTemplateV2(detail.batch.templateId, detail.batch.templateVersion)
       const initialState = createT07RoundFromPublishedTemplate(detail.batch, template)
