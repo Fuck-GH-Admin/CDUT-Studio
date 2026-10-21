@@ -8,21 +8,26 @@ import { reviewWorkspaceSectionAtom } from '@/atoms/review-atoms'
 import { reviewV2AggregateAtom } from './V2CasePanel'
 import { ReviewV3LocalManualItem } from './ReviewV3LocalManualItem'
 import { ReviewV3LocalPiControls } from './ReviewV3LocalPiControls'
+import { ReviewV3UnifiedRun } from './ReviewV3UnifiedRun'
+import { ReviewV3T08ReportPanel } from './ReviewV3T08ReportPanel'
 import { D4CaseSetup } from './D4CaseSetup'
-import type { D4ClientSelection } from '@profer/shared'
+import type { CaseAggregateV2, D4ClientSelection, ReviewRunV2 } from '@profer/shared'
 import { ReviewV3CandidateIntakeSurface } from '../review-v3-dev-b/ReviewV3CandidateIntakeSurface'
 import type { C11MainLocalProductRead } from '../../../main/lib/review/review-v3-main-local-product-intake'
 import { ReviewV3AuthorWizard, emptyB1AuthorDocument } from '../review-v3-dev-b/ReviewV3AuthorWizard'
 import type { B1AuthorDocument } from '../../../main/lib/review/review-template-plan-adapter-v3-b1'
 import type { B1CandidateReadResponse } from '../review-v3-dev-b/review-v3-author-revision-read'
 
-export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
+export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:string}={}):React.ReactElement {
   const goToCase=useSetAtom(reviewWorkspaceSectionAtom)
   const showCase=useSetAtom(reviewV2AggregateAtom)
   const [caseTitle,setCaseTitle]=React.useState('本地人工审核')
   const [caseApplicant,setCaseApplicant]=React.useState('本机用户')
   const [caseYear,setCaseYear]=React.useState(String(new Date().getFullYear()))
   const [localCaseId,setLocalCaseId]=React.useState('')
+  React.useEffect(()=>{
+    if (initialCaseId) setLocalCaseId(initialCaseId)
+  },[initialCaseId])
   const [savedCases,setSavedCases]=React.useState<Array<{id:string;title:string}>>([])
   const [d4Selection,setD4Selection]=React.useState<D4ClientSelection|undefined>(undefined)
   const [routedD4TemplateId,setRoutedD4TemplateId]=React.useState<string|undefined>(undefined)
@@ -36,6 +41,10 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   const [activePlan,setActivePlan]=React.useState<{
     templateId:string;templateVersion:number;checks:number;fingerprint:string
   }|null>(null)
+  const [nativeAggregate,setNativeAggregate]=React.useState<CaseAggregateV2|null>(null)
+  const [nativeRun,setNativeRun]=React.useState<ReviewRunV2|null>(null)
+  const [nativeRunStale,setNativeRunStale]=React.useState(true)
+  const [runEpoch,setRunEpoch]=React.useState(0)
   const [productError,setProductError]=React.useState('')
   React.useEffect(()=>{
     const route=product?.read.route
@@ -55,12 +64,14 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
   },[localCaseId])
   React.useEffect(()=>{
     setProduct(null);setActivePlan(null);setProductError('')
+    setNativeAggregate(null)
     if(!localCaseId)return
     let mounted=true
     void (async()=>{
       try{
         const aggregate=await window.reviewAPI.getAggregateV2(localCaseId)
         if(!mounted)return
+        setNativeAggregate(aggregate??null)
         if(aggregate?.d2RuntimePlan){
           const plan=aggregate.d2RuntimePlan
           setActivePlan({templateId:plan.templateId,templateVersion:plan.templateVersion,
@@ -73,6 +84,27 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
     })()
     return ()=>{mounted=false}
   },[localCaseId,materialsEpoch])
+  React.useEffect(()=>{
+    setNativeRun(null);setNativeRunStale(true)
+    if (!localCaseId) return
+    let live=true
+    void (async()=>{
+      const runs=await window.reviewAPI.listRunsV2(localCaseId)
+      const latest=[...runs].sort((a,b)=>b.startedAt.localeCompare(a.startedAt))[0]??null
+      if (!live) return
+      setNativeRun(latest)
+      if (!latest || latest.status==='queued' || latest.status==='running') return
+      const stale=await window.reviewAPI.getWorkspaceRunValidityV2({caseId:localCaseId,runId:latest.id})
+      if (live) setNativeRunStale(stale)
+    })().catch(()=>{if(live)setNativeRunStale(true)})
+    return()=>{live=false}
+  },[localCaseId,materialsEpoch,runEpoch])
+  const refreshNativeAggregate=React.useCallback(async()=>{
+    if (!localCaseId)return
+    const refreshed=await window.reviewAPI.getAggregateV2(localCaseId)
+    if(refreshed)setNativeAggregate(refreshed)
+    setRunEpoch(epoch=>epoch+1)
+  },[localCaseId])
   const [dropActive,setDropActive]=React.useState(false)
   const [dropRole,setDropRole]=React.useState<'application'|'evidence'>('application')
   const [caseBusy,setCaseBusy]=React.useState(false)
@@ -376,7 +408,30 @@ export function ReviewV3LocalCandidateWorkbench():React.ReactElement {
       />}
     </div>}
     <ReviewV3LocalManualItem key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
-    <ReviewV3LocalPiControls key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
+    {localCaseId&&<ReviewV3UnifiedRun
+      caseId={localCaseId}
+      stage={nativeAggregate?.caseV2.stage??'draft'}
+      documentCount={nativeAggregate?.caseV2.documents.filter(item=>item.active!==false).length??0}
+      technicalPlan={!!nativeAggregate?.d2RuntimePlan}
+      canRun={!!activePlan||!!nativeAggregate?.d2RuntimePlan}
+      onUpdated={refreshNativeAggregate}
+    />}
+    {localCaseId&&<div className="space-y-2 rounded-lg border border-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold">审核完成后核对与交付</h2>
+          <p className="text-xs text-muted-foreground">在原案卷修改证据、处理待办和作出人工决定；报告始终使用真实运行。</p>
+        </div>
+        <button type="button" className="rounded border border-primary/50 px-3 py-2 text-sm disabled:opacity-50"
+          disabled={caseBusy} onClick={()=>void openCase()}>打开本案复核与人工办理</button>
+      </div>
+      {nativeRun&&<ReviewV3T08ReportPanel aggregate={nativeAggregate} currentRun={nativeRun} currentStale={nativeRunStale} template={null}/>}
+      {!nativeRun&&<p className="text-xs text-muted-foreground">本案尚无真实运行，完成审核后可在这里直接下载报告。</p>}
+    </div>}
+    <details className="rounded-lg border border-border px-3 py-2">
+      <summary className="cursor-pointer text-sm font-medium">高级：Pi 详细账本与停止／续跑</summary>
+      <ReviewV3LocalPiControls key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
+    </details>
     <ReviewV3AuthorWizard key={key} initialDraft={loaded?.document??emptyB1AuthorDocument()}
       initialRevision={loaded?.revision??0}
       onSaveDraft={(document,expectedRevision)=>

@@ -7,7 +7,7 @@
 
 import { atom, useAtomValue, useStore, useSetAtom } from 'jotai'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Actor, CaseAggregateV2, FieldSpec, ReviewCommandResult, TemplateVersion } from '@profer/shared'
+import type { Actor, CaseAggregateV2, FieldSpec, ReviewCommandResult, ReviewRunV2, TemplateVersion } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { toast } from 'sonner'
 import { RunResultPanel } from './RunResultPanel'
@@ -22,6 +22,8 @@ import { ReviewV3T09OfflineSection } from './ReviewV3T09OfflineSection'
 import { humanizeReviewError } from './review-error-text'
 import { ReviewV3T05RunDecision } from './ReviewV3T05RunDecision'
 import { MaterialDropZone } from './MaterialDropZone'
+import { ReviewV3UnifiedRun } from './ReviewV3UnifiedRun'
+import { ReviewV3T08ReportPanel } from './ReviewV3T08ReportPanel'
 
 /** 当前案卷聚合 */
 export const reviewV2AggregateAtom = atom<CaseAggregateV2 | null>(null)
@@ -250,6 +252,35 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
 
   const [slotId, setSlotId] = useState('')
   const [runNonce, setRunNonce] = useState(0)
+  const [latestRun, setLatestRun] = useState<ReviewRunV2 | null>(null)
+  const [latestRunStale, setLatestRunStale] = useState(true)
+  useEffect(() => {
+    const caseId = current?.caseV2.id
+    if (!caseId) { setLatestRun(null); setLatestRunStale(true); return }
+    let active = true
+    void (async () => {
+      const runs = await window.reviewAPI.listRunsV2(caseId)
+      // 当前 Run 只从持久账本取得，不凭渲染端的运行按钮猜测状态。
+      const newest = [...runs].sort((a,b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null
+      if (!active) return
+      setLatestRun(newest)
+      if (!newest || newest.status === 'running' || newest.status === 'queued') { setLatestRunStale(true); return }
+      try {
+        const stale = await window.reviewAPI.getWorkspaceRunValidityV2({caseId,runId:newest.id})
+        if (active) setLatestRunStale(stale)
+      } catch {
+        if (active) setLatestRunStale(true)
+      }
+    })().catch(() => { if (active) {setLatestRun(null);setLatestRunStale(true)} })
+    return () => { active = false }
+  }, [current?.caseV2.id, current?.caseV2.revision, runNonce])
+  const refreshCurrentRun = useCallback(async (): Promise<void> => {
+    const caseId = current?.caseV2.id
+    if (!caseId) return
+    const fresh = await window.reviewAPI.getAggregateV2(caseId)
+    if (fresh && fresh.caseV2.id === caseId) store.set(reviewV2AggregateAtom, fresh)
+    setRunNonce((nonce) => nonce + 1)
+  }, [current?.caseV2.id, store])
   const currentTemplate = templates.find((template) => template.templateId === current?.caseV2.templateId && template.version === current?.caseV2.templateVersion)
   // 模板只有一个材料槽时自动选中：普通用户不该先学会「选槽位」才能上传材料
   useEffect(() => {
@@ -436,6 +467,17 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
                 <Button size="sm" onClick={submitCase}>{current.caseV2.stage === 'draft' ? '提交案卷' : '恢复审核任务'}</Button>
               )}
             </div>
+            <ReviewV3UnifiedRun
+              caseId={current.caseV2.id}
+              stage={current.caseV2.stage}
+              documentCount={current.caseV2.documents.filter((document) => document.active !== false).length}
+              technicalPlan={!!current.d2RuntimePlan}
+              onUpdated={refreshCurrentRun}
+            />
+            {latestRun && <details className="rounded-md border border-border/60 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-semibold">查看与导出本案审核报告</summary>
+              <ReviewV3T08ReportPanel aggregate={current} currentRun={latestRun} currentStale={latestRunStale} template={currentTemplate ?? null} />
+            </details>}
             <ReviewV3T05HumanWorkflow
               aggregate={current}
               onResult={applyResult}
@@ -445,8 +487,10 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
             <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
             <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
-            {/* 已发布模板规则检查：编译冻结计划 → T04 检查 → 真实 Run */}
-            <ReviewV3TemplateRuleRun caseId={current.caseV2.id} />
+            <details className="rounded-md border border-border/60 px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium">高级：仅执行模板规则（不启动 AI）</summary>
+              <ReviewV3TemplateRuleRun caseId={current.caseV2.id} />
+            </details>
             {/* T09 离线任务包：签发 / 预览 / 幂等导入 */}
             <ReviewV3T09OfflineSection />
             {/* T02 材料来源覆盖（只读暂存预览，不产生原件） */}
