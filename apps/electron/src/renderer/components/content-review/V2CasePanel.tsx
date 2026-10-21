@@ -6,7 +6,6 @@
  */
 
 import { atom, useAtomValue, useStore, useSetAtom } from 'jotai'
-import { selectedCaseIdAtom } from '@/atoms/review-atoms'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Actor, CaseAggregateV2, FieldSpec, ReviewCommandResult, ReviewRunV2, TemplateVersion } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
@@ -68,13 +67,7 @@ function renderTemplateFieldInput(
 }
 
 /** 案卷面板：选择模板 → 创建案卷 → 登记材料 → 开始审核 */
-export function V2CasePanel({ onCaseOpened, view = 'manage', caseId }: {
-  onCaseOpened?: (caseId: string) => void
-  /** manage=案卷列表与新建；case=当前案卷工作区（材料、运行、办理、报告、记录） */
-  view?: 'manage' | 'case'
-  /** view=case 时指定当前案卷；进入时按该 ID 读取真实聚合 */
-  caseId?: string
-} = {}): JSX.Element {
+export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) => void } = {}): JSX.Element {
   const store = useStore()
   const aggregate = useAtomValue(reviewV2AggregateAtom)
   const setNotice = useSetAtom(reviewV2NoticeAtom)
@@ -103,26 +96,6 @@ export function V2CasePanel({ onCaseOpened, view = 'manage', caseId }: {
     }
   }, [])
   useEffect(() => { void refreshList() }, [refreshList])
-
-  // view=case：按传入的 caseId 读取真实聚合；慢返回不覆盖其它案卷
-  useEffect(() => {
-    if (view !== 'case' || !caseId) return
-    if (aggregate?.caseV2.id === caseId) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const loaded = await window.reviewAPI.openAggregateV2(caseId)
-        if (cancelled) return
-        if (!loaded) { setNotice(`案卷读取失败或不存在：${caseId}`); return }
-        if (loaded.caseV2.id !== caseId) { setNotice('案卷返回与请求不一致，已忽略'); return }
-        store.set(reviewV2AggregateAtom, loaded)
-        store.set(selectedCaseIdAtom, caseId)
-      } catch (cause) {
-        if (!cancelled) setNotice(cause instanceof Error ? cause.message : String(cause))
-      }
-    })()
-    return () => { cancelled = true }
-  }, [view, caseId, aggregate?.caseV2.id, store, setNotice])
 
   const run = useCallback(async (action: () => Promise<void>): Promise<void> => {
     store.set(reviewV2BusyAtom, true)
@@ -154,14 +127,7 @@ export function V2CasePanel({ onCaseOpened, view = 'manage', caseId }: {
   const openCase = useCallback((caseId: string) => run(async () => {
     const loaded = await window.reviewAPI.openAggregateV2(caseId)
     if (!loaded) { toast.error(`案卷不存在: ${caseId}`); return }
-    // 慢返回防串案：只有结果仍属于请求的案卷才写回
-    if (loaded.caseV2.id !== caseId) {
-      toast.error(`打开的案卷与请求不一致（请求 ${caseId}，返回 ${loaded.caseV2.id}），已忽略`)
-      return
-    }
     store.set(reviewV2AggregateAtom, loaded)
-    // 明确切换"当前案卷"，让概览、Run、报告、助手线程跟随同一 ID
-    store.set(selectedCaseIdAtom, caseId)
     onCaseOpened?.(caseId)
     toast.success(`已打开案卷：${loaded.caseV2.title}`)
   }), [run, store, onCaseOpened])
@@ -371,7 +337,7 @@ export function V2CasePanel({ onCaseOpened, view = 'manage', caseId }: {
         {' · '}{current.caseV2.documents.filter((item) => item.active !== false).length} 份原件
         {' · '}{current.caseV2.stage === 'decided' ? '已形成业务决定' : '当前阶段：' + current.caseV2.stage}
       </p>}
-      {view === 'manage' && <details open={!current} className="mb-3 rounded-md border border-border/60 px-3 py-2">
+      <details open={!current} className="mb-3 rounded-md border border-border/60 px-3 py-2">
         <summary className="cursor-pointer text-xs font-medium">打开其他案卷 / 从已发布模板新建</summary>
         <div className="mt-3">
       <div className="mb-2 space-y-1.5 rounded-lg border-t pt-2">
@@ -457,17 +423,14 @@ export function V2CasePanel({ onCaseOpened, view = 'manage', caseId }: {
         </div>
       )}
         </div>
-      </details>}
+      </details>
       <div className="space-y-2">
-        {view === 'case' && !current && (
-          <p className="text-xs text-muted-foreground">正在读取当前案卷…</p>
-        )}
-        {view === 'manage' && !current && (
+        {!current && (
           <Button size="sm" disabled={store.get(reviewV2BusyAtom)} onClick={seedAndCreate}>
             载入示例并创建审核任务
           </Button>
         )}
-        {view !== 'manage' && current && (
+        {current && (
           <div className="space-y-1.5 text-xs">
             {currentTemplate?.materialSlots.length && (
               <div className="flex items-center gap-1.5">
@@ -504,66 +467,41 @@ export function V2CasePanel({ onCaseOpened, view = 'manage', caseId }: {
                 <Button size="sm" onClick={submitCase}>{current.caseV2.stage === 'draft' ? '提交案卷' : '恢复审核任务'}</Button>
               )}
             </div>
-            {/* ===== 运行与检查 ===== */}
-            <section aria-label="运行与检查" className="space-y-2">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">运行与检查</p>
-              <ReviewV3UnifiedRun
-                caseId={current.caseV2.id}
-                stage={current.caseV2.stage}
-                documentCount={current.caseV2.documents.filter((document) => document.active !== false).length}
-                technicalPlan={!!current.d2RuntimePlan}
-                onUpdated={refreshCurrentRun}
-              />
-              <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
-              <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
-              <details className="rounded-md border border-border/60 px-3 py-2 text-xs">
-                <summary className="cursor-pointer font-medium">材料覆盖与事实核对（补充核对用）</summary>
-                <div className="mt-2 space-y-2">
-                  <ReviewV3T02CoverageSection caseId={current.caseV2.id} />
-                  <ReviewV3T03FactWorkbench />
-                </div>
-              </details>
-              <details className="rounded-md border border-border/60 px-3 py-2 text-xs">
-                <summary className="cursor-pointer font-medium">只跑模板规则（不启动 AI）</summary>
-                <div className="mt-2"><ReviewV3TemplateRuleRun caseId={current.caseV2.id} /></div>
-              </details>
-            </section>
-
-            {/* ===== 人工办理 ===== */}
-            <section aria-label="人工办理" className="space-y-2">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">人工办理</p>
-              <ReviewV3T05HumanWorkflow
-                aggregate={current}
-                onResult={applyResult}
-                stageCapability={stageCapability}
-                recordTrustedStageDecision={recordTrustedStageDecision}
-                submitAppeal={(input) => window.reviewAPI.submitLocalF13Appeal(input)}
-                reviewAppeal={(input) => window.reviewAPI.reviewLocalF13Appeal(input)}
-                withdrawAppeal={(input) => window.reviewAPI.withdrawLocalF13Appeal(input)}
-              />
-              <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
-            </section>
-
-            {/* ===== 报告与交付 ===== */}
-            <section aria-label="报告与交付" className="space-y-2">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">报告与交付</p>
-              {latestRun && <details id="case-report-panel" className="rounded-md border border-border/60 px-3 py-2">
-                <summary className="cursor-pointer text-xs font-semibold">查看与导出本案审核报告</summary>
-                <ReviewV3T08ReportPanel aggregate={current} currentRun={latestRun} currentStale={latestRunStale} template={currentTemplate ?? null} />
-              </details>}
-              {!latestRun && <p className="text-xs text-muted-foreground">本案还没有可用运行；完成一次审核后即可在这里导出报告。</p>}
-              <details className="rounded-md border border-border/60 px-3 py-2 text-xs">
-                <summary className="cursor-pointer font-medium">离线任务包（签发与回件导入）</summary>
-                <div className="mt-2"><ReviewV3T09OfflineSection /></div>
-              </details>
-            </section>
-
-            {/* ===== 记录 ===== */}
-            <section aria-label="记录" className="space-y-2">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">记录</p>
-              <ReviewAssignmentCard caseId={current.caseV2.id} />
-              <CaseTimelinePanel caseId={current.caseV2.id} refreshNonce={runNonce} />
-            </section>
+            <ReviewV3UnifiedRun
+              caseId={current.caseV2.id}
+              stage={current.caseV2.stage}
+              documentCount={current.caseV2.documents.filter((document) => document.active !== false).length}
+              technicalPlan={!!current.d2RuntimePlan}
+              onUpdated={refreshCurrentRun}
+            />
+            {latestRun && <details className="rounded-md border border-border/60 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-semibold">查看与导出本案审核报告</summary>
+              <ReviewV3T08ReportPanel aggregate={current} currentRun={latestRun} currentStale={latestRunStale} template={currentTemplate ?? null} />
+            </details>}
+            <ReviewV3T05HumanWorkflow
+              aggregate={current}
+              onResult={applyResult}
+              stageCapability={stageCapability}
+              recordTrustedStageDecision={recordTrustedStageDecision}
+              submitAppeal={(input) => window.reviewAPI.submitLocalF13Appeal(input)}
+              reviewAppeal={(input) => window.reviewAPI.reviewLocalF13Appeal(input)}
+              withdrawAppeal={(input) => window.reviewAPI.withdrawLocalF13Appeal(input)}
+            />
+            <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
+            <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
+            <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
+            <details className="rounded-md border border-border/60 px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium">高级：仅执行模板规则（不启动 AI）</summary>
+              <ReviewV3TemplateRuleRun caseId={current.caseV2.id} />
+            </details>
+            {/* T09 离线任务包：签发 / 预览 / 幂等导入 */}
+            <ReviewV3T09OfflineSection />
+            {/* T02 材料来源覆盖（只读暂存预览，不产生原件） */}
+            <ReviewV3T02CoverageSection caseId={current.caseV2.id} />
+            {/* T03 事实确认与证据多对多：与观察项面板同一案卷上下文 */}
+            <ReviewV3T03FactWorkbench />
+            <ReviewAssignmentCard caseId={current.caseV2.id} />
+            <CaseTimelinePanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <p className="font-medium">{current.caseV2.title}</p>
             {current.caseV2.subjects.length > 0 && (
               <div className="rounded-md bg-muted/30 p-2">
