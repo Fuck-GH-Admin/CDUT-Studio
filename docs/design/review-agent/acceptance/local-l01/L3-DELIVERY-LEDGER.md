@@ -192,7 +192,7 @@ Electron 窗口与所有未保存状态一起丢失。
 | **COMMON-01/02** | `review-d4-common.ts:compileD4Generic` 仍在，测试通过 | **PASS（通用编译能力）**；它不是"任意材料可直接审核"的固定模板 |
 | **第 51 套候选** | `ReviewV3LocalCandidateWorkbench` 已挂在「候选方案与技术试跑」；调用 `prepareLocalNativeUnmatchedV3` → `freezeLocalCandidateAuthorV3` → `attachB1TechnicalPlanV3` | **WIRED**；产物是 `candidate-held` 技术计划，**不是已发布业务模板**，按 D2 不能形成正式业务决定 |
 | **公共 catch-all 兜底** | 仍**不存在**固定 catch-all Template ID；本轮新增 `fallbackDraftFromB1` 转换与 IPC/UI 入口（见下节） | **WIRED（Main+UI 已通）**：未匹配业务可生成可编辑草稿；真机端到端未跑，仍不算 PASS |
-| **六套完整业务示例** | `T01_STANDARD_EXAMPLES` = student / activity / scholarship / judging / expense / agreement，测试 3 项全过 | **PASS（打包与表单校验）**；**未逐一跑真实业务 Run**，不能据此推断六类业务的补件/评分/报告全通过 |
+| **六套完整业务示例** | `T01_STANDARD_EXAMPLES` 六套；**新增逐套真实运行测试** `review-v3-six-examples-run.test.ts` | **PASS（六套逐一发布 + 建案 + 真实 Run）**：每套经「负责人确认数值门槛 → 发布 → 建案 → `runTemplateRuleReview`」产出真实 `run-tpl-*` 与非空检查项；每套的反例样例**不得全部判合规**。**仍未覆盖导入真实 ZIP 原件的端到端**，需桌面会话 |
 
 **公共兜底的最小缺口与已补桥接**：
 `prepareB29UnmatchedAuthorDraft()` 产出 `B1AuthorDocument`（`candidateOnly:true`、
