@@ -61,6 +61,7 @@ import { ReviewV3T07Workbench } from './ReviewV3T07Workbench'
 import { useReviewActions } from './use-review-actions'
 import { ReviewV3QuickIntake } from './ReviewV3QuickIntake'
 import { ReviewCaseListPage } from './ReviewCaseListPage'
+import { ReviewHomePage } from './ReviewHomePage'
 import { ReviewTasksPage } from './ReviewTasksPage'
 import { reviewRouteAtom } from '@/atoms/review-route'
 
@@ -237,12 +238,15 @@ export function ContentReviewView(): React.ReactElement {
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <nav aria-label="审核工作页" className="flex shrink-0 flex-wrap items-center gap-1">
             {([
+              ['home', '审核首页'],
               ['cases', '案卷'],
               ['tasks', '待办'],
               ['batches', '审核批次'],
               ['templates', '审核模板'],
-            ] as Array<['cases' | 'tasks' | 'batches' | 'templates', string]>).map(([id, label]) => {
-              const active = id === 'cases'
+            ] as Array<['home' | 'cases' | 'tasks' | 'batches' | 'templates', string]>).map(([id, label]) => {
+              const active = id === 'home'
+                ? route.page === 'home'
+                : id === 'cases'
                 ? (route.page === 'cases' || route.page === 'case' || route.page === 'case-new')
                 : id === 'tasks'
                   ? route.page === 'tasks'
@@ -257,7 +261,8 @@ export function ContentReviewView(): React.ReactElement {
                   className="h-7 px-2.5 text-xs font-medium"
                   aria-pressed={active}
                   onClick={() => {
-                    if (id === 'cases') setRoute({ page: 'cases' })
+                    if (id === 'home') setRoute({ page: 'home' })
+                    else if (id === 'cases') setRoute({ page: 'cases' })
                     else if (id === 'tasks') setRoute({ page: 'tasks', view: 'actionable' })
                     else if (id === 'batches') setRoute({ page: 'batches' })
                     else setRoute({ page: 'templates' })
@@ -347,6 +352,9 @@ export function ContentReviewView(): React.ReactElement {
       )}
 
       {/* ===== 新页面：案卷列表 / 新建案卷 / 单案五页 / 待办 ===== */}
+      {route.page === 'home' && (
+        <main className="relative flex min-h-0 flex-1 overflow-y-auto titlebar-no-drag"><ReviewHomePage /></main>
+      )}
       {route.page === 'cases' && (
         <main className="relative flex min-h-0 flex-1 titlebar-no-drag"><ReviewCaseListPage /></main>
       )}

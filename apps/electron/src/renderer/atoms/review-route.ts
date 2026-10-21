@@ -21,6 +21,7 @@ export interface ReviewFocus {
 }
 
 export type ReviewRoute =
+  | { page: 'home' }
   | { page: 'cases' }
   | { page: 'case-new'; start: 'files' | 'template' | 'blank' }
   | { page: 'case'; caseId: string; tab: CaseTab }
@@ -39,15 +40,16 @@ export interface ReviewBackContext {
   restore?: Record<string, unknown>
 }
 
-export const reviewRouteAtom = atom<ReviewRoute>({ page: 'cases' })
+export const reviewRouteAtom = atom<ReviewRoute>({ page: 'home' })
 export const reviewFocusAtom = atom<ReviewFocus | null>(null)
 export const reviewBackContextAtom = atom<ReviewBackContext | null>(null)
 
 /** 全局导航的当前四项；由路由推导，不单独存状态。 */
-export type ReviewGlobalNav = 'cases' | 'tasks' | 'batches' | 'templates'
+export type ReviewGlobalNav = 'home' | 'cases' | 'tasks' | 'batches' | 'templates'
 
 export function globalNavOf(route: ReviewRoute): ReviewGlobalNav {
   switch (route.page) {
+    case 'home': return 'home'
     case 'tasks': return 'tasks'
     case 'batches':
     case 'batch-new':
