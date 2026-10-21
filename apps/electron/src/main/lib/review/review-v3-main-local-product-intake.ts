@@ -24,6 +24,7 @@ import {listTemplateVersions} from './template-store'
 import {loadD4UnifiedCatalog,loadD4UnifiedWorkspace} from './review-d4-catalog'
 import {prepareB29UnmatchedAuthorDraft,type B29HumanAuthorIntent,
   type B29UnmatchedAuthorDraft} from './review-v3-b3-unmatched-author-bootstrap'
+import {classifyD4ApplicationDocuments,type D4ContentRouteSuggestion} from './review-v3-d4-content-router'
 import type {B20MainReadScope} from './review-v3-b1-b2-main-read-bundle-v3-b'
 import type {B32ProductRead} from '../../../renderer/components/review-v3-dev-b/review-v3-product-workflow'
 
@@ -32,6 +33,8 @@ export interface C11MainLocalProductRead {
   read:B32ProductRead
   catalog:B3ManualCatalogEntry[]
   sessionKey:string
+  /** 当前案卷物理验真的申请原件内明确意图；歧义候选只展示不给B3默认绑定。 */
+  routeCandidates:D4ContentRouteSuggestion[]
 }
 export interface C11MainLocalTechnicalChoiceAck {
   candidateOnly:true;technicalChoiceRecorded:true
@@ -170,9 +173,8 @@ function catalog():B3ManualCatalogEntry[] {
 function evaluate(s:Session,items:B3ManualCatalogEntry[]):B3RouteState {
   const ids=s.staging.listScopedCandidateIds(s.ctx)
   const all=ids.map(id=>s.staging.getCandidate(s.ctx,id))
-  // Only a CURRENT native Case with a concrete locally published template
-  // provides a defensible 20-second technical route. No model/filename
-  // guess, candidate-held policy or school authority is inferred.
+  // 当前正式绑定、精确业务标题或已解析原件中声明的唯一模板，才允许倒计时
+  // 自动建议。模糊文件名、OCR推测和受控合成示例均不能变成自动路由依据。
   const installed=readAggregate(s.ctx.caseCandidateId)?.caseV2
   const selected=items.find(x=>x.templateId===installed?.templateId&&
     x.templateVersion===String(installed?.templateVersion)&&
@@ -187,13 +189,19 @@ function evaluate(s:Session,items:B3ManualCatalogEntry[]):B3RouteState {
     item.availability==='authorized-for-technical-selection'&&
     (item.name.trim().toLocaleLowerCase()===exactTitle||
      item.templateId.toLocaleLowerCase()===exactTitle)):[]
-  const auto=selected??(matches.length===1?matches[0]:undefined)
+  const content=installed?classifyD4ApplicationDocuments(items,installed.documents):[]
+  const solo=content.length===1&&content[0]!.autoEligible?content[0]:undefined
+  const titleMatch=matches.length===1&&(!solo||solo.templateId===matches[0]!.templateId)?matches[0]:undefined
+  const fromSource=!selected&&scoped&&solo?items.find(item=>item.templateId===solo.templateId):undefined
+  const auto=selected??titleMatch??fromSource
   const suggestions:B3RouteSuggestion[]=auto&&scoped?[{
     templateId:auto.templateId,templateVersion:auto.templateVersion,
     availability:'authorized-for-technical-selection',
     confidence:1,caseCandidateId:s.ctx.caseCandidateId,
     evidence:all.map(x=>({materialCandidateId:x.candidateId,rawSha256:x.rawSha256,
-      reason:selected?'已绑定当前案卷本地模板':'案卷标题精确匹配唯一完整模板名称或编号'})),
+      reason:selected?'已绑定当前案卷本地模板':titleMatch?
+        '案卷标题精确匹配唯一完整模板名称或编号':
+        '已核验申请原件的唯一业务意图：'+(solo?.matchedSignals.join('、')??'未知')})),
   }]:[]
   return s.router.evaluate(s.ctx,{
     automaticSelectionEnabled:true,materialCandidates:all,suggestions,
@@ -219,7 +227,8 @@ function read(event:IpcMainInvokeEvent,caseId:string):C11MainLocalProductRead {
     candidateOnly:true,publicationAllowed:false,businessWriteAllowed:false,
     schoolPolicyVerified:false,
   }
-  return {read:result,catalog:currentCatalog,sessionKey:s.signature}
+  const routeCandidates=classifyD4ApplicationDocuments(currentCatalog,data.aggregate.caseV2.documents)
+  return {read:result,catalog:currentCatalog,sessionKey:s.signature,routeCandidates}
 }
 export function installC11LocalNativeProductIntake():void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.LOCAL_PRODUCT_CURRENT_V3,
