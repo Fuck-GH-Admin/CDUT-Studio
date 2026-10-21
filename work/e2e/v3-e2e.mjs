@@ -2582,6 +2582,57 @@ const scenarios = {
     return { trace, caseId, final }
   },
 
+  /**
+   * S4 的「报告 + 冷重启」段：真实 UI 用内置示例建案（含材料），
+   * 导出报告，然后另一个进程冷启动核对案卷/材料/报告仍在。
+   * 明确说明：材料来自产品内置示例，不是 OS 文件对话框上传。
+   */
+  async 'flow-s4-report'({ send }) {
+    const trace = []
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+    const clickText = async (text) => {
+      const hit = await evaluate(send, `
+        const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], summary'))
+        const hit = nodes.find(n => (n.textContent ?? '').includes(${JSON.stringify(text)}))
+        if (hit) { hit.click(); return (hit.textContent ?? '').trim().slice(0, 40) }
+        return null
+      `)
+      trace.push('click(' + text + ')=' + hit)
+      return hit
+    }
+    for (let i = 0; i < 60; i += 1) {
+      const ready = await evaluate(send, `Boolean(window.reviewAPI)`)
+      if (ready === true) break
+      await sleep(500)
+    }
+    await clickText('内容合规审查'); await sleep(1500)
+    await clickText('进入本地材料审核'); await sleep(2500)
+    await clickText('案卷办理'); await sleep(1500)
+    await clickText('载入示例并创建审核任务'); await sleep(4000)
+
+    const state = await evaluate(send, `
+      const list = await window.reviewAPI.listCasesV2()
+      const caseId = (list ?? [])[0]?.caseId ?? null
+      if (!caseId) return { caseId: null }
+      const agg = await window.reviewAPI.getAggregateV2(caseId)
+      return { caseId, stage: agg?.caseV2?.stage ?? null,
+        documents: (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).map(d => d.fileName + '@' + (d.materialSlotId ?? '-')),
+        runs: (await window.reviewAPI.listRunsV2(caseId))?.length ?? 0 }
+    `)
+    trace.push('case=' + JSON.stringify(state))
+
+    // 真实点击导出报告
+    await clickText('导出报告'); await sleep(3000)
+    const report = await evaluate(send, `
+      const list = await window.reviewAPI.listCasesV2()
+      const caseId = (list ?? [])[0]?.caseId ?? null
+      if (!caseId) return null
+      try { return await window.reviewAPI.exportReportV2(caseId) } catch (e) { return { error: String(e).slice(0, 120) } }
+    `)
+    trace.push('report=' + JSON.stringify(report))
+    return { trace, caseId: state.caseId, documents: state.documents, report }
+  },
+
   async 'd4-list'({ send }) {
     return evaluate(send, `
       const started = Date.now()

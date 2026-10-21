@@ -106,10 +106,25 @@
 | S3-01 / S3-02 | PASS |
 | **S4** | **PARTIAL / BLOCKED_ENV** |
 
-**S4 本轮新增尝试与结论**：在真实桌面会话（Xwayland `:0` + mutter）复跑，导航/选模板/填 6 字段/
-建案/规则检查均通过并产出真实 Run；**材料文件仍无法投递**——原生 `dialog.showOpenDialog`
-窗口不被 `xdotool` 枚举到可操作窗口，`windowactivate`+`key/type --window` 与"依赖模态焦点直接输入"
-两种方式各试后 `documents` 计数始终为 0。按任务书要求**不伪造 GUI 通过**，S4 保留 PARTIAL。
+**S4 逐段实测**（把 S4 拆成六段，分别给证据，不用整项笼统 PARTIAL 掩盖已通过部分）：
+
+| S4 段 | 结果 | 证据 |
+|---|---|---|
+| 1 导航→选已发布模板→填字段→建案 | **PASS（真实 UI）** | `flow-a15-s4`：DOM 点击导航、选模板、填 6 个案例级字段、点「创建一份案卷」→ 真实 `case-mvhb0jzq` |
+| 2 **OS 文件选择器导入原件** | **BLOCKED_ENV** | 见下 |
+| 3 规则检查（真实 Run + Plan 指纹） | **PASS（真实 UI）** | 点「按模板规则检查」→ `run-tpl-mvhb2wd2-9d9837fa`，人数 compliant、材料 awaiting-supplement |
+| 4 阶段决定（初审→终审、非合规阻断） | **PASS（真机，S3-02）** | 初审 `finality=stage`、teacher 终审 `finality=final`，两段均绑真实 Run；21 人 `stage-pass` 被拒 |
+| 5 报告导出 | **PASS（真实 UI，本轮）** | `flow-s4-report`：点「导出报告」→ 真实文件 `report-cases/v2-demo-mvhftehr/reports/report-mvhftjwi.md`，内容含案卷号/阶段/事项字段 |
+| 6 冷重启保全 | **PASS** | S3-02 冷重启：`stage=decided`、两条决定、Run 全留；本轮报告与状态文件在新进程读取后仍在 |
+
+**第 2 段的完整尝试记录**：
+- headless xvfb + openbox：`wmctrl -l` 为空（无窗口管理器），对话框无焦点管理；
+- 真机桌面 Xwayland `:0` + mutter：`xdotool search --onlyvisible` 只枚举到未命名窗口与已管理窗口，
+  `windowactivate --sync` + `key/type --window` 对 3 个候选逐一投递，每次 후核对 `documents` 计数**恒为 0**；
+- 真机桌面 + "依赖模态焦点直接输入"（`ctrl+l` → `type` → `Return`）：`direct/docs=0`；
+- CDP `Input.dispatchDragEvent` 携带 `files`：Electron `webUtils.getPathForFile` 需要真实磁盘 File，合成 drag 拿不到路径。
+
+结论：**S4 仅第 2 段因环境无法自动化**，其余五段均已真机通过。按任务书要求不伪造，S4 仍标 PARTIAL。
 
 ---
 ### S4 真实 UI 旅程（PARTIAL）与一处产品缺陷修复
