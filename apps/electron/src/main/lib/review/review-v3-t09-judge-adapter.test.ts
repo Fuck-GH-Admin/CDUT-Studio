@@ -71,7 +71,8 @@ describe('F18 T09 评委评分离线适配', () => {
     expect(readT07State(batchId)?.state.rounds[0]?.votes[0]?.scores[0]?.score).toBe(4)
 
     // 模拟重新读取真实存储后再次导入：回执先于旧版本冲突命中。
-    const second = await importT09JudgePackage({ aggregate: aggregate(caseId), packageJson, deps })
+    const noPrompt = { ...deps, confirmLocalOrganizer: () => { throw new Error('duplicate must not prompt') } }
+    const second = await importT09JudgePackage({ aggregate: aggregate(caseId), packageJson, deps: noPrompt })
     expect(second.status).toBe('duplicate')
     expect(readT07State(batchId)?.state.rounds[0]?.votes).toHaveLength(1)
 
@@ -79,7 +80,7 @@ describe('F18 T09 评委评分离线适配', () => {
     // disappeared before it could be persisted. Recovery must inspect the durable
     // offlineActionId on the vote, not the numerical scores alone.
     rmSync(join(configDir, 'review-offline', caseId, 'receipts.json'), { force: true })
-    const recovered = await importT09JudgePackage({ aggregate: aggregate(caseId), packageJson, deps })
+    const recovered = await importT09JudgePackage({ aggregate: aggregate(caseId), packageJson, deps: noPrompt })
     expect(recovered.status).toBe('duplicate')
     expect(readT07State(batchId)?.state.rounds[0]?.votes).toHaveLength(1)
     expect(readT07State(batchId)?.state.rounds[0]?.votes[0]?.offlineActionId)

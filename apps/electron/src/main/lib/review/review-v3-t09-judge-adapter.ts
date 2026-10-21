@@ -130,7 +130,6 @@ export async function importT09JudgePackage(input: {
   packageJson: string
   deps: T09JudgeImportDeps
 }): Promise<{ status: 'accepted' | 'duplicate'; receipt: T09Receipt } | { status: 'conflict' | 'rejected'; preview: T09Preview }> {
-  if (!input.deps.confirmLocalOrganizer()) throw new Error('T09_LOCAL_ORGANIZER_CONFIRMATION_REQUIRED')
   const { reply, task, batchId } = loadJudgeReply(input.aggregate.caseV2.id, input.packageJson)
   const stored = readT09Receipt(reply.caseId, reply.actionId)
   if (stored && (stored.hash !== reply.hash || stored.caseId !== reply.caseId)) {
@@ -176,6 +175,9 @@ export async function importT09JudgePackage(input: {
   }
   const preview = checkedPreview(input.aggregate, reply, task, batchId)
   if (preview.status !== 'ready') return { status: preview.status, preview }
+  // Authorize only a new, validated mutation. Duplicate receipts and CAS
+  // crash recovery never require a second confirmation or score write.
+  if (!input.deps.confirmLocalOrganizer()) throw new Error('T09_LOCAL_ORGANIZER_CONFIRMATION_REQUIRED')
   const { state } = judgeState(input.aggregate, task, batchId)
   const outcome = await importT09Reply(reply, task, state,
     async (actionId) => readT09Receipt(reply.caseId, actionId),

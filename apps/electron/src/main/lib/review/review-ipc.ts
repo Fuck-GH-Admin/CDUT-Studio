@@ -831,11 +831,10 @@ export function registerReviewIpc(): void {
     if (parsed.reply.kind === 'judge-rating-reply') {
       const aggregate = getCaseV2Aggregate(input.caseId)
       if (!aggregate) throw new Error('案卷不存在')
-      const { previewT09JudgePackage, importT09JudgePackage } = require('./review-v3-t09-judge-adapter') as typeof import('./review-v3-t09-judge-adapter')
-      const preview = previewT09JudgePackage({ aggregate, packageJson: input.packageJson })
-      if (preview.preview.status !== 'ready') return { status: preview.preview.status, preview: preview.preview }
-      // 这是本机业务操作者对独立离线票的显式接收，不是学校认证。
-      const confirmed = dialog.showMessageBoxSync({
+      const { importT09JudgePackage } = require('./review-v3-t09-judge-adapter') as typeof import('./review-v3-t09-judge-adapter')
+      // Main asks for explicit local approval only AFTER receipt, CAS recovery,
+      // and payload preflight checks. Duplicate/conflict imports do not prompt.
+      const confirmLocalOrganizer = (): boolean => dialog.showMessageBoxSync({
         type: 'warning',
         buttons: ['取消导入', '确认导入到本机评分'],
         defaultId: 0,
@@ -845,12 +844,11 @@ export function registerReviewIpc(): void {
         message: '将独立评委评分导入本机批次？',
         detail: '离线包内评委身份是声明，不能证明校方身份。请核对签发任务、评委与评分后再确认。',
       }) === 1
-      if (!confirmed) return { status: 'rejected', preview: { ...preview.preview, status: 'rejected', details: ['本机组织者取消导入，未写入评分'] } }
       const { applyT07MainAction } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
       return importT09JudgePackage({
         aggregate, packageJson: input.packageJson,
         deps: {
-          confirmLocalOrganizer: () => confirmed,
+          confirmLocalOrganizer,
           submitRating: async ({ batchId, reviewerId, expectedRevision, action }) => {
             assertC0ReviewMainSender(event)
             const result = applyT07MainAction({
