@@ -407,15 +407,13 @@ export function ContentReviewView(): React.ReactElement {
         <TemplateWizardPanel />
       </section>
       <section aria-label="本地候选模板作者工作台" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'local-candidates' && 'hidden')}>
-        <ReviewV3LocalCandidateWorkbench initialCaseId={quickCaseId ?? undefined} />
         {section === 'local-candidates' && (selectedCaseId ?? quickCaseId) && (
-          <details open id="case-workspace-inline" className="mx-3 mb-3 rounded-xl border bg-card p-3 shadow-sm">
-            <summary className="cursor-pointer text-sm font-semibold">本案办理（材料、运行、办理、报告、记录）</summary>
-            <div className="mt-3">
-              <V2CasePanel view="case" caseId={(selectedCaseId ?? quickCaseId) as string} />
-            </div>
-          </details>
+          <div id="case-workspace-inline" className="mx-3 mb-3 rounded-xl border bg-card p-3 shadow-sm">
+            <p className="mb-2 text-sm font-semibold">本案办理</p>
+            <V2CasePanel view="case" caseId={(selectedCaseId ?? quickCaseId) as string} />
+          </div>
         )}
+        <ReviewV3LocalCandidateWorkbench initialCaseId={quickCaseId ?? undefined} />
       </section>
       <section aria-label="审核批次管理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'batches' && 'hidden')}>
         <BatchPanel
