@@ -67,7 +67,17 @@ function renderTemplateFieldInput(
 }
 
 /** 案卷面板：选择模板 → 创建案卷 → 登记材料 → 开始审核 */
-export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) => void } = {}): JSX.Element {
+export type V2CasePanelTab = 'materials' | 'checks' | 'workflow' | 'reports' | 'history'
+
+export function V2CasePanel({ onCaseOpened, tab, mode = 'all', caseId }: {
+  onCaseOpened?: (caseId: string) => void
+  /** 详情页：显式指定当前案卷，进入时按该 ID 读取真实聚合 */
+  caseId?: string
+  /** 单案五页：给定后只渲染该页内容，用于新的案卷详情壳 */
+  tab?: V2CasePanelTab
+  /** create=只渲染建案区；detail=只渲染案卷详情；all=旧行为（建案+详情） */
+  mode?: 'all' | 'create' | 'detail'
+} = {}): JSX.Element {
   const store = useStore()
   const aggregate = useAtomValue(reviewV2AggregateAtom)
   const setNotice = useSetAtom(reviewV2NoticeAtom)
@@ -123,6 +133,24 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
       toast.error(`${result.code}：${result.message}`)
     }
   }, [store, setNotice, toast])
+
+  // 详情路由直接指定案卷时，按 caseId 读取真实聚合；不再依赖"上次恰好打开了谁"
+  useEffect(() => {
+    if (!caseId) return
+    if (aggregate?.caseV2.id === caseId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const loaded = await window.reviewAPI.openAggregateV2(caseId)
+        if (cancelled) return
+        if (loaded) store.set(reviewV2AggregateAtom, loaded)
+        else setNotice(`案卷读取失败或不存在：${caseId}`)
+      } catch (cause) {
+        if (!cancelled) setNotice(cause instanceof Error ? cause.message : String(cause))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [caseId, aggregate?.caseV2.id, store, setNotice])
 
   const openCase = useCallback((caseId: string) => run(async () => {
     const loaded = await window.reviewAPI.openAggregateV2(caseId)
@@ -337,7 +365,7 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
         {' · '}{current.caseV2.documents.filter((item) => item.active !== false).length} 份原件
         {' · '}{current.caseV2.stage === 'decided' ? '已形成业务决定' : '当前阶段：' + current.caseV2.stage}
       </p>}
-      <details open={!current} className="mb-3 rounded-md border border-border/60 px-3 py-2">
+      {mode !== 'detail' && <details hidden={mode === 'create'} open={!current} className="mb-3 rounded-md border border-border/60 px-3 py-2">
         <summary className="cursor-pointer text-xs font-medium">打开其他案卷 / 从已发布模板新建</summary>
         <div className="mt-3">
       <div className="mb-2 space-y-1.5 rounded-lg border-t pt-2">
@@ -423,14 +451,14 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
         </div>
       )}
         </div>
-      </details>
-      <div className="space-y-2">
+      </details>}
+      <div className="space-y-2" hidden={mode === 'create' || (!current)}>
         {!current && (
           <Button size="sm" disabled={store.get(reviewV2BusyAtom)} onClick={seedAndCreate}>
             载入示例并创建审核任务
           </Button>
         )}
-        {current && (
+        {current && (tab === undefined || tab === 'materials') && (
           <div className="space-y-1.5 text-xs">
             {currentTemplate?.materialSlots.length && (
               <div className="flex items-center gap-1.5">
@@ -467,41 +495,6 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
                 <Button size="sm" onClick={submitCase}>{current.caseV2.stage === 'draft' ? '提交案卷' : '恢复审核任务'}</Button>
               )}
             </div>
-            <ReviewV3UnifiedRun
-              caseId={current.caseV2.id}
-              stage={current.caseV2.stage}
-              documentCount={current.caseV2.documents.filter((document) => document.active !== false).length}
-              technicalPlan={!!current.d2RuntimePlan}
-              onUpdated={refreshCurrentRun}
-            />
-            {latestRun && <details className="rounded-md border border-border/60 px-3 py-2">
-              <summary className="cursor-pointer text-xs font-semibold">查看与导出本案审核报告</summary>
-              <ReviewV3T08ReportPanel aggregate={current} currentRun={latestRun} currentStale={latestRunStale} template={currentTemplate ?? null} />
-            </details>}
-            <ReviewV3T05HumanWorkflow
-              aggregate={current}
-              onResult={applyResult}
-              stageCapability={stageCapability}
-              recordTrustedStageDecision={recordTrustedStageDecision}
-              submitAppeal={(input) => window.reviewAPI.submitLocalF13Appeal(input)}
-              reviewAppeal={(input) => window.reviewAPI.reviewLocalF13Appeal(input)}
-              withdrawAppeal={(input) => window.reviewAPI.withdrawLocalF13Appeal(input)}
-            />
-            <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
-            <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
-            <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
-            <details className="rounded-md border border-border/60 px-3 py-2 text-xs">
-              <summary className="cursor-pointer font-medium">高级：仅执行模板规则（不启动 AI）</summary>
-              <ReviewV3TemplateRuleRun caseId={current.caseV2.id} />
-            </details>
-            {/* T09 离线任务包：签发 / 预览 / 幂等导入 */}
-            <ReviewV3T09OfflineSection />
-            {/* T02 材料来源覆盖（只读暂存预览，不产生原件） */}
-            <ReviewV3T02CoverageSection caseId={current.caseV2.id} />
-            {/* T03 事实确认与证据多对多：与观察项面板同一案卷上下文 */}
-            <ReviewV3T03FactWorkbench />
-            <ReviewAssignmentCard caseId={current.caseV2.id} />
-            <CaseTimelinePanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <p className="font-medium">{current.caseV2.title}</p>
             {current.caseV2.subjects.length > 0 && (
               <div className="rounded-md bg-muted/30 p-2">
@@ -538,6 +531,67 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
               }}>保存姓名</Button>
             </div>
             )}
+          </div>
+        )}
+        {current && (tab === undefined || tab === 'checks') && (
+          <div className="space-y-2 text-xs">
+            <ReviewV3UnifiedRun
+              caseId={current.caseV2.id}
+              stage={current.caseV2.stage}
+              documentCount={current.caseV2.documents.filter((document) => document.active !== false).length}
+              technicalPlan={!!current.d2RuntimePlan}
+              onUpdated={refreshCurrentRun}
+            />
+            <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
+            <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
+            <details className="rounded-md border border-border/60 px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium">高级：仅执行模板规则（不启动 AI）</summary>
+              <ReviewV3TemplateRuleRun caseId={current.caseV2.id} />
+            </details>
+            {/* T02 材料来源覆盖（只读暂存预览，不产生原件） */}
+            <ReviewV3T02CoverageSection caseId={current.caseV2.id} />
+            {/* T03 事实确认与证据多对多：与观察项面板同一案卷上下文 */}
+            <ReviewV3T03FactWorkbench />
+          </div>
+        )}
+        {current && (tab === undefined || tab === 'reports') && (
+          <div className="space-y-2 text-xs">
+            {latestRun && <details open className="rounded-md border border-border/60 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-semibold">查看与导出本案审核报告</summary>
+              <ReviewV3T08ReportPanel aggregate={current} currentRun={latestRun} currentStale={latestRunStale} template={currentTemplate ?? null} />
+            </details>}
+            {/* T09 离线任务包：签发 / 预览 / 幂等导入 */}
+            <ReviewV3T09OfflineSection />
+          </div>
+        )}
+        {current && (tab === undefined || tab === 'workflow') && (
+          <div className="space-y-2 text-xs">
+            <ReviewV3T05HumanWorkflow
+              aggregate={current}
+              onResult={applyResult}
+              stageCapability={stageCapability}
+              recordTrustedStageDecision={recordTrustedStageDecision}
+              submitAppeal={(input) => window.reviewAPI.submitLocalF13Appeal(input)}
+              reviewAppeal={(input) => window.reviewAPI.reviewLocalF13Appeal(input)}
+              withdrawAppeal={(input) => window.reviewAPI.withdrawLocalF13Appeal(input)}
+            />
+            <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
+            <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />
+            <ObservationConfirmPanel caseId={current.caseV2.id} aggregate={current} onResult={applyResult} refreshNonce={runNonce} />
+            <details className="rounded-md border border-border/60 px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-medium">高级：仅执行模板规则（不启动 AI）</summary>
+              <ReviewV3TemplateRuleRun caseId={current.caseV2.id} />
+            </details>
+            {/* T02 材料来源覆盖（只读暂存预览，不产生原件） */}
+            <ReviewV3T02CoverageSection caseId={current.caseV2.id} />
+            {/* T03 事实确认与证据多对多：与观察项面板同一案卷上下文 */}
+            <ReviewV3T03FactWorkbench />
+          </div>
+        )}
+        {current && (tab === undefined || tab === 'history') && (
+          <div className="space-y-2 text-xs">
+            <ReviewAssignmentCard caseId={current.caseV2.id} />
+            <CaseTimelinePanel caseId={current.caseV2.id} refreshNonce={runNonce} />
           </div>
         )}
       </div>

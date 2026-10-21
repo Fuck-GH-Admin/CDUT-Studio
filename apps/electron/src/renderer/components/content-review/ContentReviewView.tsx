@@ -52,7 +52,7 @@ import { AssistantDrawer } from './AssistantDrawer'
 import { CenterPanel } from './CenterPanel'
 import { LeftPanel } from './LeftPanel'
 import { RightPanel } from './RightPanel'
-import { reviewV2AggregateAtom, V2CasePanel } from './V2CasePanel'
+import { reviewV2AggregateAtom, V2CasePanel, type V2CasePanelTab } from './V2CasePanel'
 import { ReviewV3T10WorkspaceOverview } from './ReviewV3T10WorkspaceOverview'
 import { TemplateWizardPanel } from './TemplateWizardPanel'
 import { ReviewV3LocalCandidateWorkbench } from './ReviewV3LocalCandidateWorkbench'
@@ -60,6 +60,9 @@ import { BatchPanel } from './BatchPanel'
 import { ReviewV3T07Workbench } from './ReviewV3T07Workbench'
 import { useReviewActions } from './use-review-actions'
 import { ReviewV3QuickIntake } from './ReviewV3QuickIntake'
+import { ReviewCaseListPage } from './ReviewCaseListPage'
+import { ReviewTasksPage } from './ReviewTasksPage'
+import { reviewRouteAtom } from '@/atoms/review-route'
 
 /** 窄屏单栏切换的栏目标识 */
 type Pane = 'left' | 'center' | 'right'
@@ -76,6 +79,8 @@ export function ContentReviewView(): React.ReactElement {
   const running = useAtomValue(reviewRunningAtom)
   const section = useAtomValue(reviewWorkspaceSectionAtom)
   const setSection = useSetAtom(reviewWorkspaceSectionAtom)
+  const route = useAtomValue(reviewRouteAtom)
+  const setRoute = useSetAtom(reviewRouteAtom)
   const setV2Aggregate = useSetAtom(reviewV2AggregateAtom)
   const businessAggregate = useAtomValue(reviewV2AggregateAtom)
   const channels = useAtomValue(channelsAtom)
@@ -232,30 +237,39 @@ export function ContentReviewView(): React.ReactElement {
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <nav aria-label="审核工作页" className="flex shrink-0 flex-wrap items-center gap-1">
             {([
-              ['workbench', '导入材料'],
-              ['local-candidates', '当前审核'],
-              ['case-v2', '结果与办理'],
+              ['cases', '案卷'],
+              ['tasks', '待办'],
+              ['batches', '审核批次'],
               ['templates', '审核模板'],
-              ['batches', '批次管理'],
-            ] as Array<[ReviewWorkspaceSection, string]>).map(([id, label]) => (
-              <Button
-                key={id}
-                size="sm"
-                variant={section === id ? 'secondary' : 'ghost'}
-                className="h-7 px-2.5 text-xs font-medium"
-                aria-pressed={section === id}
-                onClick={() => id === 'case-v2' ? void openBusinessCase() : setSection(id)}
-              >
-                {label}
-              </Button>
-            ))}
-            <Button type="button" size="sm" variant="ghost" className="h-7 px-2.5 text-xs font-medium"
-              onClick={() => openPane('right')} title="在当前案卷查看需要核对的检查与人工待办">
-              待办
-            </Button>
+            ] as Array<['cases' | 'tasks' | 'batches' | 'templates', string]>).map(([id, label]) => {
+              const active = id === 'cases'
+                ? (route.page === 'cases' || route.page === 'case' || route.page === 'case-new')
+                : id === 'tasks'
+                  ? route.page === 'tasks'
+                  : id === 'batches'
+                    ? (route.page === 'batches' || route.page === 'batch' || route.page === 'batch-new')
+                    : (route.page === 'templates' || route.page === 'template' || route.page === 'template-new')
+              return (
+                <Button
+                  key={id}
+                  size="sm"
+                  variant={active ? 'secondary' : 'ghost'}
+                  className="h-7 px-2.5 text-xs font-medium"
+                  aria-pressed={active}
+                  onClick={() => {
+                    if (id === 'cases') setRoute({ page: 'cases' })
+                    else if (id === 'tasks') setRoute({ page: 'tasks', view: 'actionable' })
+                    else if (id === 'batches') setRoute({ page: 'batches' })
+                    else setRoute({ page: 'templates' })
+                  }}
+                >
+                  {label}
+                </Button>
+              )
+            })}
           </nav>
 
-          {reviewCase && (
+          {route.page === 'case' && reviewCase && (
             <div className="flex min-w-0 items-center gap-1.5 rounded-md bg-foreground/[0.04] px-2 py-1 text-xs text-muted-foreground">
               <FileText size={12} className="shrink-0 text-foreground/60" />
               <span className="max-w-[260px] truncate" title={reviewCase.title}>
@@ -263,7 +277,7 @@ export function ContentReviewView(): React.ReactElement {
               </span>
             </div>
           )}
-          {!reviewCase && businessAggregate && (
+          {route.page === 'case' && !reviewCase && businessAggregate && (
             <div className="max-w-[300px] truncate rounded-md bg-foreground/[0.04] px-2 py-1 text-xs text-muted-foreground" title={businessAggregate.caseV2.title}>
               {businessAggregate.caseV2.title}
             </div>
@@ -271,7 +285,7 @@ export function ContentReviewView(): React.ReactElement {
         </div>
 
         {/* 右侧：出口状态徽标 + 业务操作按钮 */}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className={cn('ml-auto flex shrink-0 items-center gap-2', route.page !== 'case' && 'hidden')}>
           <GatewayBadge status={gatewayStatus} />
           <Button
             type="button"
@@ -298,15 +312,15 @@ export function ContentReviewView(): React.ReactElement {
         </div>
       </header>
 
-      <ReviewV3T10WorkspaceOverview
+      {route.page === 'case' && <ReviewV3T10WorkspaceOverview
         onOpenReview={() => openPane('left')}
         onOpenMaterials={() => openPane('center')}
         onOpenTasks={() => openPane('right')}
         onOpenTemplates={() => setSection('templates')}
         onOpenBusiness={() => void openBusinessCase()}
-      />
+      />}
 
-      {(section === 'templates' || section === 'local-candidates') && (
+      {route.page === 'templates' && (section === 'templates' || section === 'local-candidates') && (
         <nav aria-label="模板工作区" className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card/40 px-4 py-1.5 titlebar-no-drag">
           <Button type="button" data-testid="review-section-templates" size="sm" variant={section === 'templates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('templates')}>模板库与业务配置</Button>
           <Button type="button" data-testid="review-section-local-candidates" size="sm" variant={section === 'local-candidates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('local-candidates')}>候选方案与技术试跑</Button>
@@ -332,8 +346,64 @@ export function ContentReviewView(): React.ReactElement {
         </nav>
       )}
 
+      {/* ===== 新页面：案卷列表 / 新建案卷 / 单案五页 / 待办 ===== */}
+      {route.page === 'cases' && (
+        <main className="relative flex min-h-0 flex-1 titlebar-no-drag"><ReviewCaseListPage /></main>
+      )}
+      {route.page === 'case-new' && (
+        <main className="relative flex min-h-0 flex-1 overflow-y-auto titlebar-no-drag">
+          <div className="mx-auto w-full max-w-4xl px-6 py-5">
+            <header className="mb-4 flex items-center justify-between">
+              <div>
+                <h1 className="text-lg font-semibold">新建案卷</h1>
+                <p className="mt-1 text-xs text-muted-foreground">从已发布模板建案并填写案卷信息。</p>
+              </div>
+              <Button type="button" size="sm" variant="ghost" className="h-8 text-xs"
+                onClick={() => setRoute({ page: 'cases' })}>返回案卷列表</Button>
+            </header>
+            <V2CasePanel mode="create" onCaseOpened={(caseId) => setRoute({ page: 'case', caseId, tab: 'materials' })} />
+          </div>
+        </main>
+      )}
+      {route.page === 'case' && (
+        <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden titlebar-no-drag">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-4 py-2">
+            <Button type="button" size="sm" variant="ghost" className="h-7 text-xs"
+              onClick={() => setRoute({ page: 'cases' })}>← 案卷列表</Button>
+            {([
+              ['materials', '材料与事项'],
+              ['checks', '审核检查'],
+              ['workflow', '办理与决定'],
+              ['reports', '报告与交付'],
+              ['history', '操作记录'],
+            ] as Array<[V2CasePanelTab, string]>).map(([id, label]) => (
+              <Button key={id} type="button" size="sm"
+                variant={route.tab === id ? 'secondary' : 'ghost'}
+                className="h-7 px-2.5 text-xs font-medium"
+                aria-pressed={route.tab === id}
+                onClick={() => setRoute({ page: 'case', caseId: route.caseId, tab: id })}>
+                {label}
+              </Button>
+            ))}
+            <span className="ml-auto truncate text-[11px] text-muted-foreground">{route.caseId}</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+            <V2CasePanel mode="detail" tab={route.tab} caseId={route.caseId} />
+          </div>
+        </main>
+      )}
+      {route.page === 'tasks' && (
+        <main className="relative flex min-h-0 flex-1 overflow-y-auto titlebar-no-drag">
+          <div className="mx-auto w-full max-w-4xl px-6 py-5">
+            <h1 className="mb-1 text-lg font-semibold">待办</h1>
+            <p className="mb-4 text-xs text-muted-foreground">跨案卷的待处理事项；点击进入对应案卷的处理位置。</p>
+            <ReviewTasksPage />
+          </div>
+        </main>
+      )}
+
       {/* ===== 三栏主体 ===== */}
-      <main className={cn('relative flex min-h-0 flex-1 titlebar-no-drag', section !== 'workbench' && 'hidden')}>
+      <main className={cn('relative flex min-h-0 flex-1 titlebar-no-drag', 'hidden')}>
         {!reviewCase && !businessAggregate ? (
           <div className="flex h-full w-full items-center justify-center overflow-y-auto px-4 py-8">
             <ReviewV3QuickIntake onCreated={quickStart} />
@@ -363,16 +433,19 @@ export function ContentReviewView(): React.ReactElement {
         </>}
       </main>
 
-      <section aria-label="当前案卷业务办理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'case-v2' && 'hidden')}>
+      <section aria-label="当前案卷业务办理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', 'hidden')}>
         <V2CasePanel />
       </section>
-      <section aria-label="审核模板编排" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'templates' && 'hidden')}>
+      <section aria-label="审核模板编排" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag',
+        (!(route.page === 'templates' || route.page === 'template' || route.page === 'template-new') && (section !== 'templates' )) && 'hidden')}>
         <TemplateWizardPanel />
       </section>
-      <section aria-label="本地候选模板作者工作台" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'local-candidates' && 'hidden')}>
+      <section aria-label="本地候选模板作者工作台" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag',
+        (section !== 'local-candidates' || route.page !== 'templates') && 'hidden')}>
         <ReviewV3LocalCandidateWorkbench initialCaseId={quickCaseId ?? undefined} />
       </section>
-      <section aria-label="审核批次管理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'batches' && 'hidden')}>
+      <section aria-label="审核批次管理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag',
+        (!(route.page === 'batches' || route.page === 'batch' || route.page === 'batch-new') && section !== 'batches') && 'hidden')}>
         <BatchPanel
           active={section === 'batches'}
           onOpenProject={async (caseId) => {
