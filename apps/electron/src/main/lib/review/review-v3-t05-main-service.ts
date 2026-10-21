@@ -225,6 +225,14 @@ export function t05ActionEligibility(
 
   const checks = run.checks ?? []
   coverage.produced = checks.length
+  // 无真实计划或无有效检查不能因「没有待办」而被视为允许阶段通过。
+  const required = run.coverage?.plannedChecks
+  if (!Number.isSafeInteger(required) || !required || required < 1 || checks.length < required) {
+    blockers.push('本次运行缺少有效检查计划或结果覆盖不足')
+  }
+  // Run 本身已经冻结原件使用账本；未完成的原件不等同于通过。
+  const unread = (run.coverage?.documents ?? []).filter((item) => item.status !== 'read')
+  if (unread.length) blockers.push(`${unread.length} 份原件缺少完整读取或人工核对回执`)
 
   // 计划覆盖：Run 记录了有效规则集合时，逐项核对是否都产出了 Check
   const plannedRuleIds = run.inputManifest?.effectiveRuleIds ?? []
