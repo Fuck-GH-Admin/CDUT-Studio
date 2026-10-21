@@ -26,6 +26,7 @@ import type { DocumentLayoutBlock, LayoutRegionKind, ReviewDocumentBlock, Source
 import { extractDocxReviewContent, extractSpreadsheetReviewContent, extractTextFromFile } from '../document-parser'
 import { parseCsvRows } from './source-index'
 import { extractT02PptxImages, type T02SlideImage } from './review-v3-t02-pptx-visual-assets'
+import { inspectF04RasterOriginal } from './review-v3-f04-raster-integrity'
 
 /** 支持直接按文本切块的扩展名 */
 const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.csv', '.json', '.html', '.htm', '.eml'])
@@ -502,9 +503,12 @@ export async function parseFileIntoSourceDocument(
 
   // 图片：产出单个 image 块并记录原件相对路径（供 Vision 送模型）；纯文本管线读不到图内文字，故为 partial
   if (IMAGE_EXTENSIONS.has(ext)) {
+    const integrity = await inspectF04RasterOriginal(filePath, ext as Parameters<typeof inspectF04RasterOriginal>[1])
+    if (!integrity.ok) return draftOf('failed', [], integrity.reason)
     return draftOf(
       'partial',
-      [{ id: `blk-${slug}-001`, kind: 'image', text: '', page: 1, imageAssetPath: assetRelativePath }],
+      [{ id: `blk-${slug}-001`, kind: 'image', text: '', page: 1,
+        ...(assetRelativePath ? { imageAssetPath: assetRelativePath } : {}) }],
       '图片原件已收录；内容由视觉模型识别（不做文本切块），无法视觉识别时需人工核对',
     )
   }
@@ -676,8 +680,11 @@ export async function parseFileIntoSourceDocument(
       )
     }
 
-    return draftOf(ext === '.pdf' ? 'parsed' : 'partial', parseTextIntoBlocks(fileName, extracted),
-      ext === '.pdf' ? undefined : 'Office 版面解析不可用，已按纯文本读取；页码、图像及版式需查看原件核对')
+    // A text-only fallback cannot identify the PDF page for each sentence.
+    // It must never masquerade as successfully positioned PDF evidence.
+    return draftOf('partial', parseTextIntoBlocks(fileName, extracted), ext === '.pdf'
+      ? 'PDF 已提取文本但未取得可靠页码和坐标；块上的第 1 页只是文本回退占位，不能用于原件精确定位'
+      : 'Office 版面解析不可用，已按纯文本读取；页码、图像及版式需查看原件核对')
   }
 
   // 其他二进制：明确告知不支持，不伪造解析结果
@@ -710,5 +717,7 @@ export async function parseFileIntoSourceDocument(
       cells.length ? undefined : 'CSV 未发现可用单元格，请核对原件')
   }
   // 文本类：按行切块
-  return draftOf('parsed', parseTextIntoBlocks(fileName, text))
+  const blocks = parseTextIntoBlocks(fileName, text)
+  return draftOf(blocks.length > 0 ? 'parsed' : 'partial', blocks,
+    blocks.length > 0 ? undefined : '文本原件为空或未发现可审核正文；请查看原件核对')
 }

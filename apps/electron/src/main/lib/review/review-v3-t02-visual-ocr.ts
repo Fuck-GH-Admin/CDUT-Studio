@@ -164,6 +164,9 @@ export async function parseT02VisualMaterialWithOcr(input: T02OcrInput): Promise
           if (raster.totalPages === null) warnings.push('PDF 总页数未知，需核对页数覆盖')
           else if (raster.totalPages > raster.pages.length) {
             warnings.push('PDF 共 ' + raster.totalPages + ' 页，本轮仅渲染 ' + raster.pages.length + ' 页，余页待处理')
+            // The omitted pages are real, uninspected sources. Count them as
+            // pending rather than showing a misleading 0 awaiting inspection.
+            imagesAwaitingInspection += raster.totalPages - raster.pages.length
           }
           if (raster.pages.length === 0) warnings.push('PDF 未生成可识别页面')
           for (const item of raster.pages) {
@@ -174,7 +177,7 @@ export async function parseT02VisualMaterialWithOcr(input: T02OcrInput): Promise
             await copyFile(item.path, join(input.assetDirectory, filename))
             const relative = posix.join(posix.dirname(input.assetRelativePath.replace(/\\/g, '/')), filename)
             const block: ReviewDocumentBlock = {
-              id: 'blk-t02-pdf-page-' + item.page + '-' + digest.slice(0, 8),
+              id: 'blk-t02-' + source.id + '-pdf-page-' + item.page + '-' + digest.slice(0, 8),
               kind: 'image', text: '', page: item.page,
               imageAssetPath: relative,
               imageAlt: 'PDF 第 ' + item.page + ' 页真实渲染，尚需视觉核验',
@@ -213,7 +216,7 @@ export async function parseT02VisualMaterialWithOcr(input: T02OcrInput): Promise
         // A stand-alone image or a full rendered PDF page has the same pixel
         // canvas as its source page. An Office-embedded image does not.
         const fullPageImage = /^\.(png|jpg|jpeg|gif|bmp|webp)$/.test(ext) ||
-          (ext === '.pdf' && image.id.startsWith('blk-t02-pdf-page-'))
+          (ext === '.pdf' && image.id.startsWith('blk-t02-' + source.id + '-pdf-page-'))
         const extracted = await readImage(source, image, physical, input.ocr, fullPageImage)
         if (extracted.blocks.length > 0) {
           newOcrBlocks.push(...extracted.blocks)

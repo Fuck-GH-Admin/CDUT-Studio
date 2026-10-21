@@ -2,8 +2,9 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CaseAggregateV2, RuleSpec, TemplateVersion } from '@profer/shared'
-import { canonicalContentHash, savePolicyDraft } from './policy-store'
-import { hashEffectiveRuleSet, resolveEffectiveRules } from './effective-rules'
+import { canonicalContentHash, publishPolicy, savePolicyDraft } from './policy-store'
+import { hashEffectiveRuleSet, resolveEffectiveRuleReport, resolveEffectiveRules } from './effective-rules'
+import { buildDeterministicRuleChecks } from './v2-executor-factory'
 
 const CONFIG_DIR = join(import.meta.dir, '../../../../../../work/tmp', `profer-test-effective-rules-${Date.now()}`)
 process.env.PROFER_CONFIG_DIR = CONFIG_DIR
@@ -61,5 +62,39 @@ describe('唯一有效规则集', () => {
     expect(resolved[0]?.origin).toEqual({ kind: 'workspace' })
     expect(new Set(resolved.map((item) => item.rule.id)).size).toBe(3)
     expect(hashEffectiveRuleSet(resolved)).toHaveLength(64)
+  })
+
+  test('真实政策发布引用：相同裸 id 的两条相反限额均进入计划且待确认', () => {
+    const refs: NonNullable<TemplateVersion['policyRefs']> = []
+    for (const [policyId, cap] of [['policy-school', 10], ['policy-faculty', 8]] as const) {
+      const content = `${policyId}: max ${cap}`
+      const contentHash = canonicalContentHash(content)
+      const recordRule: RuleSpec = {
+        ...rule('R01', `金额不得超过 ${cap}`), policyVersionId: `${policyId}@1`,
+        workspaceConstraint: { kind: 'amount-limit', value: cap }, sourceRefIds: [`${policyId}-clause`],
+      }
+      savePolicyDraft({ policyId, version: 1, title: policyId, contentHash, content, origin: {
+        kind: 'owner-statement', text: content, enteredBy: 'owner-01', enteredAt: '2026-10-21T08:00:00Z',
+      }, status: 'draft', confirmations: [{ actorId: 'owner-01', role: 'template-owner', at: '2026-10-21T08:01:00Z' }], compiledRules: [recordRule] })
+      publishPolicy(policyId, 1)
+      refs.push({ policyId, version: 1, contentHash })
+    }
+    const published = { ...template(refs), status: 'published' as const }
+    const report = resolveEffectiveRuleReport({ caseV2: { ...baseCase, reviewRules: [] } }, published)
+    expect(report.rules).toHaveLength(2)
+    expect(report.conflicts).toHaveLength(1)
+    expect(new Set(report.rules.map(item => item.rule.id)).size).toBe(2)
+    expect(report.rules.every(item => item.rule.execution === 'manual')).toBe(true)
+    expect(report.conflicts[0]?.candidates.map(item => item.sourceRefIds[0])).toEqual(['policy-faculty-clause', 'policy-school-clause'])
+    const aggregate = {
+      caseV2: { ...baseCase, reviewRules: [], subjects: [], documents: [] },
+      observations: [], evidenceLinks: [],
+    } as unknown as CaseAggregateV2
+    const checks = buildDeterministicRuleChecks(aggregate, report.rules.map(item => item.rule))
+    expect(checks).toHaveLength(2)
+    expect(checks.every(check => check.status === 'awaiting-confirmation')).toBe(true)
+    expect(() => resolveEffectiveRules({ caseV2: { ...baseCase, reviewRules: [] } }, {
+      ...published, policyRefs: [{ ...refs[0]!, contentHash: 'untrusted-hash' }],
+    })).toThrow('F03_POLICY_REF_INVALID')
   })
 })

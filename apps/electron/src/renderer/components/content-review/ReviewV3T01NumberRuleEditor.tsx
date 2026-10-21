@@ -65,6 +65,7 @@ export function ReviewV3T01NumberRuleEditor({ criterion, fields, onChange }: Pro
     {current.ownerStatement ? (
       <p className="mt-2 text-emerald-700">负责人已确认：{current.ownerStatement.enteredBy} · {current.ownerStatement.text}</p>
     ) : <p className="mt-2 text-amber-700">尚未由负责人确认。可以保存草稿，但发布前必须确认依据。</p>}
+    {current.operator === 'gte' && <p className="mt-2 text-amber-700 dark:text-amber-300">下限规则暂可起草与保存，Main/T04 尚未提供正式下限算子；发布校验将提示暂缓。</p>}
     <div className="mt-2 grid gap-2 md:grid-cols-2">
       <label>负责人 / 确认者
         <input aria-label="规则确认者" className="mt-1 w-full rounded border px-2 py-1" value={reviewer}
@@ -81,6 +82,6 @@ export function ReviewV3T01NumberRuleEditor({ criterion, fields, onChange }: Pro
       onClick={() => onChange(confirmT01NumberLimit(criterion, {
         kind: 'owner-statement', text: source.trim(), enteredBy: reviewer.trim(), enteredAt: new Date().toISOString(),
       }))}>明确确认并锁定此版规则依据</button>
-    <p className="mt-2 text-muted-foreground">更改字段、比较关系或阈值后，确认自动失效。实际 CheckResult 由 T04 和真实 Run 生成。</p>
+    <p className="mt-2 text-muted-foreground">更改规则文字、字段或阈值，以及从旧模板派生新版本时，原确认会失效。作者确认只是本地声明，可信身份与实际 CheckResult 仍由 Main/Run 核验。</p>
   </div>
 }

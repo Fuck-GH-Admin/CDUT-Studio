@@ -3,6 +3,7 @@ import { proposeT03SubjectMerge, proposeT03SubjectSplit } from './review-v3-t03-
 import type { CaseAggregateV2, ReviewRunV2 } from '@profer/shared'
 import {
   parseT03Correction, planT03Recheck, projectT03Evidence, projectT03Facts, proposedT03EvidenceLinks,
+  resolveT03CorrectionRefs,
 } from './review-v3-t03-fact-workflow'
 
 function fixture(): CaseAggregateV2 {
@@ -45,6 +46,44 @@ describe('T03 real fact/evidence review', () => {
     expect(bob.sourceState).toBe('stale')
     expect(parseT03Correction('0', { kind: 'number', value: 10 })).toEqual({ kind: 'number', value: 0 })
     expect(() => parseT03Correction('', { kind: 'number', value: 10 })).toThrow()
+    expect(parseT03Correction('2024-02-29', { kind: 'date', value: '2023-02-01' })).toEqual({ kind: 'date', value: '2024-02-29' })
+    expect(() => parseT03Correction('2023-02-29', { kind: 'date', value: '2023-02-01' })).toThrow()
+  })
+  test('A05: a superseded old confirmation cannot revive after a newer human revision goes stale', () => {
+    const aggregate = fixture()
+    aggregate.evidenceLinks = []
+    aggregate.observations = [
+      { id: 'old', subjectId: 'alice', fieldKey: 'score', value: { kind: 'number', value: 2 },
+        sourceRefs: [{ caseId: 'case1', documentVersionId: 'certificate', parseRevision: 1, location: { kind: 'file' } }],
+        extractedBy: 'user', confirmed: true, createdAt: '2026-10-01' },
+      { id: 'correction', subjectId: 'alice', fieldKey: 'score', value: { kind: 'number', value: 0 },
+        sourceRefs: [{ caseId: 'case1', documentVersionId: 'old', parseRevision: 1, location: { kind: 'file' } }],
+        extractedBy: 'user', confirmed: true, supersedesObservationId: 'old', createdAt: '2026-10-03' },
+    ]
+    const stale = projectT03Facts(aggregate)[0]!
+    expect(stale.current).toBeNull()
+    expect(stale.sourceState).toBe('stale')
+    expect(stale.history.map(item => item.id)).toEqual(['old', 'correction'])
+
+    aggregate.observations.push({
+      id: 'reconfirmed', subjectId: 'alice', fieldKey: 'score', value: { kind: 'number', value: 0 },
+      sourceRefs: [{ caseId: 'case1', documentVersionId: 'certificate', parseRevision: 1, location: { kind: 'file' } }],
+      extractedBy: 'user', confirmed: true, supersedesObservationId: 'correction', createdAt: '2026-10-04',
+    })
+    const fresh = projectT03Facts(aggregate)[0]!
+    expect(fresh.current?.id).toBe('reconfirmed')
+    expect(fresh.needsReview).toBe(false)
+    expect(fresh.history).toHaveLength(3)
+  })
+  test('A05: confirmation preserves precise source positions and refuses old revisions', () => {
+    const aggregate = fixture()
+    const located = { caseId: 'case1', documentVersionId: 'certificate', parseRevision: 1,
+      location: { kind: 'sheet-cell' as const, sheet: 'Sheet1', row: 2, column: 'B' }, quote: '等级：优秀' }
+    expect(resolveT03CorrectionRefs(aggregate, [located])).toEqual([located])
+    expect(resolveT03CorrectionRefs(aggregate, [{ documentVersionId: 'notice' }])[0]?.location).toEqual({ kind: 'file' })
+    expect(() => resolveT03CorrectionRefs(aggregate, [{ ...located, parseRevision: 0 }])).toThrow('旧解析版本')
+    expect(() => resolveT03CorrectionRefs(aggregate, [{ ...located, caseId: 'another' }])).toThrow('其他案卷')
+    expect(() => resolveT03CorrectionRefs(aggregate, [{ documentVersionId: 'old' }])).toThrow('已停用')
   })
   test('same certificate across two people requires independent attribution, never auto-confirm', () => {
     const aggregate = fixture()
@@ -109,6 +148,20 @@ describe('T03 real fact/evidence review', () => {
     expect(merge.blockedReasons).toContain('合并字段存在冲突，必须人工确认：score')
     expect(merge.proposedSubjects[0]!.fields.score).toBeUndefined()
     expect(merge.proposedEvidenceLinks.every(link => link.status === 'candidate')).toBe(true)
+  })
+  test('A05: merge cannot conceal conflicting confirmed observations behind equal subject fields', () => {
+    const aggregate = fixture()
+    aggregate.caseV2.subjects[1]!.fields.score = { kind: 'number', value: 0 }
+    aggregate.observations[2] = {
+      ...aggregate.observations[2]!, value: { kind: 'number', value: 6 },
+      sourceRefs: [{ caseId: 'case1', documentVersionId: 'notice', parseRevision: 1, location: { kind: 'file' } }],
+    }
+    const merged = proposeT03SubjectMerge(aggregate, null, {
+      operationId: 'merge-conflict', subjectIds: ['alice', 'bob'],
+      newSubjectId: 'combined', title: '同一事项',
+    })
+    expect(merged.blockedReasons).toContain('合并字段存在冲突，必须人工确认：score')
+    expect(merged.proposedSubjects[0]!.fields.score).toBeUndefined()
   })
 
 })

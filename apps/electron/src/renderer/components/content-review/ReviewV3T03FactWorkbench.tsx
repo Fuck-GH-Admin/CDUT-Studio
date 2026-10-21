@@ -28,15 +28,13 @@ function readRef(raw: unknown, aggregate: CaseAggregateV2): SourceRef | null {
   if (!raw || typeof raw !== 'object') return null
   const ref = raw as Partial<SourceRef>
   if (typeof ref.documentVersionId !== 'string') return null
-  const doc = aggregate.caseV2.documents.find(d => d.versionId === ref.documentVersionId && d.active !== false)
+  const doc = aggregate.caseV2.documents.find(d => d.versionId === ref.documentVersionId)
   if (!doc) return null
-  // Use a canonical FILE locator when extraction only supplied an opaque document
-  // or a quote. Never invent a paragraph/sheet/page from the quote itself.
-  const exact = ref.caseId === aggregate.caseV2.id &&
-    ref.parseRevision === doc.parseRevision && ref.location
+  // Preserve explicit old provenance for stale-source warnings. Only truly
+  // document-only input receives a file-level fallback location.
   return {
-    caseId: aggregate.caseV2.id, documentVersionId: doc.versionId,
-    parseRevision: doc.parseRevision, location: exact ? ref.location! : { kind: 'file' },
+    caseId: ref.caseId ?? aggregate.caseV2.id, documentVersionId: doc.versionId,
+    parseRevision: ref.parseRevision ?? doc.parseRevision, location: ref.location ?? { kind: 'file' },
     ...(typeof ref.quote === 'string' ? { quote: ref.quote } : {}),
   }
 }
@@ -82,9 +80,9 @@ export function ReviewV3T03FactWorkbench({ onRestructure }: { onRestructure?: (p
   }
   if (!aggregate) return <p className="text-sm text-muted-foreground">打开案卷后可核对事实与证明。</p>
   const titles = new Map(aggregate.caseV2.subjects.map(item => [item.id, item.title]))
-  const confirm = (value: FieldValue, why: string): void => {
+  const confirm = (value: FieldValue, why: string, refs?: SourceRef[]): void => {
     if (!fact) return
-    const sourceRefs = lastCandidate?.sourceRefs?.length ? lastCandidate.sourceRefs : fact.current?.sourceRefs ?? []
+    const sourceRefs = refs ?? fact.current?.sourceRefs ?? lastCandidate?.sourceRefs ?? []
     if (!sourceRefs.length) { setMessage('缺少可核对的原件引用，请先补齐来源'); return }
     void perform(() => actions.confirmObservation({
       subjectId: fact.subjectId, fieldKey: fact.fieldKey, value, sourceRefs,
@@ -119,7 +117,7 @@ export function ReviewV3T03FactWorkbench({ onRestructure }: { onRestructure?: (p
             <span className="break-all">候选：{show(candidate.value)}</span>
             <button type="button" className="rounded border px-2 py-1 disabled:opacity-50"
               disabled={busy || !titles.has(fact.subjectId)}
-              onClick={() => confirm(candidate.value, '人工核对原件，确认候选事实')}>确认</button>
+              onClick={() => confirm(candidate.value, '人工核对原件，确认候选事实', candidate.sourceRefs)}>确认</button>
           </div>)}
           <label className="block">更正数值或文字
             <input value={corrected} onChange={event => setCorrected(event.target.value)}

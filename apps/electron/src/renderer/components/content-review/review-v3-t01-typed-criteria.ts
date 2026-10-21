@@ -114,6 +114,10 @@ export function validateT01TypedCriteria(template: TemplateVersion): string[] {
           !Number.isFinite(raw.threshold)) {
         errors.push(`${location} 的比较符或阈值无效`)
       }
+      // Main 当前仅有 field-maximum/lte；不能发布一个必然在运行时被阻断的下限规则。
+      if (raw.operator === 'gte') {
+        errors.push(`${location} 的「大于等于」下限规则尚未接入正式 T04 执行，请保留草稿等待规则算子接线`)
+      }
       const owner = raw.ownerStatement
       if (!owner || owner.kind !== 'owner-statement' || !owner.text?.trim() ||
           !owner.enteredBy?.trim() || !Number.isFinite(Date.parse(owner.enteredAt))) {
@@ -183,4 +187,39 @@ export function resetT01ImportedConfirmations(template: TemplateVersion): Templa
       }),
     })),
   }
+}
+
+/**
+ * 作者改了规则含义或所引用字段后，清除旧签认；只改界面顺序不撤销确认。
+ * 新确认仍由 confirmT01NumberLimit 显式产生，不能从编辑器输入猜出可信 Actor。
+ */
+export function reconcileT01OwnerConfirmations(previous: TemplateVersion, next: TemplateVersion): TemplateVersion {
+  let changed = false
+  const sections = next.sections?.map(section => ({
+    ...section,
+    criteria: section.criteria.map(criterion => {
+      const current = readT01NumberLimit(criterion)
+      if (!current?.ownerStatement) return criterion
+      const before = previous.sections?.find(item => item.id === section.id)?.criteria.find(item => item.id === criterion.id)
+      const former = before && readT01NumberLimit(before)
+      const fieldBefore = previous.fields.find(item => item.key === current.fieldKey)
+      const fieldAfter = next.fields.find(item => item.key === current.fieldKey)
+      const sameField = fieldBefore && fieldAfter &&
+        ['label', 'kind', 'scope', 'min', 'max', 'unit'].every(key =>
+          fieldBefore[key as keyof FieldSpec] === fieldAfter[key as keyof FieldSpec])
+      const sameRule = former && before &&
+        before.title === criterion.title && before.requirement === criterion.requirement &&
+        before.execution === criterion.execution && before.targetScope === criterion.targetScope &&
+        former.kind === current.kind && former.schemaVersion === current.schemaVersion &&
+        former.fieldKey === current.fieldKey && former.fieldScope === current.fieldScope &&
+        former.operator === current.operator && former.threshold === current.threshold && former.unit === current.unit
+      if (sameField && sameRule) return criterion
+      changed = true
+      return {
+        ...criterion,
+        deterministicConstraint: { ...current, ownerStatement: undefined },
+      } as T01CriterionWithConstraint
+    }),
+  }))
+  return changed ? { ...next, sections } : next
 }

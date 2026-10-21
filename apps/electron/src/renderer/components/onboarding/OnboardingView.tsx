@@ -8,8 +8,9 @@
  *  Step 1：欢迎
  *  Step 2：核心功能导览（6 张特性卡片）
  *  Step 3：迁移数据指引（从其他设备 / 其他用户导入配置）
- *  Step 4：诗意插页（海内存知己，天涯若比邻）——独立整屏，如同 Windows 10 首启
- *  Step 5：品牌收尾（CDUT Studio / 欢迎您！），点击进入主界面
+ *  Step 4：审核准备（复用全局渠道，显式选择模型、按需真实自检）
+ *  Step 5：诗意插页（海内存知己，天涯若比邻）——独立整屏，如同 Windows 10 首启
+ *  Step 6：品牌收尾（CDUT Studio / 欢迎您！），点击进入主界面
  *
  * 说明：Windows 执行环境已改为静默自适应（Git Bash > 内置 BusyBox > WSL > 原生 PowerShell），
  * 首启不再需要环境检测页；环境自检仍可从「设置 → 关于」随时发起。
@@ -21,11 +22,13 @@ import { cn } from '@/lib/utils'
 import { ChevronRight, HardDriveDownload, Users } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
+import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import { IntroWaterRipple } from './IntroWaterRipple'
 import { IntroFluidBackground } from './IntroFluidBackground'
 import { FeatureTour } from './FeatureTour'
+import { ReviewFirstUseReadiness } from './ReviewFirstUseReadiness'
 
-type OnboardingStep = 'intro' | 'welcome' | 'featureTour' | 'migration' | 'poetry' | 'ready'
+type OnboardingStep = 'intro' | 'welcome' | 'featureTour' | 'migration' | 'reviewReadiness' | 'poetry' | 'ready'
 
 interface OnboardingViewProps {
   onComplete: (openTutorial?: boolean) => void
@@ -45,6 +48,8 @@ export function OnboardingView({
 }: OnboardingViewProps) {
   const [step, setStep] = useState<OnboardingStep>(initialStep)
   const setMigrationImportDialogOpen = useSetAtom(migrationImportDialogOpenAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setSettingsTab = useSetAtom(settingsTabAtom)
 
   const handleFinish = async (openTutorial?: boolean) => {
     if (persistCompletion) {
@@ -74,6 +79,12 @@ export function OnboardingView({
 
   const handleOpenMigration = () => {
     setMigrationImportDialogOpen(true)
+  }
+
+  const handleConfigureGlobalModels = async (): Promise<void> => {
+    await handleFinish()
+    setSettingsTab('channels')
+    setSettingsOpen(true)
   }
 
   return (
@@ -175,7 +186,7 @@ export function OnboardingView({
           </div>
 
           <div className="w-full max-w-2xl mt-8 flex flex-col items-center gap-2">
-            <Button className="w-full h-12 text-base" onClick={() => setStep('poetry')}>
+            <Button className="w-full h-12 text-base" onClick={() => setStep('reviewReadiness')}>
               <>
                 继续
                 <ChevronRight className="ml-1 h-4 w-4" />
@@ -186,6 +197,19 @@ export function OnboardingView({
             </p>
           </div>
         </>
+      )}
+
+      {step === 'reviewReadiness' && (
+        <div className="flex w-full min-h-0 flex-col items-center gap-5 overflow-y-auto py-4">
+          <div className="max-w-xl text-center">
+            <h2 className="text-3xl font-bold">让材料审核做好准备</h2>
+            <p className="mt-2 text-sm text-muted-foreground">已有模型配置会自动读取；你也可以暂时跳过，进入主界面后再设置。</p>
+          </div>
+          <ReviewFirstUseReadiness onConfigureChannels={() => void handleConfigureGlobalModels()} />
+          <Button className="w-full max-w-2xl h-11" onClick={() => setStep('poetry')}>
+            继续进入 CDUT Studio <ChevronRight className="ml-1 h-4 w-4" />
+          </Button>
+        </div>
       )}
 
       {step === 'poetry' && <PoetryInterlude onDone={() => setStep('ready')} />}
