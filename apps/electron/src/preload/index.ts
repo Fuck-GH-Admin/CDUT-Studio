@@ -4728,6 +4728,13 @@ const reviewAPI = {
     sourceCandidates: Array<{ documentVersionId: string; locator: string }>
     notes: string[]
   }>,
+  /** 把 50 套 D4 冻结候选发布为演示模板；不写政策引用，判据全语义 */
+  publishD4DemoTemplates: () =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.D4_DEMO_PUBLISH_V3) as Promise<{
+      published: Array<{ templateId: string; version: number; sections: number; criteria: number }>
+      skipped: Array<{ templateId: string; version: number; reason: string }>
+      failed: Array<{ templateId: string; version: number; reason: string }>
+    }>,
   /** 已发布模板规则运行：编译冻结计划 → T04 确定性检查 → 真实 ReviewRunV2 */
   runTemplateRuleReview: (input: { caseId: string; phase?: 'submission' | 'decision' }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.TEMPLATE_RULE_RUN_V3, input) as Promise<{
@@ -4847,6 +4854,12 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.CAST_RATING_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
   resolveAppealV2: (input: { caseId: string; command: Record<string, unknown> }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.RESOLVE_APPEAL_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
+  submitLocalF13Appeal: (input: import('../main/lib/review/review-v3-f13-main-service').F13SubmitAppealCommand) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.F13_SUBMIT_LOCAL_APPEAL, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
+  reviewLocalF13Appeal: (input: import('../main/lib/review/review-v3-f13-main-service').F13ReviewAppealCommand) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.F13_REVIEW_LOCAL_APPEAL, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
+  withdrawLocalF13Appeal: (input: import('../main/lib/review/review-v3-f13-main-service').F13WithdrawAppealCommand) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.F13_WITHDRAW_LOCAL_APPEAL, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
   createPolicyV2: (input: { policyId: string; title: string; content: string; enteredBy: string }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.CREATE_POLICY_V2, input) as Promise<{ policyId: string; version: number; contentHash: string }>,
   saveTemplateDraftV2: (template: import('@profer/shared').TemplateVersion) =>

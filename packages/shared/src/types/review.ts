@@ -604,6 +604,8 @@ export const REVIEW_IPC_CHANNELS = {
   T07_INIT_STATE: 'review-v3:t07-init-state',
   /** 未匹配业务候选 → 可编辑模板草稿（只做脚手架，不发布、不虚构政策） */
   FALLBACK_TEMPLATE_DRAFT_V3: 'review-v3:fallback-template-draft',
+  /** 把 50 套 D4 冻结候选发布为演示模板（无校方政策引用，判据全语义） */
+  D4_DEMO_PUBLISH_V3: 'review-v3:d4-demo-publish',
   /** 已发布模板规则运行（编译冻结计划 → T04 检查 → 真实 ReviewRunV2） */
   TEMPLATE_RULE_RUN_V3: 'review-v3:template-rule-run',
   /** T01 受控模型起草（渠道与凭据留在 Main，渲染层只给 prompt 文本） */
@@ -629,6 +631,10 @@ export const REVIEW_IPC_CHANNELS = {
   RUN_BATCH_V2: 'review-v2:run-batch',
   SUBMIT_APPEAL_V2: 'review-v2:submit-appeal',
   RESOLVE_APPEAL_V2: 'review-v2:resolve-appeal',
+  /** F13 本机申诉提交/独立复核/撤回；真实 Actor 在 Main 派生。 */
+  F13_SUBMIT_LOCAL_APPEAL: 'review-v3:f13-submit-local-appeal',
+  F13_REVIEW_LOCAL_APPEAL: 'review-v3:f13-review-local-appeal',
+  F13_WITHDRAW_LOCAL_APPEAL: 'review-v3:f13-withdraw-local-appeal',
   // ===== N4b：模板向导 =====
   CREATE_POLICY_V2: 'review-v2:create-policy',
   SAVE_TEMPLATE_DRAFT_V2: 'review-v2:save-template-draft',

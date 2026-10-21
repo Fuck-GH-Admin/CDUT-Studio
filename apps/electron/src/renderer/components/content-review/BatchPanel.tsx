@@ -213,9 +213,8 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
     : []
 
   const openCreate = (): void => {
-    const template = templates[0]
-    setBatchName('')
-    setTemplateKey(template ? `${template.templateId}@${template.version}` : '')
+    setBatchName('新审核批次')
+    setTemplateKey('')
     setSelectedCaseIds([])
     setCreateOpen(true)
   }
@@ -769,6 +768,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         templateKey={templateKey}
         onTemplateKeyChange={(value) => { setTemplateKey(value); setSelectedCaseIds([]) }}
         availableCases={availableCases}
+        allCases={cases}
         legacyById={legacyById}
         selectedCaseIds={selectedCaseIds}
         onToggleCase={toggleCase}
@@ -776,7 +776,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         onPhysicalCommitted={(result) => { void (async () => {
           await refresh()
           if (result.batchId) setSelectedBatchId(result.batchId)
-          if (result.batchId && result.cases.every((item) => item.status === 'done')) setCreateOpen(false)
+          // 留在弹窗内展示逐案入库回执，并让用户点击一次启动所有模板批次审核。
         })() }}
         onCreate={createBatch}
       />
@@ -799,7 +799,7 @@ function SummaryCard({ label, value, hint, icon, tone }: { label: string; value:
 
 function CreateBatchDialog({
   open, onOpenChange, creating, batchName, onBatchNameChange, templates, templateKey, onTemplateKeyChange,
-  availableCases, legacyById, selectedCaseIds, onToggleCase, onApplyCaseIds, onPhysicalCommitted, onCreate,
+  availableCases, allCases, legacyById, selectedCaseIds, onToggleCase, onApplyCaseIds, onPhysicalCommitted, onCreate,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -810,6 +810,7 @@ function CreateBatchDialog({
   templateKey: string
   onTemplateKeyChange: (value: string) => void
   availableCases: CaseIndexItem[]
+  allCases: CaseIndexItem[]
   legacyById: Map<string, ReviewCaseSummary>
   selectedCaseIds: string[]
   onToggleCase: (caseId: string) => void
@@ -839,16 +840,23 @@ function CreateBatchDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>新建审核批次</DialogTitle>
-          <DialogDescription>为一组使用同一模板版本的审核项目建立批次。项目可继续在辅助审核中单独处理。</DialogDescription>
+          <DialogTitle>批量导入与审核</DialogTitle>
+          <DialogDescription>先选择 ZIP 或文件夹，逐案确认申请人和业务模板；混合业务会创建不同模板批次。下方仍保留从已有案卷建同模板批次的入口。</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => void onCreate(event)}>
           <div className="space-y-1.5">
             <Label htmlFor="review-batch-name">批次名称</Label>
             <Input id="review-batch-name" value={batchName} onChange={(event) => onBatchNameChange(event.target.value)} placeholder="如：2026 秋季综合测评" autoFocus />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="review-batch-template">审核模板</Label>
+          <ReviewV3T06PhysicalImport key="physical-batch-intake"
+            api={physicalApi} templateId={selectedTemplate?.templateId} templateVersion={selectedTemplate?.version}
+            batchName={batchName} templates={templates.map(item => ({ templateId: item.templateId, version: item.version, name: item.name }))}
+            existingCases={allCases.map(item => ({
+              caseId: item.caseId, title: item.title, templateId: item.templateId, templateVersion: item.templateVersion,
+            }))}
+            onCommitted={onPhysicalCommitted} />
+          <div className="space-y-1.5 border-t pt-3">
+            <Label htmlFor="review-batch-template">可选：使用同一模板的已有案卷组批次</Label>
             <select id="review-batch-template" value={templateKey} onChange={(event) => { onTemplateKeyChange(event.target.value); setCaseSearch('') }} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
               <option value="">选择已发布模板…</option>
               {templates.map((template) => <option key={`${template.templateId}@${template.version}`} value={`${template.templateId}@${template.version}`}>{template.name} · v{template.version}</option>)}
@@ -862,10 +870,6 @@ function CreateBatchDialog({
               }))}
               onApply={onApplyCaseIds} />
           )}
-          {selectedTemplate && <ReviewV3T06PhysicalImport key={'physical:' + templateKey}
-            api={physicalApi} templateId={selectedTemplate.templateId} templateVersion={selectedTemplate.version}
-            batchName={batchName} existingCases={availableCases.map(item => ({ caseId: item.caseId, title: item.title }))}
-            onCommitted={onPhysicalCommitted} />}
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <Label>纳入项目</Label>

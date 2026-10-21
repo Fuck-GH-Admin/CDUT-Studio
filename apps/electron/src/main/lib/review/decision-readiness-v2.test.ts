@@ -49,6 +49,46 @@ describe('UI/服务端统一的最终决定就绪判断', () => {
     expect(result.blockers).toContainEqual(expect.objectContaining({ kind: 'unread-material', id: document.versionId }))
   })
 
+  test('解析失败原件即使运行账本误写 read，也必须等人工核对原件', () => {
+    const document = { documentId: 'd1', versionId: 'd1-v1', contentHash: '', role: 'evidence' as const, fileName: '不可读扫描件.pdf', mimeType: 'application/pdf', sizeBytes: 10, assetPath: '', parseRevision: 1, parseStatus: 'failed' as const, blocks: [], usage: 'registered' as const }
+    const result = assessDecisionReadiness({
+      aggregate: aggregate({ caseV2: { ...aggregate().caseV2, documents: [document] }, adjudications: [accepted] }),
+      run: run({ coverage: { documents: [{ documentVersionId: document.versionId, status: 'read' }], plannedChecks: 1, completedChecks: 1, effectiveVerdicts: 1, pendingChecks: 0 } }),
+      runStale: false,
+      template: { materialSlots: [] } as unknown as TemplateVersion,
+    })
+    expect(result.blockers).toContainEqual(expect.objectContaining({ kind: 'unread-material', id: document.versionId }))
+    expect(result.ready).toBeFalse()
+  })
+
+  test('检查引用其他案卷的材料不能形成最终通过决定', () => {
+    const document = { documentId: 'd1', versionId: 'd1-v1', contentHash: '', role: 'evidence' as const, fileName: '成绩证明.pdf', mimeType: 'application/pdf', sizeBytes: 10, assetPath: '', parseRevision: 1, parseStatus: 'parsed' as const, blocks: [], usage: 'read' as const }
+    const source = { caseId: 'another-case', documentVersionId: document.versionId, parseRevision: 1, location: { kind: 'file' as const } }
+    const result = assessDecisionReadiness({
+      aggregate: aggregate({ caseV2: { ...aggregate().caseV2, documents: [document] }, adjudications: [accepted] }),
+      run: run({ checks: [{ ...run().checks[0]!, sourceRefs: [source] }] }),
+      runStale: false,
+      template: { materialSlots: [] } as unknown as TemplateVersion,
+    })
+    expect(result.blockers).toContainEqual(expect.objectContaining({ kind: 'unresolved-check', id: 'check-a', message: expect.stringContaining('材料引用不属于当前案卷') }))
+  })
+
+  test('已经归属另一事项的证明不能静默支持本事项通过', () => {
+    const document = { documentId: 'd1', versionId: 'd1-v1', contentHash: '', role: 'evidence' as const, fileName: '其他人的证书.pdf', mimeType: 'application/pdf', sizeBytes: 10, assetPath: '', parseRevision: 1, parseStatus: 'parsed' as const, blocks: [], usage: 'read' as const }
+    const source = { caseId: 'c1', documentVersionId: document.versionId, parseRevision: 1, location: { kind: 'file' as const } }
+    const result = assessDecisionReadiness({
+      aggregate: aggregate({
+        caseV2: { ...aggregate().caseV2, documents: [document], subjects: [subject, { ...subject, id: 's2', title: '另一事项' }] },
+        evidenceLinks: [{ id: 'link-s2', documentVersionId: document.versionId, subjectId: 's2', supportsFact: '竞赛获奖', status: 'confirmed', linkedBy: 'user' }],
+        adjudications: [accepted],
+      }),
+      run: run({ checks: [{ ...run().checks[0]!, sourceRefs: [source] }] }),
+      runStale: false,
+      template: { materialSlots: [] } as unknown as TemplateVersion,
+    })
+    expect(result.blockers).toContainEqual(expect.objectContaining({ kind: 'unresolved-check', id: 'check-a', message: expect.stringContaining('归属其他事项') }))
+  })
+
   test('审核员明确确认核对原件后，解析失败材料解除未读材料阻断', () => {
     const document = { documentId: 'd1', versionId: 'd1-v1', contentHash: '', role: 'evidence' as const, fileName: '扫描件.pdf', mimeType: 'application/pdf', sizeBytes: 10, assetPath: '', parseRevision: 1, parseStatus: 'failed' as const, blocks: [], usage: 'read' as const, manualReadReceipt: { actorId: 'reviewer', reason: '已逐页核对原件', at: '' } }
     const result = assessDecisionReadiness({

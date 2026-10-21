@@ -3,8 +3,8 @@
  *
  * 只做三件事，全部经 Main：
  * - 对某个未关闭的补件签发学生应答包（Main 用真实案卷生成并落盘）；
- * - 把包内容展示给用户，可复制到离线环境填写；
- * - 粘贴回件 JSON → Main 预览校验 → 导入（附件先登记原件，再答复补件）。
+ * - 下载可离线填写的单文件 HTML 表单；
+ * - 选择离线回件文件 → Main 预览校验 → 导入（附件先登记原件，再答复补件）。
  *
  * 身份说明：包内 recipient 是**声明**，不是登录身份，也不会因此获得校方权限。
  */
@@ -14,9 +14,21 @@ import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
 import type { CaseAggregateV2 } from '@profer/shared'
 import { reviewV2AggregateAtom } from './V2CasePanel'
+import { buildT09OfflineFormHtml } from './review-v3-t09-offline-form'
 
 type PreviewLike = { status: 'ready' | 'conflict' | 'rejected'; details: string[] }
 type JudgeChoice = { batchId: string; assignmentId: string; reviewerId: string; round: number }
+
+function downloadOfflineFile(content: string, name: string, mime: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000)
+}
 
 export function ReviewV3T09OfflineSection(): JSX.Element {
   const aggregate = useAtomValue(reviewV2AggregateAtom) as CaseAggregateV2 | null
@@ -120,6 +132,25 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
     } finally { setBusy(false) }
   }, [caseId, replyJson])
 
+  const readReplyFile = React.useCallback(async (file: File | undefined): Promise<void> => {
+    if (!file) return
+    setMessage(''); setPreview(null)
+    try {
+      if (!/\.(?:cdutreply|json)$/i.test(file.name)) throw new Error('请选择离线填写页保存的回件文件')
+      if (file.size > 80 * 1024 * 1024) throw new Error('回件文件超过 80MB，请检查附件大小')
+      const content = await file.text()
+      const parsed: unknown = JSON.parse(content)
+      if (!parsed || typeof parsed !== 'object' || (parsed as { type?: string }).type !== 'reply') {
+        throw new Error('这不是离线回件，请选择填写页保存的回件文件')
+      }
+      setReplyJson(content)
+      setMessage(`已选择回件：${file.name}。请先点“预览校验”，确认无误后导入。`)
+    } catch (error) {
+      setReplyJson('')
+      setMessage(error instanceof Error ? error.message : String(error))
+    }
+  }, [])
+
   const doImport = React.useCallback(async (): Promise<void> => {
     if (!caseId || !replyJson.trim()) return
     setBusy(true); setMessage('')
@@ -141,9 +172,7 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
   return (
     <section aria-label="离线任务包" className="space-y-2 rounded-lg border border-border/60 p-3 text-xs">
       <h4 className="font-medium">离线任务包（T09）</h4>
-      <p className="text-muted-foreground">
-        面向无网络环境的学生补件和独立评委评分：签发 → 离线填写 → 预览 → Main 核验导入。包内身份是声明，不是学校认证。
-      </p>
+      <p className="text-muted-foreground">签发任务后下载离线填写页，交给学生或评委；收到回件文件后选择文件、预览并导入。</p>
 
       <div className="flex flex-wrap items-center gap-2">
         <select
@@ -195,26 +224,21 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
       {issued && (
         <div className="space-y-1">
           <p className="text-muted-foreground">包 ID：{issued.packageId}</p>
-          <textarea
-            className="h-24 w-full rounded-md border bg-background p-2 font-mono text-[11px]"
-            readOnly
-            value={issued.json}
-            aria-label="离线包内容"
-          />
-          <Button size="sm" variant="outline" onClick={() => { void navigator.clipboard?.writeText(issued.json); toast.success('已复制到剪贴板') }}>
-            复制包内容
-          </Button>
+          <Button size="sm" onClick={() => {
+            try {
+              downloadOfflineFile(buildT09OfflineFormHtml(issued.json), `cdut-review-task-${issued.packageId}.html`, 'text/html;charset=utf-8')
+              toast.success('已请求下载离线填写页')
+            } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
+          }}>下载离线填写页</Button>
+          <p className="text-muted-foreground">对方用浏览器打开 HTML 文件填写后，点击“保存回件文件”。填写页无需安装软件、无需联网。</p>
         </div>
       )}
 
       <div className="space-y-1">
-        <textarea
-          className="h-20 w-full rounded-md border bg-background p-2 font-mono text-[11px]"
-          placeholder="粘贴离线回件 JSON（reply 包）"
-          aria-label="离线回件内容"
-          value={replyJson}
-          onChange={(event) => setReplyJson(event.target.value)}
-        />
+        <label className="block space-y-1 font-medium">导入离线回件文件
+          <input type="file" accept=".cdutreply,.json,application/json" className="block w-full text-xs font-normal"
+            disabled={busy} onChange={(event) => { void readReplyFile(event.currentTarget.files?.[0]); event.currentTarget.value = '' }}/>
+        </label>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" disabled={busy || !replyJson.trim()} onClick={() => void doPreview()}>预览校验</Button>
           <Button size="sm" disabled={busy || !replyJson.trim()} onClick={() => void doImport()}>导入回件</Button>

@@ -68,6 +68,35 @@ export function assessDecisionReadiness(input: {
     }
   }
 
+  // 结论引用必须落在本案、当前原件版本。若证据已经人工归属给某事项，
+  // 不能悄悄把这份证明拿来支持另一个事项的通过结论。
+  const documentsByVersion = new Map(aggregate.caseV2.documents.map(document => [document.versionId, document]))
+  const subjectIds = new Set(aggregate.caseV2.subjects.map(subject => subject.id))
+  for (const check of run.checks) {
+    const targetSubjects = new Set(check.target.subjectIds)
+    if (check.target.scope !== 'case' && [...targetSubjects].some(id => !subjectIds.has(id))) {
+      blockers.push({ kind: 'unresolved-check', id: check.checkId, message: `检查 ${check.ruleId} 引用了当前案卷之外的申报事项。` })
+    }
+    const refs = [...check.sourceRefs, ...(check.basis?.sourceRefs ?? [])]
+    const seenVersions = new Set<string>()
+    for (const ref of refs) {
+      const document = documentsByVersion.get(ref.documentVersionId)
+      if (ref.caseId !== aggregate.caseV2.id || !document || document.active === false ||
+          ref.parseRevision !== document.parseRevision) {
+        blockers.push({ kind: 'unresolved-check', id: check.checkId, message: `检查 ${check.ruleId} 的材料引用不属于当前案卷或已过期。` })
+        continue
+      }
+      if (check.target.scope !== 'subject' || document.role !== 'evidence' || seenVersions.has(document.versionId)) continue
+      seenVersions.add(document.versionId)
+      const confirmedOwners = new Set(aggregate.evidenceLinks.filter(link =>
+        link.documentVersionId === document.versionId && link.status === 'confirmed').map(link => link.subjectId))
+      if (confirmedOwners.size > 0 && ![...targetSubjects].some(id => confirmedOwners.has(id))) {
+        blockers.push({ kind: 'unresolved-check', id: check.checkId,
+          message: `检查 ${check.ruleId} 引用了「${document.fileName}」，但证明已归属其他事项；请人工核对并更正关联。` })
+      }
+    }
+  }
+
   const observations = [...aggregate.observations.map((item) => item as unknown as Record<string, unknown>), ...(input.observations ?? [])]
   const manuallyConfirmed = new Set(observations.filter((item) => item.confirmed === true && item.extractedBy === 'user')
     .map((item) => `${String(item.subjectId ?? '')}::${String(item.fieldKey ?? '')}`))
@@ -95,8 +124,11 @@ export function assessDecisionReadiness(input: {
     // 人工确认保存在案卷材料上；Agent 的读取证明保存在当前运行上。
     // 两者都能解除材料读取阻断，避免要求 Agent 的读取状态再伪造回写成案卷编辑。
     // 历史解析失败文件可能把空占位块记成 usage=read；失败状态下只有本次完整原件核验记录可解除阻断。
-    const manuallyRead = !!document.manualReadReceipt || (document.parseStatus !== 'failed' && document.usage === 'read')
-    if (!manuallyRead && runStatus !== 'read') {
+    // 解析失败的原件即使旧 Run 错把空块记作 read，也必须由人实际打开确认。
+    // 只有可解析材料才允许由本次 Run 的真实读取记录解除阻断。
+    const readConfirmed = !!document.manualReadReceipt ||
+      (document.parseStatus !== 'failed' && (document.usage === 'read' || runStatus === 'read'))
+    if (!readConfirmed) {
       const reason = runDocumentCoverage.get(document.versionId)?.reason
       blockers.push({ kind: 'unread-material', id: document.versionId, message: `材料尚未完整读取或人工处理：${document.fileName}${reason ? `（${reason}）` : ''}` })
     }

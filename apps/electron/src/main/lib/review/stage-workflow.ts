@@ -102,7 +102,13 @@ export function recordStageDecision(
     if (command.actor.actorSource === 'agent' && task.assigneeRole !== 'reviewer') {
       throw new CommandValidationError('AGENT_DECISION_DISABLED', 'Agent 不得代替教师或校方执行阶段决定')
     }
-    if (!payload.reason.trim()) throw new CommandValidationError('VALIDATION_FAILED', '决定必须附理由')
+    // 未知/缺失动作必须拒绝：否则会记一条 result=pass 却不动阶段，产生自相矛盾的案卷
+    const allowedActions: ReadonlyArray<StageDecisionAction> = ['stage-pass', 'item-pass', 'item-partial-pass',
+      'return-for-supplement', 'return-to-previous-stage', 'final-reject', 'withdraw']
+    if (!allowedActions.includes(payload?.action)) {
+      throw new CommandValidationError('VALIDATION_FAILED', `未知的阶段决定动作：${String(payload?.action)}`)
+    }
+    if (typeof payload.reason !== 'string' || !payload.reason.trim()) throw new CommandValidationError('VALIDATION_FAILED', '决定必须附理由')
     if (!aggregate.decisions.every((decision) => decision.taskId !== task.id)) throw new CommandValidationError('INVALID_TRANSITION', '该任务已有决定')
 
     const now = new Date().toISOString()
