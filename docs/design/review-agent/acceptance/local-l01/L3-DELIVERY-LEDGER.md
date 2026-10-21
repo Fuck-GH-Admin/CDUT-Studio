@@ -1,3 +1,20 @@
+### M4 最终回执（结构版）
+
+完整回执见 `docs/design/review-agent/acceptance/local-l01/M4-FINAL-RECEIPT.md`。
+本轮补充的最后一次真机证据：
+
+**S3-02 + 冷重启（PR #206 之后复验）**：
+`flow-a15-s3-run`（mimo-v2.6-flash）→ 真实 Run `run-pi-mvhi0bbd-xdf9x`，2 checks、0 pending
+→ 初审 `stage-pass` 成功（`finality=stage`，`stage=reviewing`，生成 teacher 终审任务）
+→ `flow-a15-s3-final`：reviewer 冒充终审被 `T05_ACTOR_NOT_ASSIGNED_TO_STAGE` 拒绝；
+teacher 终审通过（`finality=final`，`stage=decided`），两段决定均 `basedOnRunId=run-pi-mvhi0bbd-xdf9x`
+→ **新进程冷启动核对**：`stage=decided`、两条决定完整、0 个开放任务、Run 文件仍在。
+
+**F03/F08 静态审计澄清**：F03 无独立 UI 入口属正常——它由 `effective-rules.ts` 在 Main 内部消费，
+冲突以 `awaiting-confirmation` 检查呈现；F08 模块为 `review-v3-f08-rubric-calculator.ts`，
+测试存在。故 F01–F18 的模块与定向测试**18/18 齐备**。
+
+---
 ### 易用性小修（面向「拿到就能用」）
 
 设计不变，只修实现里挡住普通用户的几处摩擦：
