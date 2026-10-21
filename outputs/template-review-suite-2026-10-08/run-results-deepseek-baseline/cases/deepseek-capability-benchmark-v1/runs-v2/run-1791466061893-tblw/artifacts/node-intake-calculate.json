@@ -1,9 +1,0 @@
-{
-  "sourceIds": [
-    "deepseek-capability-benchmark-v1"
-  ],
-  "runId": "run-1791466061893-tblw",
-  "nodeId": "node-intake-calculate",
-  "dependencyHash": "42dcc11a5c3bf9c1b4be00f771ba905f8c32b1d978693f2e836086c1a8f510f7",
-  "schemaRevision": 2
-}
