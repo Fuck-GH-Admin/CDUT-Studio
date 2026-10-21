@@ -1,3 +1,69 @@
+## V3 M4 最终接收与收尾（PR #206）
+
+**依据**：`LOCAL-AGENT-M4-FINAL-CLOSEOUT-R02`（`53f7d5702`）+ `TEMPLATE-ASSET-AND-FALLBACK-RESEARCH`（`71f9ae0e8`）
+
+### 一次受控接收
+
+| 项 | 值 |
+|---|---|
+| 来源固定 SHA | `b0d3c3f69b089c1e673c4003c08c2f499a631bc8`（`integration/v3-m4-unified-f01-f18-r01`，与分支头一致） |
+| 合并前 main | `5ca7ceead640650b39326085d918bc746144f7cf` |
+| 合并提交 | `9132e9abd`（独立 merge commit，可回滚） |
+| 变更规模 | 129 文件 / +6884 −720 |
+| 冲突 | **0 处文本冲突**；逐项核对共享入口未被覆盖（见下） |
+
+未重复接收 #188–#205 的 18 个子 PR；#186/#187 仅文档，未混入功能合并。
+
+**共享入口核对**（合并后逐一确认双方功能均在）：
+`T05_STAGE_CAPABILITY`、`T05_RECORD_STAGE_DECISION`、`T06_PICK_PHYSICAL_SOURCE`、
+`T09_ISSUE_STUDENT`、`T01_MODEL_DRAFT`、`T07_GET_VIEW`、`TEMPLATE_RULE_RUN_V3`、
+`T02_STAGED_INVENTORY_V3` 均在 IPC/Preload/Shared 三处齐备；
+`review-v3-t05-main-service`、`-t06-main-service`、`-t09-main-service`、`-t07-main-service`、
+`-t01-model-draft-service`、`-main-template-plan-bridge`、`-main-template-run` 七个既有桥接文件全部保留。
+
+### 新 main 上的验证（不沿用旧 CI 绿灯）
+
+| 门禁 | 结果 |
+|---|---|
+| `bun install` | OK |
+| `bun run typecheck`（apps/electron） | **PASS** |
+| `bun run check:boundaries` | **PASS**（无边界违规） |
+| `bun run build:main` / `build:preload` / `build:renderer` | **PASS**（renderer 1m10s） |
+| `bun test --isolate` | **4979 pass / 0 fail / 5 skip**（592 文件；较合并前 4862 增 117） |
+
+### 模板资产核查（严格区分四类对象）
+
+| 对象 | 事实 | 状态 |
+|---|---|---|
+| **50 套 D4 G01–G08** | `d4-unified-r01/catalog.json` **50 条**，50 条均带 `workspaceGitBlobSha`；`review-v3-d4-catalog-attach.test.ts` 逐套挂载**非零技术计划**通过 | **PASS（资产+Plan 安装）**；`candidate-held`/`publicationAllowed=false` 未改动；**学校正式发布 NOT_AUTHORIZED** |
+| **COMMON-01/02** | `review-d4-common.ts:compileD4Generic` 仍在，测试通过 | **PASS（通用编译能力）**；它不是"任意材料可直接审核"的固定模板 |
+| **第 51 套候选** | `ReviewV3LocalCandidateWorkbench` 已挂在「候选方案与技术试跑」；调用 `prepareLocalNativeUnmatchedV3` → `freezeLocalCandidateAuthorV3` → `attachB1TechnicalPlanV3` | **WIRED**；产物是 `candidate-held` 技术计划，**不是已发布业务模板**，按 D2 不能形成正式业务决定 |
+| **公共 catch-all 兜底** | 仓库内**不存在**固定 catch-all Template ID；也没有 `B29UnmatchedAuthorDraft → T01 可编辑 TemplateVersion 草稿` 的转换函数（已确认无 `B1AuthorDocument → TemplateVersion` 转换器） | **FOLLOWUP_REQUIRED（P1）**：未匹配业务目前只能进技术候选，不能直接变成可发布业务模板 |
+| **六套完整业务示例** | `T01_STANDARD_EXAMPLES` = student / activity / scholarship / judging / expense / agreement，测试 3 项全过 | **PASS（打包与表单校验）**；**未逐一跑真实业务 Run**，不能据此推断六类业务的补件/评分/报告全通过 |
+
+**公共兜底的最小缺口（交回 F02/路由 Owner）**：
+`prepareB29UnmatchedAuthorDraft()` 产出 `B1AuthorDocument`（`candidateOnly:true`、
+`publicationAllowed:false`、`schoolPolicyVerified:false`），而正式业务 Run 需要
+`Published TemplateVersion` + 负责人确认的 `deterministicConstraint`。
+缺一个**明确的**转换：`B1AuthorDocument → TemplateVersion(draft)`（字段/分项/材料槽/阶段映射，
+且不得继承候选的 `publicationAllowed`，发布仍需 T01 负责人逐项确认）。
+L 不自行定义该映射的语义，避免把技术候选冒充业务规则。
+
+### A15 状态（本轮不重做 S1–S3）
+
+| Gate | 状态 |
+|---|---|
+| S1 | PASS（历史证据） |
+| S2 | PASS（四案例真机） |
+| S3-01 / S3-02 | PASS |
+| **S4** | **PARTIAL / BLOCKED_ENV** |
+
+**S4 本轮新增尝试与结论**：在真实桌面会话（Xwayland `:0` + mutter）复跑，导航/选模板/填 6 字段/
+建案/规则检查均通过并产出真实 Run；**材料文件仍无法投递**——原生 `dialog.showOpenDialog`
+窗口不被 `xdotool` 枚举到可操作窗口，`windowactivate`+`key/type --window` 与"依赖模态焦点直接输入"
+两种方式各试后 `documents` 计数始终为 0。按任务书要求**不伪造 GUI 通过**，S4 保留 PARTIAL。
+
+---
 ### S4 真实 UI 旅程（PARTIAL）与一处产品缺陷修复
 
 `flow-a15-s4` 全程经 DOM 点击/输入驱动，不使用后门 IPC 造事实。
