@@ -4,11 +4,12 @@
  * existing reviewAPI commands and the Main-owned actor / revision boundary.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CaseAggregateV2, ReviewCommandResult, SupplementRequest } from '@profer/shared'
+import type { CaseAggregateV2, ReviewCommandResult } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { getT05StageActionState, type T05StageAction as StageAction, type T05StageActionCapability } from './review-v3-t05-stage-actions'
+import { ReviewV3F12SupplementCycle } from './ReviewV3F12SupplementCycle'
+import { ReviewV3F13AppealHistory } from './ReviewV3F13AppealHistory'
 
-type SupplementOutcome = 'satisfied' | 'insufficient' | 'cancelled'
 type AppealResolution = 'maintain-original' | 'amend-original'
 
 export interface T05AppealSubmission {
@@ -72,8 +73,6 @@ interface Props extends T05AppealPorts, T05TrustedStagePorts {
   onResult: (result: ReviewCommandResult | undefined) => void
 }
 
-const localReviewer = { actorId: 'local-user', actorSource: 'local' as const, role: 'reviewer' as const }
-const localSubmitter = { actorId: 'local-student', actorSource: 'local' as const, role: 'student' as const }
 const terminalSupplement = new Set(['satisfied', 'cancelled'])
 const businessStatus: Record<string, string> = {
   draft: '草稿', submitted: '已提交', reviewing: '审核中',
@@ -83,135 +82,12 @@ const businessStatus: Record<string, string> = {
 const decisionLabel: Record<string, string> = {
   pass: '通过', 'partial-pass': '部分通过', return: '退回', reject: '驳回', withdraw: '撤回',
 }
-const supplementLabel: Record<string, string> = {
-  open: '待回复', responded: '待核对', insufficient: '仍不满足', satisfied: '已满足', cancelled: '已取消',
-}
-const appealLabel: Record<string, string> = {
-  submitted: '已提交', 'in-review': '复审中', upheld: '维持原决定',
-  overturned: '已更正', withdrawn: '已撤回',
-}
 
 const newRequestId = (prefix: string): string =>
   prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
 
 const parseElements = (raw: string): string[] =>
   [...new Set(raw.split(/[\n,，;；]+/).map((value) => value.trim()).filter(Boolean))]
-
-function SupplementCard({
-  request, aggregate, onResult,
-}: {
-  request: SupplementRequest
-  aggregate: CaseAggregateV2
-  onResult: Props['onResult']
-}): JSX.Element {
-  const [reply, setReply] = useState('')
-  const [attachments, setAttachments] = useState<string[]>([])
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const caseId = aggregate.caseV2.id
-  const activeDocuments = aggregate.caseV2.documents.filter((document) => document.active !== false)
-  const alreadyAtRequest = new Set(request.documentVersionIdsAtRequest ?? [])
-  const newDocuments = activeDocuments.filter((document) => !alreadyAtRequest.has(document.versionId))
-  const canReply = ['open', 'responded', 'insufficient'].includes(request.status)
-  const canResolve = request.status === 'responded' || request.status === 'open'
-
-  const execute = async (action: () => Promise<ReviewCommandResult | undefined>): Promise<void> => {
-    setError('')
-    setBusy(true)
-    try {
-      const result = await action()
-      if (result && !result.ok) setError(result.message)
-      onResult(result)
-      if (result?.ok) {
-        setReply('')
-        setAttachments([])
-        setReason('')
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const resolve = (outcome: SupplementOutcome): void => {
-    void execute(() => window.reviewAPI.resolveSupplementV2({
-      caseId,
-      command: {
-        requestId: newRequestId('t05-resolve'),
-        target: { kind: 'case', id: caseId },
-        expectedRevision: aggregate.caseV2.revision,
-        actor: localReviewer,
-        type: 'ResolveSupplement',
-        payload: { supplementId: request.id, outcome, reason: reason.trim() },
-      },
-    }))
-  }
-
-  return (
-    <section className="space-y-2 rounded-md border p-2 text-xs">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <strong>补件请求 · {supplementLabel[request.status] ?? request.status}</strong>
-        <code className="text-muted-foreground">{request.id}</code>
-      </div>
-      <p>原因：{request.reason}</p>
-      <p>所需要素：{request.requiredElements.join('、')}</p>
-      {request.originFindingKeys.length > 0 && <p className="text-muted-foreground">关联检查：{request.originFindingKeys.join('、')}</p>}
-      {request.responses.map((response) => (
-        <div key={response.id} className="rounded bg-muted/40 px-2 py-1">
-          <p>{new Date(response.at).toLocaleString()} · {response.actor}：{response.note || '附材料'}</p>
-          <p className="text-muted-foreground">提交版本：{response.documentVersionIds.length
-            ? response.documentVersionIds.map((id) => activeDocuments.find((doc) => doc.versionId === id)?.fileName ?? id).join('、')
-            : '无'}</p>
-        </div>
-      ))}
-      {canReply && (
-        <div className="space-y-1 border-t pt-2">
-          <p className="font-medium">提交方回复（本地模式：说明或补交材料）</p>
-          <textarea className="w-full rounded border bg-background p-2" rows={2} placeholder="写明补交内容和材料变更" value={reply} onChange={(event) => setReply(event.target.value)} />
-          <div className="flex flex-wrap gap-2">
-            {newDocuments.map((document) => (
-              <label key={document.versionId} className="flex items-center gap-1">
-                <input type="checkbox" checked={attachments.includes(document.versionId)}
-                  onChange={(event) => setAttachments((current) => event.target.checked
-                    ? [...current, document.versionId] : current.filter((id) => id !== document.versionId))} />
-                {document.fileName}
-              </label>
-            ))}
-          </div>
-          {!request.documentVersionIdsAtRequest && <p className="text-muted-foreground">历史阶段补件未记录请求时的材料版本清单，以下展示案卷当前有效材料；请核对版本是否真正为新补材料。</p>}
-          {newDocuments.length === 0 && <p className="text-muted-foreground">没有新登记的材料版本；可以先说明情况，或先在材料区上传清晰原件。</p>}
-          <Button size="sm" variant="outline" disabled={busy || (!reply.trim() && attachments.length === 0)}
-            onClick={() => void execute(() => window.reviewAPI.respondSupplementV2({
-              caseId,
-              command: {
-                requestId: newRequestId('t05-reply'),
-                target: { kind: 'case', id: caseId },
-                expectedRevision: aggregate.caseV2.revision,
-                actor: localSubmitter,
-                type: 'RespondSupplement',
-                payload: { supplementId: request.id, note: reply.trim(), documentVersionIds: attachments },
-              },
-            }))}>提交回复</Button>
-        </div>
-      )}
-      {canResolve && (
-        <div className="space-y-1 border-t pt-2">
-          <p className="font-medium">审核员核对（回复不自动等于满足）</p>
-          <textarea className="w-full rounded border bg-background p-2" rows={2} placeholder="说明已满足的依据，或指出仍缺什么" value={reason} onChange={(event) => setReason(event.target.value)} />
-          <div className="flex flex-wrap gap-1.5">
-            <Button size="sm" variant="outline" disabled={busy || !reason.trim() || request.status !== 'responded'} onClick={() => resolve('satisfied')}>核对满足</Button>
-            <Button size="sm" variant="outline" disabled={busy || !reason.trim() || request.status !== 'responded'} onClick={() => resolve('insufficient')}>仍然不足</Button>
-            <Button size="sm" variant="outline" disabled={busy || !reason.trim()} onClick={() => resolve('cancelled')}>有理由取消</Button>
-          </div>
-          {request.status === 'insufficient' && <p className="text-muted-foreground">本次回复仍不足，请提交方再次补充，之后重新核对。</p>}
-        </div>
-      )}
-      {error && <p role="alert" className="text-destructive">{error}</p>}
-    </section>
-  )
-}
 
 export function ReviewV3T05HumanWorkflow({
   aggregate, onResult, submitAppeal, reviewAppeal, withdrawAppeal,
@@ -421,13 +297,7 @@ export function ReviewV3T05HumanWorkflow({
         )}
       </section>
 
-      <section className="space-y-2">
-        <h4 className="font-medium">补件与复核（{aggregate.supplements.length} 条）</h4>
-        {aggregate.supplements.length === 0 && <p className="text-muted-foreground">目前没有补件请求。</p>}
-        {aggregate.supplements.map((request) => (
-          <SupplementCard key={request.id} request={request} aggregate={aggregate} onResult={onResult} />
-        ))}
-      </section>
+      <ReviewV3F12SupplementCycle aggregate={aggregate} onResult={onResult} />
 
       <section className="space-y-2 rounded-md bg-muted/30 p-2">
         <h4 className="font-medium">申报事项认定（{effectiveAdjudications.length} 条现存记录）</h4>
@@ -467,15 +337,7 @@ export function ReviewV3T05HumanWorkflow({
 
       <section className="space-y-2 rounded-md bg-muted/30 p-2">
         <h4 className="font-medium">异议与申诉</h4>
-        {aggregate.appeals.map((appeal) => (
-          <div key={appeal.id} className="rounded border bg-background p-2">
-            <p className="font-medium">{appealLabel[appeal.status] ?? appeal.status} · 针对决定 {appeal.againstDecisionId}</p>
-            <p>{appeal.statement}</p>
-            <p className="text-muted-foreground">{appeal.appellant.actorId} · {new Date(appeal.createdAt).toLocaleString()}
-              {appeal.reviewDecisionId ? ' · 复核决定 ' + appeal.reviewDecisionId : ''}</p>
-          </div>
-        ))}
-        {aggregate.appeals.length === 0 && <p className="text-muted-foreground">暂无申诉。</p>}
+        <ReviewV3F13AppealHistory aggregate={aggregate} />
         <p className="font-medium">提交方申请复审</p>
         <select className="w-full rounded border bg-background px-2 py-1" value={appealDecisionId}
           onChange={(event) => setAppealDecisionId(event.target.value)}>

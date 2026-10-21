@@ -62,7 +62,7 @@ export function readT09Receipt(caseId: string, actionId: string): T09Receipt | u
   } catch { return undefined }
 }
 
-function saveT09Receipt(caseId: string, receipt: T09Receipt): void {
+export function saveT09Receipt(caseId: string, receipt: T09Receipt): void {
   const filePath = receiptsPath(caseId)
   const all = existsSync(filePath)
     ? (() => { try { return JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, T09Receipt> } catch { return {} } })()

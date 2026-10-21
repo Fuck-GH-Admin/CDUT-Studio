@@ -32,10 +32,16 @@ export function ReviewV3T06BatchIntakePreview({
   const pending = assignments.filter((item) => !['ready', 'excluded'].includes(item.status))
   const excludedCount = assignments.filter((item) => item.status === 'excluded').length
 
+  // 已应用的名册一旦更改，必须撤销旧选择；否则父级可能以旧分案名单建批次。
+  const invalidateApplied = (): void => {
+    if (applied) onApply([])
+    setApplied(false)
+  }
+
   const loadFile = async (file: File | undefined): Promise<void> => {
     if (!file) return
     setReading(true)
-    setApplied(false)
+    invalidateApplied()
     setFilename(file.name)
     setOverrides({})
     setExcluded(new Set())
@@ -58,7 +64,7 @@ export function ReviewV3T06BatchIntakePreview({
       else next.delete(line)
       return next
     })
-    setApplied(false)
+    invalidateApplied()
   }
 
   return (
@@ -120,7 +126,7 @@ export function ReviewV3T06BatchIntakePreview({
                         disabled={status === 'excluded'}
                         onChange={(event) => {
                           setOverrides((current) => ({ ...current, [row.line]: event.target.value }))
-                          setApplied(false)
+                          invalidateApplied()
                         }}
                       >
                         <option value="">未绑定（请选择）</option>
@@ -146,7 +152,8 @@ export function ReviewV3T06BatchIntakePreview({
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-[11px] text-muted-foreground">
-              {pending.length ? '请先修正重复、错绑与未归属行，或逐行明确排除，再应用分案。' : '所有未排除的行均已确认。'}
+              {pending.length ? '请先修正重复、错绑与未归属行，或逐行明确排除，再应用分案。'
+                : applied ? '分案已应用；任何改绑、排除或更换清单均会撤销旧选择。' : '所有未排除的行均已确认。'}
             </p>
             <Button type="button" size="sm" variant="outline" disabled={pending.length > 0 || ready.length === 0}
               onClick={() => {

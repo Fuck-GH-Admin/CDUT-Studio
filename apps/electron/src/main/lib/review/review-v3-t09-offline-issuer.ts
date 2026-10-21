@@ -47,16 +47,18 @@ export function issueT09JudgeFromCase(
   rubric: RubricSpec,
   policyVersionIds: string[] = [],
   reviewedAnonymousAssets: T09Asset[] = [],
+  scoringBinding?: { batchId: string; round: number; revision: number },
 ): T09TaskPackage {
   if (assignment.caseId !== aggregate.caseV2.id || assignment.recused || assignment.status !== 'assigned') throw new Error('没有有效的可评分分配')
   if (!assignment.reviewerId) throw new Error('评委未指定')
   // Case identity is bound in the private package contract; presentation is anonymous.
   const anonymousLabel = '匿名案卷#' + createHash('sha256').update(assignment.id + '|' + aggregate.caseV2.id).digest('hex').slice(0,10)
   return issueT09Task({
-    caseId: aggregate.caseV2.id, revision: aggregate.caseV2.revision,
+    caseId: aggregate.caseV2.id, revision: scoringBinding?.revision ?? aggregate.caseV2.revision,
     lock: lockOf(aggregate, policyVersionIds),
     task: {
       kind: 'judge-rating-reply', assignmentId: assignment.id, rubricVersion: assignment.rubricVersion,
+      ...(scoringBinding ? { batchId: scoringBinding.batchId, round: scoringBinding.round, caseRevision: aggregate.caseV2.revision } : {}),
       dimensions: rubric.dimensions.map(d => ({ id: d.id, title: d.name, min: d.min, max: d.max, allowNA: !!d.naWhen })),
     },
     recipient: { role: 'judge', actorId: assignment.reviewerId, actorSource: 'local' },

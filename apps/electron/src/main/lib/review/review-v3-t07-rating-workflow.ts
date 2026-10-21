@@ -79,6 +79,16 @@ function requireCase(state: T07State, id: string): T07Case {
 function withRound(state: T07State, round: T07Round): T07State {
   return { ...state, rounds: [...state.rounds.slice(0, -1), round] }
 }
+/** 评分票变化后，旧分歧复核与包含该项目的同分裁定不得继续自动生效。 */
+function invalidatedAdjudications(round: T07Round, caseId: string): Pick<T07Round, 'divergenceReasons' | 'tieOrders'> {
+  const divergenceReasons = { ...round.divergenceReasons }
+  delete divergenceReasons[caseId]
+  return {
+    divergenceReasons,
+    tieOrders: Object.fromEntries(Object.entries(round.tieOrders)
+      .filter(([key]) => !key.split('|').includes(caseId))),
+  }
+}
 function checkSubmission(state: T07State, caseId: string, scores: T07Score[], context: T07Context): void {
   const rubric = state.rubric
   if (scores.length !== rubric.dimensions.length || new Set(scores.map((s) => s.dimensionId)).size !== scores.length) {
@@ -132,12 +142,24 @@ export function applyT07Action(state: T07State, action: T07Action, context: T07C
     else if (context.actor.role !== 'judge') throw new Error('只有对应评委能够自报回避')
     if (!action.reason.trim()) throw new Error('回避或标记缺评必须说明原因')
     const target = round.assignments.find((a) => a.id === action.assignmentId)
-    if (!target || target.status !== 'assigned') throw new Error('该分配不可回避或标记缺评')
+    // 已交卷后发现利益冲突也必须能够回避；旧票保存于修订历史，不能静默计入均分。
+    if (!target || (target.status !== 'assigned' &&
+      !(action.type !== 'mark-missing' && target.status === 'submitted'))) {
+      throw new Error('该分配不可回避或标记缺评')
+    }
     if (action.type === 'self-recuse' && target.reviewerId !== context.actor.actorId) {
       throw new Error('只能对本人分配的任务声明回避')
     }
-    return withRound(state, { ...round, assignments: round.assignments.map((a) => a.id === target.id
-      ? { ...a, status: action.type === 'mark-missing' ? 'missing' : 'recused', reason: action.reason.trim() } : a) })
+    const revokedVote = round.votes.find((v) => v.assignmentId === target.id)
+    return withRound(state, { ...round,
+      ...(revokedVote ? invalidatedAdjudications(round, target.caseId) : {}),
+      votes: revokedVote ? round.votes.filter((v) => v.assignmentId !== target.id) : round.votes,
+      revisionHistory: revokedVote
+        ? [...(round.revisionHistory ?? []), { vote: revokedVote, by: context.actor.actorId, at: context.at,
+          reason: '利益回避：' + action.reason.trim() }] : round.revisionHistory,
+      assignments: round.assignments.map((a) => a.id === target.id
+        ? { ...a, status: action.type === 'mark-missing' ? 'missing' : 'recused', reason: action.reason.trim() } : a),
+    })
   }
   if (action.type === 'request-revision') {
     requireOrganizer(context)
@@ -146,6 +168,7 @@ export function applyT07Action(state: T07State, action: T07Action, context: T07C
     const vote = round.votes.find((v) => v.assignmentId === target?.id)
     if (!target || !vote) throw new Error('只有已提交且未冻结的评分可以退回重评')
     return withRound(state, { ...round,
+      ...invalidatedAdjudications(round, target.caseId),
       assignments: round.assignments.map((a) => a.id === target.id ? { ...a, status: 'assigned' } : a),
       votes: round.votes.filter((v) => v.assignmentId !== target.id),
       revisionHistory: [...(round.revisionHistory ?? []), { vote, by: context.actor.actorId, at: context.at, reason: action.reason.trim() }],
@@ -165,7 +188,7 @@ export function applyT07Action(state: T07State, action: T07Action, context: T07C
       publicFeedback: action.publicFeedback.trim(), internalNotes: action.internalNotes?.trim(),
       submittedAt: context.at,
     }
-    return withRound(state, { ...round, votes: [...round.votes, vote],
+    return withRound(state, { ...round, ...invalidatedAdjudications(round, target.caseId), votes: [...round.votes, vote],
       assignments: round.assignments.map((a) => a.id === target.id ? { ...a, status: 'submitted' } : a) })
   }
   if (action.type === 'resolve-divergence') {
@@ -178,11 +201,18 @@ export function applyT07Action(state: T07State, action: T07Action, context: T07C
     const ids = action.caseIds
     if (ids.length < 2 || new Set(ids).size !== ids.length) throw new Error('同分裁定必须列出互不重复的案卷')
     ids.forEach((id) => requireCase(state, id))
+    const ranking = computeT07Ranking(state)
+    const score = ranking.find((row) => row.caseId === ids[0])?.total
+    const actualGroup = ranking.filter((row) => score !== null && row.total === score).map((row) => row.caseId)
+    if (score === null || actualGroup.length !== ids.length || !actualGroup.every((id) => ids.includes(id))) {
+      throw new Error('同分裁定必须且只能包含当前同分的全部案卷')
+    }
     const key = [...ids].sort().join('|')
     return withRound(state, { ...round, tieOrders: { ...round.tieOrders, [key]: [...ids] } })
   }
   requireOrganizer(context)
   const rows = computeT07Ranking(state)
+  if (rows.length === 0) throw new Error('评分批次没有案卷，不能定稿')
   const blocked = rows.some((row) => row.blockers.length > 0 || row.selected === null)
   if (blocked) throw new Error('存在缺评、未解决分歧、同分名额冲突或不完整量表，不能定稿')
   return withRound(state, { ...round, finalized: { by: context.actor.actorId, at: context.at, round: round.number, ranking: rows } })

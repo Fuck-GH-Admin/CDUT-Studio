@@ -20,6 +20,7 @@ test('T08 only exposes actual template fields and preserves scope', () => {
   expect(makeT08FieldUpdate(targets[1]!, { kind: 'text', value: '人工更正' }))
     .toEqual({ caseFieldValues: { remark: '人工更正' } })
   expect(getT08FieldTargets(aggregate, { ...template, version: 2 })).toEqual([])
+  expect(getT08FieldTargets(aggregate, { ...template, fields: [{ ...remark, readOnly: true }] })).toEqual([])
 })
 
 test('T08 requires a real typed value instead of executing natural-language prose', () => {

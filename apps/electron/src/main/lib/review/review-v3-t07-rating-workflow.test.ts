@@ -85,4 +85,41 @@ describe('T07 independent judging A14 / D11', () => {
     expect(computeT07Ranking(s)[0]!.total).toBe(4.1)
     expect(computeT07Ranking(s)[0]!.blockers).toHaveLength(0)
   })
+  test('提交后发现利益关联允许本人回避，旧票仅留审计历史并要求替补', () => {
+    let s = assign(assign(base(), 'c1', 'j1'), 'c1', 'j2')
+    s = vote(vote(s, 'c1', 'j1', 4, 5), 'c1', 'j2', 3, 4)
+    expect(computeT07Ranking(s)[0]!.blockers).toEqual([])
+    s = applyT07Action(s, { type: 'self-recuse', assignmentId: 'c1-j2', reason: '发现亲属关系' }, judge('j2'))
+    expect(s.rounds[0]!.assignments.find((a) => a.id === 'c1-j2')!.status).toBe('recused')
+    expect(s.rounds[0]!.votes).toHaveLength(1)
+    expect(s.rounds[0]!.revisionHistory?.[0]!.vote.reviewerId).toBe('j2')
+    expect(s.rounds[0]!.revisionHistory?.[0]!.reason).toContain('亲属关系')
+    expect(computeT07Ranking(s)[0]!.effectiveJudges).toBe(1)
+    expect(() => applyT07Action(s, { type: 'finalize' }, organizer)).toThrow()
+    expect(() => applyT07Action(s, { type: 'submit', assignmentId: 'c1-j2', scores: [], publicFeedback: '' }, judge('j2'))).toThrow()
+    s = vote(assign(s, 'c1', 'j3'), 'c1', 'j3', 4, 4)
+    expect(computeT07Ranking(s)[0]!.effectiveJudges).toBe(2)
+  })
+
+  test('改分后撤销旧分歧处理与同分裁决，不允许旧裁定直接生效', () => {
+    let s = { ...base(['c1', 'c2']), rubric: { ...rubric, minEffectiveJudges: 1, tieBreaker: 'owner-decides' as const, quota: 1 } }
+    s = vote(assign(s, 'c1', 'j1'), 'c1', 'j1', 4, 4)
+    s = vote(assign(s, 'c2', 'j2'), 'c2', 'j2', 4, 4)
+    s = applyT07Action(s, { type: 'set-tie-order', caseIds: ['c1', 'c2'] }, organizer)
+    s = applyT07Action(s, { type: 'resolve-divergence', caseId: 'c2', reason: '两票核对完毕' }, organizer)
+    s = applyT07Action(s, { type: 'request-revision', assignmentId: 'c2-j2', reason: '录入有误' }, organizer)
+    expect(s.rounds[0]!.tieOrders).toEqual({})
+    expect(s.rounds[0]!.divergenceReasons).toEqual({})
+    expect(() => applyT07Action(s, { type: 'set-tie-order', caseIds: ['c1', 'c2'] }, organizer)).toThrow('同分')
+    s = vote(s, 'c2', 'j2', 5, 5)
+    expect(computeT07Ranking(s).map((row) => row.caseId)).toEqual(['c2', 'c1'])
+  })
+
+  test('无法针对非同分或空批次强制定稿', () => {
+    let s = { ...base(['c1', 'c2']), rubric: { ...rubric, minEffectiveJudges: 1, tieBreaker: 'owner-decides' as const } }
+    s = vote(assign(s, 'c1', 'j1'), 'c1', 'j1', 3, 3)
+    s = vote(assign(s, 'c2', 'j2'), 'c2', 'j2', 5, 5)
+    expect(() => applyT07Action(s, { type: 'set-tie-order', caseIds: ['c1', 'c2'] }, organizer)).toThrow('同分')
+    expect(() => applyT07Action(base([]), { type: 'finalize' }, organizer)).toThrow('没有案卷')
+  })
 })

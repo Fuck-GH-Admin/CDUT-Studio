@@ -15,6 +15,7 @@ import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
 import type { T07Action, T07View } from '../../../main/lib/review/review-v3-t07-rating-workflow'
 import { ReviewV3T07JudgePanel } from './ReviewV3T07JudgePanel'
+import { createT07RoundFromPublishedTemplate } from '../../../main/lib/review/review-v3-t07-round-setup'
 
 type Claim = { role: 'judge' | 'organizer'; reviewerId?: string }
 
@@ -33,6 +34,7 @@ export function ReviewV3T07Workbench(): JSX.Element {
   const [revision, setRevision] = React.useState(0)
   const [error, setError] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const refreshSequence = React.useRef(0)
 
   const loadBatches = React.useCallback(async (): Promise<void> => {
     try {
@@ -56,63 +58,51 @@ export function ReviewV3T07Workbench(): JSX.Element {
   ), [claim, judgeId])
 
   const refresh = React.useCallback(async (): Promise<void> => {
-    if (!batchId) return
+    const sequence = ++refreshSequence.current
+    setView(null)
+    if (!batchId) { setError(''); return }
     setBusy(true); setError('')
     try {
       const result = await window.reviewAPI.getT07View({ batchId, claim: effectiveClaim })
-      setView(result.view); setRevision(result.revision)
+      if (sequence === refreshSequence.current) { setView(result.view); setRevision(result.revision) }
     } catch (cause) {
+      if (sequence !== refreshSequence.current) return
       // 尚未初始化的批次是正常状态：提示如何开始，而不是报错
       const message = cause instanceof Error ? cause.message : String(cause)
       if (message.includes('T07_STATE_NOT_INITIALIZED')) { setView(null); setError('该批次还没有评分轮次') }
       else setError(message)
-    } finally { setBusy(false) }
+    } finally { if (sequence === refreshSequence.current) setBusy(false) }
   }, [batchId, effectiveClaim])
 
   React.useEffect(() => { void refresh() }, [refresh])
 
   const startRound = React.useCallback(async (): Promise<void> => {
     if (!batchId) return
+    const sequence = refreshSequence.current
     setBusy(true); setError('')
     try {
-      const detail = await window.reviewAPI.getBatchV2(batchId)
-      const caseIds: string[] = (detail?.batch?.caseIds ?? []).slice(0, 50)
-      if (caseIds.length === 0) throw new Error('该批次没有案卷，无法建立评分轮次')
-      // 一次性初始化：匿名标签按序生成，不泄露真实案卷标题
-      const initialState = {
-        batchId,
-        rubricVersion: 1,
-        rubric: {
-          id: 'e2e-default-rubric', name: '默认评分表', version: 1, strategy: 'weighted-mean',
-          dimensions: [
-            { id: 'quality', name: '质量', weight: 1, min: 0, max: 5 },
-            { id: 'impact', name: '影响', weight: 1, min: 0, max: 5 },
-          ],
-          minEffectiveJudges: 2,
-          conversion: { mode: 'linear', targetMax: 100 },
-        },
-        cases: caseIds.map((caseId, index) => ({
-          caseId, blindLabel: `案件 ${String.fromCharCode(65 + (index % 26))}${index >= 26 ? Math.floor(index / 26) : ''}`,
-        })),
-        rounds: [{ number: 1, assignments: [], votes: [], divergenceReasons: {}, tieOrders: {} }],
-      } as never
+      if (!detail?.batch) throw new Error('无法读取该批次的锁定信息')
+      const template = await window.reviewAPI.getTemplateV2(detail.batch.templateId, detail.batch.templateVersion)
+      const initialState = createT07RoundFromPublishedTemplate(detail.batch, template)
       // 建轮次是独立动作：T07 的 reopen 只对已冻结轮次有效
       const result = await window.reviewAPI.initT07State({
         batchId, claim: effectiveClaim, state: initialState,
       })
+      if (sequence !== refreshSequence.current) return
       setView(result.view); setRevision(result.revision)
       toast.success('已建立评分轮次')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally { setBusy(false) }
+      if (sequence === refreshSequence.current) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally { if (sequence === refreshSequence.current) setBusy(false) }
   }, [batchId, effectiveClaim])
 
   const onAction = React.useCallback(async (action: T07Action): Promise<void> => {
     if (!batchId) return
+    const sequence = refreshSequence.current
     const result = await window.reviewAPI.applyT07Action({
       batchId, claim: effectiveClaim, expectedRevision: revision, action,
     })
-    setView(result.view); setRevision(result.revision)
+    if (sequence === refreshSequence.current) { setView(result.view); setRevision(result.revision) }
   }, [batchId, effectiveClaim, revision])
 
   return (
@@ -150,13 +140,14 @@ export function ReviewV3T07Workbench(): JSX.Element {
           />
         )}
         <Button size="sm" variant="outline" disabled={busy || !batchId} onClick={() => void refresh()}>刷新</Button>
-        <Button size="sm" disabled={busy || !batchId || Boolean(view)} onClick={() => void startRound()}>建立评分轮次</Button>
+        <Button size="sm" disabled={busy || !batchId || Boolean(view) || claim.role !== 'organizer'} onClick={() => void startRound()}>建立评分轮次</Button>
       </div>
 
       {error && <p className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900">{error}</p>}
+      <p className="text-xs text-muted-foreground">量表从批次绑定的已发布模板读取，不自动使用示例分数；本机切换评委仅供流程演示，真实独立评分需各评委独立工作副本及评分包。</p>
 
       {view ? (
-        <ReviewV3T07JudgePanel view={view} onAction={onAction} />
+        <ReviewV3T07JudgePanel key={`${batchId}:${effectiveClaim.role}:${effectiveClaim.reviewerId ?? ''}`} view={view} onAction={onAction} />
       ) : (
         <p className="text-xs text-muted-foreground">
           选择批次后点「建立评分轮次」。评分与冻结状态由 Main 持久保存，重启后仍在。

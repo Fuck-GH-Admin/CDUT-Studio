@@ -1,8 +1,9 @@
 /** T08 report workbench: no Main write, no actor spoofing, and no mixed historical runs. */
 import * as React from 'react'
 import type { CaseAggregateV2, ReviewRunV2, TemplateVersion } from '@profer/shared'
-import { makeT08CaseReport, t08ReportTable, type T08Audience } from './review-v3-t08-case-report'
+import { makeT08CaseReport, type T08Audience, type T08Report } from './review-v3-t08-case-report'
 import { renderT08ReportPdf } from './review-v3-t08-pdf'
+import { encodeF16ReportBundle, encodeF16ReportWorkbook, f16TextBytes } from './review-v3-f16-report-delivery'
 
 interface Props {
   aggregate: CaseAggregateV2 | null
@@ -28,14 +29,30 @@ function saveBlob(data: Blob, filename: string): void {
   document.body.appendChild(link)
   link.click()
   link.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1500)
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+async function reportBundle(report: T08Report): Promise<Blob> {
+  const workbook = await encodeF16ReportWorkbook(report)
+  const pdf = renderT08ReportPdf(report.markdown, '审核报告 · ' + report.runId)
+  const files = [
+    { name: 'report.md', bytes: f16TextBytes(report.markdown) },
+    { name: 'report.json', bytes: f16TextBytes(report.json) },
+    { name: 'report.html', bytes: f16TextBytes(htmlReport(report.markdown)) },
+    { name: 'report.xlsx', bytes: workbook },
+    { name: 'report.pdf', bytes: pdf },
+  ]
+  const bytes = await encodeF16ReportBundle(report, files)
+  const buffer = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(buffer).set(bytes)
+  return new Blob([buffer], { type: 'application/zip' })
 }
 
 export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, template }: Props): React.ReactElement {
   const [runs, setRuns] = React.useState<ReviewRunV2[]>([])
   const [selectedId, setSelectedId] = React.useState('')
   const [audience, setAudience] = React.useState<T08Audience>('student')
-  const [format, setFormat] = React.useState<'md' | 'json' | 'xlsx' | 'html' | 'pdf'>('md')
+  const [format, setFormat] = React.useState<'md' | 'json' | 'xlsx' | 'html' | 'pdf' | 'bundle'>('md')
   const [busy, setBusy] = React.useState(false)
   const [notice, setNotice] = React.useState('')
   const caseId = aggregate?.caseV2.id ?? ''
@@ -69,17 +86,17 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
     setNotice('')
     try {
       const filename = safeFilename(report.caseId + '-' + report.runId + '-' + audience)
-      if (format === 'pdf') {
+      if (format === 'bundle') {
+        saveBlob(await reportBundle(report), filename + '-delivery.zip')
+      } else if (format === 'pdf') {
         const pdf = renderT08ReportPdf(report.markdown, '审核报告 · ' + report.runId)
         const buffer = new ArrayBuffer(pdf.length)
         new Uint8Array(buffer).set(pdf)
         saveBlob(new Blob([buffer], { type: 'application/pdf' }), filename + '.pdf')
       } else if (format === 'xlsx') {
-        const XLSX = await import('xlsx')
-        const book = XLSX.utils.book_new()
-        const sheet = XLSX.utils.aoa_to_sheet(t08ReportTable(report))
-        XLSX.utils.book_append_sheet(book, sheet, '检查与来源')
-        const buffer = XLSX.write(book, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
+        const workbook = await encodeF16ReportWorkbook(report)
+        const buffer = new ArrayBuffer(workbook.length)
+        new Uint8Array(buffer).set(workbook)
         saveBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename + '.xlsx')
       } else {
         const text = format === 'json' ? report.json : format === 'html' ? htmlReport(report.markdown) : report.markdown
@@ -87,7 +104,9 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
         saveBlob(new Blob([text], { type: mime + ';charset=utf-8' }), filename + '.' + format)
       }
       setNotice(format === 'pdf' ? '已生成真实 PDF 文件并请求下载。此版本以图片页保留中文，不支持选中文字；请确认文件保存。' :
-        format === 'html' ? '已请求保存可打印 HTML；在浏览器中打开后可打印为 PDF。' : '已向系统提交文件下载，请确认保存结果。')
+        format === 'html' ? '已请求保存可打印 HTML；打开后可打印为可检索文字的 PDF。' :
+        format === 'bundle' ? '已请求下载只读交接 ZIP（含五种报告格式与 SHA-256 清单）；请确认文件保存。' :
+          '已向系统提交文件下载，请确认保存结果。')
     } catch (error) {
       setNotice('导出未完成：' + (error instanceof Error ? error.message : String(error)))
     } finally { setBusy(false) }
@@ -128,6 +147,7 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
             <option value="xlsx">XLSX 检查与来源表</option>
             <option value="html">HTML 打印版（可打印为 PDF）</option>
             <option value="pdf">PDF 文件（A4 分页，中文图片页）</option>
+            <option value="bundle">只读交接 ZIP（报告 + 哈希清单）</option>
           </select>
         </div>
         <div className="flex gap-2">
