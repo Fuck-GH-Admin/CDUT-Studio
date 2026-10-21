@@ -6,6 +6,7 @@ import { join } from 'path'
 import { createConnection } from 'net'
 import { existsSync } from 'fs'
 import { getDevInstanceId, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
+import { installProcessGuards } from './lib/process-guards'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
 import { isCdutDomain } from './lib/cdut/yanhu/yanhu-domain-gatekeeper'
 
@@ -868,6 +869,10 @@ function sendToMainWindow(channel: string, data?: unknown): void {
     send()
   }
 }
+
+// 最早期安装全局兜底：任何子系统（含审核后台链路）的遗漏异常只记录、不终止进程，
+// 否则主进程退出会连带丢失窗口与未保存状态。
+installProcessGuards()
 
 app.whenReady().then(bootstrap).catch(handleBootstrapFailure)
 
