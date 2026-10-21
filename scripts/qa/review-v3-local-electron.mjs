@@ -32,6 +32,10 @@ async function click(label){
  const ok=await evalJs('(()=>{const t='+JSON.stringify(label)+';const n=[...document.querySelectorAll("button,a,[role=button],[role=tab]")].find(e=>e.getClientRects().length&&(e.textContent||"").includes(t));if(!n)return false;n.click();return true})()')
  if(!ok)throw Error('ACTION_NOT_VISIBLE '+label)
 }
+async function clickSelector(selector){
+ const ok=await evalJs('(()=>{const n=document.querySelector('+JSON.stringify(selector)+');if(!n||!n.getClientRects().length)return false;n.click();return true})()')
+ if(!ok)throw Error('ACTION_NOT_VISIBLE '+selector)
+}
 async function fill(label,value){
  const ok=await evalJs('(()=>{const x=document.querySelector("input[aria-label="+JSON.stringify('+JSON.stringify(label)+')+"]");if(!x)return false;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(x,'+JSON.stringify(value)+');x.dispatchEvent(new Event("input",{bubbles:true}));x.dispatchEvent(new Event("change",{bubbles:true}));return true})()')
  if(!ok)throw Error('INPUT_NOT_VISIBLE '+label)
@@ -74,11 +78,14 @@ async function navigate(){
   if(!ok)throw Error('LOGIN_INPUTS_NOT_AVAILABLE')
   await click('一键连接特区账户')
  }
- await wait('review menu','document.body?.innerText?.includes("材料审核")',60000)
- await click('材料审核')
- // 该分栏在近期界面调整中改名为「候选方案与技术试跑」，按当前文案定位
- await wait('candidate tab','document.body?.innerText?.includes("候选方案与技术试跑")')
- await click('候选方案与技术试跑')
+ // 进入本地材料审核：用稳定锚点而不是文案模糊匹配
+ await wait('review entry','!!document.querySelector("[data-testid=cdut-local-review-entry]")',60000)
+ await clickSelector('[data-testid=cdut-local-review-entry]')
+ // 候选分栏只在「模板」类分节下渲染：先切到审核模板分节
+ await wait('templates section','!!document.querySelector("[data-testid=review-section-templates]")',30000)
+ await clickSelector('[data-testid=review-section-templates]')
+ await wait('candidate tab','!!document.querySelector("[data-testid=review-section-local-candidates]")',30000)
+ await clickSelector('[data-testid=review-section-local-candidates]')
  await wait('create case UI','!!document.querySelector("input[aria-label=本地案卷标题]")')
 }
 try{

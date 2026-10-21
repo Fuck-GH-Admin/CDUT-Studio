@@ -450,6 +450,7 @@ export function CdutZoneView(): React.ReactElement {
                 {/* 本地候选审核不依赖 CDUT 校园账户；正式校园能力仍受独立登录保护。 */}
                 <Button
                   type="button"
+                  data-testid="cdut-local-review-entry"
                   variant="outline"
                   onClick={() => handleSelectModule('material-review')}
                   className="w-full justify-center gap-2 border-primary/30 bg-primary/5 text-primary"
