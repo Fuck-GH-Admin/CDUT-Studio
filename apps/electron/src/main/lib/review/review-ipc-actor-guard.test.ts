@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { bindLocalReviewerCommand, LOCAL_REVIEWER_ACTOR } from './review-ipc-actor-guard'
+import { bindLocalReviewerCommand, LOCAL_REVIEWER_ACTOR, bindLocalSubmitterCommand, LOCAL_SUBMITTER_ACTOR } from './review-ipc-actor-guard'
 
 describe('审核业务命令 IPC 操作者身份边界', () => {
   test('渲染器不得声明系统、Agent、校方或模拟来源', () => {
@@ -24,5 +24,23 @@ describe('审核业务命令 IPC 操作者身份边界', () => {
     expect(result.actor).toEqual(LOCAL_REVIEWER_ACTOR)
     expect(result.requestId).toBe('r1')
     expect(command.actor.actorId).toBe('some-school-official') // input immutable
+  })
+})
+
+describe('补件应答本地身份边界', () => {
+  test('student 角色可以补件，但审计身份必须由 Main 绑定', () => {
+    const claim = { actor: { actorId: 'forged-name', actorSource: 'local', role: 'student' }, requestId: 'reply-1' }
+    const result = bindLocalSubmitterCommand(claim)
+    expect(result.actor).toEqual(LOCAL_SUBMITTER_ACTOR)
+    expect(result.requestId).toBe('reply-1')
+    expect(claim.actor.actorId).toBe('forged-name')
+  })
+  test('不能把校方、教师或审核员角色用于学生回件', () => {
+    for (const role of ['teacher', 'reviewer', 'system', 'student']) {
+      for (const source of role === 'student' ? ['school', 'agent', 'mock'] : ['local']) {
+        expect(() => bindLocalSubmitterCommand({ actor: { role, actorSource: source, actorId: 'claimed' } })).toThrow('本地补件应答 IPC')
+      }
+    }
+    expect(() => bindLocalSubmitterCommand({})).toThrow()
   })
 })

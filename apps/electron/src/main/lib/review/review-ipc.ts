@@ -1,4 +1,4 @@
-import { bindLocalReviewerCommand } from './review-ipc-actor-guard'
+import { bindLocalReviewerCommand, bindLocalSubmitterCommand } from './review-ipc-actor-guard'
 import { bindC0LocalCaseCommand, bindC0LocalCreateIntent, assertC0ReviewMainSender } from './review-c0-authority'
 import { assertSafeReviewStorageId } from './review-storage-id'
 import { registerCMainV3AuthorPlanIpc } from './review-v3-main-author-plan-ipc'
@@ -973,9 +973,13 @@ export function registerReviewIpc(): void {
     const { resolveSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
     return resolveSupplementV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof resolveSupplementV2>[1])
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.RESPOND_SUPPLEMENT_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RESPOND_SUPPLEMENT_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId || typeof input.caseId !== 'string') throw new Error('补件案卷 ID 非法')
     const { respondSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
-    return respondSupplementV2(input.caseId, input.command as unknown as Parameters<typeof respondSupplementV2>[1])
+    // 本地学生回件只能进入学生答复通道，真实校方身份须由独立 SchoolPort 验证。
+    const command = bindLocalSubmitterCommand(input.command)
+    return respondSupplementV2(input.caseId, command as unknown as Parameters<typeof respondSupplementV2>[1])
   })
   // ===== G02：V2 批次复用 Pi 审核 Agent 与同一审核工具链 =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.RUN_BATCH_V2, async (_e, batchId: string) => {
