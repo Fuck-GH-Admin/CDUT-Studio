@@ -441,6 +441,9 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
               onResult={applyResult}
               stageCapability={stageCapability}
               recordTrustedStageDecision={recordTrustedStageDecision}
+              submitAppeal={(input) => window.reviewAPI.submitLocalF13Appeal(input)}
+              reviewAppeal={(input) => window.reviewAPI.reviewLocalF13Appeal(input)}
+              withdrawAppeal={(input) => window.reviewAPI.withdrawLocalF13Appeal(input)}
             />
             <ReviewV3T05RunDecision aggregate={current} onResult={applyResult} />
             <RunResultPanel caseId={current.caseV2.id} refreshNonce={runNonce} />

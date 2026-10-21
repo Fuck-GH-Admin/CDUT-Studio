@@ -1087,6 +1087,25 @@ export function registerReviewIpc(): void {
     const { resolveAppealV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
     return resolveAppealV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof resolveAppealV2>[1])
   })
+  // F13 本地申诉独立于历史 V2 handler：全部角色与复审指派由 Main 核实。
+  ipcMain.handle(REVIEW_IPC_CHANNELS.F13_SUBMIT_LOCAL_APPEAL, (event,
+    input: import('./review-v3-f13-main-service').F13SubmitAppealCommand) => {
+    assertC0ReviewMainSender(event)
+    const { submitLocalF13Appeal } = require('./review-v3-f13-main-service') as typeof import('./review-v3-f13-main-service')
+    return submitLocalF13Appeal(input)
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.F13_REVIEW_LOCAL_APPEAL, (event,
+    input: import('./review-v3-f13-main-service').F13ReviewAppealCommand) => {
+    assertC0ReviewMainSender(event)
+    const { reviewLocalF13Appeal } = require('./review-v3-f13-main-service') as typeof import('./review-v3-f13-main-service')
+    return reviewLocalF13Appeal(input)
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.F13_WITHDRAW_LOCAL_APPEAL, (event,
+    input: import('./review-v3-f13-main-service').F13WithdrawAppealCommand) => {
+    assertC0ReviewMainSender(event)
+    const { withdrawLocalF13Appeal } = require('./review-v3-f13-main-service') as typeof import('./review-v3-f13-main-service')
+    return withdrawLocalF13Appeal(input)
+  })
 
   // ===== N4b：模板向导（无代码创建：政策先行 → 模板草稿 → 发布走 PUBLISH_TEMPLATE_V2） =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.CREATE_POLICY_V2, (_e, input: { policyId: string; title: string; content: string; enteredBy: string }) => {
