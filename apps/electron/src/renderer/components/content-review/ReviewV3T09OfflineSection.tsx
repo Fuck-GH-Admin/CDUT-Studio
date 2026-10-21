@@ -189,7 +189,7 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
         <Button size="sm" variant="outline" disabled={busy || !caseId || !judgeBatchId || !judgeAssignmentId}
           onClick={() => void issueJudge()}>签发匿名评委评分包</Button>
       </div>
-      {judgeChoices.length === 0 && <p className="text-muted-foreground">请先在评分工作台创建评分轮次和本案评委分配，再点击“读取本案评分任务”。</p>
+      {judgeChoices.length === 0 && <p className="text-muted-foreground">请先在评分工作台创建评分轮次和本案评委分配，再点击“读取本案评分任务”。</p>}
       <p className="text-muted-foreground">评分任务从 Main 已持久化的真实批次与当前轮次读取；评委回件导入时由 Main 弹窗确认，所有票据按现有 T07 修订号写入。</p>
 
       {issued && (
