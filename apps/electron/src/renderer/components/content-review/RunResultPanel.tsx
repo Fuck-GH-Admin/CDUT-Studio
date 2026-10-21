@@ -2,7 +2,7 @@
  * 审核结果面板：展示最近一次真实运行的检查明细、结论和覆盖情况
  */
 import { useCallback, useEffect, useState } from 'react'
-import type { ReviewRunV2 } from '@profer/shared'
+import type { CaseAggregateV2, ReviewRunV2, SourceRef } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { toast } from 'sonner'
 
@@ -19,8 +19,25 @@ interface RunPreflight {
   policyReviewTitles: string[]
 }
 
+/** 不把文件名相同的材料视为同一来源：按案卷、原件版本、解析版本三重核对。 */
+function describeSource(ref: SourceRef, aggregate: CaseAggregateV2 | null, caseId: string): { label: string; valid: boolean } {
+  if (ref.caseId !== caseId) return { label: `跨案卷引用 ${ref.documentVersionId}（不可采信）`, valid: false }
+  const document = aggregate?.caseV2.documents.find(item => item.versionId === ref.documentVersionId)
+  if (!document) return { label: `原件 ${ref.documentVersionId} 不在当前案卷（不可采信）`, valid: false }
+  if (document.active === false || document.parseRevision !== ref.parseRevision) {
+    return { label: `${document.fileName} · 旧原件或旧解析版本（不可采信）`, valid: false }
+  }
+  const location = ref.location
+  const where = location.kind === 'pdf-rect' ? `第 ${location.page} 页` :
+    location.kind === 'sheet-cell' ? `${location.sheet} 工作表第 ${location.row} 行 ${location.column} 列` :
+    location.kind === 'paragraph' ? `第 ${location.index} 段` :
+    location.kind === 'text-range' ? `字符 ${location.start}–${location.end}` : '文件级（需按原件核对）'
+  return { label: `${document.fileName} · ${where}`, valid: true }
+}
+
 export function RunResultPanel({ caseId, refreshNonce }: { caseId: string; refreshNonce: number }): JSX.Element {
   const [runs, setRuns] = useState<ReviewRunV2[]>([])
+  const [caseAggregate, setCaseAggregate] = useState<CaseAggregateV2 | null>(null)
   const [ruleLabels, setRuleLabels] = useState<Record<string, string>>({})
   const [preflight, setPreflight] = useState<RunPreflight | null>(null)
   const [expandedRun, setExpandedRun] = useState<string | null>(null)
@@ -30,6 +47,7 @@ export function RunResultPanel({ caseId, refreshNonce }: { caseId: string; refre
     try {
       const [list, aggregate] = await Promise.all([window.reviewAPI.listRunsV2(caseId), window.reviewAPI.getAggregateV2(caseId)])
       setRuns(list ?? [])
+      setCaseAggregate(aggregate ?? null)
       if (aggregate) {
         const template = await window.reviewAPI.getTemplateV2(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
         const labels: Record<string, string> = {}
@@ -117,10 +135,35 @@ export function RunResultPanel({ caseId, refreshNonce }: { caseId: string; refre
               {run.checks.length === 0 && <p className="text-muted-foreground">本次运行未产生检查结果（核对规则来源与模型返回）</p>}
               {run.checks.map((check, index) => {
                   const item = check as { ruleId: string; status: string; reason: string }
+                  const refs = [...new Map([...check.sourceRefs, ...(check.basis?.sourceRefs ?? [])]
+                    .map(ref => [JSON.stringify(ref), ref])).values()]
+                  const sources = refs.map(ref => {
+                    const described = describeSource(ref, caseAggregate, caseId)
+                    const document = caseAggregate?.caseV2.documents.find(entry => entry.versionId === ref.documentVersionId)
+                    if (!described.valid || check.target.scope !== 'subject' || document?.role !== 'evidence') return described
+                    const owners = new Set(caseAggregate?.evidenceLinks.filter(link =>
+                      link.documentVersionId === ref.documentVersionId && link.status === 'confirmed').map(link => link.subjectId) ?? [])
+                    return owners.size > 0 && !check.target.subjectIds.some(id => owners.has(id))
+                      ? { label: `${described.label} · 证明已归属其他事项（不可直接采信）`, valid: false }
+                      : described
+                  })
+                  const subjectIds = new Set(caseAggregate?.caseV2.subjects.map(subject => subject.id) ?? [])
+                  const unknownSubjects = check.target.scope === 'case' ? [] : check.target.subjectIds.filter(id => !subjectIds.has(id))
+                  const invalid = sources.some(source => !source.valid) || unknownSubjects.length > 0
                   return (
-                  <div key={index} className="flex items-start justify-between gap-2 rounded bg-muted/40 px-1.5 py-1">
-                    <span className="min-w-0"><span className="font-medium">{ruleLabels[item.ruleId] ?? item.ruleId}</span><span className="text-muted-foreground">：{item.reason}</span></span>
-                    <span className={item.status === 'compliant' ? 'text-emerald-600' : item.status === 'non-compliant' ? 'text-red-600' : 'text-amber-600'}>{STATUS_LABEL[item.status] ?? item.status}</span>
+                  <div key={check.checkId || index} className="space-y-1 rounded bg-muted/40 px-1.5 py-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="min-w-0"><span className="font-medium">{ruleLabels[item.ruleId] ?? item.ruleId}</span><span className="text-muted-foreground">：{item.reason}</span></span>
+                      <span className={invalid ? 'text-amber-700' : item.status === 'compliant' ? 'text-emerald-600' : item.status === 'non-compliant' ? 'text-red-600' : 'text-amber-600'}>
+                        {invalid ? '来源归属异常' : STATUS_LABEL[item.status] ?? item.status}
+                      </span>
+                    </div>
+                    <p className="text-muted-foreground">核对对象：{check.target.scope === 'case' ? '当前案卷' : check.target.subjectIds.map(id => caseAggregate?.caseV2.subjects.find(subject => subject.id === id)?.title ?? `未知事项 ${id}`).join('、') || '未标明对象'}</p>
+                    {invalid && <p className="text-amber-700">检查引用的原件或事项与当前案卷不一致，该结论不得直接作为可靠通过依据。</p>}
+                    <details><summary className="cursor-pointer text-muted-foreground">核对证据来源（{sources.length}）</summary>
+                      {sources.length === 0 ? <p>本项没有文件级出处；请结合规则输入、事实及计算明细核验。</p> :
+                        <ul className="list-disc pl-4">{sources.map((source, sourceIndex) => <li key={sourceIndex} className={source.valid ? '' : 'text-amber-700'}>{source.label}</li>)}</ul>}
+                    </details>
                   </div>
                 )
               })}

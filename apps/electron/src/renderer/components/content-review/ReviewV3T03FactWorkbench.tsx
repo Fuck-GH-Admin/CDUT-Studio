@@ -29,12 +29,14 @@ function readRef(raw: unknown, aggregate: CaseAggregateV2): SourceRef | null {
   const ref = raw as Partial<SourceRef>
   if (typeof ref.documentVersionId !== 'string') return null
   const doc = aggregate.caseV2.documents.find(d => d.versionId === ref.documentVersionId)
-  if (!doc) return null
-  // Preserve explicit old provenance for stale-source warnings. Only truly
-  // document-only input receives a file-level fallback location.
+  if (!doc || doc.active === false) return null
+  // 不把跨案卷、旧解析版本的模型引用悄悄转换成当前原件。
+  if ((ref.caseId !== undefined && ref.caseId !== aggregate.caseV2.id) ||
+      (ref.parseRevision !== undefined && ref.parseRevision !== doc.parseRevision)) return null
+  // 只有真实未提供定位时才使用文档级定位。
   return {
-    caseId: ref.caseId ?? aggregate.caseV2.id, documentVersionId: doc.versionId,
-    parseRevision: ref.parseRevision ?? doc.parseRevision, location: ref.location ?? { kind: 'file' },
+    caseId: aggregate.caseV2.id, documentVersionId: doc.versionId,
+    parseRevision: doc.parseRevision, location: ref.location ?? { kind: 'file' },
     ...(typeof ref.quote === 'string' ? { quote: ref.quote } : {}),
   }
 }
@@ -72,9 +74,20 @@ export function ReviewV3T03FactWorkbench({ onRestructure }: { onRestructure?: (p
   const impact = React.useMemo(() => aggregate && fact
     ? planT03Recheck(aggregate, run, { subjectIds: [fact.subjectId], fieldKeys: [fact.fieldKey] })
     : null, [aggregate, run, fact])
+  /** 修改证据或事实后启动一份新的、与当前案卷版本绑定的规则 Run。 */
   const perform = async (task: () => Promise<void>, success: string): Promise<void> => {
     setBusy(true); setMessage('')
-    try { await task(); setMessage(success) }
+    try {
+      await task()
+      try {
+        const nextRun = await window.reviewAPI.runTemplateRuleReview({ caseId: aggregate.caseV2.id })
+        await actions.refresh()
+        setMessage(`${success}；已重新检查 ${nextRun.checks.length} 项模板规则，旧 Run 保留。涉及 AI 语义判断的事项仍需重新运行完整审核。`)
+      } catch (recheckError) {
+        await actions.refresh()
+        setMessage(`${success}；修改已保存，但规则重审未完成：${recheckError instanceof Error ? recheckError.message : String(recheckError)}。可在规则检查区再次执行。`)
+      }
+    }
     catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
     finally { setBusy(false) }
   }
@@ -86,7 +99,7 @@ export function ReviewV3T03FactWorkbench({ onRestructure }: { onRestructure?: (p
     if (!sourceRefs.length) { setMessage('缺少可核对的原件引用，请先补齐来源'); return }
     void perform(() => actions.confirmObservation({
       subjectId: fact.subjectId, fieldKey: fact.fieldKey, value, sourceRefs,
-    }, value, why), '事实已更新，旧审核结果需重新核对')
+    }, value, why), '事实已更新')
   }
   return <section className="space-y-3 rounded-lg border p-3 text-sm" aria-label="事实与证明核对">
     <header>
