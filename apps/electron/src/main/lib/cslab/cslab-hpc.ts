@@ -104,6 +104,9 @@ interface PendingMfa {
 const pendingMfa = new Map<string, PendingMfa>()
 const connections = new Map<string, { client: Client; labId: string }>()
 const pollTimers = new Map<string, NodeJS.Timeout>()
+/** 连续 UNKNOWN 上限：集群清理作业记录后不再无限轮询。 */
+const MAX_UNKNOWN_POLLS = 10
+const unknownPollCounts = new Map<string, number>()
 
 function isTerminal(state: CsLabHpcJobState): boolean {
   return TERMINAL_STATES.includes(state)
@@ -528,6 +531,9 @@ async function getConnection(
     client.on('error', (error) => {
       console.warn('[CSLab HPC] SSH 连接异常:', error.message)
       connections.delete(key)
+      // 计算节点异常时必须同步回收堡垒机跳板与转发通道，避免端口/句柄悬挂。
+      bastionClient?.end()
+      client.destroy()
     })
     connections.set(key, { client, labId })
     return client
@@ -549,6 +555,7 @@ async function getConnection(
   client.on('error', (error) => {
     console.warn('[CSLab HPC] SSH 连接异常:', error.message)
     connections.delete(key)
+    client.destroy()
   })
   connections.set(key, { client, labId })
   return client
@@ -769,6 +776,16 @@ function schedulePoll(labId: string, key: string, sink?: CsLabHpcSink, delay = D
   const timer = setTimeout(() => {
     void refreshHpcJob(labId, key, sink)
       .then((job) => {
+        if (job.state === 'UNKNOWN') {
+          const count = (unknownPollCounts.get(key) ?? 0) + 1
+          unknownPollCounts.set(key, count)
+          if (count >= MAX_UNKNOWN_POLLS) {
+            abandonPolling(labId, key, sink, count)
+            return
+          }
+        } else {
+          unknownPollCounts.delete(key)
+        }
         if (!isTerminal(job.state)) {
           const next = Math.min(MAX_POLL_MS, delay * 2)
           schedulePoll(labId, key, sink, next)
@@ -787,6 +804,25 @@ function stopPoll(key: string): void {
   const timer = pollTimers.get(key)
   if (timer) clearTimeout(timer)
   pollTimers.delete(key)
+  unknownPollCounts.delete(key)
+}
+
+/**
+ * 连续多次无法确认状态后停止轮询。
+ * 红线：状态仍如实保留 UNKNOWN，绝不伪造终态；只追加可操作提示。
+ */
+function abandonPolling(labId: string, key: string, sink?: CsLabHpcSink, count = 0): void {
+  stopPoll(key)
+  const db = getHpcDatabase(labId)
+  const row = getHpcJobRow(db, key)
+  if (!row) return
+  const next: CsLabHpcJobRow = {
+    ...row,
+    lastCheckedAt: Date.now(),
+    message: `连续 ${count} 次未能从调度器确认状态，已停止自动轮询；可手动刷新或重新投递`,
+  }
+  upsertHpcJobRow(db, next)
+  publishJob(next, sink)
 }
 
 export async function submitHpcJob(
@@ -1003,6 +1039,16 @@ function remoteBaseUri(profile: CsLabHpcProfileRow): string {
   return `sftp://${profile.username}@${profile.host}`
 }
 
+/** 远端工作目录归一化为 URI 路径段：无尾随斜杠；根目录/空值收敛为空串。 */
+function normalizeRemoteDirForUri(dir: string): string {
+  const trimmed = (dir ?? '').replace(/^\/+|\/+$/g, '')
+  return trimmed ? `/${trimmed}` : ''
+}
+
+function remoteFileUri(profile: CsLabHpcProfileRow, name: string): string {
+  return `${remoteBaseUri(profile)}${normalizeRemoteDirForUri(profile.remoteWorkDir)}/${name}`
+}
+
 async function registerFigureAsset(
   labId: string,
   stagedPath: string,
@@ -1071,7 +1117,7 @@ export async function harvestHpcJob(
     // 跳过批处理脚本本身（旧版 batch.sh 与新版 batch-xxxxxxxx.sh）。
     if (/^batch(?:-[0-9a-f]{8})?\.sh$/i.test(name)) continue
 
-    const remoteUri = `${remoteBaseUri(profile)}${profile.remoteWorkDir}/${name}`
+    const remoteUri = remoteFileUri(profile, name)
     if (isBlacklisted(name) || size > HARVEST_MAX_BYTES) {
       artifacts.push({ path: name, bytes: size, disposition: 'remote-uri', remoteUri })
       skipped += 1

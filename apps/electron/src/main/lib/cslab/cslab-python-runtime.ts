@@ -376,6 +376,8 @@ export async function runCsLabPython(
       timeout: options.timeoutMs ?? 120_000,
       windowsHide: true,
       maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
+      // 红线：内部脚本的临时文件、__pycache__ 等副作用必须落在实验室沙箱内。
+      cwd: resolveLabDir(labId),
     },
   )
   return stdout

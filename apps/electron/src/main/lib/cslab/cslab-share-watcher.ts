@@ -120,6 +120,10 @@ export interface NormalizedSharePath {
 
 const BLOCKED_METADATA_HOSTS = new Set(['metadata.google.internal', 'metadata.goog'])
 
+// 单标签 NetBIOS 名称会被 LLMNR / NBT-NS 广播解析，是凭据中继的经典入口；
+// 但校园局域网共享盘普遍就是 lab-pc 这类单标签主机名，故只拦协议保留名。
+const BLOCKED_SINGLE_LABEL_HOSTS = new Set(['wpad', 'isatap'])
+
 /**
  * 共享源主机边界（覆盖 WebDAV 与 UNC / SMB 共享）。
  * 仅阻断云元数据、链路本地与回环；10/172.16/192.168 局域网 NAS 保持可用。
@@ -151,6 +155,9 @@ function assertSafeShareHost(hostname: string): void {
     host.startsWith('::ffff:')
   ) {
     throw new Error('安全拦截：禁止使用本机回环地址作为共享盘源，请直接添加本地路径')
+  }
+  if (BLOCKED_SINGLE_LABEL_HOSTS.has(host)) {
+    throw new Error('安全拦截：禁止使用 WPAD/ISATAP 保留主机名作为共享盘源')
   }
 }
 
