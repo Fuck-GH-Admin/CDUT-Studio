@@ -143,6 +143,37 @@ export async function importT09JudgePackage(input: {
   if (stored?.status === 'accepted' && stored.hash === reply.hash && stored.caseId === reply.caseId) {
     return { status: 'duplicate', receipt: stored }
   }
+  // Crash recovery: T07 CAS may have succeeded before receipts.json was written.
+  // A matching vote is recoverable ONLY if Main durably tagged that precise actionId
+  // in the same T07 transaction. Identical scores alone are never proof of import.
+  const persisted = getJudging(batchId)
+  const round = currentT07Round(persisted.state)
+  const existingVote = round.votes.find((vote) => vote.offlineActionId === reply.actionId)
+  if (existingVote) {
+    const integrity = checkedPreview(input.aggregate, reply, task, batchId)
+    const expected = reply.reply
+    const matches = expected.kind === 'judge-rating-reply' &&
+      task.task.kind === 'judge-rating-reply' &&
+      existingVote.assignmentId === expected.assignmentId &&
+      existingVote.caseId === reply.caseId &&
+      existingVote.reviewerId === task.recipient.actorId &&
+      existingVote.round === task.task.round &&
+      JSON.stringify(existingVote.scores) === JSON.stringify(expected.scores) &&
+      existingVote.publicFeedback === expected.publicFeedback.trim() &&
+      (existingVote.internalNotes ?? '') === (expected.internalNotes?.trim() ?? '')
+    if (integrity.status === 'rejected' || !matches) {
+      return { status: 'rejected', preview: {
+        ...integrity, status: 'rejected',
+        details: ['评分动作 ID 已被持久记录，但载荷或签发任务不匹配；拒绝重新导入'],
+      } }
+    }
+    const recovered: T09Receipt = {
+      actionId: reply.actionId, hash: reply.hash, caseId: reply.caseId,
+      status: 'accepted', newRevision: persisted.revision,
+    }
+    saveT09Receipt(reply.caseId, recovered)
+    return { status: 'duplicate', receipt: recovered }
+  }
   const preview = checkedPreview(input.aggregate, reply, task, batchId)
   if (preview.status !== 'ready') return { status: preview.status, preview }
   const { state } = judgeState(input.aggregate, task, batchId)
@@ -157,6 +188,7 @@ export async function importT09JudgePackage(input: {
           batchId, reviewerId: task.recipient.actorId, expectedRevision,
           action: {
             type: 'submit', assignmentId: task.task.assignmentId,
+            offlineActionId: item.actionId,
             scores: item.reply.scores, publicFeedback: item.reply.publicFeedback,
             ...(item.reply.internalNotes ? { internalNotes: item.reply.internalNotes } : {}),
           },

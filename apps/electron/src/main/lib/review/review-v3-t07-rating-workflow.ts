@@ -17,6 +17,8 @@ export type T07Vote = {
   assignmentId: string; caseId: string; reviewerId: string; round: number
   scores: T07Score[]; publicFeedback: string; internalNotes?: string
   submittedAt: string
+  /** Main only: durable offline reply actionId, written atomically with the vote. */
+  offlineActionId?: string
 }
 export type T07RankingRow = {
   caseId: string; blindLabel: string; total: number | null; convertedTotal: number | null; rank: number | null
@@ -46,7 +48,7 @@ export type T07Action =
   | { type: 'self-recuse'; assignmentId: string; reason: string }
   | { type: 'mark-missing'; assignmentId: string; reason: string }
   | { type: 'request-revision'; assignmentId: string; reason: string }
-  | { type: 'submit'; assignmentId: string; scores: T07Score[]; publicFeedback: string; internalNotes?: string }
+  | { type: 'submit'; assignmentId: string; scores: T07Score[]; publicFeedback: string; internalNotes?: string; offlineActionId?: string }
   | { type: 'resolve-divergence'; caseId: string; reason: string }
   | { type: 'set-tie-order'; caseIds: string[] }
   | { type: 'finalize' }
@@ -187,6 +189,7 @@ export function applyT07Action(state: T07State, action: T07Action, context: T07C
       round: round.number, scores: action.scores.map((score) => ({ ...score })),
       publicFeedback: action.publicFeedback.trim(), internalNotes: action.internalNotes?.trim(),
       submittedAt: context.at,
+      ...(action.offlineActionId ? { offlineActionId: action.offlineActionId } : {}),
     }
     return withRound(state, { ...round, ...invalidatedAdjudications(round, target.caseId), votes: [...round.votes, vote],
       assignments: round.assignments.map((a) => a.id === target.id ? { ...a, status: 'submitted' } : a) })

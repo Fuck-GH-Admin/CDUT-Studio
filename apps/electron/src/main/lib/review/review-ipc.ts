@@ -744,8 +744,13 @@ export function registerReviewIpc(): void {
       throw new Error('参数 expectedRevision 非法')
     }
     const { applyT07MainAction } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
+    // The offlineActionId audit key is assigned only by the trusted T09 Main import,
+    // never from an ordinary Renderer-issued T07 scoring action.
+    const action = input.action.type === 'submit'
+      ? (({ offlineActionId: _ignored, ...rest }) => rest)(input.action)
+      : input.action
     return applyT07MainAction({
-      batchId: input.batchId, claim: input.claim, action: input.action,
+      batchId: input.batchId, claim: input.claim, action,
       expectedRevision: input.expectedRevision,
       ...(input.initialState ? { initialState: input.initialState } : {}),
       ...(input.safeMaterials ? { safeMaterials: input.safeMaterials } : {}),

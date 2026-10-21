@@ -74,6 +74,16 @@ describe('F18 T09 评委评分离线适配', () => {
     const second = await importT09JudgePackage({ aggregate: aggregate(caseId), packageJson, deps })
     expect(second.status).toBe('duplicate')
     expect(readT07State(batchId)?.state.rounds[0]?.votes).toHaveLength(1)
+
+    // Recreate the crash window: the scoring CAS succeeded but receipts.json
+    // disappeared before it could be persisted. Recovery must inspect the durable
+    // offlineActionId on the vote, not the numerical scores alone.
+    rmSync(join(configDir, 'review-offline', caseId, 'receipts.json'), { force: true })
+    const recovered = await importT09JudgePackage({ aggregate: aggregate(caseId), packageJson, deps })
+    expect(recovered.status).toBe('duplicate')
+    expect(readT07State(batchId)?.state.rounds[0]?.votes).toHaveLength(1)
+    expect(readT07State(batchId)?.state.rounds[0]?.votes[0]?.offlineActionId)
+      .toBe(JSON.parse(packageJson).actionId)
   })
 
   test('案卷版本变动、轮次变动和回避都明确冲突，不覆盖当前评分', async () => {
