@@ -21,6 +21,8 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
   const aggregate = useAtomValue(reviewV2AggregateAtom) as CaseAggregateV2 | null
   const [supplementId, setSupplementId] = React.useState('')
   const [recipientId, setRecipientId] = React.useState('local-student')
+  const [judgeBatchId, setJudgeBatchId] = React.useState('')
+  const [judgeAssignmentId, setJudgeAssignmentId] = React.useState('')
   const [issued, setIssued] = React.useState<{ packageId: string; json: string } | null>(null)
   const [replyJson, setReplyJson] = React.useState('')
   const [preview, setPreview] = React.useState<PreviewLike | null>(null)
@@ -49,6 +51,20 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
       setMessage(cause instanceof Error ? cause.message : String(cause))
     } finally { setBusy(false) }
   }, [caseId, supplementId, recipientId])
+
+  const issueJudge = React.useCallback(async (): Promise<void> => {
+    if (!caseId || !judgeBatchId.trim() || !judgeAssignmentId.trim()) return
+    setBusy(true); setMessage('')
+    try {
+      const result = await window.reviewAPI.issueT09JudgePackage({
+        caseId, batchId: judgeBatchId.trim(), assignmentId: judgeAssignmentId.trim(),
+      })
+      setIssued({ packageId: result.packageId, json: result.json })
+      toast.success(`已签发第 ${result.round} 轮匿名评委任务包`)
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : String(cause))
+    } finally { setBusy(false) }
+  }, [caseId, judgeBatchId, judgeAssignmentId])
 
   const doPreview = React.useCallback(async (): Promise<void> => {
     if (!caseId || !replyJson.trim()) return
@@ -83,7 +99,7 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
     <section aria-label="离线任务包" className="space-y-2 rounded-lg border border-border/60 p-3 text-xs">
       <h4 className="font-medium">离线任务包（T09）</h4>
       <p className="text-muted-foreground">
-        面向无网络环境的补件应答：签发 → 离线填写 → 粘贴回件导入。包内身份是声明，不是登录身份。
+        面向无网络环境的学生补件和独立评委评分：签发 → 离线填写 → 预览 → Main 核验导入。包内身份是声明，不是学校认证。
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -108,6 +124,16 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
         <Button size="sm" disabled={busy || !caseId || !supplementId} onClick={() => void issue()}>签发离线包</Button>
         {openSupplements.length === 0 && <span className="text-muted-foreground">当前没有未关闭的补件</span>}
       </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-t pt-2">
+        <input className="h-7 w-40 rounded-md border bg-background px-2" aria-label="评分批次 ID"
+          value={judgeBatchId} onChange={(event) => setJudgeBatchId(event.target.value)} placeholder="评分批次 ID" />
+        <input className="h-7 w-40 rounded-md border bg-background px-2" aria-label="评分分配 ID"
+          value={judgeAssignmentId} onChange={(event) => setJudgeAssignmentId(event.target.value)} placeholder="评分分配 ID" />
+        <Button size="sm" variant="outline" disabled={busy || !caseId || !judgeBatchId.trim() || !judgeAssignmentId.trim()}
+          onClick={() => void issueJudge()}>签发匿名评委评分包</Button>
+      </div>
+      <p className="text-muted-foreground">须先在评分工作台建立批次轮次与评委分配；评委回件导入时由 Main 弹窗确认，所有票据按现有 T07 修订号写入。</p>
 
       {issued && (
         <div className="space-y-1">

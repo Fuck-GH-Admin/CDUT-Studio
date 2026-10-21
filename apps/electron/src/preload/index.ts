@@ -4773,7 +4773,12 @@ const reviewAPI = {
   }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T09_ISSUE_STUDENT, input) as Promise<{
     packageId: string; actionId: string; json: string
   }>,
-  /** T09 预览离线回件（只校验不写入） */
+  /** T09 从当前可信 T07 轮次签发独立评委评分任务 */
+  issueT09JudgePackage: (input: { caseId: string; batchId: string; assignmentId: string }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T09_ISSUE_JUDGE, input) as Promise<{
+      packageId: string; actionId: string; json: string; batchId: string; round: number
+    }>,
+  /** T09 预览学生/评委离线回件（只校验不写入） */
   previewT09Package: (input: { caseId: string; packageJson: string }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T09_PREVIEW_REPLY, input) as Promise<{
       preview: import('../main/lib/review/review-v3-t09-offline-codec').T09Preview

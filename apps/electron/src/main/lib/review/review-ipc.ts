@@ -13,7 +13,7 @@ import { registerCMainV3AuthorPlanIpc } from './review-v3-main-author-plan-ipc'
  * 避免向 7700+ 行的 ipc.ts 继续追加业务逻辑。
  */
 
-import { app, ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
 import { assertMainWindowSender } from '../ipc-sender-guard'
 import { getMainWindow } from '../main-window-state'
 import {
@@ -777,6 +777,17 @@ export function registerReviewIpc(): void {
       ...(input.fieldVisibility ? { fieldVisibility: input.fieldVisibility } : {}),
     })
   })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T09_ISSUE_JUDGE, (event, input: {
+    caseId: string; batchId: string; assignmentId: string
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId || !input.batchId || !input.assignmentId) throw new Error('评委任务参数非法')
+    const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+    const aggregate = getCaseV2Aggregate(input.caseId)
+    if (!aggregate) throw new Error('案卷不存在')
+    const { issueT09JudgePackage } = require('./review-v3-t09-judge-adapter') as typeof import('./review-v3-t09-judge-adapter')
+    return issueT09JudgePackage({ aggregate, batchId: input.batchId, assignmentId: input.assignmentId })
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T09_PREVIEW_REPLY, (event, input: {
     caseId: string; packageJson: string
   }) => {
@@ -785,6 +796,13 @@ export function registerReviewIpc(): void {
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
     const aggregate = getCaseV2Aggregate(input.caseId)
     if (!aggregate) throw new Error('案卷不存在')
+    const { readT09File } = require('./review-v3-t09-offline-codec') as typeof import('./review-v3-t09-offline-codec')
+    const parsed = readT09File(input.packageJson)
+    if (parsed.type !== 'reply') throw new Error('T09_NOT_A_REPLY_PACKAGE')
+    if (parsed.reply.kind === 'judge-rating-reply') {
+      const { previewT09JudgePackage } = require('./review-v3-t09-judge-adapter') as typeof import('./review-v3-t09-judge-adapter')
+      return previewT09JudgePackage({ aggregate, packageJson: input.packageJson })
+    }
     const { previewT09Package } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
     const { task, ...rest } = previewT09Package({ aggregate, packageJson: input.packageJson })
     return rest
@@ -795,6 +813,42 @@ export function registerReviewIpc(): void {
     assertC0ReviewMainSender(event)
     if (!input?.caseId || typeof input.packageJson !== 'string') throw new Error('参数非法')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+    const { readT09File } = require('./review-v3-t09-offline-codec') as typeof import('./review-v3-t09-offline-codec')
+    const parsed = readT09File(input.packageJson)
+    if (parsed.type !== 'reply') throw new Error('T09_NOT_A_REPLY_PACKAGE')
+    if (parsed.reply.kind === 'judge-rating-reply') {
+      const aggregate = getCaseV2Aggregate(input.caseId)
+      if (!aggregate) throw new Error('案卷不存在')
+      const { previewT09JudgePackage, importT09JudgePackage } = require('./review-v3-t09-judge-adapter') as typeof import('./review-v3-t09-judge-adapter')
+      const preview = previewT09JudgePackage({ aggregate, packageJson: input.packageJson })
+      if (preview.preview.status !== 'ready') return { status: preview.preview.status, preview: preview.preview }
+      // 这是本机业务操作者对独立离线票的显式接收，不是学校认证。
+      const confirmed = dialog.showMessageBoxSync({
+        type: 'warning',
+        buttons: ['取消导入', '确认导入到本机评分'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        title: '确认离线评委评分',
+        message: '将独立评委评分导入本机批次？',
+        detail: '离线包内评委身份是声明，不能证明校方身份。请核对签发任务、评委与评分后再确认。',
+      }) === 1
+      if (!confirmed) return { status: 'rejected', preview: { ...preview.preview, status: 'rejected', details: ['本机组织者取消导入，未写入评分'] } }
+      const { applyT07MainAction } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
+      return importT09JudgePackage({
+        aggregate, packageJson: input.packageJson,
+        deps: {
+          confirmLocalOrganizer: () => confirmed,
+          submitRating: async ({ batchId, reviewerId, expectedRevision, action }) => {
+            assertC0ReviewMainSender(event)
+            const result = applyT07MainAction({
+              batchId, claim: { role: 'judge', reviewerId }, expectedRevision, action,
+            })
+            return { revision: result.revision }
+          },
+        },
+      })
+    }
     const { registerNativeWorkspaceMaterialV3 } = require('./native-workspace-case-v3') as typeof import('./native-workspace-case-v3')
     const { respondSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
     const { importT09Package, t09AssetTempRoot } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')

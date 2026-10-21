@@ -618,6 +618,8 @@ export const REVIEW_IPC_CHANNELS = {
   T02_STAGED_INVENTORY_V3: 'review-v3:t02-staged-inventory',
   /** T09 签发学生离线应答包 */
   T09_ISSUE_STUDENT: 'review-v3:t09-issue-student',
+  /** T09 从真实 T07 轮次签发匿名评委任务（本地声明，非学校认证） */
+  T09_ISSUE_JUDGE: 'review-v3:t09-issue-judge',
   /** T09 预览离线回件（只校验不写入） */
   T09_PREVIEW_REPLY: 'review-v3:t09-preview-reply',
   /** T09 导入离线回件（附件先登记原件，再原子答复补件） */
