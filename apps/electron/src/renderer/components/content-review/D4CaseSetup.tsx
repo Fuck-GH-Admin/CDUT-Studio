@@ -67,9 +67,9 @@ export function D4CaseSetup({ onChange, suggestedTemplateId }: {
     setConfirmed(false)
   }
   return <div className="space-y-3 rounded-lg bg-muted/40 p-3 text-sm" data-testid="d4-case-setup">
-    <p className="text-amber-700 dark:text-amber-300">D4 候选 · 技术预审。初始值为受控合成示例，请逐对象核对。条件改变后须新建案卷。</p>
+    <p className="text-amber-700 dark:text-amber-300">选择方案并核对对象与场景后再开始审核。条件改变后请新建案卷。</p>
     <label className="block">D4 模板
-      <select aria-label="D4 技术预审模板" className="mt-1 h-9 w-full rounded-md border bg-background px-2" value={templateId} onChange={e => {
+      <select aria-label="审核方案模板" className="mt-1 h-9 w-full rounded-md border bg-background px-2" value={templateId} onChange={e => {
         const next = templates.find(t => t.templateId === e.target.value)
         setTemplateId(e.target.value); setDraft(next ? JSON.stringify(next.selection, null, 2) : ''); setConfirmed(false); setStudentFixture(false)
       }}>
@@ -112,7 +112,7 @@ export function D4CaseSetup({ onChange, suggestedTemplateId }: {
     {template && <details><summary className="cursor-pointer">完整场景、对象类型与来源标识 JSON（高级编辑）</summary>
       <textarea aria-label="D4 场景 JSON" className="mt-2 h-48 w-full rounded border bg-background p-2 font-mono text-xs" value={draft} onChange={e => { setDraft(e.target.value); setConfirmed(false) }} />
     </details>}
-    {template?.controlledStudentFixture && <label className="flex gap-2"><input type="checkbox" checked={studentFixture} onChange={e => { setStudentFixture(e.target.checked); setConfirmed(false) }} />使用随包的受控合成学籍快照（姓名/证号独立字段；非正式学籍接口）</label>}
+    {template?.controlledStudentFixture && <label className="flex gap-2"><input type="checkbox" checked={studentFixture} onChange={e => { setStudentFixture(e.target.checked); setConfirmed(false) }} />使用随包提供的学籍快照（姓名与证件号分别校验）</label>}
     {template && <label className="flex gap-2"><input aria-label="确认 D4 对象和条件" type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />我已核对对象、场景、条件及其来源版本，按以上选择创建固定任务。</label>}
     {draft && !selection && <p role="alert" className="text-destructive">场景 JSON 格式不正确</p>}
     {template?.selectionIssue && <p role="alert" className="text-destructive">该候选缺少冻结选择文件，不能用于建案：{template.selectionIssue}</p>}

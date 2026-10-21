@@ -310,13 +310,13 @@ export function ContentReviewView(): React.ReactElement {
       {(section === 'templates' || section === 'local-candidates') && (
         <nav aria-label="模板工作区" className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card/40 px-4 py-1.5 titlebar-no-drag">
           <Button type="button" data-testid="review-section-templates" size="sm" variant={section === 'templates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('templates')}>模板库与业务配置</Button>
-          <Button type="button" data-testid="review-section-local-candidates" size="sm" variant={section === 'local-candidates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('local-candidates')}>候选方案与技术试跑</Button>
+          <Button type="button" data-testid="review-section-local-candidates" size="sm" variant={section === 'local-candidates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('local-candidates')}>审核方案与试跑</Button>
           <Button type="button" data-testid="review-publish-demo-templates" size="sm" variant="outline" className="h-7 text-xs"
             disabled={demoPublishing}
             onClick={() => void publishDemoTemplates()}>
             {demoPublishing ? '发布中…' : '发布 50 套模板'}
           </Button>
-          <span className="text-[11px] text-muted-foreground">候选技术方案并非已发布的正式业务模板</span>
+          
         </nav>
       )}
 

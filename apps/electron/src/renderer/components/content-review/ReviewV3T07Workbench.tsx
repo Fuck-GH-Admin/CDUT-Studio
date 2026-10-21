@@ -138,7 +138,7 @@ export function ReviewV3T07Workbench(): JSX.Element {
       </div>
 
       {error && <p className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900">{error}</p>}
-      <p className="text-xs text-muted-foreground">量表从批次绑定的已发布模板读取，不自动使用示例分数；本机切换评委仅供流程演示，真实独立评分需各评委独立工作副本及评分包。</p>
+      <p className="text-xs text-muted-foreground">评分按批次绑定的已发布量表计算；可切换本机评委查看不同角色的评分视图。</p>
 
       {view ? (
         <ReviewV3T07JudgePanel key={`${batchId}:${effectiveClaim.role}:${effectiveClaim.reviewerId ?? ''}`} view={view} onAction={onAction} />

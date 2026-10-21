@@ -246,7 +246,7 @@ export function ReviewV3T05HumanWorkflow({
           <p className="text-muted-foreground">案卷：{businessStatus[aggregate.caseV2.stage] ?? aggregate.caseV2.stage}
             {' · '}开放任务 {openTasks.length} · 未结补件 {unresolvedSupplements.length}</p>
         </div>
-        <span className="rounded bg-muted px-2 py-1">仅代表本地业务操作，不代表校方正式审批</span>
+        <span className="rounded bg-muted px-2 py-1">本地业务操作记录</span>
       </div>
       {technicalPreReview && (
         <p className="rounded border px-2 py-1 text-amber-700 dark:text-amber-300">
@@ -387,7 +387,7 @@ export function ReviewV3T05HumanWorkflow({
         {chosenAppeal && (
           <div className="space-y-1 border-t pt-2">
             <h4 className="font-medium">本机独立角色复核</h4>
-            <p className="text-muted-foreground">由 Main 已指派的本地复核角色办理；若补充了新证据，须重新完成审核后才能保存复核结论。本地角色不代表校方认证。</p>
+            <p className="text-muted-foreground">由 Main 已指派的本地复核角色办理；若补充了新证据，须重新完成审核后才能保存复核结论。本地复核角色。</p>
             <select className="w-full rounded border bg-background px-2 py-1" value={chosenAppeal.id}
               onChange={(event) => setAppealReviewId(event.target.value)}>
               {aggregate.appeals.filter((appeal) => appeal.status === 'submitted' || appeal.status === 'in-review').map((appeal) => (

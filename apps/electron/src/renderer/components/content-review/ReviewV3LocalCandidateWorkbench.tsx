@@ -243,7 +243,7 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
       if(!fresh||fresh.caseV2.id!==localCaseId)
         throw new Error('案卷不存在；请重新读取当前原生案卷')
       const exported=await window.reviewAPI.exportReportV2(localCaseId)
-      setCaseNotice('已生成本地 Markdown 报告（草稿未审核不代表审批）：'+exported.file)
+      setCaseNotice('已生成本地 Markdown 报告：'+exported.file)
     }catch(e){setCaseError(e instanceof Error?e.message:String(e))}
     finally{setCaseBusy(false)}
   }
@@ -334,7 +334,7 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
     </div>}
     {localCaseId&&!activePlan&&<div className="space-y-3 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">使用已有 50 套 D4 模板生成本案审核任务</h2>
-      <p className="text-xs text-muted-foreground">复用 G01–G08 冻结候选和原有 D2 规则编译器。明确选择对象/场景后，一次性把技术预审 Plan 写入当前原生案卷；不另外创建案卷，不代表校方审批。已添加人工事项或已固定 Plan 的案卷请另建新案卷。</p>
+      <p className="text-xs text-muted-foreground">选择方案并确认对象/场景后，把检查方案写入当前案卷；不另外创建案卷。已添加人工事项或已固定方案的案卷请另建新案卷。</p>
       <D4CaseSetup onChange={setD4Selection} suggestedTemplateId={routedD4TemplateId}/>
       <button type="button" className="rounded border border-border px-3 py-2 text-sm disabled:opacity-50"
         disabled={caseBusy||!d4Selection} onClick={()=>void installD4()}>
@@ -354,7 +354,7 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
       </div>
       {b1Notice&&<p role="status" className="text-xs">{b1Notice}</p>}
       {b1Error&&<p role="alert" className="text-xs text-red-600">{b1Error}</p>}
-      <p className="text-xs text-muted-foreground">自定义审核目的不在既有 50 套时，可直接编辑、编译、保存和冻结候选。所有记录仅在本机，不代表校方发布、学校政策核验或正式审批。</p>
+      <p className="text-xs text-muted-foreground">审核目的不在既有 50 套方案时，可直接编辑、编译、保存并固定本机方案。</p>
       <div className="flex flex-wrap items-center gap-2">
         <input aria-label="重开候选模板 ID" className="min-w-40 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm"
           placeholder="输入已保存模板 ID" value={templateId} onChange={e=>setTemplateId(e.target.value)} />

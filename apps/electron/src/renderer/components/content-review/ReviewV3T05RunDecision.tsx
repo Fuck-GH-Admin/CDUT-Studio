@@ -123,7 +123,7 @@ export function ReviewV3T05RunDecision({
   return (
     <section className="space-y-2 rounded-lg border-t pt-3 text-xs">
       <h3 className="text-sm font-semibold">本次运行的人工核定</h3>
-      <p className="text-muted-foreground">针对真实 Run 记录待办、补件、事项认定和本地决定。技术运行完成不代表全部检查已通过。</p>
+      <p className="text-muted-foreground">针对真实 Run 记录待办、补件、事项认定和本地决定。技术运行完成仅表示运行结束，检查结论以实际结果为准。</p>
       {runs.length === 0 ? (
         <p className="text-muted-foreground">尚无已完成的可核定 ReviewRun。先完成当前案卷审核。</p>
       ) : (

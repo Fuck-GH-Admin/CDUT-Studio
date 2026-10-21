@@ -107,7 +107,7 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
   const shown=showAll?items:items.slice(0,30)
   return <section className="space-y-3 rounded border border-border p-3" data-testid="review-v3-local-pi-ledger">
     <h3 className="text-sm font-semibold">真实 Pi 后台审核与结果账本</h3>
-    <p className="text-xs text-muted-foreground">使用已存在的 Main Pi/ReviewRun 持久存储。案卷需要具备可执行模板、申报事项、材料及有效模型配置。运行结果是本地技术预审，不是学校审批。</p>
+    <p className="text-xs text-muted-foreground">使用已存在的 Main Pi/ReviewRun 持久存储。案卷需要具备可执行模板、申报事项、材料及有效模型配置。运行结果供审核人员核验与办理使用。</p>
     <p className="break-all text-xs">案卷：{caseId||'尚未选择'} · 阶段：{state?.phase??'未读取'}
       {' · '}Run：{state?.runId??'未创建'}
       {' · '}状态：{run?.status??state?.runStatus??'未取得'}</p>

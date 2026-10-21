@@ -119,7 +119,7 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
 
   return <section className="space-y-3 text-xs" aria-label="案卷报告">
     {!aggregate || !run || !report
-      ? <p className="rounded border border-border p-3 text-muted-foreground">当前没有可用的 V3 案卷及运行；报告不会用演示数据代替真实结果。</p>
+      ? <p className="rounded border border-border p-3 text-muted-foreground">当前案卷还没有可用的审核运行。</p>
       : <>
         <div className="rounded-md bg-muted/50 p-2 leading-5">
           <strong className="block">所选运行 {run.id}</strong>

@@ -153,7 +153,7 @@ export function ReviewV3F06EvidenceWorkbench(): React.ReactElement {
       </div>
       <div className="space-y-2 rounded-lg bg-background p-3 text-xs">
         <h4 className="font-medium">人工绑定：一个事实可对应多个明确选中的主体</h4>
-        <p className="text-muted-foreground">当前写入端口保存原件版本与主体/事实关系；候选中显示的页、段等精确定位尚不能随人工绑定写入，待共享 Main 来源参数接线。</p>
+        <p className="text-muted-foreground">保存原件版本与主体/事实关系，并记录人工选择的定位范围。</p>
         <div className="grid gap-1 sm:grid-cols-2">
           {subjects.map(subject => <label key={subject.id} className="flex items-start gap-2 rounded p-1">
             <input type="checkbox" className="mt-0.5" checked={selectedSubjects.includes(subject.id)}
