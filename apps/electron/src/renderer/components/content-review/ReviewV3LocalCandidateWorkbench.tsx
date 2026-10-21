@@ -268,9 +268,7 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
     setLoaded(null);setKey(k=>k+1);setError('');setMessage('本地未发布候选草稿')
   }
   return <div className="mx-auto max-w-5xl space-y-4 px-4 pb-8">
-    <details className="rounded-lg border border-border p-3" open={!localCaseId}>
-      <summary className="cursor-pointer text-sm font-medium">新建 / 切换案卷与导入原件</summary>
-      <div className="mt-3 space-y-3">
+    <div className="space-y-3 rounded-lg border border-border p-4">
       <h2 className="text-base font-semibold">新建本地审核案卷与原件导入</h2>
       <p className="text-xs text-muted-foreground">调用已有 C 原生案卷存储与系统文件选择器。原生案卷保存材料和已选择的已发布模板；候选作者草稿单独保存，需完成模板选择后再运行 Pi。</p>
       <div className="flex flex-wrap gap-2">
@@ -326,8 +324,7 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
       </select>}
       {caseNotice&&<p role="status" className="text-xs">{caseNotice}</p>}
       {caseError&&<p role="alert" className="text-xs text-red-600">{caseError}</p>}
-      </div>
-    </details>
+    </div>
     {localCaseId&&!activePlan&&<ReviewV3TemplateRoutingAssistant
       caseId={localCaseId}
       onPlanInstalled={plan=>{
@@ -435,10 +432,7 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
         }}
       />}
     </div>}
-    <details className="rounded-lg border border-border p-3">
-      <summary className="cursor-pointer text-sm font-medium">人工登记（手写依据与人工事项）</summary>
-      <div className="mt-3"><ReviewV3LocalManualItem key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} /></div>
-    </details>
+    <ReviewV3LocalManualItem key={localCaseId+'-'+materialsEpoch} caseId={localCaseId} />
     {localCaseId&&<ReviewV3UnifiedRun
       caseId={localCaseId}
       stage={nativeAggregate?.caseV2.stage??'draft'}
