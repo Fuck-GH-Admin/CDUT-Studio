@@ -1022,13 +1022,38 @@ const scenarios = {
       }
       step('createCases', { count: caseIds.length })
 
-      // 批次：复用现有 BatchStateV2 权威
+      // 批次：必须绑定「已发布且带评分量表」的模板（F15 契约）
+      const judgingTemplateId = 'e2e-judging'
+      let judgingPub = null
+      try { judgingPub = await api.getTemplateV2(judgingTemplateId, 1) } catch {}
+      if (!judgingPub || judgingPub.status !== 'published') {
+        const now = new Date().toISOString()
+        await api.saveTemplateDraftV2({
+          templateId: judgingTemplateId, version: 1, schemaVersion: 2,
+          name: 'E2E 评委量表模板', displayName: { template: '{{title}}' },
+          objectType: 'document', status: 'draft', createdAt: now,
+          fields: [{ key: 'title', label: '标题', kind: 'text', required: false, visibility: 'public', scope: 'case' }],
+          sections: [], materialSlots: [], policyVersionIds: [], policyRefs: [], outputs: [],
+          stages: [{ id: 'judging', name: '评审', kind: 'manual-review', executorRole: 'reviewer' }],
+          rubric: {
+            id: 'e2e-rubric', name: '默认评分表', version: 1, strategy: 'weighted-mean',
+            totalPrecision: 2, missingStrategy: 'block', minEffectiveJudges: 2,
+            dimensions: [
+              { id: 'quality', name: '质量', weight: 1, min: 0, max: 5 },
+              { id: 'impact', name: '影响', weight: 1, min: 0, max: 5 },
+            ],
+            scaleConversion: { fromMax: 10, toMax: 100 },
+          },
+        })
+        await api.publishTemplateV2(judgingTemplateId, 1)
+      }
+
       let batchId = null
       try {
         const state = await api.createBatchV2({
           id: 'batch-e2e-' + Date.now(), name: 'A14 评分批次',
-          templateId: 'e2e-judging', templateVersion: 1, caseIds,
-          createdAt: new Date().toISOString(),
+          templateId: judgingTemplateId, templateVersion: 1, caseIds,
+          policyVersionLock: [], createdAt: new Date().toISOString(),
         })
         batchId = state?.batch?.id ?? null
         step('createBatch', { batchId, cases: state?.batch?.caseIds?.length ?? 0 })
@@ -1037,23 +1062,9 @@ const scenarios = {
       if (!batchId) return out
 
       // 初始化评分轮次（仅组织者、仅首次）
-      const rubric = {
-        id: 'e2e-rubric', name: '默认评分表', version: 1, strategy: 'weighted-mean',
-        dimensions: [
-          { id: 'quality', name: '质量', weight: 1, min: 0, max: 5 },
-          { id: 'impact', name: '影响', weight: 1, min: 0, max: 5 },
-        ],
-        minEffectiveJudges: 2,
-        conversion: { mode: 'linear', targetMax: 100 },
-      }
-      const state = {
-        batchId, rubricVersion: 1, rubric,
-        cases: caseIds.map((id, i) => ({ caseId: id, blindLabel: '案件 ' + String.fromCharCode(65 + i) })),
-        rounds: [{ number: 1, assignments: [], votes: [], divergenceReasons: {}, tieOrders: {} }],
-      }
       let revision = 0
       try {
-        const init = await api.initT07State({ batchId, claim: { role: 'organizer' }, state })
+        const init = await api.initT07State({ batchId, claim: { role: 'organizer' } })
         revision = init.revision
         step('initRound', { revision, viewRole: init.view?.role })
       } catch (error) { step('initRound', { ok: false, error: String(error?.message ?? error) }) }

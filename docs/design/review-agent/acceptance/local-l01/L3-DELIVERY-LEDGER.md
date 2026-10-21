@@ -1,3 +1,20 @@
+### M4 收尾：F15 契约接线（本轮修复的集成缺口）
+
+**发现**：PR #206 引入了 `review-v3-t07-round-setup.ts:createT07RoundFromPublishedTemplate`，
+要求评分轮次由「批次锁定的已发布模板自带 rubric」派生；但 `T07_INIT_STATE` 仍接受
+渲染层传入的 `T07State`——**安全函数没接线，渲染层仍可自造量表**。真机复跑直接暴露：
+`initT07State` 报「无法取得与批次锁定版本一致的已发布模板」。
+
+**修复**（`review-ipc.ts` / `preload/index.ts` / `ReviewV3T07Workbench.tsx`）：
+`T07_INIT_STATE` 只接受 `{ batchId, claim }`；Main 自行读取批次与已发布模板，
+调用 `createT07RoundFromPublishedTemplate` 派生 `T07State` 后才初始化。
+渲染层不再提交任何量表或状态。
+
+**真机复验**（`flow-t07-judging`，批次绑定带 rubric 的已发布模板）：
+建 2 案 → 批次 → 轮次 rev1 → 4 次分配 rev5 → 双评委各 2 项评分 → 组织者排名
+（`total=4.5`、`converted=45`、2 位有效评委）→ 定稿 rev10，两案 rank 1 选中。
+
+---
 ### M4 收尾轮：自动化回归与模型矩阵（本轮新增）
 
 **A15 确定性流程在新 main 上复跑（全部通过）**：

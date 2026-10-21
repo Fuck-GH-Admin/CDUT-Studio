@@ -81,15 +81,8 @@ export function ReviewV3T07Workbench(): JSX.Element {
     const sequence = refreshSequence.current
     setBusy(true); setError('')
     try {
-      const detail = await window.reviewAPI.getBatchV2(batchId)
-      if (!detail?.batch) throw new Error('无法读取该批次的锁定信息')
-      const template = await window.reviewAPI.getTemplateV2(detail.batch.templateId, detail.batch.templateVersion)
-      const initialState = createT07RoundFromPublishedTemplate(detail.batch, template)
-      // 建轮次是独立动作：T07 的 reopen 只对已冻结轮次有效
-      const result = await window.reviewAPI.initT07State({
-        batchId, claim: effectiveClaim, state: initialState,
-      })
-      if (sequence !== refreshSequence.current) return
+      // 量表由 Main 从「批次锁定的已发布模板」派生，渲染层不构造状态
+      const result = await window.reviewAPI.initT07State({ batchId, claim: effectiveClaim })
       setView(result.view); setRevision(result.revision)
       toast.success('已建立评分轮次')
     } catch (cause) {

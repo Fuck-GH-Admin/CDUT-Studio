@@ -4797,10 +4797,9 @@ const reviewAPI = {
       | { status: 'accepted' | 'duplicate'; receipt: import('../main/lib/review/review-v3-t09-offline-codec').T09Receipt }
       | { status: 'conflict' | 'rejected'; preview: import('../main/lib/review/review-v3-t09-offline-codec').T09Preview }
     >,
-  /** T07 建立评分轮次（仅组织者、仅首次） */
+  /** T07 建立评分轮次（Main 从已发布模板派生量表，渲染层不传状态） */
   initT07State: (input: {
     batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
-    state: import('../main/lib/review/review-v3-t07-rating-workflow').T07State
   }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T07_INIT_STATE, input) as Promise<{
     revision: number
     updatedAt: string

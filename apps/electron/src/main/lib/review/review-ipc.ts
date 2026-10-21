@@ -758,13 +758,20 @@ export function registerReviewIpc(): void {
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T07_INIT_STATE, (event, input: {
     batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }
-    state: import('./review-v3-t07-rating-workflow').T07State
   }) => {
     assertC0ReviewMainSender(event)
     if (!input || typeof input.batchId !== 'string' || !input.batchId) throw new Error('参数 batchId 非法')
-    if (!input.state || typeof input.state !== 'object') throw new Error('参数 state 非法')
+    // 轮次必须由 Main 从「已锁定批次 + 已发布模板的自带评分量表」派生，
+    // 绝不接受渲染层传入的量表或状态（演示量表不能代替业务规则）。
+    const { readBatchStateV2 } = require('./batch-store') as typeof import('./batch-store')
+    const { getTemplate } = require('./template-store') as typeof import('./template-store')
+    const { createT07RoundFromPublishedTemplate } = require('./review-v3-t07-round-setup') as typeof import('./review-v3-t07-round-setup')
     const { initT07MainState } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
-    return initT07MainState({ batchId: input.batchId, claim: input.claim, state: input.state })
+    const batch = readBatchStateV2(input.batchId)?.batch
+    if (!batch) throw new Error('批次不存在')
+    const template = getTemplate(batch.templateId, batch.templateVersion)
+    const state = createT07RoundFromPublishedTemplate(batch, template)
+    return initT07MainState({ batchId: input.batchId, claim: input.claim, state })
   })
   // ===== T09 离线包（Local-L04 桥接：签发 / 预览 / 幂等导入） =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.T09_ISSUE_STUDENT, (event, input: {
