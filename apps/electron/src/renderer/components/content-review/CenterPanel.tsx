@@ -42,6 +42,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { ReviewActions } from './use-review-actions'
 import { SourceBlockView } from './SourceBlockView'
+import { ReviewV3SourceNavigator } from './ReviewV3SourceNavigator'
 import { useReviewWorkspaceActions } from './use-review-workspace-actions'
 import { ReviewActionDialog } from './ReviewActionDialog'
 import { Button } from '@profer/ui/primitives/button'
@@ -181,6 +182,9 @@ export function CenterPanel({ actions }: CenterPanelProps): React.ReactElement {
           {items.length} 条 / {documentsByRole.evidence.length} 份证明
         </p>
       </header>
+
+      <ReviewV3SourceNavigator purpose="application" />
+      <ReviewV3SourceNavigator purpose="evidence" />
 
       {/* 申报文件只在中栏管理，和左栏审核依据、下方证明材料分开导入。 */}
       <section className="shrink-0 border-b border-border/40 px-3 py-3">

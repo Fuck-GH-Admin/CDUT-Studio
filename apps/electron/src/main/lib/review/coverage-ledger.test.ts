@@ -107,6 +107,55 @@ describe('combineCoverage（全部符合判定，A08）', () => {
     expect(summary.pendingChecks).toBe(1)
     expect(summary.allClearVerdictAllowed).toBeFalse()
   })
+
+  test('案卷级结果不能冒充两名主体各自的检查结果', () => {
+    const broad = { ...result('r', ['s1', 's2'], 'compliant'), target: { scope: 'case' as const, subjectIds: ['s1', 's2'] } }
+    const summary = combineCoverage([], [rule('r', 'subject')], ['s1', 's2'], [broad])
+    expect(summary.plannedChecks).toBe(2)
+    expect(summary.completedChecks).toBe(0)
+    expect(summary.pendingChecks).toBe(2)
+    expect(summary.blockers.join()).toContain('无法与计划唯一对应')
+  })
+
+  test('一项主体计划收到两个结果时不选最后写入的合规结果', () => {
+    const one = result('r', ['s'], 'non-compliant')
+    const two = { ...result('r', ['s'], 'compliant'), checkId: 'another-check' }
+    const summary = combineCoverage([], [rule('r', 'subject')], ['s'], [one, two])
+    expect(summary.completedChecks).toBe(0)
+    expect(summary.effectiveVerdicts).toBe(0)
+    expect(summary.allClearVerdictAllowed).toBeFalse()
+  })
+
+  test('不同计划项的重复 checkId 不能作为两项已覆盖结果', () => {
+    const repeated = [result('r', ['s1'], 'compliant'), { ...result('r', ['s2'], 'compliant'), checkId: 'chk-r-s1' }]
+    const summary = combineCoverage([], [rule('r', 'subject')], ['s1', 's2'], repeated)
+    expect(summary.completedChecks).toBe(0)
+    expect(summary.blockers.join()).toContain('无法与计划唯一对应')
+  })
+
+  test('同名但政策版本不同的规则不得仅按 ruleId 共用一个结论', () => {
+    const rules = [rule('same', 'subject'), { ...rule('same', 'subject'), policyVersionId: 'another-policy' }]
+    const summary = combineCoverage([], rules, ['s'], [result('same', ['s'], 'compliant')])
+    expect(summary.plannedChecks).toBe(2)
+    expect(summary.completedChecks).toBe(0)
+    expect(summary.allClearVerdictAllowed).toBeFalse()
+  })
+
+  test('合法空发现但原件与规则覆盖完整可以符合；额外假结果则阻断', () => {
+    const valid = result('r', ['s'], 'compliant')
+    const ok = combineCoverage([doc('v', '材料.txt', 'read')], [rule('r', 'subject')], ['s'], [valid])
+    expect(ok.allClearVerdictAllowed).toBeTrue()
+    const forged = { ...result('foreign', ['s'], 'compliant'), checkId: 'foreign-id' }
+    const suspicious = combineCoverage([doc('v', '材料.txt', 'read')], [rule('r', 'subject')], ['s'], [valid, forged])
+    expect(suspicious.allClearVerdictAllowed).toBeFalse()
+  })
+
+  test('不适用必须具备理由，未知状态和空主体都不能宣称已覆盖', () => {
+    const noReason = result('r', ['s'], 'not-applicable')
+    const ledger = buildCheckLedger([rule('r', 'subject')], ['s'], [noReason])
+    expect(ledger[0]?.status).toBe('not-executed')
+    expect(combineCoverage([], [rule('r', 'subject')], [], []).allClearVerdictAllowed).toBeFalse()
+  })
 })
 
 describe('OCR 端口与预览（M2）', () => {
@@ -124,7 +173,7 @@ describe('OCR 端口与预览（M2）', () => {
 
 describe('组规则展开（G12/误判 5）', () => {
   const groupRule = { id: 'r-group', targetScope: 'group', severity: 'high', statement: '每条活动记录需完整', checks: [] } as unknown as Parameters<typeof buildCheckLedger>[0][number]
-  const hit = (groupValue: string) => ({ checkId: 'c', ruleId: 'r-group', status: 'compliant', target: { scope: 'group', subjectIds: [groupValue] }, at: '', engine: 'mock' }) as unknown as CheckResult
+  const hit = (groupValue: string) => ({ checkId: 'c-' + groupValue, ruleId: 'r-group', status: 'compliant', target: { scope: 'group', subjectIds: [groupValue] }, at: '', engine: 'mock' }) as unknown as CheckResult
 
   test('Given 组规则与三个组值 When 只回填两个组结果 Then 第三组 not-executed（逐组展开不折叠）', () => {
     const ledger = buildCheckLedger([groupRule], ['s1'], [hit('g1'), hit('g2')], { 'r-group': ['g1', 'g2', 'g3'] })

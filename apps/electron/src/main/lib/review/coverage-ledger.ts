@@ -45,6 +45,93 @@ export interface CheckLedgerEntry {
   reason?: string
 }
 
+const CHECK_STATUSES = new Set<CheckResult['status']>([
+  'compliant', 'non-compliant', 'not-applicable', 'awaiting-confirmation',
+  'awaiting-supplement', 'not-executed', 'execution-failed',
+])
+
+interface CheckLedgerReconciliation {
+  entries: CheckLedgerEntry[]
+  /** 未被计划唯一消费的结果必须单独报告，不能以零问题掩盖错案/重复检查。 */
+  unexpectedResults: number
+}
+
+function reconcileCheckLedger(
+  plannedRules: RuleSpec[], subjectIds: string[], results: CheckResult[],
+  groupValues?: Record<string, string[]>, sectionSubjectIds?: Record<string, string[]>,
+): CheckLedgerReconciliation {
+  const entries: CheckLedgerEntry[] = []
+  const matched = new Set<number>()
+  const resultKeys = new Map<string, number[]>()
+  const checkIdCounts = new Map<string, number>()
+  const ruleIdCounts = new Map<string, number>()
+  for (const rule of plannedRules) ruleIdCounts.set(rule.id, (ruleIdCounts.get(rule.id) ?? 0) + 1)
+
+  const add = (key: string, index: number) =>
+    resultKeys.set(key, [...(resultKeys.get(key) ?? []), index])
+  for (const [index, result] of results.entries()) {
+    if (result.checkId?.trim()) {
+      checkIdCounts.set(result.checkId, (checkIdCounts.get(result.checkId) ?? 0) + 1)
+    }
+    const target = result.target
+    if (!result.ruleId || !target || !Array.isArray(target.subjectIds)) continue
+    const ids = target.subjectIds
+    if (target.scope === 'subject' && ids.length === 1 && ids[0]) {
+      add(`${result.ruleId}::subject::${ids[0]}`, index)
+    } else if (target.scope === 'case') {
+      add(`${result.ruleId}::case`, index)
+    } else if (target.scope === 'group') {
+      if (target.groupKey) add(`${result.ruleId}::group-key::${target.groupKey}`, index)
+      else add(`${result.ruleId}::group::${[...ids].sort().join(',')}`, index)
+    }
+  }
+
+  const record = (ruleId: string, targetKey: string, keys: string[], missingReason: string) => {
+    const candidates = [...new Set(keys.flatMap(key => resultKeys.get(key) ?? []))]
+    const hit = candidates.length === 1 ? results[candidates[0]!] : undefined
+    if (ruleIdCounts.get(ruleId) !== 1) {
+      entries.push({ ruleId, targetKey, status: 'not-executed', reason: '同名规则来自多个版本，缺少可核实的唯一检查身份' })
+    } else if (candidates.length !== 1) {
+      entries.push({ ruleId, targetKey, status: 'not-executed',
+        reason: candidates.length ? '同一计划目标收到多个结果，不能任意选一个' : missingReason })
+    } else if (!hit?.checkId?.trim() || checkIdCounts.get(hit.checkId) !== 1 ||
+      !CHECK_STATUSES.has(hit.status) ||
+      (hit.status === 'not-applicable' && !hit.reason?.trim())) {
+      entries.push({ ruleId, targetKey, status: 'not-executed', reason: '检查身份、状态或不适用理由无效，不能计为已覆盖' })
+    } else {
+      matched.add(candidates[0]!)
+      entries.push({ ruleId, targetKey, status: hit.status, ...(hit.reason ? { reason: hit.reason } : {}) })
+    }
+  }
+
+  for (const rule of plannedRules) {
+    const ruleSubjects = rule.sectionId ? sectionSubjectIds?.[rule.sectionId] ?? [] : subjectIds
+    if (rule.targetScope === 'subject') {
+      if (!ruleSubjects.length) {
+        entries.push({ ruleId: rule.id, targetKey: 'subject:unknown', status: 'not-executed', reason: '规则作用域没有可核实的主体' })
+      }
+      for (const subjectId of ruleSubjects) {
+        record(rule.id, subjectId, [`${rule.id}::subject::${subjectId}`], '计划主体检查未产生结果记录')
+      }
+    } else if (rule.targetScope === 'group') {
+      const groups = groupValues?.[rule.id] ?? (rule.groupBy?.length ? [] : ['group'])
+      if (!groups.length) {
+        entries.push({ ruleId: rule.id, targetKey: 'group', status: 'not-executed', reason: '组规则未提供组值，无法展开' })
+      }
+      for (const group of groups) {
+        const aggregateKey = `${rule.id}::group::${[...ruleSubjects].sort().join(',')}`
+        const keys = group === 'group' && !rule.groupBy?.length
+          ? [aggregateKey, `${rule.id}::group-key::${group}`]
+          : [`${rule.id}::group-key::${group}`, `${rule.id}::group::${group}`]
+        record(rule.id, group, keys, '组内计划检查未产生结果记录')
+      }
+    } else {
+      record(rule.id, rule.targetScope, [`${rule.id}::case`], '案卷级计划检查未产生结果记录')
+    }
+  }
+  return { entries, unexpectedResults: results.length - matched.size }
+}
+
 /**
  * 检查账本：以「计划检查」为分母核对执行结果。
  * 计划 = 规则 × 其目标分组键的笛卡尔：subject 规则按主体展开；group 规则按组值逐组展开
@@ -57,58 +144,7 @@ export function buildCheckLedger(
   groupValues?: Record<string, string[]>,
   sectionSubjectIds?: Record<string, string[]>,
 ): CheckLedgerEntry[] {
-  const subjectIds0 = [...subjectIds]
-  const byRuleTarget = new Map<string, CheckResult>()
-  for (const result of results) {
-    // 真实模型返回的 check 可能缺 target（确定性引擎总会带）：缺省按 case 级归位，逐案规则由下方回退匹配消费
-    const scope = result.target?.scope ?? 'case'
-    const subjectIds = result.target?.subjectIds ?? subjectIds0
-    const key = `${result.ruleId}::${scope}::${[...subjectIds].sort().join(',')}`
-    byRuleTarget.set(key, result)
-    if (scope === 'group' && result.target?.groupKey) byRuleTarget.set(`${result.ruleId}::group-key::${result.target.groupKey}`, result)
-  }
-  const ledger: CheckLedgerEntry[] = []
-  for (const rule of plannedRules) {
-    const ruleSubjectIds = rule.sectionId ? sectionSubjectIds?.[rule.sectionId] ?? [] : subjectIds
-    if (rule.targetScope === 'subject') {
-      for (const subjectId of ruleSubjectIds) {
-        const hit = byRuleTarget.get(`${rule.id}::subject::${subjectId}`) ?? byRuleTarget.get(`${rule.id}::case::${subjectIds0.sort().join(',')}`)
-        ledger.push(
-          hit
-            ? { ruleId: rule.id, targetKey: subjectId, status: hit.status }
-            : { ruleId: rule.id, targetKey: subjectId, status: 'not-executed', reason: '计划检查未产生结果记录' },
-        )
-      }
-    } else if (rule.targetScope === 'group') {
-      // A group rule with no groupBy is one aggregate check for the rule's full section/case scope.
-      // Older runs omitted an explicit groupValues list and produced precisely this aggregate target.
-      const groups = groupValues?.[rule.id] ?? (rule.groupBy?.length ? [] : ['group'])
-      if (groups.length === 0) {
-        ledger.push({ ruleId: rule.id, targetKey: 'group', status: 'not-executed', reason: '组规则未提供组值，无法展开' })
-        continue
-      }
-      for (const groupValue of groups) {
-        const aggregateKey = `${rule.id}::group::${[...ruleSubjectIds].sort().join(',')}`
-        const hit = byRuleTarget.get(`${rule.id}::group-key::${groupValue}`)
-          ?? (groupValue === 'group' ? byRuleTarget.get(aggregateKey) : undefined)
-          ?? byRuleTarget.get(`${rule.id}::group::${groupValue}`)
-        ledger.push(
-          hit
-            ? { ruleId: rule.id, targetKey: groupValue, status: hit.status }
-            : { ruleId: rule.id, targetKey: groupValue, status: 'not-executed', reason: '组内计划检查未产生结果记录' },
-        )
-      }
-    } else {
-      const key = `${rule.id}::${rule.targetScope}::${[...ruleSubjectIds].sort().join(',')}`
-      const hit = byRuleTarget.get(key)
-      ledger.push(
-        hit
-          ? { ruleId: rule.id, targetKey: rule.targetScope, status: hit.status }
-          : { ruleId: rule.id, targetKey: rule.targetScope, status: 'not-executed', reason: '计划检查未产生结果记录' },
-      )
-    }
-  }
-  return ledger
+  return reconcileCheckLedger(plannedRules, subjectIds, results, groupValues, sectionSubjectIds).entries
 }
 
 export interface CoverageSummary {
@@ -132,7 +168,8 @@ export function combineCoverage(
   sectionSubjectIds?: Record<string, string[]>,
 ): CoverageSummary {
   const documentLedger = buildDocumentLedger(documents)
-  const checkLedger = buildCheckLedger(plannedRules, subjectIds, results, groupValues, sectionSubjectIds)
+  const reconciliation = reconcileCheckLedger(plannedRules, subjectIds, results, groupValues, sectionSubjectIds)
+  const checkLedger = reconciliation.entries
   const unread = documentLedger.filter((entry) => entry.status !== 'read')
   const notExecuted = checkLedger.filter((entry) => entry.status === 'not-executed' || entry.status === 'execution-failed')
   const awaiting = checkLedger.filter((entry) => entry.status === 'awaiting-confirmation' || entry.status === 'awaiting-supplement')
@@ -144,6 +181,9 @@ export function combineCoverage(
   if (notExecuted.length > 0) blockers.push(`${notExecuted.length} 项计划检查未执行`)
   if (awaiting.length > 0) blockers.push(`${awaiting.length} 项检查待确认/待补件`)
   if (violations.length > 0) blockers.push(`${violations.length} 项检查不符合`)
+  if (reconciliation.unexpectedResults > 0) {
+    blockers.push(`${reconciliation.unexpectedResults} 项检查结果无法与计划唯一对应（含多余、重复或无效结果）`)
+  }
   return {
     documents: documentLedger,
     plannedChecks: checkLedger.length,

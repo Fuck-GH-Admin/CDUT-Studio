@@ -50,7 +50,9 @@ export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequ
     // 使用默认会话沙箱，不继承当前聊天工作区；旧普通审核会话不迁移。
     const session = reusable ?? createReviewOwnedAgentSession({ caseId: input.caseId,
       title: `审核：${getCase(input.caseId)?.title ?? input.caseId}`, channelId: channel.id, modelId })
-    const previous = listRunsV2(input.caseId)[0]
+    // 同案可能在 Pi 审核之后又执行 T04 模板规则 Run。不能让另一种运行
+    // 占据列表首位，就错误放弃原 Pi 的有效续交检查点。
+    const previous = listRunsV2(input.caseId).find((run) => run.id.startsWith('run-pi-'))
     const resumeRunId = reusable && previous?.status === 'partially-completed'
       && previous.checks.some((check) => check.status === 'execution-failed')
       && !isWorkspaceRunStaleV2(aggregate, previous.id)

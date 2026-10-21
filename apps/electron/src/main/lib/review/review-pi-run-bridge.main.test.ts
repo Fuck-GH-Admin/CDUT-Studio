@@ -37,7 +37,7 @@ const { getBackgroundPiReviewState } = await import('./review-background-state')
 const { listAgentSessions, getAgentSessionMeta, updateAgentSessionMeta } = await import('../agent-session-manager')
 const { ensureDefaultWorkspace } = await import('../agent-workspace-manager')
 const { saveReviewModuleSettings } = await import('./module-settings-store')
-const { getRunV2 } = await import('./run-store-v2')
+const { getRunV2, saveRunV2 } = await import('./run-store-v2')
 const { getPiReviewBindingForSession } = await import('./pi-case-review-service')
 const { createAssignment, bindRunToAssignment, findActivePiReviewAssignment, checkAssignment } = await import('./review-agent-assignment')
 const { getConfigDir } = await import('../config-paths')
@@ -104,6 +104,32 @@ describe('后台 Main 入口与受理边界', () => {
     context.execution.end('failed')
     await Bun.sleep(0)
     expect(getRunV2(context.caseId, receipt.runId!)?.error).toBe('合成执行失败')
+  })
+
+  test('F09：T04 新 Run 不遮挡更早的 Pi 部分完成轮次续审', async () => {
+    const first = await pendingExecution()
+    first.execution.owned()
+    const receipt = await first.admission
+    first.execution.end('completed')
+    await Bun.sleep(0)
+    const previous = getRunV2(first.caseId, receipt.runId!)!
+    expect(previous.status).toBe('partially-completed')
+    expect(previous.checks.some((check) => check.status === 'execution-failed')).toBeTrue()
+
+    // 另一个技术路径最近写入模板规则 Run，不等于 Pi 的最近可续审轮次。
+    saveRunV2({ ...previous, id: 'run-t04-after-pi', status: 'completed',
+      startedAt: '2099-01-01T00:00:00.000Z', completedAt: '2099-01-01T00:01:00.000Z' })
+    const before = executions.length
+    const continuation = startBackgroundPiReview({ caseId: first.caseId, mode: 'update' }, windowContents)
+    while (executions.length === before) await Bun.sleep(0)
+    const second = executions.at(-1)!
+    second.owned()
+    const continued = await continuation
+    expect(continued.runId).toBe(receipt.runId)
+    expect(second.input.sessionId).toBe(first.execution.input.sessionId)
+    expect(getRunV2(first.caseId, receipt.runId!)?.status).toBe('running')
+    second.end('completed')
+    await Bun.sleep(0)
   })
 
   test('停止只接受当前案卷/运行，错误身份不触发执行器，正确停止持久 cancelled', async () => {
