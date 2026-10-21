@@ -16,6 +16,7 @@ import type { CaseAggregateV2 } from '@profer/shared'
 import { reviewV2AggregateAtom } from './V2CasePanel'
 
 type PreviewLike = { status: 'ready' | 'conflict' | 'rejected'; details: string[] }
+type JudgeChoice = { batchId: string; assignmentId: string; reviewerId: string; round: number }
 
 export function ReviewV3T09OfflineSection(): JSX.Element {
   const aggregate = useAtomValue(reviewV2AggregateAtom) as CaseAggregateV2 | null
@@ -23,6 +24,9 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
   const [recipientId, setRecipientId] = React.useState('local-student')
   const [judgeBatchId, setJudgeBatchId] = React.useState('')
   const [judgeAssignmentId, setJudgeAssignmentId] = React.useState('')
+  const [judgeChoices, setJudgeChoices] = React.useState<JudgeChoice[]>([])
+  const [loadingJudgeChoices, setLoadingJudgeChoices] = React.useState(false)
+  const lookupGeneration = React.useRef(0)
   const [issued, setIssued] = React.useState<{ packageId: string; json: string } | null>(null)
   const [replyJson, setReplyJson] = React.useState('')
   const [preview, setPreview] = React.useState<PreviewLike | null>(null)
@@ -39,6 +43,45 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
   }, [openSupplements, supplementId])
 
   const caseId = aggregate?.caseV2.id
+
+  React.useEffect(() => {
+    lookupGeneration.current += 1
+    setJudgeChoices([])
+    setJudgeBatchId('')
+    setJudgeAssignmentId('')
+  }, [caseId])
+
+  const loadJudgeChoices = React.useCallback(async (): Promise<void> => {
+    if (!caseId) return
+    const current = ++lookupGeneration.current
+    setLoadingJudgeChoices(true); setMessage('')
+    try {
+      const raw = await window.reviewAPI.listBatchesV2()
+      const batches = (raw as Array<{ id?: string; batch?: { id: string; caseIds?: string[] } }>)
+        .map((entry) => entry.batch)
+        .filter((item): item is { id: string; caseIds?: string[] } =>
+          Boolean(item?.id) && (item?.caseIds ?? []).includes(caseId))
+      const found = await Promise.all(batches.map(async (item): Promise<JudgeChoice[]> => {
+        try {
+          const result = await window.reviewAPI.getT07View({ batchId: item.id, claim: { role: 'organizer' } })
+          if (result.view.role !== 'organizer') return []
+          const round = result.view.state.rounds.at(-1)
+          if (!round || round.finalized) return []
+          return round.assignments.filter((row) => row.caseId === caseId && row.status === 'assigned')
+            .map((row) => ({ batchId: item.id, assignmentId: row.id, reviewerId: row.reviewerId, round: round.number }))
+        } catch { return [] } // No published scoring round for this batch.
+      }))
+      if (lookupGeneration.current !== current) return
+      const choices = found.flat()
+      setJudgeChoices(choices)
+      setJudgeBatchId(choices[0]?.batchId ?? '')
+      setJudgeAssignmentId(choices[0]?.assignmentId ?? '')
+    } catch (error) {
+      if (lookupGeneration.current === current) setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (lookupGeneration.current === current) setLoadingJudgeChoices(false)
+    }
+  }, [caseId])
 
   const issue = React.useCallback(async (): Promise<void> => {
     if (!caseId || !supplementId) return
@@ -126,14 +169,28 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-t pt-2">
-        <input className="h-7 w-40 rounded-md border bg-background px-2" aria-label="评分批次 ID"
-          value={judgeBatchId} onChange={(event) => setJudgeBatchId(event.target.value)} placeholder="评分批次 ID" />
-        <input className="h-7 w-40 rounded-md border bg-background px-2" aria-label="评分分配 ID"
-          value={judgeAssignmentId} onChange={(event) => setJudgeAssignmentId(event.target.value)} placeholder="评分分配 ID" />
-        <Button size="sm" variant="outline" disabled={busy || !caseId || !judgeBatchId.trim() || !judgeAssignmentId.trim()}
+        <Button size="sm" variant="outline" disabled={busy || loadingJudgeChoices || !caseId}
+          onClick={() => void loadJudgeChoices()}>{loadingJudgeChoices ? '正在读取评分分配…' : '读取本案评分任务'}</Button>
+        <select className="h-7 min-w-44 rounded-md border bg-background px-2"
+          aria-label="选择独立评委评分分配"
+          value={judgeChoices.some((row) => row.batchId === judgeBatchId && row.assignmentId === judgeAssignmentId)
+            ? judgeBatchId + '::' + judgeAssignmentId : ''}
+          onChange={(event) => {
+            const row = judgeChoices.find((choice) => choice.batchId + '::' + choice.assignmentId === event.target.value)
+            setJudgeBatchId(row?.batchId ?? '')
+            setJudgeAssignmentId(row?.assignmentId ?? '')
+          }}>
+          <option value="">选择本案未完成的评分分配…</option>
+          {judgeChoices.map((row) => <option key={row.batchId + ':' + row.assignmentId}
+            value={row.batchId + '::' + row.assignmentId}>
+            {row.batchId} · 第{row.round}轮 · {row.reviewerId}
+          </option>)}
+        </select>
+        <Button size="sm" variant="outline" disabled={busy || !caseId || !judgeBatchId || !judgeAssignmentId}
           onClick={() => void issueJudge()}>签发匿名评委评分包</Button>
       </div>
-      <p className="text-muted-foreground">须先在评分工作台建立批次轮次与评委分配；评委回件导入时由 Main 弹窗确认，所有票据按现有 T07 修订号写入。</p>
+      {judgeChoices.length === 0 && <p className="text-muted-foreground">请先在评分工作台创建评分轮次和本案评委分配，再点击“读取本案评分任务”。</p>
+      <p className="text-muted-foreground">评分任务从 Main 已持久化的真实批次与当前轮次读取；评委回件导入时由 Main 弹窗确认，所有票据按现有 T07 修订号写入。</p>
 
       {issued && (
         <div className="space-y-1">
