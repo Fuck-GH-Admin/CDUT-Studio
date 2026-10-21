@@ -202,25 +202,25 @@ export function ContentReviewView(): React.ReactElement {
       data-profer-navigation-region="content-review"
       tabIndex={-1}
     >
-      {/* 首次进入材料审核时才提示配置审核模型：卡片形式、可关闭，不阻塞主界面 */}
+      {/* 首次进入材料审核时才提示配置审核模型：右侧浮层，不挤压主界面、不形成上下分栏 */}
       {reviewReadinessVisible && (
         <section aria-label="审核模型就绪检查"
-          className="mx-4 mt-3 shrink-0 rounded-lg border border-border/60 bg-card/80 p-4 shadow-sm">
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold">让材料审核做好准备</h2>
-              <p className="mt-1 text-xs text-muted-foreground">已有模型配置会自动读取；也可以先跳过，进入主界面后再到设置里配置。</p>
+          className="absolute inset-0 z-20 flex flex-col bg-background">
+          <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col px-6 py-8">
+            <header className="mb-4">
+              <h2 className="text-xl font-semibold">让材料审核做好准备</h2>
+              <p className="mt-1 text-sm text-muted-foreground">已有模型配置会自动读取；也可以先跳过，进入主界面后再到设置里配置。</p>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <ReviewFirstUseReadiness />
             </div>
-            <Button type="button" variant="ghost" size="sm" className="h-7 text-xs"
-              onClick={() => dismissReviewReadiness()}>跳过，稍后设置</Button>
-          </div>
-          <div className="max-h-[38vh] overflow-y-auto">
-            <ReviewFirstUseReadiness />
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Button type="button" size="sm" className="h-8 text-xs" onClick={() => dismissReviewReadiness()}>
-              完成，开始审核
-            </Button>
+            <footer className="mt-4 flex items-center justify-end gap-2 border-t border-border/60 pt-3">
+              <Button type="button" variant="ghost" size="sm" className="h-8 text-xs"
+                onClick={() => dismissReviewReadiness()}>跳过，稍后设置</Button>
+              <Button type="button" size="sm" className="h-8 text-xs" onClick={() => dismissReviewReadiness()}>
+                完成，开始审核
+              </Button>
+            </footer>
           </div>
         </section>
       )}
