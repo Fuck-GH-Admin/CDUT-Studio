@@ -17,6 +17,16 @@ import { saveDraft, publishTemplate, getTemplate } from './template-store'
 
 const DEMO_PREFIX = '【演示】'
 
+/**
+ * 去掉 D4 冻结定义里的编号前缀（如「G02-T01｜」「G06-T09 」「G04-」），
+ * 用户在模板库里应该看到业务名称，而不是内部编号。
+ */
+function stripCodePrefix(name: string): string {
+  return name
+    .replace(/^G\d{2}(?:[-–— ]?T?\d{1,3})?[｜|:：\-–—\s]*/i, '')
+    .trim()
+}
+
 interface D4ModuleTask {
   id: string
   title: string
@@ -51,12 +61,13 @@ export function demoTemplateFromD4(entry: D4UnifiedEntry, workspace: ReviewAutho
     } as TemplateCriterionSpec)),
   }))
 
+  const displayTitle = `${DEMO_PREFIX}${stripCodePrefix(definition.name)}`
   return {
     templateId: entry.templateId,
     version: entry.templateVersion,
     schemaVersion: 2,
-    name: `${DEMO_PREFIX}${definition.name}`,
-    displayName: { template: `${DEMO_PREFIX}${definition.name}` },
+    name: displayTitle,
+    displayName: { template: displayTitle },
     objectType: 'document',
     status: 'draft',
     createdAt,
