@@ -24,6 +24,16 @@ saveDraft({
 } as never)
 publishTemplate(templateId, 1)
 
+const anotherTemplateId = 't06-other-business'
+saveDraft({
+  templateId: anotherTemplateId, version: 1, schemaVersion: 2, name: '另一业务模板',
+  objectType: 'organization', displayName: { template: 'x' }, status: 'draft', createdAt: '',
+  fields: [{ key: 'applicant', label: '申请人', kind: 'text', required: false, visibility: 'public', scope: 'case' }],
+  sections: [], materialSlots: [], policyVersionIds: [], policyRefs: [], outputs: [],
+  stages: [{ id: 'end', name: '结束', kind: 'finalize', executorRole: 'reviewer' }],
+} as never)
+publishTemplate(anotherTemplateId, 1)
+
 /** 真实目录 → 真实枚举与指纹（不伪造 OS 弹窗，但确实读盘）。 */
 function seedSelection(files: Array<{ name: string; content?: string }> = [{ name: 'a.txt' }]) {
   const root = mkdtempSync(join(tmpdir(), 't06src-'))
@@ -77,5 +87,70 @@ describe('T06 物理入库桥接', () => {
     const ok = receipt.cases.find((item) => item.groupId === 'ok')!
     expect(ok.status).toBe('done')
     expect(ok.documents).toHaveLength(1)
+  })
+
+  test('混合模板文件夹独立分案，并按业务模板分成两个真实批次', async () => {
+    const selection = seedSelection([{ name: 'first.pdf', content: 'A' }, { name: 'second.pdf', content: 'B' }])
+    const result = await service.commitT06PhysicalImport({
+      requestId: 'r-mixed', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, batchName: '同次导入',
+      groups: [
+        { groupId: 'g-first', action: 'create', entryIds: [selection.entries[0]!.entryId],
+          title: '业务一', applicant: '甲', templateId, templateVersion: 1 },
+        { groupId: 'g-second', action: 'create', entryIds: [selection.entries[1]!.entryId],
+          title: '业务二', applicant: '乙', templateId: anotherTemplateId, templateVersion: 1 },
+      ],
+    })
+    expect(result.cases.map(entry => entry.status)).toEqual(['done', 'done'])
+    expect(result.batches).toHaveLength(2)
+    expect(result.batches?.map(batch => batch.templateId)).toEqual([templateId, anotherTemplateId])
+    expect(new Set(result.batches?.flatMap(batch => batch.caseIds)).size).toBe(2)
+  })
+
+  test('某案卷模板未就绪时其余案卷仍可入库并创建真实批次', async () => {
+    const selection = seedSelection([{ name: 'good.pdf' }, { name: 'bad.pdf' }])
+    const result = await service.commitT06PhysicalImport({
+      requestId: 'r-isolation', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, batchName: '容错批量',
+      groups: [
+        { groupId: 'bad', action: 'create', title: '不可用模板', applicant: '甲',
+          entryIds: [selection.entries[1]!.entryId], templateId: 'missing-template', templateVersion: 1 },
+        { groupId: 'good', action: 'create', title: '可用模板', applicant: '乙',
+          entryIds: [selection.entries[0]!.entryId], templateId, templateVersion: 1 },
+      ],
+    })
+    expect(result.cases.map(entry => entry.status)).toEqual(['failed', 'done'])
+    expect(result.batches?.map(batch => batch.templateId)).toEqual([templateId])
+    expect(result.batches?.[0]?.caseIds).toHaveLength(1)
+  })
+
+  test('相同名称与大小的不同案卷原件不能共享 DocumentVersion', async () => {
+    const first = seedSelection([{ name: 'proof.txt', content: '同一份证明' }])
+    const second = seedSelection([{ name: 'proof.txt', content: '同一份证明' }])
+    const submit = (selection: typeof first, requestId: string) => service.commitT06PhysicalImport({
+      requestId, selectionId: selection.selectionId, previewFingerprint: selection.previewFingerprint,
+      templateId, templateVersion: 1, batchName: requestId,
+      groups: [{ groupId: 'group', action: 'create' as const, entryIds: [selection.entries[0]!.entryId],
+        title: requestId, applicant: requestId }],
+    })
+    const a = await submit(first, 'r-person-a')
+    const b = await submit(second, 'r-person-b')
+    expect(a.cases[0]?.status).toBe('done')
+    expect(b.cases[0]?.status).toBe('done')
+    expect(a.cases[0]?.documents[0]?.documentVersionId).not.toBe(b.cases[0]?.documents[0]?.documentVersionId)
+  })
+
+  test('预览后即使字节长度未变，更换原件也必须拒绝入库', async () => {
+    const root = mkdtempSync(join(tmpdir(), 't06-swapped-'))
+    writeFileSync(join(root, 'proof.txt'), 'AAA')
+    const selected = service.buildT06SelectionFromPath(root, 'folder')
+    writeFileSync(join(root, 'proof.txt'), 'BBB')
+    const result = await service.commitT06PhysicalImport({
+      requestId: 'r-swapped', selectionId: selected.selectionId, previewFingerprint: selected.previewFingerprint,
+      templateId, templateVersion: 1, batchName: '变更文件',
+      groups: [{ groupId: 'g', action: 'create', entryIds: [selected.entries[0]!.entryId], title: '原件变更', applicant: '甲' }],
+    })
+    expect(result.cases[0]?.status).toBe('failed')
+    expect(result.cases[0]?.error).toContain('内容已变化')
   })
 })
