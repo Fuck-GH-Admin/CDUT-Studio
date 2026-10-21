@@ -1,3 +1,37 @@
+### F01–F18 状态矩阵（合并后新 main 上实测）
+
+判定口径（不混用）：**PASS_SCOPED** = 代码已合入 + 该功能定向测试在新 main 通过；
+**WIRED** = 有真实用户入口且 Main 端口接通；**JOURNEY_VERIFIED** = 真机 Electron 走过完整用户路径；
+**BLOCKED_EXTERNAL** = 需学校正式接口；**NOT_RUN** = 未实测。
+
+| F | 功能 | 代码位置 | 定向测试 | 入口 | 状态 |
+|---|---|---|---|---|---|
+| F01 | 首次使用引导与就绪 | `onboarding/review-first-use-readiness.ts` | `review-first-use-readiness.test.ts` | 审核专区引导 | PASS_SCOPED / WIRED |
+| F02 | 模板作者与负责人签认 | `review-v3-t01-typed-criteria.ts`、`ReviewV3T01NumberRuleEditor` | `review-v3-t01-*`、`review-v3-main-template-plan-bridge.test.ts` | 模板库 | PASS_SCOPED / WIRED（A15 S2 真机用过） |
+| F03 | 政策/来源冲突解析 | `f03-policy-resolution.ts` | `f03-policy-resolution.test.ts` | 规则摘要 | PASS_SCOPED |
+| F04 | 原件接入与栅格完整性 | `review-v3-f04-*` | 3 个 `review-v3-f04-*` 测试 | 材料区 | PASS_SCOPED |
+| F05 | 图像/OCR 事实提取 | T02 视觉 OCR 模块 | `review-v3-t02-visual-material.test.ts` | 材料覆盖面板 | PASS_SCOPED（OCR 依赖外部引擎，缺资源只能 partial） |
+| F06 | 证据归属工作台 | `review-v3-f06-*` | `review-v3-f06-evidence.test.ts` | 事实工作台 | PASS_SCOPED / WIRED |
+| F07 | 冻结绑定覆盖与 0-check 阻断 | `review-v3-f07-plan-coverage.test.ts`、`t05ActionEligibility` | `review-v3-f07-plan-coverage.test.ts` | Main 门禁 | PASS_SCOPED / **真机门禁已验证**（21 人拒 stage-pass） |
+| F08 | 数值下限/上限算子 | `review-v3-f08-rubric-calculator.ts`、T04 `value-limit` | `review-v3-f08-rubric-calculator.test.ts` | 规则检查 | PASS_SCOPED / **真机 18-21 人验证**；`gte` 下限算子仍缺（已记 CONTRACT_GAP） |
+| F09 | 运行生命周期与增量恢复 | `review-v3-f09-run-lifecycle.ts` | `review-v3-f09-run-lifecycle.test.ts` | Main | PASS_SCOPED |
+| F10 | 事实确认与来源导航 | `review-v3-source-navigation.ts`、T03 工作台 | `review-v3-source-navigation.test.ts`、`review-v3-t03-fact-workflow.test.ts` | 案卷办理 | PASS_SCOPED / WIRED |
+| F11 | 可信业务阶段 | `review-v3-t05-main-service.ts` | `review-v3-t05-stage-actions.test.ts`、`review-v3-t05-business-mode.test.ts` | 案卷办理 | **JOURNEY_VERIFIED**（S3-02 初审→终审真机） |
+| F12 | 补件周期 | `stage-workflow.ts` + T05 | `review-v3-t05-main-service.test.ts` | 案卷办理 | **JOURNEY_VERIFIED**（S3-01 两轮补件真机） |
+| F13 | 申诉、撤回与独立复审 | `review-v3-f13-*` | 2 个 `review-v3-f13-*` 测试 | 案卷办理 | PASS_SCOPED；**正式申诉 Main 端口仍 CONTRACT_BLOCKED**（改判需 teacher，本地无此身份） |
+| F14 | 批次工作清单 | `review-v3-f14-batch-worklist.ts` | `review-v3-f14-batch-worklist.test.ts` | 批次管理 | PASS_SCOPED / WIRED |
+| F15 | 独立评委、回避、排名、定稿 | `review-v3-t07-*` + `review-v3-t07-main-service.ts` | `review-v3-t07-rating-workflow/round-setup/main-service` | 批次区评委工作台 | **JOURNEY_VERIFIED**（双评委→排名→定稿真机 + 冷重启） |
+| F16 | 报告格式与投递 | `content-review/review-v3-f16-report-delivery.ts` | `review-v3-f16-report-delivery.test.ts` | 导出报告 | PASS_SCOPED |
+| F17 | 助手建议与来源落地 | `review-v3-f17-grounding/patch` | 2 个 `review-v3-f17-*` 测试 | 审核助手 | PASS_SCOPED |
+| F18 | 离线往返与 SchoolPort | `review-v3-t09-*`、`review-v3-f18-school-profile.ts` | `review-v3-t09-offline-codec/main-service`、`review-v3-f18-school-profile` | 离线任务包 | PASS_SCOPED / WIRED；**学校正式联调 S01–S03 BLOCKED_EXTERNAL** |
+
+**未验证的重负载项（NOT_RUN）**：100 案 / 500 文件批量极限、安装包与无开发依赖启动、
+评委独立工作副本、全部导出格式、跨平台样本。这些不代表失败，只是本轮未执行。
+
+**学校外部依赖（BLOCKED_EXTERNAL）**：真实校方身份、政策批准、校园 API。
+本地可用模拟业务角色完成业务闭环，但**不标为学校接入已完成**。
+
+---
 ## V3 M4 最终接收与收尾（PR #206）
 
 **依据**：`LOCAL-AGENT-M4-FINAL-CLOSEOUT-R02`（`53f7d5702`）+ `TEMPLATE-ASSET-AND-FALLBACK-RESEARCH`（`71f9ae0e8`）
