@@ -84,7 +84,10 @@ describe('T05 可信阶段边界', () => {
   })
 
   test('全部检查通过且无未结束补件时准备度为 ready', () => {
-    const run = { id: 'run-1', status: 'completed', checks: [{ checkId: 'c1', status: 'compliant' }] }
+    const run = { id: 'run-1', status: 'completed',
+      coverage: { plannedChecks: 1, completedChecks: 1, pendingChecks: 0, documents: [] },
+      checks: [{ checkId: 'c1', status: 'compliant' }],
+    }
     expect(t05DecisionReadiness(aggregate() as never, run as never).readiness).toBe('ready')
   })
 })

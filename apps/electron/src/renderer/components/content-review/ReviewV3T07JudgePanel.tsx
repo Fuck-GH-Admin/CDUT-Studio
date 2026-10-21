@@ -113,6 +113,16 @@ function T07JudgeTasks({ view, busy, onSubmit, onOpenDocument }: {
                 </p>
               ))}
               <p className="whitespace-pre-wrap">公开评语：{active.ownVote.publicFeedback || '无'}</p>
+              {!view.finalized && (
+                <div className="space-y-2 border-t pt-3">
+                  <p className="text-xs text-muted-foreground">提交后发现利益关联，仍可主动回避。原评分会从汇总撤销并保留审计记录。</p>
+                  <input aria-label="提交后回避原因" value={recuseReason} disabled={busy}
+                    onChange={(e) => setRecuseReason(e.target.value)} placeholder="请说明利益关联"
+                    className="h-9 w-full rounded-md border bg-background px-2" />
+                  <Button type="button" variant="outline" size="sm" disabled={busy || !recuseReason.trim()}
+                    onClick={() => void onSubmit({ type: 'self-recuse', assignmentId: active.assignmentId, reason: recuseReason })}>撤销本人票并回避</Button>
+                </div>
+              )}
             </div>
           ) : active.status !== 'assigned' ? (
             <p className="text-muted-foreground">该任务已标记为{active.status === 'recused' ? '回避' : '缺评'}，无法直接提交。需要组织者重新分配。</p>
@@ -190,6 +200,14 @@ function T07OrganizerDesk({ view, busy, onSubmit }: {
     }
     return [...grouped.values()].filter((group) => group.length > 1)
   }, [ranking])
+  const statusCount = useMemo(() => new Map(state.cases.map((entry) => {
+    const assignments = round.assignments.filter((assignment) => assignment.caseId === entry.caseId)
+    return [entry.caseId, {
+      pending: assignments.filter((assignment) => assignment.status === 'assigned').length,
+      recused: assignments.filter((assignment) => assignment.status === 'recused').length,
+      missing: assignments.filter((assignment) => assignment.status === 'missing').length,
+    }] as const
+  })), [state.cases, round.assignments])
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -214,7 +232,7 @@ function T07OrganizerDesk({ view, busy, onSubmit }: {
               assignmentId: 't07-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9),
             })}>分配</Button>
           </div>
-          <p className="text-xs text-muted-foreground">替补需先对原任务作回避或缺评标记；评分不会代替可信 Main 的身份与任务授权。</p>
+          <p className="text-xs text-muted-foreground">替补需先处理原任务；已评分后发现利益冲突也可以回避，撤销票进入历史但不计入汇总。</p>
         </div>
       )}
       <div className="space-y-2 rounded-md border p-3">
@@ -225,15 +243,15 @@ function T07OrganizerDesk({ view, busy, onSubmit }: {
             <span className="min-w-32">{byCase.get(a.caseId) ?? a.caseId} · {a.reviewerId}</span>
             <span className="text-muted-foreground">{a.status === 'recused' ? '回避' : a.status === 'submitted' ? '已提交' : a.status === 'missing' ? '缺评' : '待提交'}</span>
             {a.reason && <span className="text-xs text-muted-foreground">原因：{a.reason}</span>}
-            {!frozen && a.status === 'assigned' && (
+            {!frozen && (a.status === 'assigned' || a.status === 'submitted') && (
               <>
                 <input aria-label={'处理原因 ' + a.id} value={reasons[a.id] ?? ''}
                   onChange={(e) => setReasons((v) => ({ ...v, [a.id]: e.target.value }))}
                   placeholder="原因" className="h-8 min-w-32 flex-1 rounded-md border bg-background px-2" />
                 <Button type="button" size="sm" variant="outline" disabled={busy || !reasons[a.id]?.trim()}
                   onClick={() => void onSubmit({ type: 'recuse', assignmentId: a.id, reason: reasons[a.id]! })}>回避</Button>
-                <Button type="button" size="sm" variant="outline" disabled={busy || !reasons[a.id]?.trim()}
-                  onClick={() => void onSubmit({ type: 'mark-missing', assignmentId: a.id, reason: reasons[a.id]! })}>标缺评</Button>
+                {a.status === 'assigned' && <Button type="button" size="sm" variant="outline" disabled={busy || !reasons[a.id]?.trim()}
+                  onClick={() => void onSubmit({ type: 'mark-missing', assignmentId: a.id, reason: reasons[a.id]! })}>标缺评</Button>}
               </>
             )}
             {!frozen && a.status === 'submitted' && (
@@ -248,14 +266,34 @@ function T07OrganizerDesk({ view, busy, onSubmit }: {
           </div>
         ))}
       </div>
+      {(round.revisionHistory?.length ?? 0) > 0 && (
+        <div className="space-y-1 rounded-md bg-muted/40 p-3 text-xs">
+          <h3 className="font-medium">评分更正与撤销记录（{round.revisionHistory!.length}）</h3>
+          {round.revisionHistory!.map((item, index) => (
+            <p key={`${item.vote.assignmentId}-${item.at}-${index}`}>
+              {byCase.get(item.vote.caseId) ?? item.vote.caseId} · {item.vote.reviewerId} ·
+              {item.at} · {item.by}：{item.reason}
+            </p>
+          ))}
+        </div>
+      )}
       <div className="space-y-2 rounded-md border p-3">
         <h3 className="font-medium">评分汇总与名额</h3>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead><tr className="border-b"><th className="p-2">匿名项目</th><th className="p-2">有效评委</th><th className="p-2">均分</th><th className="p-2">排名</th><th className="p-2">名额</th><th className="p-2">状态</th></tr></thead>
+            <thead><tr className="border-b"><th className="p-2">匿名项目</th><th className="p-2">有效评委 / 缺口</th><th className="p-2">均分</th><th className="p-2">排名</th><th className="p-2">名额</th><th className="p-2">状态</th></tr></thead>
             <tbody>{ranking.map((row) => (
               <tr key={row.caseId} className="border-b align-top">
-                <td className="p-2 font-medium">{row.blindLabel}</td><td className="p-2">{row.effectiveJudges}</td>
+                <td className="p-2 font-medium">{row.blindLabel}</td><td className="p-2">
+                  {row.effectiveJudges}/{state.rubric.minEffectiveJudges ?? 1}
+                  <div className="text-muted-foreground">待评 {statusCount.get(row.caseId)?.pending ?? 0} · 回避 {statusCount.get(row.caseId)?.recused ?? 0} · 缺评 {statusCount.get(row.caseId)?.missing ?? 0}</div>
+                  <details className="mt-1"><summary className="cursor-pointer text-primary">各维度分母</summary>
+                    {row.dimensions.map((dimension) => <div key={dimension.dimensionId}>
+                      {state.rubric.dimensions.find((item) => item.id === dimension.dimensionId)?.name ?? dimension.dimensionId}：
+                      {scoreLabel(dimension.average)}（{dimension.voters} 票）
+                    </div>)}
+                  </details>
+                </td>
                 <td className="p-2">{scoreLabel(row.total)}{row.convertedTotal !== null && <div className="text-muted-foreground">折算 {row.convertedTotal.toFixed(2)}</div>}</td><td className="p-2">{row.rank ?? '—'}</td>
                 <td className="p-2">{row.selected === null ? '待裁定' : row.selected ? '入选' : '未入选'}</td>
                 <td className="p-2">

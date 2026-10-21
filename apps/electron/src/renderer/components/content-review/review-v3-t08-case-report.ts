@@ -25,6 +25,11 @@ export interface T08Report {
   rows: Array<{ kind: string; id: string; status: string; detail: string; source: string }>
 }
 
+export interface T08WorkbookSheet {
+  name: string
+  rows: string[][]
+}
+
 function locationLabel(ref: SourceRef): string {
   const location = ref.location
   switch (location.kind) {
@@ -103,7 +108,10 @@ export function makeT08CaseReport(input: {
   const { aggregate, run, template, audience, stale } = input
   if (run.caseId !== aggregate.caseV2.id) throw new Error('所选运行不属于当前案卷')
   const manifest = run.inputManifest
-  const visibility = new Map((template?.fields ?? []).map((field) => [field.key, field.visibility]))
+  const internal = audience !== 'student'
+  // 历史运行不能使用当前模板的字段可见性替历史版本背书；未知字段默认不可公开。
+  const matchingTemplate = template?.templateId === run.templateId && template.version === run.templateVersion
+  const visibility = new Map((matchingTemplate ? template.fields : []).map((field) => [field.key, field.visibility]))
   const publicFields = (fields: Record<string, unknown>): Record<string, string> => Object.fromEntries(
     Object.entries(fields).filter(([key]) => audience !== 'student' || visibility.get(key) === 'public')
       .map(([key, field]) => [key, fieldText(field)]),
@@ -115,8 +123,8 @@ export function makeT08CaseReport(input: {
   const runDispositions = aggregate.dispositions.filter((item) => item.runId === run.id && item.inputHash === manifest.hash)
   const docs = manifest.documentVersions.map((v) => {
     const original = aggregate.caseV2.documents.find((d) => d.versionId === v.versionId)
-    return { versionId: v.versionId, name: original?.fileName ?? '历史原件（本地版本不可用）', contentHash: v.contentHash }
-  })
+    return { versionId: v.versionId, name: original?.fileName ?? '历史原件（本地版本不可用）', contentHash: v.contentHash, role: original?.role ?? null }
+  }).filter((doc) => internal || (doc.role !== null && doc.role !== 'rule'))
   const lines = [
     '# 审核结果 · ' + (audience === 'student' ? '申请人版' : audience === 'reviewer' ? '审核人版' : '组织者版'),
     '',
@@ -136,13 +144,14 @@ export function makeT08CaseReport(input: {
   ]
   const rows: T08Report['rows'] = []
   for (const check of run.checks) {
-    const source = sourceSummary(check.sourceRefs, aggregate)
-    lines.push('- ' + check.checkId + ' / ' + check.ruleId + '：' + check.status + '；' + check.reason)
-    lines.push('  - 来源：' + source)
-    if (audience !== 'student' && check.calculation?.detailLines?.length) {
+    const source = internal ? sourceSummary(check.sourceRefs, aggregate) : '来源详情仅供审核人员核对'
+    const detail = internal ? check.reason : '检查说明需由审核人员确认后反馈'
+    lines.push('- ' + check.checkId + ' / ' + check.ruleId + '：' + check.status + '；' + detail)
+    if (internal) lines.push('  - 来源：' + source)
+    if (internal && check.calculation?.detailLines?.length) {
       lines.push(...check.calculation.detailLines.map((line) => '  - 计算：' + line))
     }
-    rows.push({ kind: 'check', id: check.checkId, status: check.status, detail: check.reason, source })
+    rows.push({ kind: 'check', id: check.checkId, status: check.status, detail, source })
   }
   lines.push('', '## 补件与业务结论')
   if (historical) {
@@ -158,9 +167,9 @@ export function makeT08CaseReport(input: {
   }
   if (decision) {
     lines.push('- 已记录的业务决定：' + decision.result + '；' + decision.reason + '（' + decision.at + '）')
-    lines.push('- 决定主体：' + decision.actor.actorSource + ' / ' + decision.actor.role + '（不等于校方认证授权）')
+    if (internal) lines.push('- 决定主体：' + decision.actor.actorSource + ' / ' + decision.actor.role + '（不等于校方认证授权）')
   } else lines.push('- 未发现基于所选运行作出的业务决定；技术检查不能代替正式决定。')
-  if (audience !== 'student') {
+  if (internal) {
     lines.push('', '## 内部核对与模型建议（不等于业务决定）')
     for (const opinion of run.opinions) {
       const source = sourceSummary(opinion.sourceRefs, aggregate)
@@ -177,20 +186,32 @@ export function makeT08CaseReport(input: {
     schema: 'review-v3-t08-report/1',
     audience,
     caseId: aggregate.caseV2.id,
-    run: { id: run.id, status: run.status, templateId: run.templateId, templateVersion: run.templateVersion, inputManifest: manifest, coverage: run.coverage },
+    run: {
+      id: run.id, status: run.status, templateId: run.templateId, templateVersion: run.templateVersion,
+      inputHash: manifest.hash,
+      ...(internal ? { inputManifest: manifest } : {}),
+      coverage: internal ? run.coverage : {
+        plannedChecks: run.coverage.plannedChecks, completedChecks: run.coverage.completedChecks,
+        effectiveVerdicts: run.coverage.effectiveVerdicts, pendingChecks: run.coverage.pendingChecks,
+      },
+    },
     historical,
     sources: docs,
     checks: run.checks.map((c) => ({
-      checkId: c.checkId, ruleId: c.ruleId, status: c.status, reason: c.reason,
-      references: c.sourceRefs.map((ref) => ({ ...ref, resolution: resolveT08Source(ref, aggregate).state })),
-      ...(audience === 'student' ? {} : { calculation: c.calculation, executedBy: c.executedBy }),
+      checkId: c.checkId, ruleId: c.ruleId, status: c.status,
+      ...(internal ? {
+        reason: c.reason,
+        references: c.sourceRefs.map((ref) => ({ ...ref, resolution: resolveT08Source(ref, aggregate).state })),
+        calculation: c.calculation, executedBy: c.executedBy,
+      } : {}),
     })),
-    decision: decision ? { result: decision.result, reason: decision.reason, at: decision.at, actorSource: decision.actor.actorSource } : null,
+    decision: decision ? { result: decision.result, reason: decision.reason, at: decision.at,
+      ...(internal ? { actorSource: decision.actor.actorSource } : {}) } : null,
     ...(historical ? {} : {
       supplements: aggregate.supplements.map((s) => ({ reason: s.reason, requiredElements: s.requiredElements, status: s.status })),
       subjects: aggregate.caseV2.subjects.map((s) => ({ title: s.title, fields: publicFields(s.fields) })),
     }),
-    ...(audience === 'student' ? {} : { opinions: run.opinions, dispositions: runDispositions, diagnostics: run.diagnostics, error: run.error }),
+    ...(internal ? { opinions: run.opinions, dispositions: runDispositions, diagnostics: run.diagnostics, error: run.error } : {}),
   }
   return { audience, runId: run.id, caseId: run.caseId, status: run.status, stale: historical, markdown: lines.join('\n'), json: JSON.stringify(data, null, 2), rows }
 }
@@ -198,6 +219,40 @@ export function makeT08CaseReport(input: {
 /** UTF-8 spreadsheet input; actual XLSX serialization is delegated to the owning UI. */
 export function t08ReportTable(report: T08Report): Array<Array<string>> {
   return [['类型', '编号', '状态', '说明', '来源'], ...report.rows.map((r) => [r.kind, r.id, r.status, r.detail, r.source])]
+}
+
+/** XLSX 的所有工作表只消费已完成受众投影，禁止回读未脱敏的 Aggregate/Run。 */
+export function t08ReportWorkbookSheets(report: T08Report): T08WorkbookSheet[] {
+  const data = JSON.parse(report.json) as {
+    run: { templateId: string; templateVersion: number; inputHash: string; coverage: {
+      plannedChecks: number; completedChecks: number; effectiveVerdicts: number; pendingChecks: number
+    } }
+    sources: Array<{ versionId: string; name: string; contentHash: string }>
+    decision: { result: string; reason: string; at: string } | null
+    subjects?: Array<{ title: string; fields: Record<string, string> }>
+    supplements?: Array<{ reason: string; status: string; requiredElements: string[] }>
+  }
+  const summary: string[][] = [
+    ['项目', '值'], ['案卷 ID', report.caseId], ['运行 ID', report.runId], ['受众', report.audience],
+    ['模板版本', data.run.templateId + '@' + data.run.templateVersion], ['输入哈希', data.run.inputHash],
+    ['运行状态', report.status], ['历史/过期', report.stale ? '是' : '否'],
+    ['计划检查', String(data.run.coverage.plannedChecks)], ['完成检查', String(data.run.coverage.completedChecks)],
+    ['有效判断', String(data.run.coverage.effectiveVerdicts)], ['待处理', String(data.run.coverage.pendingChecks)],
+    ['业务决定', data.decision?.result ?? '无'], ['决定理由', data.decision?.reason ?? '未记录'],
+  ]
+  const sheets: T08WorkbookSheet[] = [
+    { name: '报告概览', rows: summary },
+    { name: '检查与来源', rows: t08ReportTable(report) },
+    { name: '原件版本', rows: [['版本 ID', '文件名', '内容哈希'], ...data.sources.map((item) => [item.versionId, item.name, item.contentHash])] },
+  ]
+  if (data.subjects) sheets.push({
+    name: '事项字段', rows: [['事项', '字段', '值'], ...data.subjects.flatMap((item) =>
+      Object.entries(item.fields).map(([field, value]) => [item.title, field, value]))],
+  })
+  if (data.supplements) sheets.push({
+    name: '补件清单', rows: [['状态', '原因', '要求'], ...data.supplements.map((item) => [item.status, item.reason, item.requiredElements.join('、')])],
+  })
+  return sheets
 }
 
 

@@ -3,6 +3,7 @@
  */
 import * as React from 'react'
 import type { ReviewBackgroundPiRunState, ReviewRunV2 } from '@profer/shared'
+import { projectF09RunLifecycle } from './review-v3-f09-run-lifecycle'
 
 const statusName: Record<string,string> = {
   compliant:'符合', 'non-compliant':'不符合',
@@ -21,11 +22,14 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
   const [error,setError]=React.useState('')
   const [notice,setNotice]=React.useState('')
   const [showAll,setShowAll]=React.useState(false)
+  const [runStale,setRunStale]=React.useState<boolean|null>(null)
   const generation=React.useRef(0)
+  const refreshSequence=React.useRef(0)
 
   const refresh=React.useCallback(async():Promise<void>=>{
     if(!caseId)return
     const currentGeneration=generation.current
+    const currentRequest=++refreshSequence.current
     const [next,runs]=await Promise.all([
       window.reviewAPI.getBackgroundPiReviewStateV2(caseId),
       window.reviewAPI.listRunsV2(caseId),
@@ -35,16 +39,26 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
       ? await window.reviewAPI.getRunV2(caseId,next.runId) : undefined
     if(actual&&(actual.caseId!==caseId||actual.id!==next.runId))
       throw new Error('MAIN_PI_PERSISTED_RUN_SCOPE_MISMATCH')
-    if(currentGeneration!==generation.current)return
+    // 是否过期由 Main 对当前聚合与 Run 的真实输入版本判断，界面不自算哈希。
+    let stale:boolean|null=null
+    let validityError=''
+    if(actual&&!['queued','running'].includes(actual.status)){
+      try{stale=await window.reviewAPI.getWorkspaceRunValidityV2({caseId,runId:actual.id})}
+      catch(e){validityError=`无法核验 Run 输入版本：${e instanceof Error?e.message:String(e)}`}
+    }
+    // 较早一轮慢查询不能覆盖后发的停止/恢复回执或另一轮刷新。
+    if(currentGeneration!==generation.current||currentRequest!==refreshSequence.current)return
     setState(next)
     setRun(actual??null)
+    setRunStale(stale)
     setHistory(runs.filter(item=>item.caseId===caseId))
+    setError(previous=>validityError||(previous.startsWith('无法核验 Run 输入版本')?'':previous))
   },[caseId])
 
   React.useEffect(()=>{
     generation.current+=1
     let live=true
-    setState(null);setRun(null);setHistory([]);setInspectedRunId('');setShowAll(false);setError('');setNotice('')
+    setState(null);setRun(null);setHistory([]);setInspectedRunId('');setShowAll(false);setError('');setNotice('');setRunStale(null)
     if(!caseId)return()=>{live=false;generation.current+=1}
     void refresh().catch(e=>{
       if(live)setError(e instanceof Error?e.message:String(e))
@@ -87,6 +101,7 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
     finally{setBusy(false)}
   }
   const viewed=inspectedRunId?history.find(item=>item.id===inspectedRunId)??run:run
+  const lifecycle=projectF09RunLifecycle(state,run,runStale)
   const items=viewed?.checks??[]
   const opinions=viewed?.opinions??[]
   const shown=showAll?items:items.slice(0,30)
@@ -96,13 +111,29 @@ export function ReviewV3LocalPiControls({caseId}:{caseId:string}):React.ReactEle
     <p className="break-all text-xs">案卷：{caseId||'尚未选择'} · 阶段：{state?.phase??'未读取'}
       {' · '}Run：{state?.runId??'未创建'}
       {' · '}状态：{run?.status??state?.runStatus??'未取得'}</p>
+    <div className="space-y-1.5 rounded-lg bg-muted/50 p-3 text-xs" data-testid="review-v3-f09-lifecycle">
+      <p className="font-semibold">{lifecycle.title}</p>
+      <p>{lifecycle.explanation}</p>
+      <p className="text-muted-foreground">下一步：{lifecycle.nextStep}</p>
+      {lifecycle.coverage.planned>0&&<div className="space-y-1">
+        <div className="flex justify-between text-muted-foreground">
+          <span>持久化检查覆盖：{lifecycle.coverage.completed}/{lifecycle.coverage.planned}；待处理 {lifecycle.coverage.pending}</span>
+          <span>{lifecycle.coverage.percent}%</span>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-border" role="progressbar"
+          aria-label="已完成的计划检查占比" aria-valuemin={0} aria-valuemax={100}
+          aria-valuenow={lifecycle.coverage.percent??0}>
+          <div className="h-full rounded-full bg-primary transition-[width]" style={{width:`${lifecycle.coverage.percent??0}%`}} />
+        </div>
+      </div>}
+      {runStale===true&&<p className="text-amber-700 dark:text-amber-400">当前 Run 对案卷最新输入已过期；历史检查不可直接当作新版本结论。</p>}
+    </div>
     <div className="flex flex-wrap gap-2">
-      <button type="button" className={button} disabled={!caseId||busy}
-        onClick={()=>void execute('start')}>继续 / 启动 Pi 审核</button>
-      <button type="button" className={button} disabled={!caseId||busy}
+      <button type="button" className={button} disabled={!caseId||busy||!lifecycle.canStart}
+        onClick={()=>void execute('start')}>{lifecycle.startLabel}</button>
+      <button type="button" className={button} disabled={!caseId||busy||!lifecycle.canStart}
         onClick={()=>void execute('restart')}>重新审核全部材料（新 Run）</button>
-      <button type="button" className={button} disabled={!caseId||busy||!state?.runId||
-        !['running','queued','awaiting-input','awaiting-decision'].includes(state?.runStatus??'')}
+      <button type="button" className={button} disabled={!caseId||busy||!state?.runId||!lifecycle.canStop}
         onClick={()=>void execute('stop')}>停止当前 Run</button>
       <button type="button" className={button} disabled={!caseId||busy}
         onClick={()=>void execute('refresh')}>刷新运行与检查结果</button>

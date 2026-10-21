@@ -1,7 +1,8 @@
 import { useCallback } from 'react'
 import { useAtomValue, useStore } from 'jotai'
 import { beginWorkspaceCaseWrite } from './review-workspace-write-fence'
-import type { Actor, CaseAggregateV2, FieldValue, ReviewCommandV2, SourceRef } from '@profer/shared'
+import type { Actor, CaseAggregateV2, FieldValue, ReviewCommandV2 } from '@profer/shared'
+import { resolveT03CorrectionRefs } from '../../../main/lib/review/review-v3-t03-fact-workflow'
 import {
   reviewWorkspaceAggregatesByCaseAtom,
   reviewWorkspaceExtractedObservationsByCaseAtom,
@@ -17,26 +18,6 @@ function fieldValue(value: unknown): FieldValue {
   if (typeof value === 'number' && Number.isFinite(value)) return { kind: 'number', value }
   if (typeof value === 'boolean') return { kind: 'boolean', value }
   return { kind: 'text', value: value == null ? '' : String(value) }
-}
-
-function sourceRefsFor(aggregate: CaseAggregateV2, refs: unknown): SourceRef[] {
-  if (!Array.isArray(refs)) return []
-  return refs.flatMap((raw) => {
-    if (!raw || typeof raw !== 'object') return []
-    const value = raw as { documentVersionId?: unknown; quote?: unknown }
-    if (typeof value.documentVersionId !== 'string') return []
-    const document = aggregate.caseV2.documents.find((item) => item.versionId === value.documentVersionId)
-    if (!document) return []
-    const quote = typeof value.quote === 'string' ? value.quote : undefined
-    const block = quote ? document.blocks.find((item) => item.text.includes(quote) || quote.includes(item.text)) : undefined
-    return [{
-      caseId: aggregate.caseV2.id,
-      documentVersionId: document.versionId,
-      parseRevision: document.parseRevision,
-      location: block?.location ?? { kind: 'file' as const },
-      ...(quote ? { quote } : {}),
-    }]
-  })
 }
 
 export function useReviewWorkspaceActions(): {
@@ -120,7 +101,7 @@ export function useReviewWorkspaceActions(): {
         subjectId: observation.subjectId,
         fieldKey: observation.fieldKey,
         value: fieldValue(value),
-        sourceRefs: sourceRefsFor(aggregate, observation.sourceRefs),
+        sourceRefs: resolveT03CorrectionRefs(aggregate, observation.sourceRefs ?? []),
         reason,
       },
     }) }))

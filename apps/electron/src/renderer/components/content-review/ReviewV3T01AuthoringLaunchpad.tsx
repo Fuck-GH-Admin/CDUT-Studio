@@ -57,7 +57,7 @@ export function ReviewV3T01AuthoringLaunchpad({onDraft,modelDraftInvoke}:Props):
     <section className="mt-3 grid gap-3 rounded-lg border bg-muted/20 p-3 lg:grid-cols-2" aria-label="从需求起草与业务验收材料">
       <div className="space-y-2">
         <h3 className="text-sm font-semibold">从自然语言起草模板</h3>
-        <p className="text-xs text-muted-foreground">支持从明确写出的对象、字段、必交材料、人数/金额上限及流程生成可编辑草稿。当前是本地结构化提取，未调用大模型；含糊制度不会被猜成确定规则。</p>
+        <p className="text-xs text-muted-foreground">支持从明确写出的对象、字段、必交材料、人数/金额上下限及流程生成可编辑草稿。明确的数值审核门槛会成为待确认规则，不会变成阻止违规值录入的表单限制；含糊制度不会被猜成确定性规则。</p>
         <textarea aria-label="模板需求自然语言" className="min-h-28 w-full rounded border bg-background p-2 text-xs"
           placeholder={'模板名称：实验室申请\n审核对象：组织\n字段：组织名称、负责人、参加人数（1-20人）、使用日期、用途\n必交材料：实验计划书\n流程：自动核对→初审→终审\n规则：人数不得超过20'}
           value={brief} onChange={event=>{setBrief(event.target.value);setProposal(null)}}/>

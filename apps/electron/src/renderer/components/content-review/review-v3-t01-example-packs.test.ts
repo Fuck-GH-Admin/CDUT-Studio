@@ -2,6 +2,7 @@ import {describe,expect,test} from 'bun:test'
 import JSZip from 'jszip'
 import {validateTemplate} from '../../../main/lib/review/template-store'
 import {T01_STANDARD_EXAMPLES,createT01ExamplePack,exampleT01PackFiles,checkT01ExampleForm} from './review-v3-t01-example-packs'
+import { readT01NumberLimit } from './review-v3-t01-typed-criteria'
 
 describe('T01 six physical acceptance packs',()=>{
   test('all six contain uploadable text originals with distinct outcomes and no forged authority',()=>{
@@ -37,5 +38,19 @@ describe('T01 six physical acceptance packs',()=>{
       expect((await archive.file(document.path)!.async('string')).length).toBeGreaterThan(20)
     }
     expect(await archive.file('SIMULATED-POLICY.md')!.async('string')).toContain('虚构')
+  })
+  test('虚构门槛在模板草稿中是真正待确认的规则，不是限制违规案卷录入的表单 max',()=>{
+    const expected = [
+      ['activity','participants','lte',40], ['activity','budget','lte',5000],
+      ['scholarship','grade','gte',80], ['expense','amount','lte',1000],
+    ] as const
+    for (const [scenario, fieldKey, operator, threshold] of expected) {
+      const template=createT01ExamplePack(scenario).template
+      const rule=template.sections?.flatMap(section=>section.criteria)
+        .map(criterion=>readT01NumberLimit(criterion)).find(constraint=>constraint?.fieldKey===fieldKey)
+      expect(rule).toMatchObject({fieldKey,operator,threshold})
+      expect(rule?.ownerStatement).toBeUndefined()
+      expect(template.fields.find(field=>field.key===fieldKey)?.max).toBeUndefined()
+    }
   })
 })

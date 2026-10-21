@@ -20,9 +20,8 @@ import type {
   SourceDocument,
 } from '@profer/shared'
 import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
-import { reviewCaseAtom, reviewFocusAtom, reviewRuleLocateAtom, reviewSourceFocusAtom } from '@/atoms/review-atoms'
+import { reviewCaseAtom, reviewFocusAtom, reviewRuleLocateAtom } from '@/atoms/review-atoms'
 import { cn } from '@/lib/utils'
-import { sourceRefTargetsBlock } from './review-source-focus'
 
 /** 高亮颜色（三色均带 ring 与圆角，过渡用 transition-all） */
 const HIGHLIGHT_CLASSES: Record<'red' | 'yellow' | 'blue', string> = {
@@ -64,7 +63,6 @@ export function SourceBlockView({
   const rootRef = React.useRef<HTMLDivElement>(null)
   const focus = useAtomValue(reviewFocusAtom)
   const ruleLocate = useAtomValue(reviewRuleLocateAtom)
-  const sourceFocus = useAtomValue(reviewSourceFocusAtom)
   const reviewCase = useAtomValue(reviewCaseAtom)
 
   // 派生：本块是否命中某条定位请求，以及命中哪一路（focus / 规则定位）。
@@ -86,7 +84,6 @@ export function SourceBlockView({
     if (!ruleLocate) return undefined
     return ruleLocate.anchors.find((anchor) => hitAnchor(anchor, document.id, block.id))
   }, [block.id, document.id, ruleLocate])
-  const sourceRefHit = React.useMemo(() => sourceFocus && sourceRefTargetsBlock(sourceFocus.ref, document, block), [block, document, sourceFocus])
 
   // 临时高亮状态（2.5 秒后自动清除）
   const [activeHighlight, setActiveHighlight] = React.useState<'red' | 'yellow' | 'blue' | null>(null)
@@ -114,18 +111,15 @@ export function SourceBlockView({
 
   // 焦点定位 + 高亮：focus nonce 变化 或 规则定位 nonce 变化 时触发。
   // 用拼接字符串做依赖键：任一 nonce 变化即重新执行（同块重复点击也能再次闪）。
-  const triggerKey = `${focus?.nonce ?? 0}:${ruleLocate?.nonce ?? 0}:${sourceFocus?.nonce ?? 0}:${focusHitAnchor ? 1 : 0}:${ruleHitAnchor ? 1 : 0}:${sourceRefHit ? 1 : 0}`
+  const triggerKey = `${focus?.nonce ?? 0}:${ruleLocate?.nonce ?? 0}:${focusHitAnchor ? 1 : 0}:${ruleHitAnchor ? 1 : 0}`
 
   React.useEffect(() => {
-    if (!focusHitAnchor && !ruleHitAnchor && !sourceRefHit) return
+    if (!focusHitAnchor && !ruleHitAnchor) return
 
     // M0/H07：问题卡命中的"依据侧"锚点恒为蓝色（设计 §8：左栏校规定位始终蓝）；
     // 仅申报/证明侧锚点按问题严重度红/黄
-    const hitIsRuleSide = (focusHitAnchor !== undefined && focusHitAnchor === focus?.ruleAnchor)
-      || (sourceRefHit !== undefined && sourceFocus?.purpose === 'rule')
-    const color: 'red' | 'yellow' | 'blue' = sourceRefHit
-      ? (sourceFocus?.purpose === 'rule' ? 'blue' : 'yellow')
-      : focusHitAnchor
+    const hitIsRuleSide = focusHitAnchor !== undefined && focusHitAnchor === focus?.ruleAnchor
+    const color: 'red' | 'yellow' | 'blue' = focusHitAnchor
       ? (hitIsRuleSide ? 'blue' : (focus?.severity ?? 'red'))
       : 'blue'
     // 命中的那个锚点（精度降级角标用它；两路都命中时以问题卡侧为准）
@@ -141,9 +135,7 @@ export function SourceBlockView({
     setActiveHighlight(color)
 
     // 3) 精度降级角标：非 block 级锚点显示"仅定位到此文件/页"
-    const precision = sourceRefHit
-      ? sourceFocus?.ref.location.kind === 'file' ? 'document' : 'block'
-      : targetAnchor?.precision ?? anchorPrecision ?? 'block'
+    const precision = targetAnchor?.precision ?? anchorPrecision ?? 'block'
     setPrecisionBadge(precision === 'block' ? null : precisionLabel(precision))
 
     if (timerRef.current) clearTimeout(timerRef.current)

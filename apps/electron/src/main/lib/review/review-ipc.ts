@@ -1,4 +1,4 @@
-import { bindLocalReviewerCommand } from './review-ipc-actor-guard'
+import { bindLocalReviewerCommand, bindLocalSubmitterCommand } from './review-ipc-actor-guard'
 import { bindC0LocalCaseCommand, bindC0LocalCreateIntent, assertC0ReviewMainSender } from './review-c0-authority'
 import { assertSafeReviewStorageId } from './review-storage-id'
 import { registerCMainV3AuthorPlanIpc } from './review-v3-main-author-plan-ipc'
@@ -13,7 +13,7 @@ import { registerCMainV3AuthorPlanIpc } from './review-v3-main-author-plan-ipc'
  * 避免向 7700+ 行的 ipc.ts 继续追加业务逻辑。
  */
 
-import { app, ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
 import { assertMainWindowSender } from '../ipc-sender-guard'
 import { getMainWindow } from '../main-window-state'
 import {
@@ -744,8 +744,13 @@ export function registerReviewIpc(): void {
       throw new Error('参数 expectedRevision 非法')
     }
     const { applyT07MainAction } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
+    // The offlineActionId audit key is assigned only by the trusted T09 Main import,
+    // never from an ordinary Renderer-issued T07 scoring action.
+    const action = input.action.type === 'submit'
+      ? (({ offlineActionId: _ignored, ...rest }) => rest)(input.action)
+      : input.action
     return applyT07MainAction({
-      batchId: input.batchId, claim: input.claim, action: input.action,
+      batchId: input.batchId, claim: input.claim, action,
       expectedRevision: input.expectedRevision,
       ...(input.initialState ? { initialState: input.initialState } : {}),
       ...(input.safeMaterials ? { safeMaterials: input.safeMaterials } : {}),
@@ -764,18 +769,32 @@ export function registerReviewIpc(): void {
   // ===== T09 离线包（Local-L04 桥接：签发 / 预览 / 幂等导入） =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.T09_ISSUE_STUDENT, (event, input: {
     caseId: string; supplementId: string; recipientId: string
-    fieldVisibility?: Record<string, 'public' | 'internal'>
   }) => {
     assertC0ReviewMainSender(event)
     if (!input?.caseId || !input.supplementId || !input.recipientId) throw new Error('参数非法')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
     const aggregate = getCaseV2Aggregate(input.caseId)
     if (!aggregate) throw new Error('案卷不存在')
-    const { issueT09StudentPackage } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
+    // 学生包只能包含可信已发布模板明确标为 public 的字段。
+    // Renderer 传来的字段可见性绝不是授权来源，忽略旧版 DTO 的同名属性。
+    const { getTemplate } = require('./template-store') as typeof import('./template-store')
+    const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+    const { issueT09StudentPackage, t09PublishedStudentVisibility } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
+    const fieldVisibility = t09PublishedStudentVisibility(aggregate, template)
     return issueT09StudentPackage({
-      aggregate, supplementId: input.supplementId, recipientId: input.recipientId,
-      ...(input.fieldVisibility ? { fieldVisibility: input.fieldVisibility } : {}),
+      aggregate, supplementId: input.supplementId, recipientId: input.recipientId, fieldVisibility,
     })
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.T09_ISSUE_JUDGE, (event, input: {
+    caseId: string; batchId: string; assignmentId: string
+  }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId || !input.batchId || !input.assignmentId) throw new Error('评委任务参数非法')
+    const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+    const aggregate = getCaseV2Aggregate(input.caseId)
+    if (!aggregate) throw new Error('案卷不存在')
+    const { issueT09JudgePackage } = require('./review-v3-t09-judge-adapter') as typeof import('./review-v3-t09-judge-adapter')
+    return issueT09JudgePackage({ aggregate, batchId: input.batchId, assignmentId: input.assignmentId })
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T09_PREVIEW_REPLY, (event, input: {
     caseId: string; packageJson: string
@@ -785,6 +804,13 @@ export function registerReviewIpc(): void {
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
     const aggregate = getCaseV2Aggregate(input.caseId)
     if (!aggregate) throw new Error('案卷不存在')
+    const { readT09File } = require('./review-v3-t09-offline-codec') as typeof import('./review-v3-t09-offline-codec')
+    const parsed = readT09File(input.packageJson)
+    if (parsed.type !== 'reply') throw new Error('T09_NOT_A_REPLY_PACKAGE')
+    if (parsed.reply.kind === 'judge-rating-reply') {
+      const { previewT09JudgePackage } = require('./review-v3-t09-judge-adapter') as typeof import('./review-v3-t09-judge-adapter')
+      return previewT09JudgePackage({ aggregate, packageJson: input.packageJson })
+    }
     const { previewT09Package } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
     const { task, ...rest } = previewT09Package({ aggregate, packageJson: input.packageJson })
     return rest
@@ -795,6 +821,40 @@ export function registerReviewIpc(): void {
     assertC0ReviewMainSender(event)
     if (!input?.caseId || typeof input.packageJson !== 'string') throw new Error('参数非法')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+    const { readT09File } = require('./review-v3-t09-offline-codec') as typeof import('./review-v3-t09-offline-codec')
+    const parsed = readT09File(input.packageJson)
+    if (parsed.type !== 'reply') throw new Error('T09_NOT_A_REPLY_PACKAGE')
+    if (parsed.reply.kind === 'judge-rating-reply') {
+      const aggregate = getCaseV2Aggregate(input.caseId)
+      if (!aggregate) throw new Error('案卷不存在')
+      const { importT09JudgePackage } = require('./review-v3-t09-judge-adapter') as typeof import('./review-v3-t09-judge-adapter')
+      // Main asks for explicit local approval only AFTER receipt, CAS recovery,
+      // and payload preflight checks. Duplicate/conflict imports do not prompt.
+      const confirmLocalOrganizer = (): boolean => dialog.showMessageBoxSync({
+        type: 'warning',
+        buttons: ['取消导入', '确认导入到本机评分'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        title: '确认离线评委评分',
+        message: '将独立评委评分导入本机批次？',
+        detail: '离线包内评委身份是声明，不能证明校方身份。请核对签发任务、评委与评分后再确认。',
+      }) === 1
+      const { applyT07MainAction } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
+      return importT09JudgePackage({
+        aggregate, packageJson: input.packageJson,
+        deps: {
+          confirmLocalOrganizer,
+          submitRating: async ({ batchId, reviewerId, expectedRevision, action }) => {
+            assertC0ReviewMainSender(event)
+            const result = applyT07MainAction({
+              batchId, claim: { role: 'judge', reviewerId }, expectedRevision, action,
+            })
+            return { revision: result.revision }
+          },
+        },
+      })
+    }
     const { registerNativeWorkspaceMaterialV3 } = require('./native-workspace-case-v3') as typeof import('./native-workspace-case-v3')
     const { respondSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
     const { importT09Package, t09AssetTempRoot } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
@@ -913,9 +973,13 @@ export function registerReviewIpc(): void {
     const { resolveSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
     return resolveSupplementV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof resolveSupplementV2>[1])
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.RESPOND_SUPPLEMENT_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RESPOND_SUPPLEMENT_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
+    if (!input?.caseId || typeof input.caseId !== 'string') throw new Error('补件案卷 ID 非法')
     const { respondSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
-    return respondSupplementV2(input.caseId, input.command as unknown as Parameters<typeof respondSupplementV2>[1])
+    // 本地学生回件只能进入学生答复通道，真实校方身份须由独立 SchoolPort 验证。
+    const command = bindLocalSubmitterCommand(input.command)
+    return respondSupplementV2(input.caseId, command as unknown as Parameters<typeof respondSupplementV2>[1])
   })
   // ===== G02：V2 批次复用 Pi 审核 Agent 与同一审核工具链 =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.RUN_BATCH_V2, async (_e, batchId: string) => {

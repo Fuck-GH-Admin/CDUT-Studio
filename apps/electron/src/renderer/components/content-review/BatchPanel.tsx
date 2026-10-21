@@ -1,5 +1,5 @@
 /** 批量审核：按批次查看项目进度；审核队列策略后续单独收敛。 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BatchStateV2, ReviewBatch, ReviewCaseSummary, TemplateVersion, BatchTriageInput, BatchTriageRoute, BatchIssueGroup } from '@profer/shared'
 import { groupBatchIssues, triageBatchCase, prepareBatchIssueActionDraft } from '@profer/shared'
 import { AlertTriangle, CheckCircle2, Clock3, FileWarning, FolderOpen, Plus, RefreshCw } from 'lucide-react'
@@ -17,6 +17,7 @@ import { ReviewV3T06BatchIntakePreview } from './ReviewV3T06BatchIntakePreview'
 import { ReviewV3T06PhysicalImport, type T06PhysicalMainApi } from './ReviewV3T06PhysicalImport'
 import type { T06CommitReceipt } from './review-v3-t06-physical-intake'
 import { buildBatchSummaryCsv } from './review-v3-t06-batch-intake'
+import { latestBatchRun, mapWithConcurrency, selectVisibleBatchCases } from './review-v3-f14-batch-worklist'
 
 type CaseIndexItem = Awaited<ReturnType<typeof window.reviewAPI.listCasesV2>>[number]
 type ReviewRunV2 = Awaited<ReturnType<typeof window.reviewAPI.listRunsV2>>[number]
@@ -48,11 +49,12 @@ function formatTime(value: string | undefined): string {
 }
 
 function caseStatus(row: BatchProjectRow, batch: BatchStateV2): { label: string; tone: string } {
-  if (row.stage === 'awaiting-supplement') return { label: '等待补件', tone: 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' }
-  if (row.stage === 'awaiting-review' || row.stage === 'awaiting-final') return { label: '需要人工处理', tone: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
   if (row.entryStatus === 'failed') return { label: '执行失败', tone: 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300' }
   if (row.entryStatus === 'paused') return { label: '已暂停', tone: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
   if (row.entryStatus === 'running') return { label: '审核中', tone: 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' }
+  if (row.entryStatus === 'queued') return { label: batch.status === 'draft' ? '待开始' : '排队中', tone: 'bg-muted text-muted-foreground' }
+  if (row.stage === 'awaiting-supplement') return { label: '等待补件', tone: 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' }
+  if (row.stage === 'awaiting-review' || row.stage === 'awaiting-final') return { label: '需要人工处理', tone: 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' }
   if (row.entryStatus === 'done') return { label: batch.status === 'finalized' ? '批次已定稿' : '检查已完成', tone: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' }
   if (batch.status === 'draft') return { label: '待开始', tone: 'bg-muted text-muted-foreground' }
   return { label: '排队中', tone: 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300' }
@@ -80,6 +82,7 @@ const TRIAGE_TONES: Record<BatchTriageRoute, string> = {
 
 export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Element {
   const store = useStore()
+  const progressPollInFlight = useRef(false)
   const [batches, setBatches] = useState<BatchStateV2[]>([])
   const [selectedBatchId, setSelectedBatchId] = useState('')
   const [cases, setCases] = useState<CaseIndexItem[]>([])
@@ -121,15 +124,15 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
       setSelectedBatchId((current) => batchList.some((batch) => batch.batch.id === current) ? current : batchList[0]?.batch.id ?? '')
 
       const caseIds = [...new Set(batchList.flatMap((batch) => batch.cases.map((entry) => entry.caseId)))]
-      const runEntries = await Promise.all(caseIds.map(async (caseId) => {
+      // 大批次有上百案卷，限制 IPC/磁盘查询并发，避免打开工作台时瞬时淹没 Main。
+      const runEntries = await mapWithConcurrency(caseIds, 6, async (caseId) => {
         try {
           const history = await window.reviewAPI.listRunsV2(caseId)
-          const latest = [...history].sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))[0]
-          return [caseId, latest] as const
+          return [caseId, latestBatchRun(history)] as const
         } catch {
           return [caseId, undefined] as const
         }
-      }))
+      })
       setRuns(Object.fromEntries(runEntries))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -141,6 +144,49 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
   useEffect(() => { if (active) void refresh() }, [active, refresh])
 
   const selectedBatch = batches.find((batch) => batch.batch.id === selectedBatchId) ?? null
+
+  // Main 按案逐个落盘；UI 不应等整个批次的 runBatchV2 Promise 返回才显示进度。
+  // 轮询只读已有状态，发现完成的案卷才补读 Run，绝不在 Renderer 改写批次。
+  useEffect(() => {
+    if (!active || !selectedBatchId) return
+    let cancelled = false
+    const poll = async (): Promise<void> => {
+      if (progressPollInFlight.current) return
+      progressPollInFlight.current = true
+      try {
+        const updated = await window.reviewAPI.getBatchV2(selectedBatchId)
+        if (cancelled || !updated) return
+        const old = selectedBatch
+        const oldEntries = new Map(old?.cases.map((entry) => [entry.caseId, entry]))
+        const changed = !old || updated.status !== old.status || updated.cases.some((entry) => {
+          const previous = oldEntries.get(entry.caseId)
+          return !previous || entry.status !== previous.status || entry.error !== previous.error
+        })
+        if (!changed) return
+        const completed = updated.cases.filter((entry) => entry.status === 'done'
+          && oldEntries.get(entry.caseId)?.status !== 'done').map((entry) => entry.caseId)
+        if (completed.length) {
+          const [caseList, runEntries] = await Promise.all([
+            window.reviewAPI.listCasesV2(),
+            mapWithConcurrency(completed, 6, async (caseId) => {
+              try { return [caseId, latestBatchRun(await window.reviewAPI.listRunsV2(caseId))] as const }
+              catch { return [caseId, undefined] as const }
+            }),
+          ])
+          if (cancelled) return
+          setCases(caseList)
+          setRuns((current) => ({ ...current, ...Object.fromEntries(runEntries) }))
+        }
+        if (!cancelled) setBatches((current) => current.map((item) => item.batch.id === updated.batch.id ? updated : item))
+      } catch {
+        // 瞬时轮询失败不代表队列失败；用户仍可手动刷新查看 Main 的持久状态。
+      } finally {
+        progressPollInFlight.current = false
+      }
+    }
+    const interval = window.setInterval(() => { void poll() }, selectedBatch?.status === 'running' || executing ? 1500 : 8000)
+    return () => { cancelled = true; window.clearInterval(interval) }
+  }, [active, selectedBatchId, selectedBatch, executing])
   const legacyById = useMemo(() => new Map(legacyCases.map((item) => [item.id, item])), [legacyCases])
   const caseById = useMemo(() => new Map(cases.map((item) => [item.caseId, item])), [cases])
   const rows = useMemo<BatchProjectRow[]>(() => {
@@ -319,6 +365,10 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
     if (route === 'auto-return-candidate' || route === 'awaiting-supplement') total.supplement++
     return total
   }, { pending: 0, human: 0, technical: 0, passCandidate: 0, supplement: 0 })
+  const queueCounts = selectedBatch?.cases.reduce((total, entry) => {
+    total[entry.status]++
+    return total
+  }, { queued: 0, running: 0, done: 0, failed: 0, paused: 0 })
 
   const processAutomation = async (): Promise<void> => {
     if (!selectedBatch || executing || handlingBatch || !selectedBatch.automation || selectedBatch.automation.mode === 'assist') return
@@ -355,13 +405,12 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
       try {
         const [caseIndex, histories] = await Promise.all([
           window.reviewAPI.listCasesV2(),
-          Promise.all(result.cases.filter((entry) => entry.status === 'done')
-            .map(async (entry) => ({ caseId: entry.caseId, history: await window.reviewAPI.listRunsV2(entry.caseId) }))),
+          mapWithConcurrency(result.cases.filter((entry) => entry.status === 'done'), 6,
+            async (entry) => ({ caseId: entry.caseId, history: await window.reviewAPI.listRunsV2(entry.caseId) })),
         ])
         const stages = new Map(caseIndex.map((item) => [item.caseId, item.stage]))
         routes = new Map(histories.map(({ caseId, history }) => {
-          const run = [...history].sort((a, b) =>
-            (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))[0]
+          const run = latestBatchRun(history)
           return [caseId, triageBatchCase({
             caseId, entryStatus: 'done', caseStage: stages.get(caseId), run, batch: result.batch,
           }).route] as const
@@ -464,13 +513,16 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
       </div>
 
       {selectedBatch && (
-        <p className="text-xs text-muted-foreground">
-          技术异常：{counts.technical} 项 · 已执行自动通过：
+        <div className="space-y-1 text-xs text-muted-foreground" role="status" aria-live="polite">
+          <p>名册共 {selectedBatch.cases.length} 案 · 待执行 {queueCounts?.queued} · 执行中 {queueCounts?.running} ·
+            检查结束 {queueCounts?.done} · 执行失败 {queueCounts?.failed} · 暂停 {queueCounts?.paused}。
+            {selectedBatch.status === 'running' && ' 正在逐案处理，状态自动更新。'}</p>
+          <p>技术异常：{counts.technical} 项 · 已执行自动通过：
           {(selectedBatch.automationReceipts ?? []).filter((r) => r.action === 'pass' && r.status === 'applied').length} 案 ·
           已执行自动补件：{(selectedBatch.automationReceipts ?? []).filter((r) => r.action === 'return' && r.status === 'applied').length} 案 ·
           自动阻断/失败：{(selectedBatch.automationReceipts ?? []).filter((r) => r.status !== 'applied').length} 条。
-          候选建议不是正式决定；正式处理仅以案卷事务回执为准。
-        </p>
+          候选建议不是正式决定；正式处理仅以案卷事务回执为准。</p>
+        </div>
       )}
       {error && <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">批次加载失败：{error}</div>}
 
@@ -721,7 +773,11 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
         selectedCaseIds={selectedCaseIds}
         onToggleCase={toggleCase}
         onApplyCaseIds={setSelectedCaseIds}
-        onPhysicalCommitted={(result) => { void refresh(); if (result.batchId && result.cases.every(item => item.status === 'done')) setCreateOpen(false) }}
+        onPhysicalCommitted={(result) => { void (async () => {
+          await refresh()
+          if (result.batchId) setSelectedBatchId(result.batchId)
+          if (result.batchId && result.cases.every((item) => item.status === 'done')) setCreateOpen(false)
+        })() }}
         onCreate={createBatch}
       />
     </div>
@@ -762,6 +818,14 @@ function CreateBatchDialog({
   onCreate: (event: React.FormEvent<HTMLFormElement>) => void
 }): JSX.Element {
   const selectedTemplate = templates.find((template) => `${template.templateId}@${template.version}` === templateKey)
+  const [caseSearch, setCaseSearch] = useState('')
+  const visibleCases = useMemo(() => {
+    const query = caseSearch.trim().toLocaleLowerCase()
+    return query ? availableCases.filter((item) => [item.caseId, item.title, legacyById.get(item.caseId)?.applicant ?? '']
+      .some((value) => value.toLocaleLowerCase().includes(query))) : availableCases
+  }, [availableCases, caseSearch, legacyById])
+  const visibleIds = visibleCases.map((item) => item.caseId)
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedCaseIds.includes(id))
   const canCreate = !!selectedTemplate && batchName.trim().length > 0 && selectedCaseIds.length > 0 && !creating
   // Main 已提供物理入库端口；仍保留存在性判断，便于旧 preload 降级为不可用而不是崩
   const physicalMain = window.reviewAPI as Partial<T06PhysicalMainApi>
@@ -785,7 +849,7 @@ function CreateBatchDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="review-batch-template">审核模板</Label>
-            <select id="review-batch-template" value={templateKey} onChange={(event) => onTemplateKeyChange(event.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+            <select id="review-batch-template" value={templateKey} onChange={(event) => { onTemplateKeyChange(event.target.value); setCaseSearch('') }} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
               <option value="">选择已发布模板…</option>
               {templates.map((template) => <option key={`${template.templateId}@${template.version}`} value={`${template.templateId}@${template.version}`}>{template.name} · v{template.version}</option>)}
             </select>
@@ -805,10 +869,18 @@ function CreateBatchDialog({
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <Label>纳入项目</Label>
-              <span className="text-xs text-muted-foreground">已选 {selectedCaseIds.length} 个</span>
+              <span className="text-xs text-muted-foreground">已选 {selectedCaseIds.length} / {availableCases.length} 个</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input aria-label="搜索候选案卷" value={caseSearch} onChange={(event) => setCaseSearch(event.target.value)}
+                placeholder="按标题、案卷 ID、申报人筛选" className="min-w-[170px] flex-1" />
+              <Button type="button" size="sm" variant="outline" disabled={!visibleIds.length}
+                onClick={() => onApplyCaseIds(selectVisibleBatchCases(selectedCaseIds, visibleIds, !allVisibleSelected))}>
+                {allVisibleSelected ? '取消当前筛选' : '全选当前筛选'}（{visibleIds.length}）
+              </Button>
             </div>
             <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-border/80 p-1.5">
-              {availableCases.map((item) => {
+              {visibleCases.map((item) => {
                 const legacy = legacyById.get(item.caseId)
                 return (
                   <label key={item.caseId} className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-2 hover:bg-muted/50">
@@ -821,6 +893,7 @@ function CreateBatchDialog({
                 )
               })}
               {selectedTemplate && availableCases.length === 0 && <p className="px-3 py-8 text-center text-xs text-muted-foreground">没有使用此模板版本的项目。</p>}
+              {selectedTemplate && availableCases.length > 0 && visibleCases.length === 0 && <p className="px-3 py-8 text-center text-xs text-muted-foreground">当前搜索没有匹配案卷，已选的其他案卷仍保留。</p>}
               {!selectedTemplate && <p className="px-3 py-8 text-center text-xs text-muted-foreground">先选择模板，再选择要纳入的项目。</p>}
             </div>
           </div>

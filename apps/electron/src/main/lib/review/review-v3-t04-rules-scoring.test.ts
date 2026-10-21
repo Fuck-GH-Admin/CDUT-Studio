@@ -31,6 +31,38 @@ describe('T04 real deterministic calculations (D04-D07)',()=>{
     expect(evaluateT04Rule(rule,op,rows)).toEqual(result)
     expect(evaluateT04Rule(rule,op,[rows[0]!,item('s4',{score:0,event:null},['event'])]).status).toBe('awaiting-confirmation')
   })
+  test('A07: groupBy applies the cap once per confirmed group, never across applicants',()=>{
+    const rule=makeRule('per-applicant',{groupBy:['applicantId']})
+    const op:T04Operation={kind:'group-score',calculation:{valueFrom:'score',aggregate:'sum',
+      cap:{value:'10',unit:'point'},deduplicateBy:['event']}}
+    const rows=[item('a1',{applicantId:'A',event:'E1',score:6}),
+      item('a2',{applicantId:'A',event:'E2',score:5}),
+      item('b1',{applicantId:'B',event:'E1',score:7}),
+      item('b2',{applicantId:'B',event:'E1',score:3})]
+    const result=evaluateT04Rule(rule,op,rows)
+    expect(result.result).toBe('17.00')
+    expect(result.groupResults?.map(g=>[g.groupKey,g.result])).toEqual([['["A"]','10.00'],['["B"]','7.00']])
+    expect(Object.fromEntries(result.allocation!.map(x=>[x.itemId,x.counted])))
+      .toEqual({a1:'6.00',a2:'4.00',b1:'7.00',b2:'0.00'})
+    expect(evaluateT04Rule(rule,op,[...rows,item('c',{applicantId:null,event:'E3',score:2})]).status)
+      .toBe('awaiting-confirmation')
+    expect(evaluateT04Rule(rule,op,[...rows].reverse())).toEqual(result)
+  })
+  test('A07: rounded line items reconcile to rounded total for fractional score allocations',()=>{
+    const rule=makeRule('fractional')
+    const op:T04Operation={kind:'group-score',calculation:{valueFrom:'score',aggregate:'sum'},precision:2}
+    const result=evaluateT04Rule(rule,op,[item('a',{score:'0.004'}),item('b',{score:'0.004'})])
+    expect(result.result).toBe('0.01')
+    expect(result.allocation?.map(x=>x.counted)).toEqual(['0.01','0.00'])
+    expect(result.allocation!.reduce((sum,x)=>sum+decimalT04(x.counted),0n))
+      .toBe(decimalT04(result.result!))
+    expect(evaluateT04Rule(rule,{...op,precision:7},[item('a',{score:1})]).status)
+      .toBe('awaiting-confirmation')
+    expect(evaluateT04Rule(rule,op,[item('a',{score:1}) ,{
+      id:'b',fields:{score:{value:1,confirmed:true,unit:'EUR'}},
+    },{id:'c',fields:{score:{value:1,confirmed:true,unit:'USD'}}}]).status)
+      .toBe('awaiting-confirmation')
+  })
   test('D05: weighted 85/90/95/80 = 87.75; explicit zero works, missing is not zero',()=>{
     const op:T04Operation={kind:'weighted-sum',terms:[
       {field:'study',weight:'0.50'},{field:'moral',weight:'0.30'},
@@ -67,6 +99,15 @@ describe('T04 real deterministic calculations (D04-D07)',()=>{
     expect(evaluateT04Rule(rule,op,[item('after',{date:'2026-01-01'})]).status).toBe('non-compliant')
     expect(evaluateT04Rule(rule,op,[item('bad',{date:'2025-02-30'})]).status).toBe('awaiting-confirmation')
     expect(evaluateT04Rule(rule,op,[item('zoned',{date:'2025-04-01T00:00:00+08:00'})]).status).toBe('awaiting-confirmation')
+  })
+  test('A07: confirmed lower-bound comparison covers gte, zero and unknown values',()=>{
+    const rule=makeRule('min-attendance')
+    const op:T04Operation={kind:'value-minimum',field:'attendance',minimum:'20'}
+    expect(evaluateT04Rule(rule,op,[item('x',{attendance:20})]).status).toBe('compliant')
+    expect(evaluateT04Rule(rule,op,[item('x',{attendance:0})]).status).toBe('non-compliant')
+    expect(evaluateT04Rule(rule,op,[item('x',{attendance:null})]).status).toBe('awaiting-confirmation')
+    expect(evaluateT04Rule(rule,{...op,minimum:'unknown'},[item('x',{attendance:100})]).status)
+      .toBe('awaiting-confirmation')
   })
   test('real grouping never merges unknown keys; mutually exclusive choices are not silently selected',()=>{
     const grouping=makeRule('groups',{groupBy:['applicantId']})

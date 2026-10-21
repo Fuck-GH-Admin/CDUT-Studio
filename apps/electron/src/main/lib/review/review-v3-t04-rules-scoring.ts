@@ -20,6 +20,7 @@ export type T04Operation =
   | { kind: 'amount-cap'; amountField: string; currencyField: string; cap: string; currency: string; precision?: number }
   | { kind: 'date-range'; field: string; from?: string; until?: string }
   | { kind: 'value-limit'; field: string; maximum: string; unit?: string }
+  | { kind: 'value-minimum'; field: string; minimum: string; unit?: string }
   | { kind: 'material-min-count'; field: string; minimum: number }
   | { kind: 'value-equals'; field: string; expected: string; unit?: string }
   | { kind: 'mutual-exclusion'; groupField: string; selectionField?: string }
@@ -47,6 +48,8 @@ export interface T04Outcome {
   sourceRefIds: string[]
   missingFields: string[]
   allocation?: Array<{ itemId: string; counted: string; reason: string }>
+  /** 确认的每组独立封顶后再合计展示值。 */
+  groupResults?: Array<{ groupKey: string; result: string; allocation: NonNullable<T04Outcome['allocation']> }>
   /** For incomplete currency sets these are estimates for the known subset only. */
   knownSubtotal?: string
   excess?: string
@@ -260,15 +263,20 @@ function exclusive(rule:RuleSpec,op:Extract<T04Operation,{kind:'mutual-exclusion
 
 function groupScore(rule: RuleSpec, op: Extract<T04Operation,{kind:'group-score'}>, items:T04Item[]):T04Outcome {
   const c=op.calculation, precision=op.precision ?? 2
+  if (!Number.isInteger(precision) || precision < 0 || precision > 6)
+    return pending('计分保留位数必须是 0–6 的整数',items,rule)
   let cap:bigint | undefined
   try { if (c.cap) {cap=decimalT04(c.cap.value); if (cap < 0n) throw Error('negative cap')} }
   catch {return pending('规则上限不是可用的非负十进制值',items,rule)}
   type Candidate = { item:T04Item; value:bigint; key:string }
   const entries:Candidate[] = [], missing:string[]=[]
+  let commonUnit:string | undefined
   for (const item of items) {
     const value=field(item,c.valueFrom)
     if (!known(value)) {missing.push(item.id+':'+c.valueFrom);continue}
     if (value.unit && c.cap?.unit && value.unit !== c.cap.unit) {missing.push(item.id+':unit');continue}
+    if (value.unit && commonUnit && value.unit !== commonUnit) {missing.push(item.id+':unit');continue}
+    if (value.unit) commonUnit=value.unit
     const keys:string[]=[]
     for (const k of c.deduplicateBy ?? []) {
       const x=field(item,k)
@@ -301,18 +309,29 @@ function groupScore(rule: RuleSpec, op: Extract<T04Operation,{kind:'group-score'
   const raw=kept.reduce((sum,x)=>sum+x.value,0n)
   const total=cap!==undefined && raw>cap?cap:raw
   let remaining=total
-  let displayRemaining=decimalT04(formatT04(total,precision))
-  const allocation:T04Outcome['allocation']=[]
+  const exact:Array<{entry:Candidate;counted:bigint}>=[]
   for (const entry of kept) {
     const counted=entry.value<remaining?entry.value:remaining
     remaining-=counted
-    // Round allocations as a ledger: distribute display units in score order,
-    // never allow separately rounded rows to exceed the rounded group total.
-    const rounded=decimalT04(formatT04(counted,precision))
-    const roundedCounted=rounded<displayRemaining?rounded:displayRemaining
-    displayRemaining-=roundedCounted
-    allocation.push({itemId:entry.item.id,counted:formatT04(roundedCounted,precision),reason:counted===entry.value?'全额计入':'组上限截断'})
+    exact.push({entry,counted})
   }
+  // 小数精度以下的剩余计分单位按最大余数分配，同余数再按分值与 ID 排序。
+  // 保证展示明细之和严格等于展示总分，避免各行独立舍入丢失尾差。
+  const displayUnit=pow10(6-precision)
+  const totalUnits=decimalT04(formatT04(total,precision))/displayUnit
+  const units=exact.map(x=>x.counted/displayUnit)
+  let extra=totalUnits-units.reduce((sum,x)=>sum+x,0n)
+  const remainders=exact.map((x,i)=>({i,remainder:x.counted%displayUnit}))
+    .sort((a,b)=>a.remainder===b.remainder
+      ? (exact[a.i]!.entry.value===exact[b.i]!.entry.value
+        ? exact[a.i]!.entry.item.id.localeCompare(exact[b.i]!.entry.item.id)
+        : exact[a.i]!.entry.value>exact[b.i]!.entry.value?-1:1)
+      : a.remainder>b.remainder?-1:1)
+  for (const x of remainders) {if (extra===0n) break;units[x.i]=units[x.i]!+1n;extra--}
+  const allocation:T04Outcome['allocation']=exact.map((x,i)=>({
+    itemId:x.entry.item.id,counted:formatT04(units[i]!*displayUnit,precision),
+    reason:x.counted===x.entry.value?'全额计入':'组上限截断',
+  }))
   for (const entry of dropped) allocation.push({itemId:entry.item.id,counted:formatT04(0n,precision),reason:'同键择高/择单项未计入'})
   allocation.sort((a,b)=>a.itemId.localeCompare(b.itemId))
   const detail=['规则 '+rule.id+'，政策版本 '+rule.policyVersionId,'候选原值 '+formatT04(raw,precision),'组计入 '+formatT04(total,precision),
@@ -406,6 +425,26 @@ function valueLimit(rule:RuleSpec,op:Extract<T04Operation,{kind:'value-limit'}>,
   return complete(failed.length?'non-compliant':'compliant',null,failed.length?'超出上限: '+failed.join(','):'全部值符合上限',lines,items,rule)
 }
 
+/** 与上限比较相对称的下限操作；由具名已确认的类型化规则接入，不猜自然语言。 */
+function valueMinimum(rule:RuleSpec,op:Extract<T04Operation,{kind:'value-minimum'}>,items:T04Item[]):T04Outcome {
+  let minimum:bigint
+  try {minimum=decimalT04(op.minimum)}catch{return pending('数值下限配置不合法',items,rule)}
+  const failed:string[]=[],missing:string[]=[],lines:string[]=[]
+  for(const item of items) {
+    const v=field(item,op.field)
+    if(!known(v)||(op.unit&&v.unit&&v.unit!==op.unit)) {missing.push(item.id+':'+op.field);continue}
+    try {
+      if(typeof v.value!=='string'&&typeof v.value!=='number')throw Error('non-decimal')
+      const value=decimalT04(v.value)
+      lines.push(item.id+': '+String(v.value)+' >= '+op.minimum)
+      if(value<minimum)failed.push(item.id)
+    }catch {missing.push(item.id+':'+op.field)}
+  }
+  if(missing.length)return pending('比较数值/单位未知',items,rule,missing)
+  return complete(failed.length?'non-compliant':'compliant',null,
+    failed.length?'低于下限: '+failed.join(','):'全部值达到下限',lines,items,rule)
+}
+
 /** Counts originate from Main-verified active DocumentVersions, not freeform text. */
 function materialMinCount(rule:RuleSpec,op:Extract<T04Operation,{kind:'material-min-count'}>,items:T04Item[]):T04Outcome {
   if(!Number.isSafeInteger(op.minimum)||op.minimum<0) return pending('材料数量规则非法',items,rule)
@@ -469,12 +508,28 @@ export function evaluateT04Rule(rule:RuleSpec,operation:T04Operation,items:T04It
   const split=eligible(rule,items)
   if(split.missing.length)return pending('适用条件/例外有未知事实，不能静默排除',items,rule,split.missing)
   if(split.accepted.length===0)return complete('not-applicable',null,'所有对象均不适用或命中例外',split.excluded,items,rule)
+  if(operation.kind==='group-score' && rule.groupBy?.length) {
+    const grouped=partitionT04Items(rule,split.accepted)
+    if(grouped.unknownItems.length) return pending('分组键尚未确认，不能合并不同对象的计分上限',
+      split.accepted,rule,grouped.unknownItems.map(id=>id+':groupBy'))
+    const evaluated=grouped.groups.map(group=>({key:group.key,outcome:groupScore(rule,operation,group.items)}))
+    const incomplete=evaluated.find(x=>x.outcome.status!=='compliant'||x.outcome.result===null)
+    if(incomplete) return pending('分组 '+incomplete.key+' 计算未完成：'+incomplete.outcome.reason,
+      split.accepted,rule,incomplete.outcome.missingFields)
+    const precision=operation.precision??2
+    const total=evaluated.reduce((sum,x)=>sum+decimalT04(x.outcome.result!),0n)
+    const details=evaluated.flatMap(x=>['组 '+x.key+'，计入 '+x.outcome.result,...x.outcome.detailLines])
+    return {...complete('compliant',formatT04(total,precision),'按确认的分组分别封顶并汇总',details,split.accepted,rule),
+      allocation:evaluated.flatMap(x=>x.outcome.allocation??[]),
+      groupResults:evaluated.map(x=>({groupKey:x.key,result:x.outcome.result!,allocation:x.outcome.allocation??[]}))}
+  }
   switch(operation.kind) {
     case 'group-score':return groupScore(rule,operation,split.accepted)
     case 'weighted-sum':return weighted(rule,operation,split.accepted)
     case 'amount-cap':return amount(rule,operation,split.accepted)
     case 'date-range':return dateRange(rule,operation,split.accepted)
     case 'value-limit':return valueLimit(rule,operation,split.accepted)
+    case 'value-minimum':return valueMinimum(rule,operation,split.accepted)
     case 'material-min-count':return materialMinCount(rule,operation,split.accepted)
     case 'value-equals':return equalsValue(rule,operation,split.accepted)
     case 'mutual-exclusion':return exclusive(rule,operation,split.accepted)

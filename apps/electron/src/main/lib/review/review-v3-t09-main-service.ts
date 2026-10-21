@@ -18,6 +18,26 @@ import {
   type T09Preview, type T09Receipt, type T09ReplyPackage, type T09State, type T09TaskPackage,
 } from './review-v3-t09-offline-codec'
 import { issueT09StudentFromCase } from './review-v3-t09-offline-issuer'
+import type { CaseAggregateV2, TemplateVersion } from '@profer/shared'
+
+/**
+ * Public fields are a Main-only decision, never a renderer-supplied permission.
+ * Reject nonpublished/mismatched templates rather than trusting stale policy.
+ */
+export function t09PublishedStudentVisibility(
+  aggregate: CaseAggregateV2, template: TemplateVersion | undefined,
+): Record<string, 'public' | 'internal'> {
+  if (!template || template.status !== 'published' ||
+      template.templateId !== aggregate.caseV2.templateId ||
+      template.version !== aggregate.caseV2.templateVersion) {
+    throw new Error('T09_PUBLIC_TEMPLATE_NOT_PUBLISHED')
+  }
+  const visibility: Record<string, 'public' | 'internal'> = {}
+  for (const field of template.fields) {
+    visibility[field.key] = field.visibility === 'public' ? 'public' : 'internal'
+  }
+  return visibility
+}
 
 function offlineDir(caseId: string): string {
   assertSafeReviewStorageId(caseId, 'caseId')
@@ -62,7 +82,7 @@ export function readT09Receipt(caseId: string, actionId: string): T09Receipt | u
   } catch { return undefined }
 }
 
-function saveT09Receipt(caseId: string, receipt: T09Receipt): void {
+export function saveT09Receipt(caseId: string, receipt: T09Receipt): void {
   const filePath = receiptsPath(caseId)
   const all = existsSync(filePath)
     ? (() => { try { return JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, T09Receipt> } catch { return {} } })()

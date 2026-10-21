@@ -20,7 +20,8 @@ import type { CaseAggregateV2, ReviewAssistantMessage, SourceRef } from '@profer
 import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
 import { ReviewV3T08ReportPanel } from './ReviewV3T08ReportPanel'
 import { ReviewV3T08SuggestionReview } from './ReviewV3T08SuggestionReview'
-import { resolveT08Source, t08AssistantContext, type T08ResolvedSource } from './review-v3-t08-case-report'
+import { resolveT08Source, type T08ResolvedSource } from './review-v3-t08-case-report'
+import { buildF17AssistantContext, extractF17Citations, resolveF17Citation } from './review-v3-f17-grounding'
 import {
   reviewAssistantOpenAtom,
   reviewAssistantPendingAtom,
@@ -74,6 +75,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
 
   const caseId = selectedCaseId ?? reviewCase?.id ?? ''
+  const legacyCaseActive = reviewCase?.id === caseId
   const messages = threads[caseId] ?? []
   const currentRun = workspaceRun?.caseId === aggregate?.caseV2.id ? workspaceRun : null
   const opinions = currentRun?.opinions ?? []
@@ -111,6 +113,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
   }
   const resolveReference = (id: string): SourceRef | undefined => {
     if (!currentRun || !aggregate) return undefined
+    if (id.startsWith('[F17:')) return resolveF17Citation(id, aggregate, currentRun) ?? undefined
     const opinion = currentRun.opinions.find((item) => item.id === id || item.checkId === id)
     const check = currentRun.checks.find((item) => item.checkId === id)
     const refs = opinion?.sourceRefs ?? check?.sourceRefs ?? []
@@ -120,6 +123,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
 
   const canNavigateReference = (id: string): boolean => {
     if (resolveReference(id)) return true
+    if (!legacyCaseActive) return false
     if (legacyRun?.findings.some((finding) => finding.id === id)) return true
     if (reviewCase?.items.some((item) => item.id === id)) return true
     if (reviewCase?.documents.some((doc) => doc.id === id && doc.blocks.length > 0)) return true
@@ -127,9 +131,15 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
       (pack.id === id || pack.outline.some((rule) => rule.id === id)) &&
       pack.outline.some((rule) => rule.anchors.length > 0))
   }
+  const referenceLabel = (id: string): string => {
+    if (!id.startsWith('[F17:') || !aggregate || !currentRun) return id
+    const ref = resolveF17Citation(id, aggregate, currentRun)
+    return ref ? resolveT08Source(ref, aggregate).label : '历史或无法核验的来源'
+  }
   const navigateReference = (id: string): void => {
     const v3Source = resolveReference(id)
     if (v3Source) { void openSource(v3Source); return }
+    if (!legacyCaseActive) return
     const finding = legacyRun?.findings.find((item) => item.id === id)
     if (finding) { actions.focusFinding(finding); setActivePane('center'); return }
     const item = reviewCase?.items.find((candidate) => candidate.id === id)
@@ -183,7 +193,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
     // Only the API request gets the source-grounded V3 run context; the visible user
     // message remains the question. The Main gateway still owns model dispatch.
     const modelHistory = aggregate && currentRun && !workspaceRunStale
-      ? [...nextHistory.slice(0, -1), { ...userMessage, content: t08AssistantContext(aggregate, currentRun, content) }]
+      ? [...nextHistory.slice(0, -1), { ...userMessage, content: buildF17AssistantContext(aggregate, currentRun, content) }]
       : nextHistory
     await actions.assistantChat(modelHistory)
   }
@@ -200,8 +210,8 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
       <header className="flex shrink-0 items-start justify-between gap-2 border-b border-border/60 px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-foreground">审核助手</h2>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground" title={reviewCase?.title}>
-            案卷：{reviewCase?.title ?? '未载入'}
+          <p className="mt-0.5 truncate text-xs text-muted-foreground" title={aggregate?.caseV2.title ?? (legacyCaseActive ? reviewCase?.title : undefined)}>
+            案卷：{aggregate?.caseV2.title ?? (legacyCaseActive ? reviewCase?.title : null) ?? '未载入'}
           </p>
           {selectedFinding && (
             <p className="mt-0.5 truncate text-xs text-blue-600 dark:text-blue-400" title={selectedFinding.title}>
@@ -228,6 +238,9 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
       </nav>
       {/* 消息列表 */}
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto scrollbar-thin px-4 py-3">
+        {tab === 'chat' && workspaceRunStale && currentRun && <p className="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          本次审核 Run 已过期；助手不再把它的原件或结论当作当前上下文，请先重新审核。
+        </p>}
         {tab === 'chat' && messages.length === 0 && (
           <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
             问答通过现有模型出口执行；当前 V3 Run 的检查与来源会作为只读上下文提供。无法核验的回答不代表审核决定，来源请以“检查与来源”页为准。
@@ -237,9 +250,15 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
           <MessageBubble
             key={message.id}
             message={message}
-            extraReferences={currentRun ? [...currentRun.checks.map((x) => x.checkId), ...opinions.map((x) => x.id)].filter((id) => message.role === 'assistant' && message.content.split(/[^\p{L}\p{N}_.:-]+/gu).includes(id)).slice(0, 12) : []}
+            extraReferences={currentRun && message.role === 'assistant'
+              ? [
+                  ...extractF17Citations(message.content),
+                  ...[...currentRun.checks.map(x => x.checkId), ...opinions.map(x => x.id)]
+                    .filter(id => message.content.split(/[^\p{L}\p{N}_.:-]+/gu).includes(id)).slice(0, 12),
+                ] : []}
             onReference={navigateReference}
             canLocate={canNavigateReference}
+            referenceLabel={referenceLabel}
           />
         ))}
         {tab === 'sources' && <>
@@ -268,6 +287,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
             template={workspaceTemplate}
             opinion={draftOpinion}
             stale={workspaceRunStale}
+            onOpenSource={openSource}
             onClose={() => setDraftOpinionId(null)}
           />}
         </>}
@@ -349,11 +369,12 @@ function SourceLink({ refItem, aggregate, onOpen }: {
     {located?.label ?? refItem.documentVersionId} {located?.state === 'file-only' ? '（仅文件）' : ''}
   </button>
 }
-function MessageBubble({ message, extraReferences, onReference, canLocate }: {
+function MessageBubble({ message, extraReferences, onReference, canLocate, referenceLabel }: {
   message: ReviewAssistantMessage
   extraReferences: string[]
   onReference(id: string): void
   canLocate(id: string): boolean
+  referenceLabel(id: string): string
 }): React.ReactElement {
   const isUser = message.role === 'user'
   return (
@@ -381,10 +402,10 @@ function MessageBubble({ message, extraReferences, onReference, canLocate }: {
               key={reference}
               disabled={!canLocate(reference)}
               onClick={() => onReference(reference)}
-              title={canLocate(reference) ? '查看本次运行的真实来源' : '该引用不含已核验的原件落点'}
+              title={canLocate(reference) ? '查看本次运行可定位的原件（不代表原文支持模型结论）' : '该引用不属于当前 Run 或没有可核对的原件落点'}
               className="rounded-md bg-blue-500/10 px-1.5 py-0.5 text-xs font-medium text-blue-600 disabled:opacity-50 dark:text-blue-400"
             >
-              {reference}{!canLocate(reference) ? '（仅标识）' : ''}
+              {referenceLabel(reference)}{!canLocate(reference) ? '（仅标识）' : ''}
             </button>
           ))}
         </div>

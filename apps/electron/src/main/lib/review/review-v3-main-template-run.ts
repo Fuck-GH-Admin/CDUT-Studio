@@ -20,7 +20,8 @@ import { getTemplate } from './template-store'
 import { saveRunV2, listRunsV2 } from './run-store-v2'
 import { computeRunInputHash } from './run-service-v2'
 import { compileTemplatePlanForCase } from './review-v3-main-template-plan-bridge'
-import { evaluateT04Plan, toT04CheckResult } from './review-v3-t04-rules-scoring'
+import { evaluateT04Plan } from './review-v3-t04-rules-scoring'
+import { reconcileF07PublishedPlan } from './review-v3-f07-plan-coverage'
 
 const MAIN_ACTOR: Actor = { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' }
 
@@ -83,14 +84,25 @@ export function runTemplateRuleReview(input: {
       `模板规则尚不能编译为可执行计划：${bridge.unresolved.map((item) => `${item.ruleId}（${item.reason}）`).join('；')}`)
   }
   const { plan, checks, bindings } = bridge.compiled
+  if (bindings.length === 0) {
+    throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '已发布模板尚无可执行检查，不能记录空运行')
+  }
   const ruleIds = bindings.map((item) => item.rule.id)
 
   const executedAt = new Date().toISOString()
-  const target: CheckResult['target'] = { scope: 'case', subjectIds: [aggregate.caseV2.id] }
-  const verifiedSources = sourceRefsOf(aggregate)
+  const active = (aggregate.caseV2.documents ?? []).filter((document) => document.active !== false)
   const proposals = evaluateT04Plan(plan, checks)
-  const results: CheckResult[] = proposals.map((proposal) =>
-    toT04CheckResult(proposal, target, verifiedSources, executedAt))
+  if (proposals.length !== plan.bindings.length) {
+    throw new CommandValidationError('DEPENDENCY_UNRESOLVED', 'T04 实际检查数量与冻结计划不一致')
+  }
+  // 逐条核对 Check×target×object×subject + Run 原件版本，而非将全案原件复制给每条检查。
+  const reconciled = reconcileF07PublishedPlan({
+    plan, bindings,
+    results: proposals.map((proposal, index) => ({ binding: plan.bindings[index]!, proposal })),
+    documents: active, verifiedSources: sourceRefsOf(aggregate),
+    caseId: aggregate.caseV2.id, recordedAt: executedAt,
+  })
+  const results: CheckResult[] = reconciled.checks
 
   const compliant = results.filter((item) => item.status === 'compliant').length
   const nonCompliant = results.filter((item) => item.status === 'non-compliant').length
@@ -98,7 +110,6 @@ export function runTemplateRuleReview(input: {
     item.status === 'awaiting-confirmation' || item.status === 'awaiting-supplement').length
   const failed = results.filter((item) => item.status === 'execution-failed' || item.status === 'not-executed').length
 
-  const active = (aggregate.caseV2.documents ?? []).filter((document) => document.active !== false)
   const planFingerprint = fingerprintOf(plan.fingerprint, ruleIds)
   const run: ReviewRunV2 = {
     id: `run-tpl-${Date.now().toString(36)}-${createHash('sha256').update(planFingerprint + executedAt).digest('hex').slice(0, 8)}`,
@@ -125,23 +136,18 @@ export function runTemplateRuleReview(input: {
       effectiveRuleSetHash: createHash('sha256').update([...ruleIds].sort().join(',')).digest('hex'),
       planFingerprint,
     },
-    status: pending > 0 || failed > 0 ? 'partially-completed' : 'completed',
+    status: pending > 0 || failed > 0 || reconciled.blockers.length > 0 ? 'partially-completed' : 'completed',
     checkpoints: [{
       nodeId: 'template-rule-plan', inputHash: planFingerprint,
       status: 'done', attempts: 1,
     }],
     checks: results,
     opinions: [],
-    coverage: {
-      documents: active.map((document) => ({ documentVersionId: document.versionId, status: document.usage ?? 'used' })),
-      plannedChecks: bindings.length,
-      completedChecks: results.length,
-      effectiveVerdicts: compliant + nonCompliant,
-      pendingChecks: pending + failed,
-    },
+    coverage: reconciled.coverage,
     diagnostics: [
       `模板规则计划：${ruleIds.length} 条规则，${results.length} 项检查`,
       `计划指纹：${planFingerprint}`,
+      ...reconciled.blockers.map((reason) => `覆盖阻断：${reason}`),
     ],
     startedAt: executedAt,
     completedAt: executedAt,

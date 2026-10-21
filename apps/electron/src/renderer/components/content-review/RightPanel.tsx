@@ -26,13 +26,19 @@ import { CaseTimelinePanel } from './CaseTimelinePanel'
 import { useReviewWorkspaceActions } from './use-review-workspace-actions'
 import { buildReviewWorkspaceViewModel } from './review-workspace-view-model'
 import { ReviewActionDialog, type ReviewActionDialogField } from './ReviewActionDialog'
-import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
+import { ReviewV3SourceLinks } from './ReviewV3SourceLinks'
+import { reviewSourcePurpose } from './review-v3-source-navigation'
 
 interface RightPanelProps { actions: ReviewActions }
 
 const STATUS_LABELS: Record<string, string> = {
   draft: '草稿', ready: '可开始审核', reviewing: '审核中', 'needs-attention': '待人工处理',
   'waiting-supplement': '等待补件', 'ready-for-decision': '可作最终决定', decided: '已决定',
+}
+const CHECK_STATUS_LABELS: Record<CheckResult['status'], string> = {
+  compliant: '符合', 'non-compliant': '不符合', 'awaiting-supplement': '待补件',
+  'awaiting-confirmation': '待确认', 'not-applicable': '不适用',
+  'not-executed': '未执行', 'execution-failed': '执行失败',
 }
 let sourceFocusNonce = 0
 
@@ -62,7 +68,6 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
   const [feedback, setFeedback] = React.useState<string | null>(null)
   const [showResolved, setShowResolved] = React.useState(false)
   const [historyNonce, setHistoryNonce] = React.useState(0)
-  const [sourcePreview, setSourcePreview] = React.useState<{ path: string; fileName: string } | null>(null)
   const [dialog, setDialog] = React.useState<{ title: string; description?: string; fields: ReviewActionDialogField[]; submit(values: Record<string, string>): Promise<void> } | null>(null)
   // 操作回执只属于当前案卷和轮次，切案或重新启动不沿用上一轮的停止提示。
   React.useEffect(() => {
@@ -180,6 +185,15 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
     }))
   }
 
+  const focusSource = (ref: SourceRef, originKey: string): void => {
+    if (!aggregate) return
+    const purpose = reviewSourcePurpose(ref, aggregate)
+    if (!purpose) return
+    sourceFocusNonce += 1
+    setSourceFocus({ ref, purpose, nonce: sourceFocusNonce, originPendingActionKey: originKey })
+    setActivePane(purpose === 'rule' ? 'left' : 'center')
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-thin">
       <header className="shrink-0 border-b border-border/60 px-4 py-3">
@@ -263,23 +277,7 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
                   const activeSupplement = aggregate?.supplements.find((supplement) => supplement.originFindingKeys.includes(item.checkId ?? item.key))
                   const relatedSubject = aggregate?.caseV2.subjects.find((subject) => subject.id === item.subjectId)
                   const scopeSubjects = check?.target.subjectIds.map((id) => aggregate?.caseV2.subjects.find((subject) => subject.id === id)?.title ?? id) ?? []
-                  const sourceRefs = [...(item.sourceRefs ?? []), ...(relatedSubject?.sourceRefs ?? [])]
-                  const distinctSources = sourceRefs.filter((ref, index) => sourceRefs.findIndex((candidate) => candidate.documentVersionId === ref.documentVersionId && JSON.stringify(candidate.location) === JSON.stringify(ref.location)) === index)
-                  const focusSource = async (ref: SourceRef): Promise<void> => {
-                    const document = aggregate?.caseV2.documents.find((candidate) => candidate.versionId === ref.documentVersionId)
-                    const purpose = document?.role === 'rule' ? 'rule' : document?.role === 'application' ? 'application' : 'evidence'
-                    sourceFocusNonce += 1
-                    setActivePane(purpose === 'rule' ? 'left' : 'center')
-                    setSourceFocus({ ref, purpose, nonce: sourceFocusNonce, originPendingActionKey: item.key })
-                    if (!document || !aggregate) return
-                    try {
-                      const path = await window.reviewAPI.getWorkspaceDocumentPreviewPath({ caseId: aggregate.caseV2.id, documentVersionId: document.versionId })
-                      if (!path) throw new Error('找不到案卷中保存的原件，请检查材料是否仍存在')
-                      setSourcePreview({ path, fileName: document.fileName })
-                    } catch (error) {
-                      setNotice(error instanceof Error ? error.message : String(error))
-                    }
-                  }
+                  const sourceRefs = [...(item.sourceRefs ?? []), ...(check?.sourceRefs ?? []), ...(relatedSubject?.sourceRefs ?? [])]
                   const group = item.presentationGroup ?? 'verify'
                   const previousGroup = view.pendingActions[itemIndex - 1]?.presentationGroup
                   const checkTone = check?.status === 'non-compliant'
@@ -296,7 +294,7 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
                       <p className={cn('pt-2 text-xs font-semibold', group === 'resolve' ? 'text-rose-700 dark:text-rose-300' : group === 'verify' ? 'text-amber-700 dark:text-amber-300' : 'text-primary')}>{group === 'verify' ? '待人工核对' : group === 'resolve' ? '需要处理' : '待最终认定'} · {view.pendingActions.filter((candidate) => candidate.presentationGroup === group).length} 项</p>
                       {group === 'verify' && <p className="text-xs leading-5 text-muted-foreground">这是待办数量，不是整案结论。请核对事实、材料或规则检查；未处理前不能通过。退回补件或驳回需要你在下方单独选择并填写理由。</p>}
                     </>}
-                    <article data-review-pending-key={item.key} className={cn('rounded-xl border p-3 shadow-sm', checkTone)}>
+                    <article tabIndex={-1} data-review-pending-key={item.key} className={cn('rounded-xl border p-3 shadow-sm', checkTone)}>
                       <div className="flex items-start gap-2">
                         <p className={cn('min-w-0 flex-1 text-sm font-semibold leading-5', check?.status === 'non-compliant' ? 'text-rose-800 dark:text-rose-200' : checkLabel ? 'text-amber-800 dark:text-amber-200' : 'text-foreground')}>{item.title}</p>
                         {checkLabel && <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', check?.status === 'non-compliant' ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300' : 'bg-amber-500/15 text-amber-700 dark:text-amber-300')}>{checkLabel}</span>}
@@ -311,16 +309,7 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
                       <p className="mt-1 text-sm leading-5 text-foreground/75">{item.detail}</p>
                       {sourceNames.length > 0 && <p className="mt-1 text-xs text-muted-foreground">来源：{[...new Set(sourceNames)].join('、')}</p>}
                       {check && <p className="mt-1 rounded-md border border-border/50 bg-background/70 px-2 py-1.5 text-xs leading-5"><span className="font-semibold text-foreground">审核依据：</span><span className="text-muted-foreground">{aggregate?.caseV2.reviewRules?.find((rule) => rule.id === check.ruleId)?.title ?? '当前审核规则'} · {check.reason}</span></p>}
-                      {distinctSources.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">
-                        {(['rule', 'application', 'evidence'] as const).map((purpose) => {
-                          const ref = distinctSources.find((candidate) => {
-                            const role = aggregate?.caseV2.documents.find((document) => document.versionId === candidate.documentVersionId)?.role
-                            return purpose === 'rule' ? role === 'rule' : purpose === 'application' ? role === 'application' : role === 'evidence' || role === 'attachment'
-                          })
-                          if (!ref) return null
-                          return <button key={purpose} type="button" onClick={() => { void focusSource(ref) }} className="rounded border border-primary/25 bg-background px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/5">查看{purpose === 'rule' ? '规则' : purpose === 'application' ? '申报' : '证明'}</button>
-                        })}
-                      </div>}
+                      {aggregate && <ReviewV3SourceLinks aggregate={aggregate} refs={sourceRefs} onNavigate={(ref) => focusSource(ref, item.key)} />}
                       {item.kind === 'check' && check && !runStale && (
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <button type="button" disabled={busyKey !== null} onClick={() => handleDisposition(check, 'confirmed-issue')} className="rounded bg-primary px-2 py-1.5 text-xs text-primary-foreground disabled:opacity-50">确认该项问题</button>
@@ -352,6 +341,24 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
               </div>
             )}
           </section>
+
+          {aggregate && run.checks.length > 0 && (
+            <section className="shrink-0 px-3 pt-3" aria-label="全部检查与引用">
+              <details className="rounded-lg border border-border/60 bg-card px-3 py-2">
+                <summary className="cursor-pointer text-xs font-semibold">全部检查及原件出处 · {run.checks.length} 项</summary>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">包括已符合及待处理检查；可逐一核对所有实际登记的引用。缺少精确来源不会被当作已定位。</p>
+                <div className="mt-2 max-h-[55vh] space-y-2 overflow-y-auto">
+                  {run.checks.map((check) => (
+                    <article key={check.checkId} tabIndex={-1} data-review-pending-key={`check-source:${check.checkId}`} className="rounded-md bg-muted/40 p-2">
+                      <p className="text-xs font-medium">{aggregate.caseV2.reviewRules?.find((rule) => rule.id === check.ruleId)?.title ?? check.ruleId} · {CHECK_STATUS_LABELS[check.status]}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{check.reason}</p>
+                      <ReviewV3SourceLinks aggregate={aggregate} refs={check.sourceRefs} onNavigate={(ref) => focusSource(ref, `check-source:${check.checkId}`)} />
+                    </article>
+                  ))}
+                </div>
+              </details>
+            </section>
+          )}
 
           {run.opinions.length > 0 && (
             <section className="shrink-0 px-3 pt-3">
@@ -428,7 +435,6 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
         </>
       )}
       {dialog && <ReviewActionDialog title={dialog.title} description={dialog.description} fields={dialog.fields} onClose={() => setDialog(null)} onSubmit={dialog.submit} />}
-      {sourcePreview && <FilePreviewDialog open filePath={sourcePreview.path} fileName={sourcePreview.fileName} onClose={() => setSourcePreview(null)} />}
     </div>
   )
 }

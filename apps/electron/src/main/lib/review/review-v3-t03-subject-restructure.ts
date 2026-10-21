@@ -215,14 +215,23 @@ export function proposeT03SubjectMerge(
   const fields: Record<string, FieldValue> = {}
   const blockedReasons: string[] = []
   const keys = new Set(originals.flatMap(subject => Object.keys(subject.fields)))
+  for (const ob of latest) keys.add(ob.fieldKey)
   for (const key of keys) {
-    const options = originals.flatMap(subject => subject.fields[key] ? [subject.fields[key]!] : [])
+    // An explicit correction is newer than the originally submitted fields.
+    // Compare the effective value per subject, not both historical versions.
+    const options = originals.flatMap(subject => {
+      const observation = latest.find(ob => ob.subjectId === subject.id && ob.fieldKey === key)
+      return observation ? [observation.value] : subject.fields[key] ? [subject.fields[key]!] : []
+    })
     if (new Set(options.map(value => JSON.stringify(value))).size > 1) {
       blockedReasons.push('合并字段存在冲突，必须人工确认：' + key)
     } else if (options[0]) fields[key] = options[0]
   }
   const sources = uniqueRefs(originals.flatMap(subject => subject.sourceRefs)
     .filter(ref => activeRef(ref, aggregate)))
+  if (!sources.length && !latest.some(ob => ob.sourceRefs.some(ref => activeRef(ref, aggregate)))) {
+    blockedReasons.push('合并事项缺少当前有效原件来源')
+  }
   const now = input.now ?? new Date().toISOString()
   for (const ob of latest) {
     if (!ob.sourceRefs.length || ob.sourceRefs.some(ref => !activeRef(ref, aggregate)))
@@ -241,6 +250,8 @@ export function proposeT03SubjectMerge(
     freshLink(link, input.newSubjectId, input.operationId, i))
   if (new Set(originals.map(subject => subject.sectionId)).size > 1)
     blockedReasons.push('跨分项事项不能直接合并')
+  if (new Set(originals.map(subject => subject.type)).size > 1)
+    blockedReasons.push('不同类型的事项不能直接合并')
   const proposedSubjects: ReviewSubject[] = [{
     id: input.newSubjectId, title: input.title, type: first.type,
     sectionId: first.sectionId, fields, sourceRefs: sources,

@@ -21,7 +21,7 @@ export function getT08FieldTargets(aggregate: CaseAggregateV2, template: Templat
     template.version !== aggregate.caseV2.templateVersion) return []
   const targets: T08FieldTarget[] = []
   for (const field of template.fields) {
-    if (!editableKinds.has(field.kind)) continue
+    if (field.readOnly || !editableKinds.has(field.kind)) continue
     if (field.scope === 'case') {
       targets.push({ id: 'case:' + field.key, label: '案卷 · ' + field.label, scope: 'case',
         field, before: aggregate.caseV2.caseFields[field.key] })

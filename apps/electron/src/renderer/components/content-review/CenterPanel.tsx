@@ -42,6 +42,8 @@ import {
 import { cn } from '@/lib/utils'
 import type { ReviewActions } from './use-review-actions'
 import { SourceBlockView } from './SourceBlockView'
+import { ReviewV3SourceNavigator } from './ReviewV3SourceNavigator'
+import { ReviewV3F06EvidenceWorkbench } from './ReviewV3F06EvidenceWorkbench'
 import { useReviewWorkspaceActions } from './use-review-workspace-actions'
 import { ReviewActionDialog } from './ReviewActionDialog'
 import { Button } from '@profer/ui/primitives/button'
@@ -181,6 +183,9 @@ export function CenterPanel({ actions }: CenterPanelProps): React.ReactElement {
           {items.length} 条 / {documentsByRole.evidence.length} 份证明
         </p>
       </header>
+
+      <ReviewV3SourceNavigator purpose="application" />
+      <ReviewV3SourceNavigator purpose="evidence" />
 
       {/* 申报文件只在中栏管理，和左栏审核依据、下方证明材料分开导入。 */}
       <section className="shrink-0 border-b border-border/40 px-3 py-3">
@@ -411,6 +416,14 @@ export function CenterPanel({ actions }: CenterPanelProps): React.ReactElement {
           <p className="text-xs font-semibold  text-muted-foreground">证明材料</p>
           <ReviewMaterialLaneActions role="evidence" documentIds={documentsByRole.evidence.map((document) => document.id)} actions={actions} />
         </div>
+        {aggregate && (
+          <details className="mb-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+            <summary className="cursor-pointer text-xs font-medium">
+              V3 证明归属与多主体关联（以真实原件版本为准）
+            </summary>
+            <ReviewV3F06EvidenceWorkbench />
+          </details>
+        )}
         <div className="grid grid-cols-1 gap-2">
           {documentsByRole.evidence.map((document) => {
             const evidence = evidences.find((candidate) => candidate.documentId === document.id) ?? {

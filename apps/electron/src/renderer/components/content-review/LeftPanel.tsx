@@ -23,6 +23,7 @@ import {
 import type { ReviewActions } from './use-review-actions'
 import { RuleOutlineList } from './RuleOutlineList'
 import { SourceBlockView } from './SourceBlockView'
+import { ReviewV3SourceNavigator } from './ReviewV3SourceNavigator'
 import { MoveReviewDocumentButtons, RemoveReviewDocumentButton, ReviewMaterialLaneActions } from './ReviewMaterialControls'
 
 interface LeftPanelProps {
@@ -151,6 +152,8 @@ export function LeftPanel({ actions }: LeftPanelProps): React.ReactElement {
           <span className="truncate">{ruleDocuments.length} 份文件 · {manualRules.length} 条手写依据</span>
         </p>
       </header>
+
+      <ReviewV3SourceNavigator purpose="rule" />
 
       {template && (template.sections ?? []).some((section) => section.criteria.length > 0) && (
         <section className="shrink-0 px-3 pt-3">

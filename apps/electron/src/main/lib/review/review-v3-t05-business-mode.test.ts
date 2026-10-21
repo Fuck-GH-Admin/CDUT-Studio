@@ -56,6 +56,8 @@ function run(checks: Array<Record<string, unknown>>, extra: Record<string, unkno
       observationIds: [], evidenceLinkIds: [] },
     checkpoints: [], artifacts: [], opinions: [],
     checks,
+    // 真实 Run 必须有非零冻结计划；仅一个 checks[] 不能构成业务放行依据。
+    coverage: { plannedChecks: checks.length, completedChecks: checks.length, pendingChecks: 0, documents: [] },
     ...extra,
   } as unknown as ReviewRunV2
   saveRunV2(value)

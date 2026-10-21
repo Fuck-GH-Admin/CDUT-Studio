@@ -111,15 +111,32 @@ describe('A15 S2 四案例', () => {
     expect(material.sourceVersionIds.length).toBe(0)
   })
 
-  test('gte 下限规则不映射到上限算子，而是显式 unresolved', () => {
+  test('gte 下限规则编译为 field-minimum，不能误用上限算子', () => {
     const template = buildTemplate()
     ;(template.sections![0]!.criteria[0] as unknown as { deterministicConstraint: { operator: string } })
       .deterministicConstraint.operator = 'gte'
     const aggregate = caseWith(18, true)
     const effective = resolveEffectiveRules(aggregate, template).map((entry) => entry.rule)
     const { constraints, unresolved } = adaptT01ConstraintsToT04(template, effective)
-    expect(constraints).toHaveLength(0)
-    expect(unresolved[0]?.reason).toContain('算子')
+    expect(constraints).toHaveLength(1)
+    expect(constraints[0]?.constraint).toMatchObject({ kind: 'field-minimum', fieldKey: 'applicantCount', minimum: '20' })
+    expect(unresolved).toHaveLength(0)
+  })
+
+  test('真实 T01 编辑器 owner-statement 能编译并保留签认来源', () => {
+    const template = buildTemplate()
+    template.status = 'published'
+    const typed = template.sections![0]!.criteria[0] as unknown as {
+      deterministicConstraint: { ownerStatement: unknown }
+    }
+    typed.deterministicConstraint.ownerStatement = {
+      kind: 'owner-statement', text: '负责人确认人数上限为 20 人',
+      enteredBy: 'local-organizer', enteredAt: '2026-10-21T00:00:00Z',
+    }
+    const result = compileTemplatePlanForCase({ aggregate: caseWith(18, true), template })
+    expect(result.unresolved).toHaveLength(0)
+    expect(result.constraints[0]?.confirmedBy).toBe('local-organizer')
+    expect(result.compiled).toBeDefined()
   })
 
   test('未确认的约束不进入正式计划', () => {

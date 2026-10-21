@@ -4,12 +4,13 @@
  * No model-generated key, Actor or approval is ever executed.
  */
 import * as React from 'react'
-import type { CaseAggregateV2, ReviewRunV2, TemplateVersion } from '@profer/shared'
+import type { CaseAggregateV2, ReviewRunV2, SourceRef, TemplateVersion } from '@profer/shared'
 import { useReviewWorkspaceActions } from './use-review-workspace-actions'
 import { resolveT08Source } from './review-v3-t08-case-report'
 import {
-  getT08FieldTargets, makeT08FieldUpdate, parseT08FieldDraft, showT08FieldValue,
+  getT08FieldTargets, parseT08FieldDraft, showT08FieldValue,
 } from './review-v3-t08-suggestion'
+import { makeF17FieldPatch } from './review-v3-f17-patch'
 
 interface Props {
   aggregate: CaseAggregateV2
@@ -17,12 +18,14 @@ interface Props {
   template: TemplateVersion | null
   opinion: ReviewRunV2['opinions'][number]
   stale: boolean
+  onOpenSource?(source: SourceRef): Promise<void>
   onClose(): void
 }
 
-export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion, stale, onClose }: Props): React.ReactElement {
+export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion, stale, onOpenSource, onClose }: Props): React.ReactElement {
   const actions = useReviewWorkspaceActions()
-  const targets = React.useMemo(() => getT08FieldTargets(aggregate, template), [aggregate, template])
+  const targets = React.useMemo(() => template?.status === 'published'
+    ? getT08FieldTargets(aggregate, template) : [], [aggregate, template])
   const [mode, setMode] = React.useState<'field' | 'supplement'>('field')
   const [targetId, setTargetId] = React.useState('')
   const [requiredElements, setRequiredElements] = React.useState('')
@@ -59,7 +62,7 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
       }
       if (!target) throw new Error('请先选择字段')
       const value = parseT08FieldDraft(target.field, draft)
-      const update = makeT08FieldUpdate(target, value)
+      const update = makeF17FieldPatch(target, value)
       const response = await window.reviewAPI.updateFieldsV2({
         caseId: aggregate.caseV2.id,
         command: {
@@ -72,7 +75,7 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
           payload: update,
         },
       })
-      if (!response?.ok) throw new Error('业务字段保存失败')
+      if (!response?.ok) throw new Error(response?.message ?? '业务字段保存失败')
       await actions.refresh()
       setNotice('修改已通过 Main 案卷命令保存。旧 Run 不会被改写，需重新审核受影响的规则。')
       setConfirmed(false)
@@ -97,7 +100,12 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
         .catch((error) => setNotice('复制草案失败：' + String(error)))
     }}>复制临时草案</button>
     <p className="text-muted-foreground">关联 Run：{run.id}；当前案卷 revision {aggregate.caseV2.revision}。准确定位来源 {located}/{sources.length}，无法核对的来源不得视作证据。</p>
-    {sources.map((source, index) => <p key={index} className="text-muted-foreground">{source.label} · {source.state}</p>)}
+    {sources.map((source, index) => <div key={index} className="text-muted-foreground">
+      <span>{source.label} · {source.state}</span>
+      {onOpenSource && (source.state === 'located' || source.state === 'file-only') && <button
+        type="button" className="ml-2 rounded border border-border px-2 py-1 text-foreground"
+        onClick={() => void onOpenSource(source.ref)}>核对原件</button>}
+    </div>)}
     {stale && <p className="text-amber-700">本次 Run 已过期；刷新并重新核查后才能应用。</p>}
     <div className="flex flex-wrap gap-2">
       <button type="button" className={'rounded border px-2 py-1 ' + (mode === 'field' ? 'bg-primary text-primary-foreground' : '')} onClick={() => setMode('field')}>审阅字段修改</button>
@@ -128,13 +136,13 @@ export function ReviewV3T08SuggestionReview({ aggregate, run, template, opinion,
           }
         </label>
         <div className="rounded bg-background p-2">对比：{showT08FieldValue(target.before)} → <strong>{draft || '待填写'}</strong></div>
-        {target.field.kind !== 'text' && <p className="text-amber-700">可以审阅新值，但当前 Main 仅能安全保存文本字段。数字、日期等需要 L 线接入模板类型事务后才能应用；不会将类型错误写入案卷。</p>}
+        <p className="text-muted-foreground">保存前由 Main 使用案卷绑定的已发布模板重新校验字段类型与权限；旧 Run 不会因此自动重跑。</p>
         <label className="flex items-start gap-2">
           <input type="checkbox" className="mt-1" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
           <span>我已核对原件和模板，确认仅修改选定字段；这不是自动采纳模型意见，也不是校方审批。修改后原 Run 保留、需重新检查。</span>
         </label>
         <button type="button" className="rounded bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50"
-          disabled={stale || busy || !draft.trim() || !confirmed || target.field.kind !== 'text'} onClick={() => void apply()}>
+          disabled={stale || busy || !draft.trim() || !confirmed} onClick={() => void apply()}>
           {busy ? '正在保存…' : '人工确认并保存至案卷'}
         </button>
       </div>}

@@ -51,6 +51,39 @@ function sourceState(refs: readonly SourceRef[], caseId: string, documents: Case
 }
 
 /**
+ * Preserve a real extraction locator when a reviewer confirms a fact.
+ * A legacy document-only selection can use a file locator, but an explicitly
+ * stale revision or a cross-case reference must never be silently "upgraded".
+ */
+export function resolveT03CorrectionRefs(aggregate: CaseAggregateV2, rawRefs: unknown): SourceRef[] {
+  if (!Array.isArray(rawRefs)) throw new Error('事实来源必须是原件引用列表')
+  const refs = rawRefs.map((raw): SourceRef => {
+    if (!raw || typeof raw !== 'object') throw new Error('事实来源缺少原件版本')
+    const value = raw as Partial<SourceRef>
+    if (typeof value.documentVersionId !== 'string') throw new Error('事实来源缺少原件版本')
+    const doc = aggregate.caseV2.documents.find(item => item.versionId === value.documentVersionId)
+    if (!doc || doc.active === false) throw new Error('事实引用的原件已停用或不存在，请重新选择当前原件')
+    if ((value.caseId !== undefined && value.caseId !== aggregate.caseV2.id) ||
+      (value.parseRevision !== undefined && value.parseRevision !== doc.parseRevision)) {
+      throw new Error('事实来源属于其他案卷或旧解析版本，请重新核对来源')
+    }
+    const location = value.location ?? { kind: 'file' as const }
+    if (!location || typeof location !== 'object' ||
+      !['pdf-rect', 'sheet-cell', 'paragraph', 'text-range', 'file'].includes(location.kind)) {
+      throw new Error('事实来源位置无效，请重新选择原件')
+    }
+    return {
+      caseId: aggregate.caseV2.id,
+      documentVersionId: doc.versionId,
+      parseRevision: doc.parseRevision,
+      location,
+      ...(typeof value.quote === 'string' ? { quote: value.quote } : {}),
+    }
+  })
+  return [...new Map(refs.map(ref => [JSON.stringify(ref), ref])).values()]
+}
+
+/**
  * Facts from the latest Run remain *candidates*, even when their values are identical.
  * The most recent still-current human confirmation is the displayed effective value.
  * Later AI extraction must not silently mask it. Historical rows are never discarded.
@@ -75,11 +108,14 @@ export function projectT03Facts(aggregate: CaseAggregateV2, extracted: readonly 
   return [...byKey.entries()].map(([key, row]) => {
     // Break equal timestamps by append order, not lexical random IDs.
     const history = row.history
-    const current = [...history].reverse().find(ob =>
-      ob.confirmed && sourceState(ob.sourceRefs, aggregate.caseV2.id, docs) === 'current',
-    ) ?? null
+    // A later human correction supersedes an older confirmation even if the
+    // new source subsequently expires. Never resurrect the superseded value.
+    const lastHuman = [...history].reverse().find(ob => ob.confirmed && ob.extractedBy === 'user')
+    const current = lastHuman && sourceState(lastHuman.sourceRefs, aggregate.caseV2.id, docs) === 'current'
+      ? lastHuman : null
+    const humanIndex = lastHuman ? history.lastIndexOf(lastHuman) : -1
     const candidates = [
-      ...history.filter(ob => !ob.confirmed).map(ob => ({
+      ...history.slice(humanIndex + 1).filter(ob => !ob.confirmed).map(ob => ({
         id: ob.id, subjectId: ob.subjectId, fieldKey: ob.fieldKey, value: ob.value,
         sourceRefs: ob.sourceRefs,
       })),
@@ -89,7 +125,9 @@ export function projectT03Facts(aggregate: CaseAggregateV2, extracted: readonly 
     if (!subjects.has(row.subjectId)) reasons.push('主体尚未归属')
     if (!current) reasons.push('尚无有效人工确认事实')
     if (current && candidates.some(c => !sameValue(c.value, current.value))) reasons.push('新提取值与已确认值不同')
-    if (history.some(ob => sourceState(ob.sourceRefs, aggregate.caseV2.id, docs) === 'stale') ||
+    // Historical, already-superseded revisions remain visible in the audit
+    // trail, but do not permanently contaminate the current review queue.
+    if ((lastHuman && sourceState(lastHuman.sourceRefs, aggregate.caseV2.id, docs) === 'stale') ||
       candidates.some(c => sourceState(c.sourceRefs ?? [], aggregate.caseV2.id, docs) === 'stale')) {
       reasons.push('原件版本或解析修订已变化')
     }
@@ -102,8 +140,9 @@ export function projectT03Facts(aggregate: CaseAggregateV2, extracted: readonly 
     return {
       key, subjectId: row.subjectId, subjectTitle: subjects.get(row.subjectId) ?? row.subjectId,
       fieldKey: row.fieldKey, current, candidates, history,
-      sourceState: current ? 'current' : history.length
-        ? sourceState(history[history.length - 1]!.sourceRefs, aggregate.caseV2.id, docs)
+      sourceState: current ? 'current' : lastHuman
+        ? sourceState(lastHuman.sourceRefs, aggregate.caseV2.id, docs)
+        : history.length ? sourceState(history[history.length - 1]!.sourceRefs, aggregate.caseV2.id, docs)
         : 'unattributed',
       needsReview: reasons.length > 0,
       reasons,
@@ -174,7 +213,15 @@ export function parseT03Correction(raw: string, previous: FieldValue): FieldValu
     if (raw !== 'true' && raw !== 'false') throw new Error('布尔值必须为 true 或 false')
     return { kind: 'boolean', value: raw === 'true' }
   }
-  if (previous.kind === 'date') return { kind: 'date', value: raw }
+  if (previous.kind === 'date') {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim())
+    if (!match) throw new Error('日期须为 YYYY-MM-DD')
+    const year = Number(match[1]), month = Number(match[2]), day = Number(match[3])
+    const actual = new Date(Date.UTC(year, month - 1, day))
+    if (year < 100 || actual.getUTCFullYear() !== year || actual.getUTCMonth() !== month - 1 ||
+      actual.getUTCDate() !== day) throw new Error('日期不在有效日历范围内')
+    return { kind: 'date', value: raw.trim() }
+  }
   if (previous.kind === 'enum') return { kind: 'enum', value: raw }
   if (previous.kind === 'text') return { kind: 'text', value: raw }
   // Compound/attachment corrections are edited in their corresponding field editor.

@@ -13,7 +13,7 @@ export type T09Lock = { templateId: string; templateVersion: number; policyVersi
 export type T09Asset = { name: string; mimeType: string; dataBase64: string; sha256: string }
 export type T09Task =
   | { kind: 'student-reply'; supplementId: string; reason: string; requiredElements: string[]; deadline?: string }
-  | { kind: 'judge-rating-reply'; assignmentId: string; rubricVersion: number; dimensions: Array<{ id: string; title: string; min: number; max: number; allowNA: boolean }> }
+  | { kind: 'judge-rating-reply'; assignmentId: string; rubricVersion: number; dimensions: Array<{ id: string; title: string; min: number; max: number; allowNA: boolean }>; /** 新版 T07 评分回件必须锁定所属批次/轮次及签发时的案卷版本。 */ batchId?: string; round?: number; caseRevision?: number }
 export type T09Reply =
   | { kind: 'student-reply'; supplementId: string; note: string; assets: T09Asset[] }
   | { kind: 'judge-rating-reply'; assignmentId: string; rubricVersion: number; scores: JudgeRating['scores']; publicFeedback: string; internalNotes?: string }
@@ -71,6 +71,10 @@ export function issueT09Task(input: {
   if (roleFor(input.task) !== input.recipient.role || !input.recipient.actorId) throw new Error('收件人角色不符合任务')
   if (input.task.kind === 'student-reply' && !input.task.supplementId) throw new Error('没有指定补件任务')
   if (input.task.kind === 'judge-rating-reply' && (!input.task.assignmentId || !Number.isInteger(input.task.rubricVersion))) throw new Error('没有指定评分分配')
+  if (input.task.kind === 'judge-rating-reply' && input.task.batchId !== undefined &&
+    (!input.task.batchId || !Number.isInteger(input.task.round) || input.task.round! < 1 || !Number.isInteger(input.task.caseRevision) || input.task.caseRevision! < 0)) {
+    throw new Error('评分批次/轮次/案卷版本绑定不完整')
+  }
   checkAssets(input.assets ?? [])
   const body = { type: 'task' as const, format: T09_FORMAT, packageId: randomUUID(), actionId: randomUUID(),
     caseId: input.caseId, baseRevision: input.revision, lock: input.lock, createdAt: new Date().toISOString(),
@@ -118,6 +122,8 @@ export function readT09File(json: string): T09Package {
   if (!pkg.caseId || !Number.isInteger(pkg.baseRevision) || !validLock(pkg.lock)) throw new Error('目标版本信息不完整')
   if (pkg.type === 'task') {
     if (roleFor(pkg.task) !== pkg.recipient.role) throw new Error('任务角色不符')
+    if (pkg.task.kind === 'judge-rating-reply' && pkg.task.batchId !== undefined &&
+      (!pkg.task.batchId || !Number.isInteger(pkg.task.round) || !Number.isInteger(pkg.task.caseRevision))) throw new Error('评分任务绑定不完整')
     checkAssets(pkg.assets)
   } else {
     if (!pkg.requestPackageId || !pkg.requestHash || !pkg.respondent?.actorId) throw new Error('回复缺少关联任务')

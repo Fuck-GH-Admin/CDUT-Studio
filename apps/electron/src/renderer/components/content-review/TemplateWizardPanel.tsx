@@ -13,8 +13,9 @@ import { ReviewV3T01TrialPanel } from './ReviewV3T01TrialPanel'
 import { ReviewV3T01AuthoringLaunchpad } from './ReviewV3T01AuthoringLaunchpad'
 import { ReviewV3T01ConditionEditor } from './ReviewV3T01ConditionEditor'
 import { ReviewV3T01NumberRuleEditor } from './ReviewV3T01NumberRuleEditor'
-import { readT01NumberLimit, validateT01TypedCriteria, type T01CriterionWithConstraint } from './review-v3-t01-typed-criteria'
+import { readT01NumberLimit, reconcileT01OwnerConfirmations, validateT01TypedCriteria, type T01CriterionWithConstraint } from './review-v3-t01-typed-criteria'
 import { exportT01Template, importT01Template } from './review-v3-t01-template-portability'
+import { copyT01TemplateConfiguration, forkT01TemplateVersion } from './review-v3-t01-versioning'
 
 type EditableFieldKind = 'text' | 'number' | 'date' | 'boolean' | 'enum'
 type TemplateLibraryFilter = 'all' | 'published' | 'reference' | 'drafts'
@@ -92,11 +93,6 @@ function newTemplate(kind: 'blank' | 'comprehensive'): TemplateVersion {
     policyVersionIds: [], stages, outputs: [{ id: 'approval', kind: 'approval', audience: 'teacher' }],
     status: 'draft', createdAt: new Date().toISOString(),
   }
-}
-
-function nextDraft(source: TemplateVersion, version: number): TemplateVersion {
-  const { publishedAt: _publishedAt, ...base } = source
-  return { ...base, version, status: 'draft', createdAt: new Date().toISOString() }
 }
 
 function reordered<T>(items: T[], index: number, offset: -1 | 1): T[] {
@@ -193,21 +189,12 @@ export function TemplateWizardPanel(): JSX.Element {
 
   const openTemplate = (template: TemplateVersion): void => {
     const nextVersion = Math.max(0, ...templateVersions.filter((candidate) => candidate.templateId === template.templateId).map((candidate) => candidate.version)) + 1
-    setEditing(template.status === 'draft' ? template : nextDraft(template, nextVersion))
+    setEditing(template.status === 'draft' ? template : forkT01TemplateVersion(template, nextVersion, new Date().toISOString()))
     setMessage([])
   }
 
   const copyReferenceTemplate = async (template: TemplateVersion): Promise<void> => {
-    const copy: TemplateVersion = {
-      ...template,
-      templateId: generatedId('custom-review'),
-      version: 1,
-      name: `${template.name}（我的配置）`,
-      catalogKind: 'custom',
-      status: 'draft',
-      createdAt: new Date().toISOString(),
-      publishedAt: undefined,
-    }
+    const copy = copyT01TemplateConfiguration(template, generatedId('custom-review'), new Date().toISOString())
     setLoading(true)
     store.set(reviewV2BusyAtom, true)
     try {
@@ -226,7 +213,7 @@ export function TemplateWizardPanel(): JSX.Element {
   }
 
   const updateTemplate = (update: (current: TemplateVersion) => TemplateVersion): void => {
-    setEditing((current) => current ? update(current) : current)
+    setEditing((current) => current ? reconcileT01OwnerConfirmations(current, update(current)) : current)
     setMessage([])
   }
 
@@ -295,17 +282,26 @@ export function TemplateWizardPanel(): JSX.Element {
     catch (error) { toast.error(`模板排序失败：${error instanceof Error ? error.message : String(error)}`) }
   }
 
+  const publishedById = new Map<string, TemplateVersion>()
+  for (const version of templateVersions) {
+    if (version.status !== 'published') continue
+    const current = publishedById.get(version.templateId)
+    if (!current || current.version < version.version) publishedById.set(version.templateId, version)
+  }
   const libraryCounts = {
     all: templates.length,
-    published: templates.filter((template) => template.status === 'published').length,
+    published: publishedById.size,
     reference: templates.filter((template) => template.catalogKind === 'reference' && template.status === 'draft').length,
     drafts: templates.filter((template) => template.status === 'draft' && template.catalogKind !== 'reference').length,
   }
-  const visibleTemplates = templates.filter((template) => {
-    if (libraryFilter === 'published') return template.status === 'published'
-    if (libraryFilter === 'reference') return template.catalogKind === 'reference'
-    if (libraryFilter === 'drafts') return template.status === 'draft' && template.catalogKind !== 'reference'
-    return true
+  const visibleTemplates = templates.flatMap((template) => {
+    if (libraryFilter === 'published') {
+      const published = publishedById.get(template.templateId)
+      return published ? [published] : []
+    }
+    if (libraryFilter === 'reference') return template.catalogKind === 'reference' ? [template] : []
+    if (libraryFilter === 'drafts') return template.status === 'draft' && template.catalogKind !== 'reference' ? [template] : []
+    return [template]
   })
 
   const removeTemplate = async (template: TemplateVersion): Promise<void> => {
@@ -380,7 +376,7 @@ export function TemplateWizardPanel(): JSX.Element {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{template.name}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">最新 v{template.version} · {template.sections?.length ?? 0} 个分项 · {template.fields.length} 个字段</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{libraryFilter === 'published' ? '已发布' : '最新'} v{template.version} · {template.sections?.length ?? 0} 个分项 · {template.fields.length} 个字段</p>
                 </div>
                 <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-xs">{template.status === 'published' ? '已发布 · 可载入' : template.status === 'deprecated' ? '已停用' : '草稿 · 待配置'}</span>
               </div>
@@ -403,6 +399,22 @@ export function TemplateWizardPanel(): JSX.Element {
               </div>
               {template.status !== 'published' && <p className="mt-2 text-xs leading-4 text-muted-foreground">配置本单位、本年度规则并发布后，才可载入辅助审核。</p>}
               {template.sourceNote && <details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">参考来源</summary><p className="mt-1">{template.sourceNote}</p></details>}
+              {templateVersions.filter(version => version.templateId === template.templateId).length > 1 && (
+                <details className="mt-2 text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">版本历史（发布版可追溯）</summary>
+                  <div className="mt-2 space-y-1">
+                    {templateVersions.filter(version => version.templateId === template.templateId)
+                      .sort((a, b) => b.version - a.version).map(version => (
+                        <div key={version.version} className="flex items-center justify-between gap-2 rounded bg-background p-1.5">
+                          <span>v{version.version} · {version.status === 'published' ? '已发布且不可覆盖' : version.status === 'draft' ? '草稿' : '已停用'}</span>
+                          <Button size="sm" variant="ghost" onClick={() => openTemplate(version)}>
+                            {version.status === 'draft' ? '继续编辑' : '从此版派生'}
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                </details>
+              )}
             </div>
           ))}
           {visibleTemplates.length === 0 && <p className="text-sm text-muted-foreground">此分类下暂无模板。</p>}

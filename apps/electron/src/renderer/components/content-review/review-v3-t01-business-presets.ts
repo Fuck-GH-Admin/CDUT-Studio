@@ -90,6 +90,12 @@ export function createT01Scenario(id: T01ScenarioId, templateId: string, created
         field('budget','申报预算','number',{min:0,unit:'元'})],
       materialSlots:[slot('request','活动申请',['组织','时间','地点']),slot('roster','参与名单',['人员'])],
       sections:[section('conditions','活动申请审核',[
+        setT01NumberLimit(criterion('headcount','参与人数上限','虚构活动示例要求参与人数不得超过40；发布前需负责人核实。','deterministic'), {
+          schemaVersion:1,kind:'field-number-limit',fieldKey:'participants',fieldScope:'case',operator:'lte',threshold:40,
+        }),
+        setT01NumberLimit(criterion('budget-limit','预算上限','虚构活动示例要求申报预算不得超过5000元；发布前需负责人核实。','deterministic'), {
+          schemaVersion:1,kind:'field-number-limit',fieldKey:'budget',fieldScope:'case',operator:'lte',threshold:5000,unit:'元',
+        }),
         criterion('scope','资格与资源','核对组织资格、场地时间冲突、预算和申报期限；缺少正式约束时人工确认。'),
         criterion('roster','参与人员','核对申请与参与名单人数及负责人。')])],
     }
@@ -99,6 +105,9 @@ export function createT01Scenario(id: T01ScenarioId, templateId: string, created
         field('category','申请类别'),field('deadline','申报日期','date')],
       materialSlots:[slot('form','奖学金申请',['申请类别','身份']),slot('transcript','成绩或排名证明',['成绩','排名'])],
       sections:[section('eligibility','资格与推荐',[
+        setT01NumberLimit(criterion('minimum-grade','示例成绩门槛','虚构奖学金示例要求成绩不得低于80；需负责人核实且等待 T04 下限算子。','deterministic'), {
+          schemaVersion:1,kind:'field-number-limit',fieldKey:'grade',fieldScope:'case',operator:'gte',threshold:80,
+        }),
         criterion('threshold','申请资格','根据本批次确认的资格门槛和截止时间逐条核对。'),
         criterion('duplicate','重复申请与名额','对照本批次名额和申请记录；超额时交负责人决定。')])],
       outputs:[{id:'roster',kind:'roster',audience:'organizer'},{id:'feedback',kind:'item-feedback',audience:'student'}],
@@ -122,6 +131,9 @@ export function createT01Scenario(id: T01ScenarioId, templateId: string, created
         field('expenseDate','费用发生日期','date')],
       materialSlots:[slot('invoice','票据',['抬头','日期','金额']),slot('request','报销申请单',['总金额','事项'])],
       sections:[section('verification','材料与金额核对',[
+        setT01NumberLimit(criterion('amount-limit','单笔金额上限','虚构报销示例要求单笔金额不得超过1000元；需负责人确认。','deterministic'), {
+          schemaVersion:1,kind:'field-number-limit',fieldKey:'amount',fieldScope:'case',operator:'lte',threshold:1000,unit:'元',
+        }),
         criterion('invoice','票据可见信息','核对可见抬头、金额及日期，不代表外部发票真伪验真。'),
         criterion('limit','经费额度与标准','仅按本案确认的制度和预算核对可报限额，缺少依据时待人工确认。')])],
     }

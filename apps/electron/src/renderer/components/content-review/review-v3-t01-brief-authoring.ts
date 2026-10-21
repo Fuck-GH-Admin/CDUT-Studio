@@ -7,6 +7,7 @@
  */
 import type { FieldSpec, MaterialSlotSpec, TemplateCriterionSpec, TemplateVersion, WorkflowStageSpec } from '@profer/shared'
 import { createT01Scenario, type T01ScenarioId } from './review-v3-t01-business-presets'
+import { setT01NumberLimit } from './review-v3-t01-typed-criteria'
 
 export interface T01BriefDraft {
   template: TemplateVersion
@@ -104,7 +105,8 @@ function stagePlan(raw: string): WorkflowStageSpec[] {
     workflowOwner: 'local',
   }))
 }
-const wordLimit = /(?:参加人数|参与人数|人数|预算|金额|名额|费用)(?:不得|不能|不可|不应|不)?(?:超过|高于|大于)\s*(\d+(?:\.\d+)?)/g
+// 只有明确的禁止/最低门槛才生成数值规则；「人数超过20需加审」不是「人数不得超过20」。
+const wordLimit = /(参加人数|参与人数|申请人数|人数|预算|申报金额|金额|名额|费用)((?:不得|不能|不可|不应|不)(?:超过|高于|大于)|(?:最多|至多|不多于)|(?:至少|不少于|不低于|不得少于|不能少于))\s*(\d+(?:\.\d+)?)/g
 const labeledRequirement = /(?:规则|审核要求|检查要求|标准)\s*[:：]\s*([^\n]+)/
 
 /** Only explicit statements become editable draft data. No fabricated policy refs. */
@@ -149,25 +151,43 @@ export function draftT01FromBrief(raw: string, templateId: string, createdAt: st
   } satisfies FieldSpec]
   const fields = baseFields.map(f => ({ ...f }))
   const limits = [...text.matchAll(new RegExp(wordLimit.source, 'g'))]
+  const numberCriteria: TemplateCriterionSpec[] = []
+  const seenLimits = new Set<string>()
   for (const match of limits) {
-    const phrase = match[0]!, max = Number(match[1])
-    const label = phrase.match(/^(参加人数|参与人数|人数|预算|金额|名额|费用)/)?.[1]
+    const phrase = match[0]!, threshold = Number(match[3])
+    const label = match[1]
     const f = fields.find(x => label && (x.label.includes(label) || x.key === fieldKeys.find(([re]) => re.test(label))?.[1]))
-    if (!f || !Number.isFinite(max)) { questions.push('数值限制「' + phrase + '」未匹配明确字段，请在编辑器确认。');continue }
+    if (!f || !Number.isFinite(threshold)) { questions.push('数值限制「' + phrase + '」未匹配明确字段，请在编辑器确认。');continue }
     f.kind = 'number'
-    f.max = max
-    extracted.push('数值上限：' + f.label + ' ≤ ' + max)
+    // 审核门槛不能冒充输入表单的 max，否则超标案卷甚至无法填写，T04 也得不到一条 Check。
+    const operator = /至少|不少于|不低于|少于/.test(match[2]!) ? 'gte' : 'lte'
+    if (operator === 'lte') delete f.max
+    else delete f.min
+    const key = `${f.key}:${operator}:${threshold}`
+    if (seenLimits.has(key)) continue
+    seenLimits.add(key)
+    numberCriteria.push(setT01NumberLimit({
+      id: `brief-numeric-${numberCriteria.length + 1}`, title: `${f.label}${operator === 'lte' ? '上限' : '下限'}`,
+      requirement: phrase, execution: 'deterministic', targetScope: 'case',
+    }, {
+      schemaVersion: 1, kind: 'field-number-limit', fieldKey: f.key, fieldScope: 'case',
+      operator, threshold, ...(f.unit ? { unit: f.unit } : {}),
+    }))
+    extracted.push(`待确认的审核门槛：${f.label} ${operator === 'lte' ? '≤' : '≥'} ${threshold}（尚未发布）`)
   }
   const requirements = text.match(labeledRequirement)?.[1]
-  const criteria: TemplateCriterionSpec[] = requirements ? tokens(requirements).map((x, index) => ({
+  const remainingRequirements = requirements ? tokens(requirements).filter(item =>
+    !numberCriteria.some(criterion => item === criterion.requirement)) : []
+  const criteria: TemplateCriterionSpec[] = [...numberCriteria, ...remainingRequirements.map((x, index) => ({
     id: 'brief-rule-' + (index + 1), title: x.slice(0, 24), requirement: x,
-    execution: 'manual', targetScope: 'case',
-  })) : []
-  if (requirements) extracted.push('草拟要求：' + criteria.length + ' 条，待确认执行类型及依据')
+    execution: 'manual' as const, targetScope: 'case' as const,
+  }))]
+  if (criteria.length) extracted.push('草拟要求：' + criteria.length + ' 条，待确认执行类型及依据')
   if (/不评分|无需评分|无评分/.test(text)) extracted.push('评分：无评分')
   else if (/评分|量表|分数/.test(text) && !scenario) questions.push('存在评分要求，请确认评分维度、权重、缺评和最终决定规则。')
   questions.push('请确认制度/负责人要求的正式来源、适用版本及优先级；草稿不得自动成为正式政策。')
-  if (criteria.length) questions.push('规则文字仍是待确认的人工检查要求；确定性计算须由 T04 编译后才可进入真实 Run。')
+  if (numberCriteria.length) questions.push('已提取结构化数值规则；请在编辑器核对字段与阈值，并由真实负责人重新确认。下限规则需等待 T04 算子接线。')
+  if (remainingRequirements.length) questions.push('其余规则文字仍是待确认的人工检查要求；确定性计算须由 T04 编译后才可进入真实 Run。')
   const sections = criteria.length ? [{
     id:'brief-review', name:'需求草拟检查', order:0, required:true, criteria,
   }] : scenario ? seed.sections : []

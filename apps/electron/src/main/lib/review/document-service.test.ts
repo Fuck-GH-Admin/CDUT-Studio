@@ -349,6 +349,27 @@ describe('parseFileIntoSourceDocument / 图片与未知二进制', () => {
     expect(document.parseError ?? '').toContain('视觉模型')
   })
 
+  test('F04 损坏的 PNG 与伪装扩展名不得伪造视觉来源块', async () => {
+    const truncated = join(testRoot, '损坏原件.png')
+    const disguised = join(testRoot, '伪装图片.png')
+    writeFileSync(truncated, ONE_PIXEL_PNG.subarray(0, 25))
+    writeFileSync(disguised, '%PDF-1.4 fake')
+    for (const path of [truncated, disguised]) {
+      const result = await parseFileIntoSourceDocument(path, '原件.png', 'evidence', 'source-docs/原件.png')
+      expect(result.parseStatus).toBe('failed')
+      expect(result.blocks).toHaveLength(0)
+      expect(result.parseError).toContain('图片文件损坏')
+    }
+  })
+
+  test('F04 已删除的图片登记时明确失败，而不是报告已收录', async () => {
+    const missing = join(testRoot, '不存在的证明.jpg')
+    const result = await parseFileIntoSourceDocument(missing, '不存在的证明.jpg', 'evidence')
+    expect(result.parseStatus).toBe('failed')
+    expect(result.blocks).toHaveLength(0)
+    expect(result.parseError).toContain('图片原件不可读取')
+  })
+
   test('Given 未知二进制文件 When 解析 Then parseStatus 为 failed 且不伪造可读块', async () => {
     const filePath = join(testRoot, '原始数据.bin')
     writeFileSync(filePath, Buffer.from([0x00, 0x01, 0x02, 0xfe, 0xff]))
