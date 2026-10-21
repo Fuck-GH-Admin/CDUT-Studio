@@ -919,6 +919,12 @@ export function registerReviewIpc(): void {
     const saved = saveDraft(result.template)
     return { template: saved, sourceCandidates: result.sourceCandidates, notes: result.notes }
   })
+  // ===== 50 套 D4 候选 → 演示模板发布 =====
+  ipcMain.handle(REVIEW_IPC_CHANNELS.D4_DEMO_PUBLISH_V3, (event) => {
+    assertC0ReviewMainSender(event)
+    const { publishD4DemoTemplates } = require('./review-v3-d4-demo-publish') as typeof import('./review-v3-d4-demo-publish')
+    return publishD4DemoTemplates()
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.TEMPLATE_RULE_RUN_V3, async (event, input: {
     caseId: string; phase?: 'submission' | 'decision'
   }) => {

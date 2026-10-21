@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { ReviewFirstUseReadiness } from '@/components/onboarding/ReviewFirstUseReadiness'
+import { humanizeReviewError } from './review-error-text'
 import { isEditableTarget } from '@/lib/navigation-controller'
 import {
   reviewActivePaneAtom,
@@ -167,6 +168,25 @@ export function ContentReviewView(): React.ReactElement {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [assistantOpen])
 
+  // 50 套 D4 候选 → 演示模板：让拖入材料匹配到的模板可以真正用于业务审核
+  const [demoPublishing, setDemoPublishing] = React.useState(false)
+  const publishDemoTemplates = React.useCallback(async (): Promise<void> => {
+    setDemoPublishing(true)
+    try {
+      const result = await window.reviewAPI.publishD4DemoTemplates()
+      toast.success(`演示模板已发布 ${result.published.length} 套` +
+        (result.skipped.length ? `，跳过 ${result.skipped.length} 套` : '') +
+        (result.failed.length ? `，失败 ${result.failed.length} 套` : ''))
+      if (result.failed.length) {
+        toast.error(`发布会话失败：${result.failed[0]!.templateId}：${result.failed[0]!.reason}`)
+      }
+    } catch (error) {
+      toast.error(`发布演示模板失败：${humanizeReviewError(error)}`)
+    } finally {
+      setDemoPublishing(false)
+    }
+  }, [])
+
   // 审核模型就绪提示：只在首次进入材料审核时出现，关闭后不再打扰
   const [reviewReadinessVisible, setReviewReadinessVisible] = React.useState<boolean>(() => {
     try { return window.localStorage.getItem('cdut.review.readinessAcknowledged') !== '1' } catch { return true }
@@ -290,6 +310,11 @@ export function ContentReviewView(): React.ReactElement {
         <nav aria-label="模板工作区" className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card/40 px-4 py-1.5 titlebar-no-drag">
           <Button type="button" data-testid="review-section-templates" size="sm" variant={section === 'templates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('templates')}>模板库与业务配置</Button>
           <Button type="button" data-testid="review-section-local-candidates" size="sm" variant={section === 'local-candidates' ? 'secondary' : 'ghost'} className="h-7 text-xs" onClick={() => setSection('local-candidates')}>候选方案与技术试跑</Button>
+          <Button type="button" data-testid="review-publish-demo-templates" size="sm" variant="outline" className="h-7 text-xs"
+            disabled={demoPublishing}
+            onClick={() => void publishDemoTemplates()}>
+            {demoPublishing ? '发布中…' : '发布 50 套演示模板'}
+          </Button>
           <span className="text-[11px] text-muted-foreground">候选技术方案并非已发布的正式业务模板</span>
         </nav>
       )}
