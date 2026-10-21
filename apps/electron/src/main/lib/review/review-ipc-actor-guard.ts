@@ -34,8 +34,11 @@ export const LOCAL_SUBMITTER_ACTOR: Actor = Object.freeze({
 
 export function bindLocalSubmitterCommand<T extends Record<string, unknown>>(command: T): T {
   const claim = command?.actor as Actor | undefined
-  if (!claim || claim.actorSource !== 'local' || claim.role !== 'student') {
-    throw new Error('本地补件应答 IPC 仅接受 student 本地模式，禁止自称校方或审核员')
+  if (!claim || claim.actorSource !== 'local' ||
+      (claim.role !== 'student' && claim.role !== 'reviewer')) {
+    throw new Error('本地补件应答 IPC 仅允许本地提交方或审核员，不接受校方/教师/Agent 身份声明')
   }
-  return { ...command, actor: LOCAL_SUBMITTER_ACTOR }
+  // Legacy local reviewer-on-behalf-of-student is an explicit business path.
+  // Its actor is still Main-bound; never trust a user-supplied actorId.
+  return { ...command, actor: claim.role === 'student' ? LOCAL_SUBMITTER_ACTOR : LOCAL_REVIEWER_ACTOR }
 }

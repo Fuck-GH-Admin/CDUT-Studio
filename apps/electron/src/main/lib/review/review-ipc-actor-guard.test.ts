@@ -35,11 +35,18 @@ describe('补件应答本地身份边界', () => {
     expect(result.requestId).toBe('reply-1')
     expect(claim.actor.actorId).toBe('forged-name')
   })
-  test('不能把校方、教师或审核员角色用于学生回件', () => {
-    for (const role of ['teacher', 'reviewer', 'system', 'student']) {
-      for (const source of role === 'student' ? ['school', 'agent', 'mock'] : ['local']) {
-        expect(() => bindLocalSubmitterCommand({ actor: { role, actorSource: source, actorId: 'claimed' } })).toThrow('本地补件应答 IPC')
-      }
+  test('旧版本地审核员代提交路径保留，但其审计身份也来自 Main', () => {
+    const bound = bindLocalSubmitterCommand({ actor: {
+      role: 'reviewer', actorSource: 'local', actorId: 'claimed-admin',
+    } })
+    expect(bound.actor).toEqual(LOCAL_REVIEWER_ACTOR)
+  })
+  test('不能把校方、教师或 Agent 角色用于学生回件', () => {
+    for (const role of ['teacher', 'system', 'school-admin']) {
+      expect(() => bindLocalSubmitterCommand({ actor: { role, actorSource: 'local', actorId: 'claimed' } })).toThrow('本地补件应答 IPC')
+    }
+    for (const source of ['school', 'agent', 'mock']) {
+      expect(() => bindLocalSubmitterCommand({ actor: { role: 'student', actorSource: source, actorId: 'claimed' } })).toThrow('本地补件应答 IPC')
     }
     expect(() => bindLocalSubmitterCommand({})).toThrow()
   })
