@@ -93,9 +93,17 @@
 `FALLBACK_TEMPLATE_DRAFT_V3` → 保存 draft → 提示去「审核模板」编辑/确认/发布。
 **发布仍由既有 `PUBLISH_TEMPLATE_V2` 与 T01 负责人确认完成**，本桥接不发布任何模板。
 
-状态调整：PUBLIC FALLBACK 由 `FOLLOWUP_REQUIRED` 改为 **WIRED（Main+UI 已通，
-真机未跑端到端）**；仍缺「未匹配材料 → 草稿 → 负责人确认 → 发布 → 真实 Run」的
-一次真机证据，需要 B30 物理原件接入才能触发 unmatched。
+状态调整：PUBLIC FALLBACK 由 `FOLLOWUP_REQUIRED` 改为 **WIRED（Main+UI 已通）**。
+
+**整链 Main 层已实证**（`review-v3-fallback-chain.test.ts`）：
+`B1AuthorDocument` → `fallbackDraftFromB1` → 既有 `saveDraft` → 既有 `publishTemplate`
+→ 既有 `createCaseFromTemplate` 建真实案卷 → 既有 `runTemplateRuleReview` 产出真实
+`ReviewRunV2`（`run-tpl-*`，`inputManifest.planFingerprint` 与返回值一致）。
+关键负例：兜底草稿的判据**全部停在 `awaiting-confirmation`**，理由为
+「该规则不是确定性执行类型」——**既不会判 compliant，也不会被判成执行失败**。
+
+仍缺：一次**真机 UI** 的 `unmatched 材料 → 草稿 → 负责人确认 → 发布 → Run`，
+需要 B30 物理原件接入才能触发 unmatched；该段记为待跑，不标 PASS。
 
 ### A15 状态（本轮不重做 S1–S3）
 
