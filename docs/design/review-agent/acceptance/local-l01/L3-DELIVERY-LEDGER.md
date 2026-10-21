@@ -1,3 +1,20 @@
+### 上游 PR（Nya-Angle/CDUT-Studio）
+
+**PR**：https://github.com/Nya-Angle/CDUT-Studio/pull/38
+**分支**：`Fuck-GH-Admin:feat/review-v3-m4` → `Nya-Angle/CDUT-Studio:main`
+**说明文档**：`docs/design/review-agent/UPSTREAM-PR-DESCRIPTION.md`
+
+| 项 | 值 |
+|---|---|
+| 基线 | 已合并上游 `c406c2af3`（CDUT Science 首版 + Better），唯一冲突为 `apps/electron/package.json` 版本号 |
+| 规模 | 1053 提交 / 1844 文件 / +361217 −5291 |
+| 分支裁剪 | 剔除 `outputs/`（816 个试验输出约 14MB）与 `work/{reports,review-framework-trial,decision-log}`；保留 `work/e2e` 脚手架 |
+| 版本 | 分支上对齐上游 `0.15.146`，使 PR 不主张版本变更（发版号由发版负责人决定） |
+| 可合并性 | GitHub 报告 `mergeable=true`；创建时 CI 7 项进行中 |
+| 仓库来源 | 上游不是本仓库的父仓库，因此先 fork `Fuck-GH-Admin/CDUT-Studio` 再推送分支 |
+| 分支备份 | 同一分支也已推送至本仓库 `origin/feat/review-v3-m4` |
+
+---
 ### 批次与报告的验收边界（如实记录）
 
 **批次管理 UI**：`批次管理` 入口与「新建批次」对话框在真机可达（输出为空态按钮
