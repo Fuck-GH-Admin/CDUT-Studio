@@ -2511,45 +2511,48 @@ const scenarios = {
     const docPath = process.env.E2E_DOCX_PATH ?? ''
     if (zone?.ok) {
       await sleep(2000)
-      // 先按「模态对话框自动获得焦点」直接输入（真机桌面下最可靠）
-      spawnSync('xdotool', ['key', '--clearmodifiers', 'ctrl+l'], { stdio: 'ignore' })
-      await sleep(500)
-      spawnSync('xdotool', ['type', '--delay', '30', docPath], { stdio: 'ignore' })
-      await sleep(500)
-      spawnSync('xdotool', ['key', 'Return'], { stdio: 'ignore' })
-      await sleep(2500)
-      const directCount = await evaluate(send, `
-        const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
-        return (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).length
-      `)
-      trace.push('direct/docs=' + directCount)
-      if (typeof directCount === 'number' && directCount > 0) {
-        await sleep(2000)
-      } else {
-      const names = spawnSync('xdotool', ['search', '--onlyvisible', '--name', ''], { encoding: 'utf8' })
-      const ids = String(names.stdout ?? '').split('\n').map((x) => x.trim()).filter(Boolean)
-      const described = ids.map((id) => {
-        const title = spawnSync('xdotool', ['getwindowname', id], { encoding: 'utf8' })
-        return { id, name: String(title.stdout ?? '').trim() }
-      })
-      trace.push('xwindows=' + JSON.stringify(described.map((w) => w.name || w.id).slice(0, 8)))
-      const candidates = described.filter((w) => !/openbox/i.test(w.name) && !/CDUT Studio/i.test(w.name)).slice(0, 3)
-      for (const candidate of candidates) {
-        spawnSync('xdotool', ['windowactivate', '--sync', String(candidate.id)], { stdio: 'ignore' })
-        await sleep(300)
-        spawnSync('xdotool', ['key', '--window', String(candidate.id), '--clearmodifiers', 'ctrl+l'], { stdio: 'ignore' })
-        await sleep(300)
-        spawnSync('xdotool', ['type', '--window', String(candidate.id), '--delay', '20', docPath], { stdio: 'ignore' })
-        await sleep(300)
-        spawnSync('xdotool', ['key', '--window', String(candidate.id), 'Return'], { stdio: 'ignore' })
-        await sleep(1500)
-        const count = await evaluate(send, `
+      // 关闭可能残留的旧对话框，避免把输入投给上一次的窗口
+      const stale = spawnSync('xdotool', ['search', '--name', 'Open Files'], { encoding: 'utf8' })
+      for (const id of String(stale.stdout ?? '').split('\n').map((x) => x.trim()).filter(Boolean)) {
+        spawnSync('xdotool', ['windowkill', id], { stdio: 'ignore', timeout: 3000 })
+      }
+      // 原生对话框在 Linux Electron 上标题为 "Open Files"（已用 xwininfo 确认），
+      // 按标题精确激活该窗口后投递绝对路径，而不是盲猜窗口。
+      let dialogId = null
+      for (let i = 0; i < 24; i += 1) {
+        await sleep(500)
+        const found = spawnSync('xdotool', ['search', '--name', 'Open Files'], { encoding: 'utf8' })
+        const ids = String(found.stdout ?? '').split('\n').map((x) => x.trim()).filter(Boolean)
+        if (ids.length) { dialogId = ids[ids.length - 1]; break }
+      }
+      trace.push('dialog=' + dialogId)
+      if (dialogId) {
+        if (process.env.E2E_MANUAL_PICK === '1') {
+          // 关键：原生模态对话框打开期间 Runtime.evaluate 不会返回，
+          // 因此这里只能纯计时等待人工选择，绝不轮询页面。
+          const waitMs = Number(process.env.E2E_MANUAL_WAIT_MS ?? 90000)
+          trace.push('manual-pick: 等待人工选择 ' + waitMs + 'ms')
+          await sleep(waitMs)
+        }
+        const run = (args) => spawnSync('xdotool', args, { stdio: 'ignore', timeout: 4000 })
+        // 文件已经放到对话框默认目录（下载），直接输文件名触发搜索再回车，
+        // 避免依赖 GTK4 的路径输入栏（Ctrl+L 在 GTK4 无效，已用截图确认）。
+        const fileName = (docPath.split('/').pop() ?? '').replace(/\.docx$/i, '')
+        if (process.env.E2E_MANUAL_PICK !== '1') {
+          run(['windowactivate', dialogId])
+          run(['windowfocus', dialogId])
+          await sleep(800)
+          run(['key', '--clearmodifiers', 'ctrl+a'])
+          run(['type', '--delay', '40', fileName])
+          await sleep(1500)
+          run(['key', 'Return'])
+          await sleep(2500)
+        }
+        const opened = await evaluate(send, `
           const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
           return (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).length
         `)
-        trace.push('try:' + candidate.id + ' docs=' + count)
-        if (typeof count === 'number' && count > 0) break
-      }
+        trace.push('afterDialog=' + opened)
       }
       for (let i = 0; i < 10; i += 1) {
         const count = await evaluate(send, `

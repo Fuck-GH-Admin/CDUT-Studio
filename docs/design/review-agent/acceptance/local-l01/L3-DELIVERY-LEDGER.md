@@ -1,3 +1,26 @@
+### M4 收尾轮：自动化回归与模型矩阵（本轮新增）
+
+**A15 确定性流程在新 main 上复跑（全部通过）**：
+
+| 场景 | 结果 |
+|---|---|
+| `flow-a15-s2` 四案例 | 18 人 `[compliant, compliant]`；21 人 `[non-compliant, compliant]`；人数未知 `[awaiting-confirmation, compliant]`；缺计划书 `[compliant, awaiting-supplement]` |
+| `flow-a15-s3-01` 补件两轮 | 首轮 `partially-completed`（材料待补件）→ 开补件 → 第一轮 `insufficient`（1 份原件）→ 第二轮 `satisfied`（2 份原件，新 `doc-2-*`）→ 新 Run 产生 |
+
+**模型可用性矩阵**（应用内 `T01 受控模型起草` 端口实测，非仅 curl）：
+
+| 模型 | 应用内调用 | 说明 |
+|---|---|---|
+| `mimo-v2.6-flash` | **PASS** | 返回 `{"ok":true}`，渠道名与模型标识正确回传 |
+| `mimo-v2.6-pro` | **PASS** | 同上 |
+| `minimax-m3.1-flash` | **PASS** | 同上 |
+| `glm-5.3-flash` / `step-5-preview` | 渠道可用 | 已在渠道模型清单内 |
+| `minimax-m3` | **渠道已下线** | 赞助渠道返回 `model_not_found`，已从 E2E 清单移除 |
+
+**人工验收素材包**：`work/e2e/manual-kit/`（4 份真实 DOCX + `env.sh` + `README-A15-S4.md`），
+供有桌面会话的操作者完成唯一无法自动化的「OS 文件选择器导入」一步，并附 6 步验证清单与反例。
+
+---
 ### F01–F18 状态矩阵（合并后新 main 上实测）
 
 判定口径（不混用）：**PASS_SCOPED** = 代码已合入 + 该功能定向测试在新 main 通过；
