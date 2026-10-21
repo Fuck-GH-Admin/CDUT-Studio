@@ -42,7 +42,9 @@ export type T04PublishedConstraint = {
   confirmedAt: string
   /** Same logical policy limit across versions; T04 conflict resolution requires a named decision. */
   claimKey?: string
-  constraint: { kind: 'field-maximum'; fieldKey: string; maximum: string; unit?: string }
+  constraint:
+    | { kind: 'field-maximum'; fieldKey: string; maximum: string; unit?: string }
+    | { kind: 'field-minimum'; fieldKey: string; minimum: string; unit?: string }
 }
 
 /** Main-verified case/subject snapshot. Absence is NOT zero or a missing file. */
@@ -134,11 +136,11 @@ export function compilePublishedTemplateReviewPlan(input: T04PublishedPlanInput)
         !nonempty(c.confirmedBy) || !nonempty(c.confirmedAt) ||
         (c.claimKey !== undefined && !nonempty(c.claimKey)) || !rule ||
         rule.execution !== 'deterministic' || rule.confirmation !== 'confirmed' ||
-        c.constraint.kind !== 'field-maximum')
+        !['field-maximum', 'field-minimum'].includes(c.constraint.kind))
       return reject('Confirmed typed constraint must match a deterministic published RuleSpec: ' + key)
     const f = fieldDefinitions.get(c.constraint.fieldKey)
     if (!f || f.kind !== 'number' || f.scope && f.scope !== rule.targetScope ||
-        !/^-?\d+(?:\.\d{1,6})?$/.test(c.constraint.maximum) ||
+        !/^-?\d+(?:\.\d{1,6})?$/.test(c.constraint.kind === 'field-maximum' ? c.constraint.maximum : c.constraint.minimum) ||
         (c.constraint.unit && f.unit && c.constraint.unit !== f.unit))
       return reject('Field maximum has incompatible field, scope, numeric value or unit: ' + key)
     typed.set(key, c)
@@ -176,8 +178,11 @@ export function compilePublishedTemplateReviewPlan(input: T04PublishedPlanInput)
     const operation: T04Operation = materialSlotId !== null && slots.has(materialSlotId)
       ? { kind: 'material-min-count', field: materialField(materialSlotId), minimum: slots.get(materialSlotId)!.minCount }
       : constraint
-        ? { kind: 'value-limit', field: constraint.constraint.fieldKey, maximum: constraint.constraint.maximum,
-            ...(constraint.constraint.unit ? {unit:constraint.constraint.unit} : {}) }
+        ? constraint.constraint.kind === 'field-minimum'
+          ? { kind: 'value-minimum', field: constraint.constraint.fieldKey, minimum: constraint.constraint.minimum,
+              ...(constraint.constraint.unit ? { unit:constraint.constraint.unit } : {}) }
+          : { kind: 'value-limit', field: constraint.constraint.fieldKey, maximum: constraint.constraint.maximum,
+              ...(constraint.constraint.unit ? { unit:constraint.constraint.unit } : {}) }
         : compileT04Operation(rule)
     const selected = targets.filter(t => t.scope === rule.targetScope)
     if (!selected.length) return reject('Rule has no matching target scope: ' + rule.id)

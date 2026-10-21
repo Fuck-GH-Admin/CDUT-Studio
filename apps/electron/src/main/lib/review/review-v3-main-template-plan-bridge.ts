@@ -33,7 +33,7 @@ interface TemplateCriterionDeterministicConstraint {
   operator?: string
   threshold?: number
   unit?: string
-  ownerStatement?: { actorId?: string; confirmedAt?: string; statement?: string }
+  ownerStatement?: { kind?: string; text?: string; enteredBy?: string; enteredAt?: string; actorId?: string; confirmedAt?: string; statement?: string }
 }
 
 /** 一个未映射的约束：必须如实报出，不能静默丢弃或降级。 */
@@ -78,8 +78,13 @@ export function adaptT01ConstraintsToT04(
     if (!raw || raw.kind !== 'field-number-limit') continue
     const ruleId = ruleIdOf(sectionId, criterion.id)
 
-    // 未签名/未确认的约束不能进入正式计划
-    if (!raw.ownerStatement?.actorId || !raw.ownerStatement.confirmedAt) {
+    // 真实 T01 作者编辑器与旧 A15 夹具均可读取，保留实际确认人和时间。
+    const statement = raw.ownerStatement
+    const confirmedBy = statement?.enteredBy?.trim() || statement?.actorId?.trim()
+    const confirmedAt = statement?.enteredAt || statement?.confirmedAt
+    const authored = statement?.enteredBy !== undefined
+    if (!confirmedBy || !confirmedAt || !Number.isFinite(Date.parse(confirmedAt)) ||
+        (authored && (statement?.kind !== 'owner-statement' || !statement.text?.trim()))) {
       unresolved.push({ ruleId, fieldKey: raw.fieldKey ?? '', operator: raw.operator ?? '', reason: '负责人尚未确认该数值规则' })
       continue
     }
@@ -92,9 +97,9 @@ export function adaptT01ConstraintsToT04(
       unresolved.push({ ruleId, fieldKey: raw.fieldKey, operator: raw.operator ?? '', reason: '模板中不存在该字段' })
       continue
     }
-    if (raw.operator !== 'lte') {
+    if (raw.operator !== 'lte' && raw.operator !== 'gte') {
       unresolved.push({ ruleId, fieldKey: raw.fieldKey, operator: raw.operator ?? '',
-        reason: `T04 尚无 ${String(raw.operator)} 对应算子，不得冒充上限规则` })
+        reason: `T04 不支持 ${String(raw.operator)}，不得猜测比较语义` })
       continue
     }
     const policyVersionId = rulePolicy.get(ruleId)
@@ -108,14 +113,13 @@ export function adaptT01ConstraintsToT04(
       ruleId,
       // 正式运行规则身份与 resolveEffectiveRules 一致，不采用 template-owner: 前缀
       policyVersionId,
-      confirmedBy: raw.ownerStatement.actorId,
-      confirmedAt: raw.ownerStatement.confirmedAt,
-      constraint: {
-        kind: 'field-maximum',
-        fieldKey: raw.fieldKey,
-        maximum: String(raw.threshold),
-        ...(raw.unit ? { unit: raw.unit } : {}),
-      },
+      confirmedBy,
+      confirmedAt,
+      constraint: raw.operator === 'gte'
+        ? { kind: 'field-minimum', fieldKey: raw.fieldKey, minimum: String(raw.threshold),
+            ...(raw.unit ? { unit: raw.unit } : {}) }
+        : { kind: 'field-maximum', fieldKey: raw.fieldKey, maximum: String(raw.threshold),
+            ...(raw.unit ? { unit: raw.unit } : {}) },
     })
   }
   return { constraints, unresolved }

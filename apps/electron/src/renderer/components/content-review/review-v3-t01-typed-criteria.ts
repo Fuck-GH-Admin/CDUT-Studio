@@ -114,10 +114,6 @@ export function validateT01TypedCriteria(template: TemplateVersion): string[] {
           !Number.isFinite(raw.threshold)) {
         errors.push(`${location} 的比较符或阈值无效`)
       }
-      // Main 当前仅有 field-maximum/lte；不能发布一个必然在运行时被阻断的下限规则。
-      if (raw.operator === 'gte') {
-        errors.push(`${location} 的「大于等于」下限规则尚未接入正式 T04 执行，请保留草稿等待规则算子接线`)
-      }
       const owner = raw.ownerStatement
       if (!owner || owner.kind !== 'owner-statement' || !owner.text?.trim() ||
           !owner.enteredBy?.trim() || !Number.isFinite(Date.parse(owner.enteredAt))) {
