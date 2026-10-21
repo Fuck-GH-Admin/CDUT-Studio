@@ -13,8 +13,8 @@
  * - 同一 requestId 幂等，重复提交返回既有回执；
  * - 绝不把「文件躺在磁盘上」当作已入库。
  */
-import { createHash } from 'node:crypto'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, relative, sep } from 'node:path'
 import { BrowserWindow, dialog } from 'electron'
@@ -56,14 +56,18 @@ export interface T06CommitGroup {
   title?: string
   applicant?: string
   caseId?: string
+  /** 每个案卷可独立选择已发布模板；未传时兼容旧单模板批次。 */
+  templateId?: string
+  templateVersion?: number
 }
 
 export interface T06PhysicalCommitRequest {
   requestId: string
   selectionId: string
   previewFingerprint: string
-  templateId: string
-  templateVersion: number
+  /** 旧版整批固定模板；新式按组设置 templateId/templateVersion 时可不传。 */
+  templateId?: string
+  templateVersion?: number
   batchName: string
   groups: T06CommitGroup[]
 }
@@ -80,6 +84,8 @@ export interface T06CommitReceipt {
   requestId: string
   cases: T06CaseReceipt[]
   batchId?: string
+  /** 混合业务会按已发布模板拆为多个真实批次，而不是伪造跨模板锁。 */
+  batches?: Array<{ batchId: string; templateId: string; templateVersion: number; caseIds: string[] }>
   batchError?: string
 }
 
@@ -93,6 +99,7 @@ interface StoredEntry {
   entryId: string
   relativePath: string
   byteLength: number
+  contentSha256: string
   /** Main-only：绝对字节来源（目录文件路径或 ZIP 内条目） */
   absolutePath?: string
   zipEntryName?: string
@@ -104,6 +111,8 @@ interface StoredSelection {
   sourceKind: T06SourceKind
   /** ZIP 只读取一次并常驻内存，避免提交时重读磁盘导致与预览不一致 */
   zipBytes?: Uint8Array
+  /** 同一提交中的 ZIP 只解压一次；大量文件不能逐条重复解压整个 ZIP。 */
+  zipDecodedCache?: Map<string, Uint8Array>
   entries: StoredEntry[]
   warnings: string[]
   createdAt: number
@@ -112,18 +121,31 @@ interface StoredSelection {
 const selections = new Map<string, StoredSelection>()
 /** requestId → 回执（幂等） */
 const receipts = new Map<string, T06CommitReceipt>()
-/** entryId → 已入库的 DocumentVersion，保证重复提交不重复登记 */
+const receiptRequests = new Map<string, string>()
+/** (来源选择、目标案卷、原件令牌) → 实际登记的版本。不能跨案卷复用。 */
 const registered = new Map<string, string>()
 
 const sha256 = (value: Uint8Array | string): string =>
   createHash('sha256').update(value).digest('hex')
 
-function fingerprintOf(entries: Array<{ relativePath: string; byteLength: number }>): string {
+function fingerprintOf(entries: Array<{ relativePath: string; byteLength: number; contentSha256: string }>): string {
   const canonical = entries
-    .map((entry) => `${entry.relativePath}\u0000${entry.byteLength}`)
+    .map((entry) => `${entry.relativePath}\u0000${entry.byteLength}\u0000${entry.contentSha256}`)
     .sort()
     .join('\u0001')
   return sha256(canonical)
+}
+
+/** 64 KiB 分块读取，避免文件选择预览时把超大原件完整装入内存。 */
+function hashFile(path: string): string {
+  const hash = createHash('sha256')
+  const fd = openSync(path, 'r')
+  try {
+    const chunk = Buffer.allocUnsafe(64 * 1024)
+    let count: number
+    while ((count = readSync(fd, chunk, 0, chunk.length, null)) > 0) hash.update(chunk.subarray(0, count))
+    return hash.digest('hex')
+  } finally { closeSync(fd) }
 }
 
 /** 递归枚举目录下的原件；跳过隐藏文件与符号链接，避免越界。 */
@@ -134,7 +156,7 @@ function walkDirectory(root: string): Array<{ absolutePath: string; relativePath
     for (const name of readdirSync(current)) {
       if (name.startsWith('.')) continue
       const full = join(current, name)
-      const stats = statSync(full)
+      const stats = lstatSync(full)
       if (stats.isSymbolicLink()) continue
       if (stats.isDirectory()) { visit(full); continue }
       if (!stats.isFile() || stats.size > MAX_ENTRY_BYTES) continue
@@ -162,7 +184,8 @@ export function buildT06SelectionFromPath(target: string, sourceKind: T06SourceK
     const listed = walkDirectory(target)
     if (listed.length >= MAX_ENTRIES) warnings.push(`来源条目超过 ${MAX_ENTRIES} 条，仅处理前 ${MAX_ENTRIES} 条`)
     for (const item of listed) {
-      entries.push({ entryId: `e-${sha256(item.relativePath + '\u0000' + item.byteLength).slice(0, 24)}`, ...item })
+      const contentSha256 = hashFile(item.absolutePath)
+      entries.push({ entryId: `e-${sha256(item.relativePath + '\u0000' + contentSha256).slice(0, 24)}`, ...item, contentSha256 })
     }
   } else {
     const raw = readFileSync(target)
@@ -174,9 +197,10 @@ export function buildT06SelectionFromPath(target: string, sourceKind: T06SourceK
     for (const accepted of decoded.accepted) {
       if (entries.length >= MAX_ENTRIES) { warnings.push(`ZIP 条目超过 ${MAX_ENTRIES} 条，已截断`); break }
       const relativePath = accepted.entryName.split('/').filter(Boolean).join('/')
+      const contentSha256 = sha256(accepted.bytes)
       entries.push({
-        entryId: `e-${sha256(relativePath + '\u0000' + accepted.bytes.byteLength).slice(0, 24)}`,
-        relativePath, zipEntryName: accepted.entryName, byteLength: accepted.bytes.byteLength,
+        entryId: `e-${sha256(relativePath + '\u0000' + contentSha256).slice(0, 24)}`,
+        relativePath, zipEntryName: accepted.entryName, byteLength: accepted.bytes.byteLength, contentSha256,
       })
     }
   }
@@ -185,7 +209,7 @@ export function buildT06SelectionFromPath(target: string, sourceKind: T06SourceK
     throw new CommandValidationError('VALIDATION_FAILED', '选中的来源里没有可入库的原件')
   }
   const selection: StoredSelection = {
-    selectionId: `sel-${sha256(target + '\u0000' + Date.now()).slice(0, 24)}`,
+    selectionId: `sel-${randomUUID()}`,
     fingerprint: fingerprintOf(entries), sourceKind, entries, warnings, createdAt: Date.now(),
     ...(zipBytes ? { zipBytes } : {}),
   }
@@ -214,49 +238,62 @@ export async function pickT06PhysicalSource(sourceKind: T06SourceKind): Promise<
 }
 
 function bytesOf(selection: StoredSelection, entry: StoredEntry): Uint8Array {
+  let bytes: Uint8Array
   if (entry.absolutePath) {
     const raw = readFileSync(entry.absolutePath)
-    return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+    bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+  } else {
+    if (!selection.zipBytes || !entry.zipEntryName) throw new CommandValidationError('NOT_FOUND', 'ZIP 来源已失效，请重新选择')
+    if (!selection.zipDecodedCache) {
+      const decoded = decodeReviewB2Zip(selection.zipBytes)
+      selection.zipDecodedCache = new Map(decoded.accepted.map(item => [item.entryName, item.bytes]))
+    }
+    const found = selection.zipDecodedCache.get(entry.zipEntryName)
+    if (!found) throw new CommandValidationError('NOT_FOUND', `ZIP 条目已不可读：${entry.zipEntryName}`)
+    bytes = found
   }
-  if (!selection.zipBytes || !entry.zipEntryName) throw new CommandValidationError('NOT_FOUND', 'ZIP 来源已失效，请重新选择')
-  const decoded = decodeReviewB2Zip(selection.zipBytes)
-  const found = decoded.accepted.find((item) => item.entryName === entry.zipEntryName)
-  if (!found) throw new CommandValidationError('NOT_FOUND', `ZIP 条目已不可读：${entry.zipEntryName}`)
-  return found.bytes
+  if (bytes.byteLength !== entry.byteLength || sha256(bytes) !== entry.contentSha256) {
+    throw new CommandValidationError('VALIDATION_FAILED', `预览后原件内容已变化，请重新选择来源：${entry.relativePath}`)
+  }
+  return bytes
 }
 
 /** 把单个条目落成真实 DocumentVersion（走既有原生材料登记）。 */
 async function registerEntry(selection: StoredSelection, entry: StoredEntry, caseId: string): Promise<string> {
-  const cached = registered.get(entry.entryId)
+  const identity = `${selection.selectionId}\u0000${caseId}\u0000${entry.entryId}`
+  const cached = registered.get(identity)
   if (cached) return cached
   const bytes = bytesOf(selection, entry)
-  const tempPath = join(tmpdir(), `t06-${entry.entryId}-${basename(entry.relativePath) || 'entry.bin'}`)
-  const { writeFileSync } = await import('node:fs')
+  const tempPath = join(tmpdir(), `t06-${sha256(identity).slice(0, 24)}-${basename(entry.relativePath) || 'entry.bin'}`)
   writeFileSync(tempPath, bytes)
-  const aggregate = readAggregate(caseId)
-  if (!aggregate) throw new CommandValidationError('NOT_FOUND', '案卷不存在')
-  // 案卷类型决定写入通道：原生 V3 案卷走原生登记，模板创建的 V2 案卷走 V2 材料服务
-  const versionId = isNativeWorkspaceCaseV3(aggregate)
-    ? await (async () => {
-      const document = await registerNativeWorkspaceMaterialV3(caseId, tempPath, 'evidence', MAIN_ACTOR)
-      const after = readAggregate(caseId)
-      const found = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
-      if (!found) throw new CommandValidationError('INVALID_TRANSITION', '原件已登记但找不到版本记录')
-      return found.versionId
-    })()
-    : await (async () => {
-      const written = await registerMaterial(caseId, {
-        requestId: `t06-register-${entry.entryId}`,
-        actor: MAIN_ACTOR,
-        expectedRevision: aggregate.caseV2.revision,
-        payload: { sourcePath: tempPath, role: 'evidence' } as never,
-      })
-      if (!written.ok) throw new CommandValidationError(written.code, written.message)
-      if (!written.entity) throw new CommandValidationError('INVALID_TRANSITION', '原件已登记但未返回版本记录')
-      return written.entity.versionId
-    })()
-  registered.set(entry.entryId, versionId)
-  return versionId
+  try {
+    const aggregate = readAggregate(caseId)
+    if (!aggregate) throw new CommandValidationError('NOT_FOUND', '案卷不存在')
+    // 案卷类型决定写入通道：原生 V3 案卷走原生登记，模板创建的 V2 案卷走 V2 材料服务
+    const versionId = isNativeWorkspaceCaseV3(aggregate)
+      ? await (async () => {
+        const document = await registerNativeWorkspaceMaterialV3(caseId, tempPath, 'evidence', MAIN_ACTOR)
+        const after = readAggregate(caseId)
+        const found = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
+        if (!found) throw new CommandValidationError('INVALID_TRANSITION', '原件已登记但找不到版本记录')
+        return found.versionId
+      })()
+      : await (async () => {
+        const written = await registerMaterial(caseId, {
+          requestId: `t06-register-${sha256(identity).slice(0, 28)}`,
+          actor: MAIN_ACTOR,
+          expectedRevision: aggregate.caseV2.revision,
+          payload: { sourcePath: tempPath, role: 'evidence' } as never,
+        })
+        if (!written.ok) throw new CommandValidationError(written.code, written.message)
+        if (!written.entity) throw new CommandValidationError('INVALID_TRANSITION', '原件已登记但未返回版本记录')
+        return written.entity.versionId
+      })()
+    registered.set(identity, versionId)
+    return versionId
+  } finally {
+    try { unlinkSync(tempPath) } catch { /* 无法清理时不掩盖原有写入失败 */ }
+  }
 }
 
 /**
@@ -268,28 +305,53 @@ async function registerEntry(selection: StoredSelection, entry: StoredEntry, cas
  */
 export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest): Promise<T06CommitReceipt> {
   if (!request?.requestId?.trim()) throw new CommandValidationError('VALIDATION_FAILED', '缺少请求号')
+  if (!request.batchName?.trim() || !Array.isArray(request.groups) || !request.groups.length) {
+    throw new CommandValidationError('VALIDATION_FAILED', '批次名称无效或没有确认案卷')
+  }
+  const requestFingerprint = sha256(JSON.stringify(request))
   const cached = receipts.get(request.requestId)
-  if (cached) return cached
+  if (cached) {
+    if (receiptRequests.get(request.requestId) !== requestFingerprint) {
+      throw new CommandValidationError('VALIDATION_FAILED', '相同请求号包含不同的分案内容，请重新选择来源')
+    }
+    return cached
+  }
 
   const selection = selections.get(request.selectionId)
   if (!selection) throw new CommandValidationError('NOT_FOUND', '来源选择已失效，请重新选择')
   if (selection.fingerprint !== request.previewFingerprint) {
     throw new CommandValidationError('VALIDATION_FAILED', '来源内容在预览后发生变化，请重新预览')
   }
-  const template = getTemplate(request.templateId, request.templateVersion)
-  if (!template || template.status !== 'published') {
-    throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '模板不存在或未发布')
-  }
   const byEntry = new Map(selection.entries.map((entry) => [entry.entryId, entry]))
+  const assigned = new Set<string>()
+  const groupIds = new Set<string>()
+  for (const group of request.groups) {
+    if (!group || !group.groupId?.trim() || groupIds.has(group.groupId) ||
+        !['create', 'existing'].includes(group.action) || !Array.isArray(group.entryIds) || !group.entryIds.length) {
+      throw new CommandValidationError('VALIDATION_FAILED', '存在重复、空材料或非法的案卷组')
+    }
+    groupIds.add(group.groupId)
+    for (const entryId of group.entryIds) {
+      if (!byEntry.has(entryId)) throw new CommandValidationError('VALIDATION_FAILED', '来源中没有原件：' + entryId)
+      if (assigned.has(entryId)) throw new CommandValidationError('VALIDATION_FAILED', '同一原件不能分配给不同案卷：' + entryId)
+      assigned.add(entryId)
+    }
+  }
 
   const cases: T06CaseReceipt[] = []
-  const succeededCaseIds: string[] = []
+  const succeededByTemplate = new Map<string, { templateId: string; templateVersion: number; caseIds: string[] }>()
   for (const group of request.groups as T06CommitGroup[]) {
     let caseId = group.caseId
     try {
+      const templateId = group.templateId ?? request.templateId
+      const templateVersion = group.templateVersion ?? request.templateVersion
+      const template = templateId && templateVersion ? getTemplate(templateId, templateVersion) : undefined
+      if (!template || template.status !== 'published') {
+        throw new CommandValidationError('DEPENDENCY_UNRESOLVED', `案卷“${group.groupId}”尚未匹配可用的已发布模板`)
+      }
       if (group.action === 'create') {
         caseId = `case-${sha256(request.requestId + '\u0000' + group.groupId).slice(0, 24)}`
-        const created = await createCaseFromTemplate(request.templateId, request.templateVersion, {
+        const created = await createCaseFromTemplate(templateId!, templateVersion!, {
           title: group.title?.trim() || group.groupId,
           fieldValues: { applicant: group.applicant ?? '' },
           subjects: [],
@@ -297,6 +359,12 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
         if (!created.ok) throw new CommandValidationError(created.code, created.message)
       } else if (!caseId) {
         throw new CommandValidationError('VALIDATION_FAILED', '绑定既有案卷缺少 caseId')
+      }
+      if (group.action === 'existing') {
+        const existing = readAggregate(caseId!)
+        if (!existing || existing.caseV2.templateId !== templateId || existing.caseV2.templateVersion !== templateVersion) {
+          throw new CommandValidationError('VALIDATION_FAILED', '已有案卷的模板版本与本组选择不一致')
+        }
       }
       const documents: Array<{ entryId: string; documentVersionId: string }> = []
       const failures: string[] = []
@@ -314,7 +382,10 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
         cases.push({ groupId: group.groupId, caseId, documents, status: 'failed', error: failures.join('；') })
       } else {
         cases.push({ groupId: group.groupId, caseId, documents, status: 'done' })
-        succeededCaseIds.push(caseId!)
+        const key = `${templateId!}@${templateVersion!}`
+        const item = succeededByTemplate.get(key) ?? { templateId: templateId!, templateVersion: templateVersion!, caseIds: [] }
+        item.caseIds.push(caseId!)
+        succeededByTemplate.set(key, item)
       }
     } catch (cause) {
       cases.push({
@@ -324,33 +395,36 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
     }
   }
 
-  let batchId: string | undefined
-  let batchError: string | undefined
-  if (succeededCaseIds.length === 0) {
-    batchError = '没有全部原件入库成功的案卷，未创建批次'
-  } else {
+  const batches: NonNullable<T06CommitReceipt['batches']> = []
+  const batchErrors: string[] = []
+  for (const [templateKey, group] of succeededByTemplate) {
     try {
-      batchId = `batch-${sha256(request.requestId).slice(0, 20)}`
+      const template = getTemplate(group.templateId, group.templateVersion)
+      if (!template || template.status !== 'published') throw new Error('模板在入库后被撤销发布')
+      const batchId = `batch-${sha256(request.requestId + '\u0000' + templateKey).slice(0, 20)}`
       createBatchV2({
-        id: batchId, name: request.batchName,
-        templateId: request.templateId, templateVersion: request.templateVersion,
+        id: batchId, name: succeededByTemplate.size > 1 ? `${request.batchName} · ${template.name}` : request.batchName,
+        templateId: group.templateId, templateVersion: group.templateVersion,
         // 政策版本锁沿用模板声明的政策版本，不在此处臆造版本号
         policyVersionLock: (template.policyVersionIds ?? []).map((policyVersionId) => ({
           policyVersionId, version: 1,
         })),
-        caseIds: succeededCaseIds, createdAt: new Date().toISOString(),
+        caseIds: group.caseIds, createdAt: new Date().toISOString(),
       })
+      batches.push({ batchId, ...group })
     } catch (cause) {
-      batchError = cause instanceof Error ? cause.message : String(cause)
-      batchId = undefined
+      batchErrors.push(`${templateKey}：${cause instanceof Error ? cause.message : String(cause)}`)
     }
   }
 
   const receipt: T06CommitReceipt = {
     requestId: request.requestId, cases,
-    ...(batchId ? { batchId } : {}),
-    ...(batchError ? { batchError } : {}),
+    ...(batches[0] ? { batchId: batches[0].batchId, batches } : {}),
+    ...(batchErrors.length || !batches.length ? { batchError: batchErrors.join('；') || '没有全部原件入库成功的案卷，未创建批次' } : {}),
   }
   receipts.set(request.requestId, receipt)
+  receiptRequests.set(request.requestId, requestFingerprint)
+  // 已落库／失败回执都固定后释放解压缓存；来源压缩字节仍可用于重新选择分案。
+  selection.zipDecodedCache = undefined
   return receipt
 }

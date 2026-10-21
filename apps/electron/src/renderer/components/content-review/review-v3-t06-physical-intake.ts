@@ -75,8 +75,8 @@ export function previewT06PhysicalImport(source: T06PhysicalSelection, options: 
   return { source, groups: [...groups.values()], errors, unassignedCount }
 }
 export type T06GroupChoice =
-  | { action: 'create'; title: string; applicant: string }
-  | { action: 'existing'; caseId: string }
+  | { action: 'create'; title: string; applicant: string; templateId?: string; templateVersion?: number }
+  | { action: 'existing'; caseId: string; templateId?: string; templateVersion?: number }
   | { action: 'exclude' }
 export interface T06CommitGroup {
   groupId: string
@@ -85,13 +85,15 @@ export interface T06CommitGroup {
   title?: string
   applicant?: string
   caseId?: string
+  templateId?: string
+  templateVersion?: number
 }
 export interface T06PhysicalCommitRequest {
   requestId: string
   selectionId: string
   previewFingerprint: string
-  templateId: string
-  templateVersion: number
+  templateId?: string
+  templateVersion?: number
   batchName: string
   groups: T06CommitGroup[]
 }
@@ -99,12 +101,13 @@ export interface T06PhysicalCommitRequest {
 export function planT06PhysicalImport(
   preview: T06PhysicalPreview,
   decisions: Readonly<Record<string, T06GroupChoice>>,
-  input: { requestId: string; templateId: string; templateVersion: number; batchName: string; knownCaseIds: readonly string[] },
+  input: {
+    requestId: string; templateId?: string; templateVersion?: number; batchName: string; knownCaseIds: readonly string[]
+    knownCases?: ReadonlyArray<{ caseId: string; templateId: string; templateVersion: number }>
+  },
 ): { request?: T06PhysicalCommitRequest; errors: string[] } {
   const errors = [...preview.errors], groups: T06CommitGroup[] = []
-  if (!input.requestId?.trim() || !input.templateId?.trim() ||
-      !Number.isSafeInteger(input.templateVersion) || input.templateVersion < 1 ||
-      !input.batchName?.trim()) errors.push('批次名称、请求号或模板版本无效')
+  if (!input.requestId?.trim() || !input.batchName?.trim()) errors.push('批次名称或请求号无效')
   if (!preview.groups.length) errors.push('没有可导入的材料')
   const known = new Set(input.knownCaseIds), assigned = new Set<string>()
   for (const group of preview.groups) {
@@ -112,17 +115,26 @@ export function planT06PhysicalImport(
     if (!decision) { errors.push('尚未确认：' + group.name); continue }
     if (decision.action === 'exclude') continue
     if (group.unassigned) { errors.push('根目录文件尚未指定案卷组：' + group.name); continue }
+    const templateId = decision.templateId ?? input.templateId
+    const templateVersion = decision.templateVersion ?? input.templateVersion
+    if (!templateId?.trim() || !Number.isSafeInteger(templateVersion) || !templateVersion || templateVersion < 1) {
+      errors.push('尚未为案卷确认业务模板：' + group.name); continue
+    }
     if (decision.action === 'create') {
       if (!decision.title.trim() || !decision.applicant.trim()) { errors.push('新案卷缺标题或申请人：' + group.name); continue }
       groups.push({ groupId: group.groupId, entryIds: group.entries.map(e => e.entryId),
-        action: 'create', title: decision.title.trim(), applicant: decision.applicant.trim() })
+        action: 'create', title: decision.title.trim(), applicant: decision.applicant.trim(), templateId, templateVersion })
     } else {
       if (!known.has(decision.caseId) || assigned.has(decision.caseId)) {
         errors.push('案卷不存在、模板版本不一致或重复绑定：' + group.name); continue
       }
+      const existing = input.knownCases?.find(item => item.caseId === decision.caseId)
+      if (existing && (existing.templateId !== templateId || existing.templateVersion !== templateVersion)) {
+        errors.push('已有关联案卷的模板与当前组不一致：' + group.name); continue
+      }
       assigned.add(decision.caseId)
       groups.push({ groupId: group.groupId, entryIds: group.entries.map(e => e.entryId),
-        action: 'existing', caseId: decision.caseId })
+        action: 'existing', caseId: decision.caseId, templateId, templateVersion })
     }
   }
   if (!groups.length) errors.push('没有确认纳入的案卷')
@@ -144,6 +156,7 @@ export interface T06CommitReceipt {
   requestId: string
   cases: T06CaseReceipt[]
   batchId?: string
+  batches?: Array<{ batchId: string; templateId: string; templateVersion: number; caseIds: string[] }>
   batchError?: string
 }
 /** Main implements these through its existing trusted case/material/batch writer. */
@@ -155,13 +168,17 @@ export interface T06PhysicalWriterPorts {
 /** Independently failing groups remain recoverable; only fully imported cases enter batch. */
 export async function executeT06PhysicalImport(request: T06PhysicalCommitRequest, ports: T06PhysicalWriterPorts): Promise<T06CommitReceipt> {
   const cases: T06CaseReceipt[] = []
+  const succeededByTemplate = new Map<string, { templateId: string; templateVersion: number; caseIds: string[] }>()
   for (const group of request.groups) {
     let caseId = group.caseId
     const documents: T06ItemReceipt[] = []
     try {
+      const templateId = group.templateId ?? request.templateId
+      const templateVersion = group.templateVersion ?? request.templateVersion
+      if (!templateId || !templateVersion) throw new Error('案卷没有可用的模板版本')
       if (group.action === 'create') caseId = await ports.createCase({
         requestId: request.requestId + ':' + group.groupId + ':create',
-        templateId: request.templateId, templateVersion: request.templateVersion,
+        templateId, templateVersion,
         title: group.title!, applicant: group.applicant!,
       })
       if (!caseId) throw new Error('案卷不存在')
@@ -172,18 +189,26 @@ export async function executeT06PhysicalImport(request: T06PhysicalCommitRequest
         }))
       }
       cases.push({ groupId: group.groupId, caseId, documents, status: 'done' })
+      const key = `${templateId}@${templateVersion}`
+      const entry = succeededByTemplate.get(key) ?? { templateId, templateVersion, caseIds: [] }
+      entry.caseIds.push(caseId)
+      succeededByTemplate.set(key, entry)
     } catch (cause) {
       cases.push({ groupId: group.groupId, caseId, documents, status: 'failed',
         error: cause instanceof Error ? cause.message : String(cause) })
     }
   }
-  const caseIds = cases.filter(x => x.status === 'done').map(x => x.caseId!)
-  if (!caseIds.length) return { requestId: request.requestId, cases }
-  try {
-    const batchId = await ports.createBatch({ requestId: request.requestId + ':batch', name: request.batchName,
-      templateId: request.templateId, templateVersion: request.templateVersion, caseIds })
-    return { requestId: request.requestId, cases, batchId }
-  } catch (cause) {
-    return { requestId: request.requestId, cases, batchError: cause instanceof Error ? cause.message : String(cause) }
+  if (!succeededByTemplate.size) return { requestId: request.requestId, cases }
+  const batches: NonNullable<T06CommitReceipt['batches']> = []
+  const errors: string[] = []
+  for (const [key, group] of succeededByTemplate) {
+    try {
+      const batchId = await ports.createBatch({ requestId: request.requestId + ':batch:' + key,
+        name: succeededByTemplate.size === 1 ? request.batchName : request.batchName + ' · ' + key,
+        ...group })
+      batches.push({ batchId, ...group })
+    } catch (cause) { errors.push(key + '：' + (cause instanceof Error ? cause.message : String(cause))) }
   }
+  return { requestId: request.requestId, cases, ...(batches[0] ? { batchId: batches[0].batchId, batches } : {}),
+    ...(errors.length ? { batchError: errors.join('；') } : {}) }
 }
