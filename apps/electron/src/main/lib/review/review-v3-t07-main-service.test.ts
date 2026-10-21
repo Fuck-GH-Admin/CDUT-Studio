@@ -37,7 +37,10 @@ function seedPublishedBatch(batchId: string): void {
     templateId, version: 1, schemaVersion: 2, name: '本地独立评分',
     objectType: 'organization', displayName: { template: '{{name}}' },
     fields: [], sections: [], materialSlots: [], policyVersionIds: [], policyRefs: [],
-    outputs: [], stages: [], status: 'draft', createdAt: '2026-10-21T00:00:00Z',
+    outputs: [],
+    // 发布测试走真实服务端校验；量表模板也须包含一条合法业务流程。
+    stages: [{ id: 'judge-review', name: '评委审核', kind: 'manual-review', executorRole: 'reviewer' }],
+    status: 'draft', createdAt: '2026-10-21T00:00:00Z',
     rubric: {
       dimensions: [
         { id: 'quality', name: '质量', min: 0, max: 5, weight: 1 },
