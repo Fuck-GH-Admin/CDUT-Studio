@@ -30,6 +30,7 @@ import {
   MessageCircle,
 } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
+import { ReviewFirstUseReadiness } from '@/components/onboarding/ReviewFirstUseReadiness'
 import { isEditableTarget } from '@/lib/navigation-controller'
 import {
   reviewActivePaneAtom,
@@ -166,12 +167,44 @@ export function ContentReviewView(): React.ReactElement {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [assistantOpen])
 
+  // 审核模型就绪提示：只在首次进入材料审核时出现，关闭后不再打扰
+  const [reviewReadinessVisible, setReviewReadinessVisible] = React.useState<boolean>(() => {
+    try { return window.localStorage.getItem('cdut.review.readinessAcknowledged') !== '1' } catch { return true }
+  })
+  const dismissReviewReadiness = React.useCallback((): void => {
+    setReviewReadinessVisible(false)
+    try { window.localStorage.setItem('cdut.review.readinessAcknowledged', '1') } catch { /* 忽略存储不可用 */ }
+  }, [])
+
   return (
     <div
       className="relative flex h-full min-h-0 flex-col overflow-hidden bg-content-area outline-none"
       data-profer-navigation-region="content-review"
       tabIndex={-1}
     >
+      {/* 首次进入材料审核时才提示配置审核模型：卡片形式、可关闭，不阻塞主界面 */}
+      {reviewReadinessVisible && (
+        <section aria-label="审核模型就绪检查"
+          className="mx-4 mt-3 shrink-0 rounded-lg border border-border/60 bg-card/80 p-4 shadow-sm">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold">让材料审核做好准备</h2>
+              <p className="mt-1 text-xs text-muted-foreground">已有模型配置会自动读取；也可以先跳过，进入主界面后再到设置里配置。</p>
+            </div>
+            <Button type="button" variant="ghost" size="sm" className="h-7 text-xs"
+              onClick={() => dismissReviewReadiness()}>跳过，稍后设置</Button>
+          </div>
+          <div className="max-h-[38vh] overflow-y-auto">
+            <ReviewFirstUseReadiness />
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button type="button" size="sm" className="h-8 text-xs" onClick={() => dismissReviewReadiness()}>
+              完成，开始审核
+            </Button>
+          </div>
+        </section>
+      )}
+
       {/* 工作台专属二级工具栏：模块导航与操作动作合流，居于 CDUT 专区统一顶栏下方，
           享有完整容器宽度，物理上不会与右上角 Windows 窗口按钮重叠 */}
       <header className="relative z-10 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/60 bg-card/60 px-4 py-2 titlebar-no-drag">
