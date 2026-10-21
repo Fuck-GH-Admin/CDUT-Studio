@@ -2511,6 +2511,21 @@ const scenarios = {
     const docPath = process.env.E2E_DOCX_PATH ?? ''
     if (zone?.ok) {
       await sleep(2000)
+      // 先按「模态对话框自动获得焦点」直接输入（真机桌面下最可靠）
+      spawnSync('xdotool', ['key', '--clearmodifiers', 'ctrl+l'], { stdio: 'ignore' })
+      await sleep(500)
+      spawnSync('xdotool', ['type', '--delay', '30', docPath], { stdio: 'ignore' })
+      await sleep(500)
+      spawnSync('xdotool', ['key', 'Return'], { stdio: 'ignore' })
+      await sleep(2500)
+      const directCount = await evaluate(send, `
+        const agg = await window.reviewAPI.getAggregateV2(${JSON.stringify(caseId)})
+        return (agg?.caseV2?.documents ?? []).filter(d => d.active !== false).length
+      `)
+      trace.push('direct/docs=' + directCount)
+      if (typeof directCount === 'number' && directCount > 0) {
+        await sleep(2000)
+      } else {
       const names = spawnSync('xdotool', ['search', '--onlyvisible', '--name', ''], { encoding: 'utf8' })
       const ids = String(names.stdout ?? '').split('\n').map((x) => x.trim()).filter(Boolean)
       const described = ids.map((id) => {
@@ -2534,6 +2549,7 @@ const scenarios = {
         `)
         trace.push('try:' + candidate.id + ' docs=' + count)
         if (typeof count === 'number' && count > 0) break
+      }
       }
       for (let i = 0; i < 10; i += 1) {
         const count = await evaluate(send, `
