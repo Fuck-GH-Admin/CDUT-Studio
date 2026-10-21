@@ -9,7 +9,9 @@
  * 不重写 T07 的业务算法：分配、回避、评分、排名、同分与冻结全部调用
  * `review-v3-t07-rating-workflow` 的既有纯函数。
  */
-import { getChannelById } from '../channel-manager'
+import { readBatchStateV2 } from './batch-store'
+import { getTemplate } from './template-store'
+import { createT07RoundFromPublishedTemplate } from './review-v3-t07-round-setup'
 import {
   applyT07Action, projectT07View, currentT07Round, computeT07Ranking,
   type T07Action, type T07Actor, type T07SafeCaseMaterial, type T07State, type T07View,
@@ -78,8 +80,12 @@ export function initT07MainState(input: {
 }): T07StateView {
   const actor = deriveT07Actor(input.claim)
   if (actor.role !== 'organizer') throw new Error('T07_ORGANIZER_REQUIRED')
-  if (input.state.batchId !== input.batchId) throw new Error('T07_BATCH_MISMATCH')
-  const persisted = initT07State(input.batchId, input.state, 0)
+  // Renderer 参数 state 为旧 IPC 兼容项，不作为真实评分轮次的数据来源。
+  const batch = readBatchStateV2(input.batchId)?.batch
+  if (!batch) throw new Error('T07_BATCH_NOT_FOUND')
+  const template = getTemplate(batch.templateId, batch.templateVersion)
+  const trustedState = createT07RoundFromPublishedTemplate(batch, template)
+  const persisted = initT07State(input.batchId, trustedState, 0)
   return {
     revision: persisted.revision,
     updatedAt: persisted.updatedAt,
@@ -111,9 +117,9 @@ export function applyT07MainAction(input: {
 }): T07ApplyResult {
   const actor = deriveT07Actor(input.claim)
   const existing = readT07State(input.batchId)
-  if (!existing && !input.initialState) throw new Error('T07_STATE_NOT_INITIALIZED')
+  if (!existing) throw new Error('T07_STATE_NOT_INITIALIZED')
 
-  const base = existing?.state ?? input.initialState!
+  const base = existing.state
   if (base.batchId !== input.batchId) throw new Error('T07_BATCH_MISMATCH')
 
   const next = applyT07Action(base, input.action, {
@@ -122,9 +128,7 @@ export function applyT07MainAction(input: {
     ...(input.naEligible ? { naEligible: input.naEligible } : {}),
   })
 
-  const persisted: T07PersistedState = existing
-    ? writeT07State(input.batchId, next, input.expectedRevision)
-    : initT07State(input.batchId, next, input.expectedRevision)
+  const persisted: T07PersistedState = writeT07State(input.batchId, next, input.expectedRevision)
 
   return {
     revision: persisted.revision,
