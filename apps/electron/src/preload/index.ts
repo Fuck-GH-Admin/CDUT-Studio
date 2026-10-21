@@ -4769,7 +4769,6 @@ const reviewAPI = {
   /** T09 签发学生离线应答包 */
   issueT09StudentPackage: (input: {
     caseId: string; supplementId: string; recipientId: string
-    fieldVisibility?: Record<string, 'public' | 'internal'>
   }) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T09_ISSUE_STUDENT, input) as Promise<{
     packageId: string; actionId: string; json: string
   }>,

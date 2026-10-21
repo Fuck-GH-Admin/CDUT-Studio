@@ -769,17 +769,24 @@ export function registerReviewIpc(): void {
   // ===== T09 离线包（Local-L04 桥接：签发 / 预览 / 幂等导入） =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.T09_ISSUE_STUDENT, (event, input: {
     caseId: string; supplementId: string; recipientId: string
-    fieldVisibility?: Record<string, 'public' | 'internal'>
   }) => {
     assertC0ReviewMainSender(event)
     if (!input?.caseId || !input.supplementId || !input.recipientId) throw new Error('参数非法')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
     const aggregate = getCaseV2Aggregate(input.caseId)
     if (!aggregate) throw new Error('案卷不存在')
+    // 学生包只能包含可信已发布模板明确标为 public 的字段。
+    // Renderer 传来的字段可见性绝不是授权来源，忽略旧版 DTO 的同名属性。
+    const { getTemplate } = require('./template-store') as typeof import('./template-store')
+    const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+    if (!template || template.status !== 'published') throw new Error('T09_PUBLIC_TEMPLATE_NOT_PUBLISHED')
+    const fieldVisibility: Record<string, 'public' | 'internal'> = {}
+    for (const field of template.fields) {
+      fieldVisibility[field.key] = field.visibility === 'public' ? 'public' : 'internal'
+    }
     const { issueT09StudentPackage } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
     return issueT09StudentPackage({
-      aggregate, supplementId: input.supplementId, recipientId: input.recipientId,
-      ...(input.fieldVisibility ? { fieldVisibility: input.fieldVisibility } : {}),
+      aggregate, supplementId: input.supplementId, recipientId: input.recipientId, fieldVisibility,
     })
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T09_ISSUE_JUDGE, (event, input: {
