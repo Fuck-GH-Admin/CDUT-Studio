@@ -1,11 +1,13 @@
 /** F13 公开申诉历史只读投影；不推断旧英文状态的法律含义。 */
-import type { Appeal, BusinessDecision, CaseAggregateV2, DocumentVersion, WorkflowTask } from '@profer/shared'
+import type { Appeal, BusinessDecision, CaseAggregateV2, CommandReceipt, DocumentVersion, WorkflowTask } from '@profer/shared'
 
 export interface F13AppealHistoryEntry {
   appeal: Appeal
   original?: BusinessDecision
   amendment?: BusinessDecision
   reviewTask?: WorkflowTask
+  reviewReceipt?: CommandReceipt
+  withdrawalReceipt?: CommandReceipt
   evidence: Array<{ id: string; document?: DocumentVersion }>
   statusLabel: string
   outcomeLabel: string
@@ -31,6 +33,10 @@ export function buildF13AppealHistory(aggregate: CaseAggregateV2): F13AppealHist
     const candidate = appeal.reviewDecisionId ? decisions.get(appeal.reviewDecisionId) : undefined
     const amendment = candidate?.amendsDecisionId === appeal.againstDecisionId ? candidate : undefined
     const reviewTask = appeal.reviewTaskId ? tasks.get(appeal.reviewTaskId) : undefined
+    const reviewReceipt = aggregate.receiptLog.findLast((receipt) =>
+      receipt.type === 'ReviewLocalAppealV3' && receipt.summary.includes(`申诉 ${appeal.id}：`))
+    const withdrawalReceipt = aggregate.receiptLog.findLast((receipt) =>
+      receipt.type === 'WithdrawLocalAppealV3' && receipt.summary.endsWith(`撤回申诉 ${appeal.id}，原业务决定保留`))
     const evidence = appeal.newEvidenceDocumentVersionIds.map((id) => ({ id, document: documents.get(id) }))
     const warnings: string[] = []
     if (!original) warnings.push('关联的原业务决定缺失')
@@ -41,10 +47,10 @@ export function buildF13AppealHistory(aggregate: CaseAggregateV2): F13AppealHist
     let outcomeLabel: string
     if (appeal.resolution === 'withdrawn' && appeal.status === 'withdrawn') {
       outcomeLabel = '申诉已撤回，原决定未因此更改'
-      warnings.push('旧申诉记录未单独存储撤回时间；可从业务命令回执核对')
+      if (!withdrawalReceipt) warnings.push('旧申诉记录未单独存储撤回时间；可从业务命令回执核对')
     } else if (appeal.resolution === 'maintain-original' && appeal.status === 'upheld') {
       outcomeLabel = '独立复审维持原决定'
-      warnings.push('维持决定的复审人、理由与时间尚未在 Appeal 中独立留痕，需核对业务命令回执')
+      if (!reviewReceipt) warnings.push('维持决定的复审人、理由与时间尚未在 Appeal 中独立留痕，需核对业务命令回执')
     } else if (appeal.resolution === 'amend-original' && appeal.status === 'overturned' && amendment) {
       outcomeLabel = '独立复审已追加更正决定'
     } else if (appeal.status === 'submitted' || appeal.status === 'in-review') {
@@ -61,6 +67,8 @@ export function buildF13AppealHistory(aggregate: CaseAggregateV2): F13AppealHist
       ...(original ? { original } : {}),
       ...(amendment ? { amendment } : {}),
       ...(reviewTask ? { reviewTask } : {}),
+      ...(reviewReceipt ? { reviewReceipt } : {}),
+      ...(withdrawalReceipt ? { withdrawalReceipt } : {}),
       evidence,
       statusLabel: pendingLabels[appeal.status] ?? (appeal.status === 'withdrawn' ? '已撤回' : '已处理'),
       outcomeLabel,

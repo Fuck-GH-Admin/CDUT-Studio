@@ -13,7 +13,7 @@ export function ReviewV3F13AppealHistory({ aggregate }: { aggregate: CaseAggrega
 
   return (
     <ol className="space-y-2" aria-label="申诉及独立复审历史">
-      {items.map(({ appeal, original, amendment, reviewTask, evidence, statusLabel, outcomeLabel, warnings, originalSuperseded }) => (
+      {items.map(({ appeal, original, amendment, reviewTask, reviewReceipt, withdrawalReceipt, evidence, statusLabel, outcomeLabel, warnings, originalSuperseded }) => (
         <li key={appeal.id} className="space-y-1 rounded-md border bg-background p-2">
           <div className="flex flex-wrap justify-between gap-1">
             <strong>{statusLabel} · {appeal.id}</strong>
@@ -30,6 +30,8 @@ export function ReviewV3F13AppealHistory({ aggregate }: { aggregate: CaseAggrega
           {reviewTask && <p className="text-muted-foreground">复审任务：{reviewTask.id} · {reviewTask.assigneeRole}
             {reviewTask.assigneeActorId ? ` / ${reviewTask.assigneeActorId}` : ' / 未指派具体人员'} · {reviewTask.status}</p>}
           <p className="font-medium">处理结果：{outcomeLabel}</p>
+          {reviewReceipt && <p className="text-muted-foreground">复核回执：{reviewReceipt.actor.actorId} · {new Date(reviewReceipt.at).toLocaleString()} · {reviewReceipt.summary}</p>}
+          {withdrawalReceipt && <p className="text-muted-foreground">撤回回执：{withdrawalReceipt.actor.actorId} · {new Date(withdrawalReceipt.at).toLocaleString()}</p>}
           {amendment && <p>更正后决定：{decisionText[amendment.result] ?? amendment.result} · {amendment.id} · {amendment.reason}
             （{amendment.actor.actorId}，依据运行 {amendment.basedOnRunId}）</p>}
           {warnings.map((warning, index) => <p role="note" className="text-amber-700 dark:text-amber-300" key={`${appeal.id}-${index}`}>待核对：{warning}</p>)}

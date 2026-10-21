@@ -629,6 +629,10 @@ export const REVIEW_IPC_CHANNELS = {
   RUN_BATCH_V2: 'review-v2:run-batch',
   SUBMIT_APPEAL_V2: 'review-v2:submit-appeal',
   RESOLVE_APPEAL_V2: 'review-v2:resolve-appeal',
+  /** F13 本机申诉提交/独立复核/撤回；真实 Actor 在 Main 派生。 */
+  F13_SUBMIT_LOCAL_APPEAL: 'review-v3:f13-submit-local-appeal',
+  F13_REVIEW_LOCAL_APPEAL: 'review-v3:f13-review-local-appeal',
+  F13_WITHDRAW_LOCAL_APPEAL: 'review-v3:f13-withdraw-local-appeal',
   // ===== N4b：模板向导 =====
   CREATE_POLICY_V2: 'review-v2:create-policy',
   SAVE_TEMPLATE_DRAFT_V2: 'review-v2:save-template-draft',

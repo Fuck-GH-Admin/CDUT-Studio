@@ -4847,6 +4847,12 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.CAST_RATING_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
   resolveAppealV2: (input: { caseId: string; command: Record<string, unknown> }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.RESOLVE_APPEAL_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
+  submitLocalF13Appeal: (input: import('../main/lib/review/review-v3-f13-main-service').F13SubmitAppealCommand) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.F13_SUBMIT_LOCAL_APPEAL, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
+  reviewLocalF13Appeal: (input: import('../main/lib/review/review-v3-f13-main-service').F13ReviewAppealCommand) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.F13_REVIEW_LOCAL_APPEAL, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
+  withdrawLocalF13Appeal: (input: import('../main/lib/review/review-v3-f13-main-service').F13WithdrawAppealCommand) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.F13_WITHDRAW_LOCAL_APPEAL, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
   createPolicyV2: (input: { policyId: string; title: string; content: string; enteredBy: string }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.CREATE_POLICY_V2, input) as Promise<{ policyId: string; version: number; contentHash: string }>,
   saveTemplateDraftV2: (template: import('@profer/shared').TemplateVersion) =>

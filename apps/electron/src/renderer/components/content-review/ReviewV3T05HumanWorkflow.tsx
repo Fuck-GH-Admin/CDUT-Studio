@@ -20,6 +20,8 @@ export interface T05AppealSubmission {
   againstDecisionId: string
   statement: string
   newEvidenceDocumentVersionIds: string[]
+  /** 旧版案卷没有提交人绑定时，本机用户明确确认本地申诉人身份。 */
+  confirmLocalSubmitter?: boolean
 }
 
 export interface T05AppealReview {
@@ -105,6 +107,7 @@ export function ReviewV3T05HumanWorkflow({
   const [appealDecisionId, setAppealDecisionId] = useState('')
   const [appealStatement, setAppealStatement] = useState('')
   const [appealDocuments, setAppealDocuments] = useState<string[]>([])
+  const [localSubmitterConfirmed, setLocalSubmitterConfirmed] = useState(false)
   const [appealReviewId, setAppealReviewId] = useState('')
   const [appealResolution, setAppealResolution] = useState<AppealResolution>('maintain-original')
   const [appealReason, setAppealReason] = useState('')
@@ -165,6 +168,7 @@ export function ReviewV3T05HumanWorkflow({
     setError('')
     setAppealStatement('')
     setAppealDocuments([])
+    setLocalSubmitterConfirmed(false)
   }, [caseId])
 
   // 切案、版本写入或本地模拟角色变化后，旧的能力快照不能继续驱动按钮。
@@ -359,19 +363,31 @@ export function ReviewV3T05HumanWorkflow({
             </label>
           ))}
         </div>
-        <Button size="sm" variant="outline" disabled={busy || !submitAppeal || !appealDecisionId || !appealStatement.trim()}
+        {!aggregate.caseV2.submitter && (
+          <label className="flex items-start gap-2 text-xs">
+            <input type="checkbox" className="mt-0.5" checked={localSubmitterConfirmed}
+              onChange={(event) => setLocalSubmitterConfirmed(event.target.checked)} />
+            <span>这是本机案卷，我确认以本机提交方身份登记此次申诉。此操作只记录本地申诉，不证明学校账号身份。</span>
+          </label>
+        )}
+        <Button size="sm" variant="outline" disabled={busy || !submitAppeal || aggregate.caseV2.stage !== 'decided'
+          || (!aggregate.caseV2.submitter && !localSubmitterConfirmed)
+          || !appealDecisionId || !appealStatement.trim()}
           onClick={() => void (async () => {
             if (!submitAppeal) return
             const ok = await execute(() => submitAppeal({
               requestId: newRequestId('t05-appeal'), caseId, expectedRevision: aggregate.caseV2.revision, againstDecisionId: appealDecisionId,
               statement: appealStatement.trim(), newEvidenceDocumentVersionIds: appealDocuments,
+              confirmLocalSubmitter: localSubmitterConfirmed,
             }))
-            if (ok) { setAppealStatement(''); setAppealDocuments([]) }
+            if (ok) { setAppealStatement(''); setAppealDocuments([]); setLocalSubmitterConfirmed(false) }
           })()}>提交申诉</Button>
+        {aggregate.caseV2.stage !== 'decided' && <p className="text-muted-foreground">形成最终业务决定后才能提交新申诉。</p>}
         {!submitAppeal && <p className="text-muted-foreground">申诉提交端口尚未接入可信 Main，填写内容只保存在当前表单，不会假称已提交。</p>}
         {chosenAppeal && (
           <div className="space-y-1 border-t pt-2">
-            <h4 className="font-medium">独立复核人处理</h4>
+            <h4 className="font-medium">本机独立角色复核</h4>
+            <p className="text-muted-foreground">由 Main 已指派的本地复核角色办理；若补充了新证据，须重新完成审核后才能保存复核结论。本地角色不代表校方认证。</p>
             <select className="w-full rounded border bg-background px-2 py-1" value={chosenAppeal.id}
               onChange={(event) => setAppealReviewId(event.target.value)}>
               {aggregate.appeals.filter((appeal) => appeal.status === 'submitted' || appeal.status === 'in-review').map((appeal) => (
