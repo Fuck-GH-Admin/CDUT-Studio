@@ -94,8 +94,13 @@ function guarded(entry: F03RuleEntry, reason: 'conflict' | 'unconfirmed'): F03Ru
   const rule = entry.rule
   // 旧 V2 计算分支未统一检查 confirmation，故暂时将不可信规则投影为人工待核。
   // 仅修改运行时投影，不改写原始已发布 PolicyRecord/RuleSpec。
-  return { ...entry, rule: { ...rule, execution: 'manual', confirmation: reason === 'conflict' ? 'conflict' : 'unconfirmed',
-    // V2 的 dataCheck 分支在 manual 分流之前，必须同时移除运行态可执行载荷。
+  // D2 的未认证语义检查必须仍能提交 awaiting-confirmation；Pi 已在写入边界
+  // 显式拒绝 unconfirmed→compliant。若降成 manual，旧审核器会在身份校验前
+  // 报「非语义检查」，破坏 D2 正式校规不能被模型确认的明确业务门禁。
+  const guardedExecution = reason === 'unconfirmed' && rule.execution === 'semantic'
+    ? 'semantic' : 'manual'
+  return { ...entry, rule: { ...rule, execution: guardedExecution, confirmation: reason === 'conflict' ? 'conflict' : 'unconfirmed',
+    // 防止未知或冲突政策携带确定性自动执行载荷。
     dataCheck: undefined, calculation: undefined,
     onFail: 'manual-review', onUnknown: 'needs-confirmation' } }
 }
