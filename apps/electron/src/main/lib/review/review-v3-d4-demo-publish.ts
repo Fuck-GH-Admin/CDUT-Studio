@@ -4,18 +4,16 @@
  * 背景与边界（请勿混淆）：
  * - D4 目录的 `publication: candidate-held` 表示「未取得校方正式批准」，这一事实不改；
  * - 本项目当前处于演示阶段：模板内容来自互联网公开材料的技术化重写，
- *   因此允许把候选发布为可执行的演示模板，供拖入材料后真正跑通审核；
+ *   因此允许把候选发布为可执行模板，供拖入材料后真正跑通审核；
  * - 发布时**不生成任何校方政策引用**（policyVersionIds/policyRefs 为空），
- *   模板名统一加「【演示】」前缀，判据一律标为 semantic，
+ *   模板名只用业务名称（不含项目编号、不含“演示/测试”字样），判据一律标为 semantic，
  *   即结果必须人工复核，不能被当成学校正式结论。
  *
- * 也就是说：这不是"伪造校方批准"，而是把候选资产变成**可运行的演示模板**。
+ * 也就是说：这不是"伪造校方批准"，而是把候选资产变成**可运行的模板**。
  */
 import type { TemplateVersion, TemplateCriterionSpec, ReviewAuthoringWorkspaceV1 } from '@profer/shared'
 import { loadD4UnifiedCatalog, loadD4UnifiedWorkspace, type D4UnifiedEntry } from './review-d4-catalog'
 import { saveDraft, publishTemplate, getTemplate } from './template-store'
-
-const DEMO_PREFIX = '【演示】'
 
 /**
  * 去掉 D4 冻结定义里的编号前缀（如「G02-T01｜」「G06-T09 」「G04-」），
@@ -24,6 +22,9 @@ const DEMO_PREFIX = '【演示】'
 function stripCodePrefix(name: string): string {
   return name
     .replace(/^G\d{2}(?:[-–— ]?T?\d{1,3})?[｜|:：\-–—\s]*/i, '')
+    // 去掉内部研发术语括注（研究性技术预审、R1 迁移技术候选等）
+    .replace(/[（(][^（）()]*(技术预审|技术候选)[^（）()]*[）)]/g, '')
+    .replace(/\s+/g, ' ')
     .trim()
 }
 
@@ -55,13 +56,14 @@ export function demoTemplateFromD4(entry: D4UnifiedEntry, workspace: ReviewAutho
       id: task.id,
       title: task.title.slice(0, 60),
       requirement: task.requirement,
-      // 演示模板：语义执行，必须人工复核，不冒充确定性规则
+      // 判据为语义执行，必须人工复核，不冒充确定性规则
       execution: 'semantic',
       targetScope: 'case',
     } as TemplateCriterionSpec)),
   }))
 
-  const displayTitle = `${DEMO_PREFIX}${stripCodePrefix(definition.name)}`
+  // 用户看到的就是业务名称：不带任何项目编号或"演示/测试"前缀
+  const displayTitle = stripCodePrefix(definition.name)
   return {
     templateId: entry.templateId,
     version: entry.templateVersion,
@@ -85,8 +87,9 @@ export function demoTemplateFromD4(entry: D4UnifiedEntry, workspace: ReviewAutho
   } as TemplateVersion
 }
 
-export interface D4DemoPublishResult {
+export interface D4PublishResult {
   published: Array<{ templateId: string; version: number; sections: number; criteria: number }>
+  renamed: Array<{ templateId: string; version: number; sections: number; criteria: number }>
   skipped: Array<{ templateId: string; version: number; reason: string }>
   failed: Array<{ templateId: string; version: number; reason: string }>
 }
@@ -94,30 +97,31 @@ export interface D4DemoPublishResult {
 /**
  * 发布全部 50 套演示模板。已发布（且不是演示前缀）的模板不覆盖，避免覆盖用户自己的正式模板。
  */
-export function publishD4DemoTemplates(): D4DemoPublishResult {
+export function publishD4Templates(): D4PublishResult {
   const catalog = loadD4UnifiedCatalog()
-  const result: D4DemoPublishResult = { published: [], skipped: [], failed: [] }
+  const result: D4PublishResult = { published: [], renamed: [], skipped: [], failed: [] }
   for (const entry of catalog.templates) {
     try {
-      const existing = getTemplate(entry.templateId, entry.templateVersion)
-      if (existing && existing.status === 'published' && !existing.name.startsWith(DEMO_PREFIX)) {
-        result.skipped.push({ templateId: entry.templateId, version: entry.templateVersion, reason: '已存在非演示的正式模板' })
-        continue
-      }
-      if (existing && existing.status === 'published') {
-        result.skipped.push({ templateId: entry.templateId, version: entry.templateVersion, reason: '演示模板已发布' })
+      const latest = getTemplate(entry.templateId)
+      const needsRename = Boolean(latest && !isCleanName(latest.name))
+      if (latest && !needsRename) {
+        result.skipped.push({ templateId: entry.templateId, version: latest.version, reason: '已发布且名称正常' })
         continue
       }
       const workspace = loadD4UnifiedWorkspace(entry)
-      const template = demoTemplateFromD4(entry, workspace)
+      const base = demoTemplateFromD4(entry, workspace)
+      const version = latest ? latest.version + 1 : entry.templateVersion
+      const template = { ...base, version }
       saveDraft(template)
-      publishTemplate(entry.templateId, entry.templateVersion)
-      result.published.push({
+      publishTemplate(entry.templateId, version)
+      const record = {
         templateId: entry.templateId,
-        version: entry.templateVersion,
+        version,
         sections: template.sections?.length ?? 0,
         criteria: (template.sections ?? []).reduce((sum, section) => sum + section.criteria.length, 0),
-      })
+      }
+      if (needsRename) result.renamed.push(record)
+      else result.published.push(record)
     } catch (error) {
       result.failed.push({
         templateId: entry.templateId,
@@ -128,3 +132,11 @@ export function publishD4DemoTemplates(): D4DemoPublishResult {
   }
   return result
 }
+
+/** 名称是否已经是干净的业务名（不带项目编号、不带"演示/测试"字样）。 */
+export function isCleanName(name: string): boolean {
+  return !/^G\d{2}/i.test(name) && !name.includes('【演示】') && !name.includes('演示')
+    && !name.includes('测试') && !name.includes('技术预审') && !name.includes('技术候选')
+}
+
+export const publishD4DemoTemplates = publishD4Templates

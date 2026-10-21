@@ -168,20 +168,21 @@ export function ContentReviewView(): React.ReactElement {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [assistantOpen])
 
-  // 50 套 D4 候选 → 演示模板：让拖入材料匹配到的模板可以真正用于业务审核
+  // 50 套 D4 候选 → 可执行模板：让拖入材料匹配到的模板可以真正用于业务审核
   const [demoPublishing, setDemoPublishing] = React.useState(false)
   const publishDemoTemplates = React.useCallback(async (): Promise<void> => {
     setDemoPublishing(true)
     try {
       const result = await window.reviewAPI.publishD4DemoTemplates()
-      toast.success(`演示模板已发布 ${result.published.length} 套` +
+      toast.success(`模板已发布 ${result.published.length} 套` +
+        (result.renamed.length ? `，改名 ${result.renamed.length} 套` : '') +
         (result.skipped.length ? `，跳过 ${result.skipped.length} 套` : '') +
         (result.failed.length ? `，失败 ${result.failed.length} 套` : ''))
       if (result.failed.length) {
         toast.error(`发布会话失败：${result.failed[0]!.templateId}：${result.failed[0]!.reason}`)
       }
     } catch (error) {
-      toast.error(`发布演示模板失败：${humanizeReviewError(error)}`)
+      toast.error(`发布模板失败：${humanizeReviewError(error)}`)
     } finally {
       setDemoPublishing(false)
     }
@@ -313,7 +314,7 @@ export function ContentReviewView(): React.ReactElement {
           <Button type="button" data-testid="review-publish-demo-templates" size="sm" variant="outline" className="h-7 text-xs"
             disabled={demoPublishing}
             onClick={() => void publishDemoTemplates()}>
-            {demoPublishing ? '发布中…' : '发布 50 套演示模板'}
+            {demoPublishing ? '发布中…' : '发布 50 套模板'}
           </Button>
           <span className="text-[11px] text-muted-foreground">候选技术方案并非已发布的正式业务模板</span>
         </nav>

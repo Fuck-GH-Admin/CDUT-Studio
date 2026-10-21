@@ -4728,10 +4728,11 @@ const reviewAPI = {
     sourceCandidates: Array<{ documentVersionId: string; locator: string }>
     notes: string[]
   }>,
-  /** 把 50 套 D4 冻结候选发布为演示模板；不写政策引用，判据全语义 */
+  /** 把 50 套 D4 冻结候选发布为可执行模板；不写政策引用，判据全语义 */
   publishD4DemoTemplates: () =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.D4_DEMO_PUBLISH_V3) as Promise<{
       published: Array<{ templateId: string; version: number; sections: number; criteria: number }>
+      renamed: Array<{ templateId: string; version: number; sections: number; criteria: number }>
       skipped: Array<{ templateId: string; version: number; reason: string }>
       failed: Array<{ templateId: string; version: number; reason: string }>
     }>,
