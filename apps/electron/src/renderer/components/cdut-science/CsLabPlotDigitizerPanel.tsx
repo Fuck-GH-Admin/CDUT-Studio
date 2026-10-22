@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CsLabPlotDigitizerPanel — 图表逆向数字化抽屉
  *
  * 流程：三点标定 → 颜色取样 → 自动提取 → 拖动控制点磁性吸附 → 保存为 fig + table。
@@ -34,6 +34,18 @@ interface CsLabPlotDigitizerPanelProps {
 type PolygonMode = 'x' | 'y' | null
 
 const MAX_TICKS = 3
+
+/** 演示光谱图的预置标定点（坐标已按 640×480 原图边框像素扫描校准） */
+const DEMO_DIGITIZER_TICKS = {
+  x: [
+    { px: 80.5, py: 419.5, value: 0 },
+    { px: 599.5, py: 419.5, value: 1000 },
+  ] as CsLabAxisTick[],
+  y: [
+    { px: 80.5, py: 419.5, value: 0 },
+    { px: 80.5, py: 40.5, value: 100 },
+  ] as CsLabAxisTick[],
+}
 
 export function CsLabPlotDigitizerPanel({
   labId,
@@ -123,9 +135,20 @@ export function CsLabPlotDigitizerPanel({
     [xTicks, yTicks],
   )
 
-  const digitize = async (): Promise<void> => {
+  const digitize = React.useCallback(async (override?: {
+    xTicks: CsLabAxisTick[]
+    yTicks: CsLabAxisTick[]
+    mode?: CsLabPlotMode
+    color?: string
+    tolerance?: number
+  }): Promise<void> => {
     if (!selection) return
-    if (xTicks.length < 2 || yTicks.length < 2) {
+    const effectiveX = override?.xTicks ?? xTicks
+    const effectiveY = override?.yTicks ?? yTicks
+    const effectiveMode = override?.mode ?? mode
+    const effectiveColor = override?.color ?? color
+    const effectiveTolerance = override?.tolerance ?? tolerance
+    if (effectiveX.length < 2 || effectiveY.length < 2) {
       setError('X/Y 轴各至少需要 2 个刻度点')
       return
     }
@@ -133,13 +156,17 @@ export function CsLabPlotDigitizerPanel({
     setError(null)
     setMessage(null)
     try {
+      const calibrationInput: CsLabPlotCalibration = {
+        x: { ticks: effectiveX, scale: 'auto' },
+        y: { ticks: effectiveY, scale: 'auto' },
+      }
       const payload = await window.electronAPI.cslab.digitizePlot({
         labId,
         imageDataUrl: selection.cropDataUrl,
-        mode,
-        calibration,
-        color: color || undefined,
-        tolerance,
+        mode: effectiveMode,
+        calibration: calibrationInput,
+        color: effectiveColor || undefined,
+        tolerance: effectiveTolerance,
       })
       setResult(payload)
       setSeries(payload.series)
@@ -159,7 +186,34 @@ export function CsLabPlotDigitizerPanel({
     } finally {
       setBusy(null)
     }
-  }
+  }, [selection, xTicks, yTicks, labId, mode, color, tolerance, setRuntime])
+
+  /** 仅演示光谱图（640×480）提供的一键标定：写入预置刻度并立即提取 */
+  const isDemoSpectrum = naturalSize?.width === 640 && naturalSize?.height === 480
+  const applyDemoCalibration = React.useCallback(async (): Promise<void> => {
+    if (!isDemoSpectrum) return
+    setXTicks(DEMO_DIGITIZER_TICKS.x)
+    setYTicks(DEMO_DIGITIZER_TICKS.y)
+    setMode('line')
+    setColor('')
+    setTolerance(28)
+    await digitize({
+      xTicks: DEMO_DIGITIZER_TICKS.x,
+      yTicks: DEMO_DIGITIZER_TICKS.y,
+      mode: 'line',
+      color: '',
+      tolerance: 28,
+    })
+  }, [digitize, isDemoSpectrum])
+
+  // 引导气泡通过自定义事件触发同一套一键标定逻辑
+  React.useEffect(() => {
+    const handler = (): void => {
+      void applyDemoCalibration()
+    }
+    window.addEventListener('cslab:demo-digitize', handler)
+    return () => window.removeEventListener('cslab:demo-digitize', handler)
+  }, [applyDemoCalibration])
 
   const startDrag = (
     event: React.PointerEvent<SVGCircleElement>,
@@ -183,8 +237,8 @@ export function CsLabPlotDigitizerPanel({
     const snapped = snapPointToPolyline(point, polylines, threshold)
     const nextPixel: [number, number] = [snapped.point.x, snapped.point.y]
 
-    const valueX = mapPixelToValue(snapped.point.x, xTicks, result.axisFit?.x.scale ?? 'auto')
-    const valueY = mapPixelToValue(snapped.point.y, yTicks, result.axisFit?.y.scale ?? 'auto')
+    const valueX = mapPixelToValue(snapped.point.x, xTicks, result.axisFit?.x.scale ?? 'auto', 'px')
+    const valueY = mapPixelToValue(snapped.point.y, yTicks, result.axisFit?.y.scale ?? 'auto', 'py')
     if (valueX == null || valueY == null) return
 
     setSeries((previous) =>
@@ -254,8 +308,12 @@ export function CsLabPlotDigitizerPanel({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="relative overflow-hidden rounded-xl border border-cslab-border bg-white">
+    <div
+      data-tour="cslab-digitizer"
+      data-series-count={series.length}
+      className="space-y-4"
+    >
+      <div className="relative overflow-hidden rounded-xl border border-cslab-border bg-cslab-elevated">
         <img
           ref={imageRef}
           src={selection.cropDataUrl}
@@ -300,9 +358,8 @@ export function CsLabPlotDigitizerPanel({
                   cx={pixel[0]}
                   cy={pixel[1]}
                   r={Math.max(3, (naturalSize?.width ?? 400) * 0.004)}
-                  fill="#D97757"
+                  className="fill-cslab-accent stroke-cslab-bg"
                   fillOpacity={0.75}
-                  stroke="#FAF9F5"
                   strokeWidth={1}
                   vectorEffect="non-scaling-stroke"
                   style={{ cursor: 'grab' }}
@@ -320,7 +377,7 @@ export function CsLabPlotDigitizerPanel({
                   y1={tick.py}
                   x2={tick.px + 6}
                   y2={tick.py}
-                  stroke="#D97757"
+                  className="stroke-cslab-accent"
                   strokeWidth={1}
                   vectorEffect="non-scaling-stroke"
                 />
@@ -329,7 +386,7 @@ export function CsLabPlotDigitizerPanel({
                   y1={tick.py - 6}
                   x2={tick.px}
                   y2={tick.py + 6}
-                  stroke="#D97757"
+                  className="stroke-cslab-accent"
                   strokeWidth={1}
                   vectorEffect="non-scaling-stroke"
                 />
@@ -344,6 +401,13 @@ export function CsLabPlotDigitizerPanel({
           <button
             key={axis ?? 'off'}
             type="button"
+            data-tour={
+              axis === 'x'
+                ? 'cslab-digitizer-calibrate-x'
+                : axis === 'y'
+                  ? 'cslab-digitizer-calibrate-y'
+                  : 'cslab-digitizer-calibrate-off'
+            }
             onClick={() => setTickAxis(axis)}
             className={cn(
               'rounded-lg border px-2 py-1 text-[10px] transition-colors',
@@ -447,9 +511,23 @@ export function CsLabPlotDigitizerPanel({
         </div>
       )}
 
+      {isDemoSpectrum && (
+        <button
+          type="button"
+          data-tour="cslab-digitizer-demo"
+          disabled={busy !== null}
+          onClick={() => void applyDemoCalibration()}
+          className="flex w-full items-center justify-center gap-1 rounded-lg border border-cslab-accent/40 bg-cslab-accent/10 px-3 py-2 text-[11px] font-medium text-cslab-accent transition-colors hover:bg-cslab-accent/15 disabled:opacity-50"
+        >
+          {busy === 'digitize' ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+          注入演示标定点并提取
+        </button>
+      )}
+
       <div className="flex items-center gap-2">
         <button
           type="button"
+          data-tour="cslab-digitizer-extract"
           disabled={busy !== null}
           onClick={() => void digitize()}
           className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg bg-cslab-accent px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:opacity-50"
@@ -459,6 +537,7 @@ export function CsLabPlotDigitizerPanel({
         </button>
         <button
           type="button"
+          data-tour="cslab-digitizer-save"
           disabled={busy !== null || series.length === 0}
           onClick={() => void save()}
           className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-cslab-border px-3 py-2 text-xs text-cslab-text transition-colors hover:bg-cslab-surface disabled:opacity-50"

@@ -4,6 +4,7 @@
  */
 
 import type { LucideIcon } from 'lucide-react'
+import { isGoalUpdateToolName } from '@profer/shared'
 import {
   BookOpen,
   Bot,
@@ -105,6 +106,16 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   BrowserPreviewOpen: Globe,
   BrowserDomAction: MousePointer2,
   BrowserExecuteJavaScript: Code2,
+}
+
+/**
+ * 判定「不应在消息流中作为工具块展示/计数」的静默工具：
+ * - Goal 更新工具（update_goal 等）由目标面板承接；
+ * - AskUserQuestion 交互完全由底部 AskUserBanner 承接，消息流中静默隐藏。
+ * 供 ProcessBlockGroup 折叠过滤与 ContentBlock 渲染守卫统一调用。
+ */
+export function isSilentStreamToolName(name: string): boolean {
+  return isGoalUpdateToolName(name) || name === 'AskUserQuestion'
 }
 
 /**

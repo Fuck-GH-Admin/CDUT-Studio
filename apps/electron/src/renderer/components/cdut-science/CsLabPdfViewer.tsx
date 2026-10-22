@@ -253,7 +253,7 @@ export function CsLabPdfViewer({
       <div
         ref={scrollRef}
         data-cslab-pdf-scroll
-        className="min-h-0 flex-1 overflow-auto bg-[#EFEDE7] px-5 py-4"
+        className="min-h-0 flex-1 overflow-auto bg-cslab-surface px-5 py-4"
       >
         {loading && (
           <div className="flex h-full items-center justify-center gap-2 text-[11px] text-cslab-muted">
@@ -497,7 +497,7 @@ function PdfPageView({
   return (
     <div
       ref={wrapperRef}
-      className="relative shrink-0 rounded-sm bg-white shadow-subtle"
+      className="relative shrink-0 rounded-sm bg-cslab-elevated shadow-subtle"
       style={{ width, height }}
     >
       <canvas ref={canvasRef} className="block h-full w-full select-none" />

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CsLabDagCanvas — Prove2Me 假说推演画布
  *
  * 交互：拖拽平移 / 滚轮缩放 / 节点拖动 / 双击编辑 / 右侧圆点连线。
@@ -650,7 +650,7 @@ export function CsLabDagCanvas({
             <path
               d={`M ${connect.startX} ${connect.startY} L ${connect.pointerX} ${connect.pointerY}`}
               fill="none"
-              stroke="#D97757"
+              className="stroke-cslab-accent"
               strokeWidth={1.5}
               strokeDasharray="4 4"
             />

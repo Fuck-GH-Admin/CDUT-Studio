@@ -9,8 +9,10 @@
 import { describe, expect, it } from 'bun:test'
 import {
   formatBeijingClock,
+  getBeijingClockAngles,
   getBeijingGreetingParts,
   getBeijingHour,
+  getBeijingTimeNumbers,
   greetingForBeijingHour,
 } from '../src/renderer/lib/beijing-greeting'
 
@@ -18,6 +20,11 @@ import {
 function beijingInstant(hour: number, minute = 0): Date {
   // 北京时间 = UTC+8，故 UTC 小时 = 北京小时 - 8
   return new Date(Date.UTC(2026, 9, 16, hour - 8, minute, 0))
+}
+
+/** 同上，但精确到秒（表盘角度用例需要） */
+function beijingInstantHms(hour: number, minute = 0, second = 0): Date {
+  return new Date(Date.UTC(2026, 9, 16, hour - 8, minute, second))
 }
 
 describe('getBeijingHour（北京时间小时解析 BDD-GREETING-01）', () => {
@@ -78,5 +85,72 @@ describe('formatBeijingClock（抽屉北京时间时钟 BDD-GREETING-03）', () 
       expect(text).not.toContain('分')
       expect(text).toMatch(/^\d{2}:\d{2}:\d{2}$/)
     }
+  })
+})
+
+describe('getBeijingClockAngles（表盘指针角度 BDD-GREETING-04）', () => {
+  it('Given 北京时间 10:04:18 When 计算角度 Then 时分秒角度精确联动', () => {
+    const angles = getBeijingClockAngles(beijingInstantHms(10, 4, 18))
+    expect(angles.hour).toBe(10)
+    expect(angles.minute).toBe(4)
+    expect(angles.second).toBe(18)
+    // 时针：10*30 + 4*0.5 + 18/120 = 302.15
+    expect(angles.hourAngle).toBeCloseTo(302.15, 5)
+    // 分针：4*6 + 18*0.1 = 25.8
+    expect(angles.minuteAngle).toBeCloseTo(25.8, 5)
+    // 秒针：18*6 = 108
+    expect(angles.secondAngle).toBe(108)
+    expect(angles.clockText).toBe('10:04:18')
+  })
+
+  it('Given 00:00:00 与 12:00:00 When 计算角度 Then 时针均归零到 12 点方向', () => {
+    for (const hour of [0, 12]) {
+      const angles = getBeijingClockAngles(beijingInstantHms(hour, 0, 0))
+      expect(angles.hourAngle).toBe(0)
+      expect(angles.minuteAngle).toBe(0)
+      expect(angles.secondAngle).toBe(0)
+      expect(angles.clockText).toBe(`${String(hour).padStart(2, '0')}:00:00`)
+    }
+  })
+
+  it('Given 北京时间 23:59:59 When 计算角度 Then 时针仍在 0~360 区间内', () => {
+    const { hourAngle } = getBeijingClockAngles(beijingInstantHms(23, 59, 59))
+    expect(hourAngle).toBeGreaterThan(0)
+    expect(hourAngle).toBeLessThan(360)
+  })
+
+  it('Given 遍历全天整点与第 59 秒 When 计算角度 Then 三个角度均有限且落在 0~360', () => {
+    for (let h = 0; h < 24; h++) {
+      for (const second of [0, 59]) {
+        const angles = getBeijingClockAngles(beijingInstantHms(h, 30, second))
+        for (const angle of [angles.hourAngle, angles.minuteAngle, angles.secondAngle]) {
+          expect(Number.isFinite(angle)).toBe(true)
+          expect(angle).toBeGreaterThanOrEqual(0)
+          expect(angle).toBeLessThan(360)
+        }
+        expect(angles.clockText).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+      }
+    }
+  })
+})
+
+describe('getBeijingClockAngles 时区隔离（BDD-GREETING-05）', () => {
+  it('Given UTC 2026-10-16T00:30:45Z When 计算 Then 北京时间为 08:30:45，与测试机时区无关', () => {
+    const numbers = getBeijingTimeNumbers(new Date('2026-10-16T00:30:45Z'))
+    expect(numbers).toEqual({ hour: 8, minute: 30, second: 45 })
+
+    const angles = getBeijingClockAngles(new Date('2026-10-16T00:30:45Z'))
+    expect(angles.secondAngle).toBe(270)
+    expect(angles.minuteAngle).toBeCloseTo(184.5, 5)
+    expect(angles.hourAngle).toBeCloseTo(255.375, 5)
+    expect(angles.clockText).toBe('08:30:45')
+  })
+
+  it('Given UTC 2026-10-15T17:00:00Z（北京时间已跨日）When 计算 Then 归入次日 01:00', () => {
+    const angles = getBeijingClockAngles(new Date('2026-10-15T17:00:00Z'))
+    expect(angles.hour).toBe(1)
+    expect(angles.minute).toBe(0)
+    expect(angles.minuteAngle).toBe(0)
+    expect(angles.clockText).toBe('01:00:00')
   })
 })

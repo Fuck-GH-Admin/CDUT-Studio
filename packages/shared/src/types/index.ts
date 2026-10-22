@@ -54,8 +54,9 @@ export * from './github'
 // 版本更新日志（CHANGELOG）相关类型
 export * from './changelog'
 
-// 系统提示词相关类型
-export * from './system-prompt'
+// 本地系统公告栏（Bulletin）相关类型
+export * from './bulletin'
+
 export * from './agent-preset'
 export * from './agent-preset-policy'
 

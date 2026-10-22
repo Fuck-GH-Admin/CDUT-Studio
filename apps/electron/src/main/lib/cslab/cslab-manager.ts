@@ -14,18 +14,28 @@ import type {
 } from '@profer/shared'
 import {
   createLabId,
+  deleteLabFiles,
   ensureLabLayout,
   getDefaultLabDir,
   listLabManifests,
   readLabManifest,
   resolveLabDir,
+  updateLabManifest,
   writeLabManifest,
 } from './cslab-paths'
 import {
+  closeCsLabDatabase,
   countEntities,
   getCsLabDatabase,
   setLabState,
 } from './cslab-db'
+import { closeAllHpcDatabases } from './cslab-hpc-db'
+import { closeAllShareDatabases } from './cslab-share-db'
+import { stopVaultWatcher } from './cslab-canvas-sync'
+import { stopLabToolWatcher } from './cslab-tool-registry'
+import { stopShareWatcher } from './cslab-share-watcher'
+import { stopZoteroWatcher } from './cslab-zotero'
+import { listAgentSessions, updateAgentSessionMeta } from '../agent-session-manager'
 import { listAssets } from './cslab-iron-cage'
 import { getPythonCapability } from './cslab-python'
 
@@ -89,6 +99,98 @@ export function openLab(labId: string): CsLabLab {
   const db = getCsLabDatabase(join(labDir, 'db', 'central_meta.sqlite'))
   setLabState(db, 'last_opened_at', String(Date.now()))
   return manifest
+}
+
+/** 重命名实验室（不改变 sandbox 目录与 labId）。 */
+export function renameLab(labId: string, newName: string): CsLabLab {
+  const name = typeof newName === 'string' ? newName.trim() : ''
+  if (!name) throw new Error('实验室名称不能为空')
+  if (name.length > 60) throw new Error('实验室名称不能超过 60 个字符')
+  return updateLabManifest(labId, { name })
+}
+
+/** 切换置顶状态；不修改 updatedAt，避免「置顶」被误判为内容更新。 */
+export function togglePinLab(labId: string): CsLabLab {
+  const current = getLab(labId)
+  if (!current) throw new Error('实验室不存在或清单损坏')
+  const pinned = !current.pinned
+  return updateLabManifest(labId, {
+    pinned,
+    pinnedAt: pinned ? Date.now() : undefined,
+  })
+}
+
+/** 切换归档状态；解除归档时恢复归档前的业务状态。 */
+export function toggleArchiveLab(labId: string): CsLabLab {
+  const current = getLab(labId)
+  if (!current) throw new Error('实验室不存在或清单损坏')
+
+  if (!current.archived) {
+    const previousStatus = current.status === '已归档' ? '运行中' : current.status
+    return updateLabManifest(labId, {
+      archived: true,
+      archivedAt: Date.now(),
+      status: '已归档',
+      statusBeforeArchive: previousStatus,
+    })
+  }
+
+  return updateLabManifest(labId, {
+    archived: false,
+    archivedAt: undefined,
+    status: current.statusBeforeArchive ?? '运行中',
+    statusBeforeArchive: undefined,
+  })
+}
+
+/** 关闭该实验室关联的全部文件监听；单项失败只记录警告，不阻断删除。 */
+async function stopLabWatchers(labId: string): Promise<void> {
+  const tasks: Array<{ label: string; run: () => Promise<unknown> }> = [
+    { label: 'Vault', run: () => stopVaultWatcher(labId) },
+    { label: '自定义工具', run: () => stopLabToolWatcher(labId) },
+    { label: '共享盘', run: () => stopShareWatcher(labId) },
+    { label: 'Zotero', run: () => stopZoteroWatcher(labId) },
+  ]
+  for (const task of tasks) {
+    try {
+      await task.run()
+    } catch (error) {
+      console.warn(`[CSLab] 删除实验室前停止 ${task.label} 监听失败:`, error)
+    }
+  }
+}
+
+/**
+ * 彻底删除实验室：
+ * 1. 停止文件监听并解绑历史会话；
+ * 2. 关闭 SQLite 连接，避免 Windows 文件句柄占用导致 EBUSY；
+ * 3. 物理删除沙箱目录并注销索引。
+ */
+export async function deleteLab(labId: string): Promise<void> {
+  const labDir = resolveLabDir(labId)
+  const manifest = readLabManifest(labDir)
+  if (!manifest) throw new Error('实验室不存在或清单损坏')
+
+  await stopLabWatchers(labId)
+
+  // 历史会话脱敏解绑；显式传 archived 防止 updateAgentSessionMeta 触发自动解归档。
+  for (const session of listAgentSessions(true)) {
+    if (session.cslabLabId !== labId) continue
+    try {
+      updateAgentSessionMeta(session.id, {
+        cslabLabId: undefined,
+        archived: session.archived,
+      })
+    } catch (error) {
+      console.warn(`[CSLab] 解绑实验室会话失败 (${session.id}):`, error)
+    }
+  }
+
+  closeCsLabDatabase(join(labDir, 'db', 'central_meta.sqlite'))
+  closeAllHpcDatabases()
+  closeAllShareDatabases()
+
+  deleteLabFiles(labId)
 }
 
 export async function getLabSnapshot(labId: string): Promise<CsLabLabSnapshot> {

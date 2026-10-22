@@ -13,6 +13,7 @@ import { IntroWaterRipple } from './components/onboarding/IntroWaterRipple'
 import { CoachTourOverlay } from './components/onboarding/coach-tour/CoachTourOverlay'
 import { coachTourOpenAtom } from './atoms/coach-tour-atoms'
 import { CURRENT_COACH_TOUR_VERSION } from './components/onboarding/coach-tour/coach-tour-steps'
+import { useBulletinStartupTrigger } from './hooks/useBulletinStartupTrigger'
 import type { AppShellContextType } from './contexts/AppShellContext'
 
 /** 懒加载非首屏组件——减少首次渲染的 JS 解析量 */
@@ -20,6 +21,7 @@ const OnboardingView = React.lazy(() => import('./components/onboarding/Onboardi
 const EnvironmentCheckDialog = React.lazy(() => import('./components/environment/EnvironmentCheckDialog').then(m => ({ default: m.EnvironmentCheckDialog })))
 const MigrationImportDialog = React.lazy(() => import('./components/migration/MigrationImportDialog').then(m => ({ default: m.MigrationImportDialog })))
 const SettingsDialog = React.lazy(() => import('./components/settings/SettingsDialog').then(m => ({ default: m.SettingsDialog })))
+const BulletinDialog = React.lazy(() => import('./components/bulletin/BulletinDialog').then(m => ({ default: m.BulletinDialog })))
 
 export default function App(): React.ReactElement {
   const store = useStore()
@@ -124,6 +126,10 @@ export default function App(): React.ReactElement {
       </React.Suspense>
       <IntroReplayOverlay />
       <CoachTourOverlay />
+      <BulletinStartupTrigger />
+      <React.Suspense fallback={null}>
+        <BulletinDialog />
+      </React.Suspense>
     </TooltipProvider>
   )
 }
@@ -202,4 +208,12 @@ function IntroReplayOverlay(): React.ReactElement | null {
 function GlobalEnvironmentCheckDialog(): React.ReactElement {
   const [open, setOpen] = useAtom(environmentCheckDialogOpenAtom)
   return <EnvironmentCheckDialog open={open} onOpenChange={setOpen} />
+}
+
+/**
+ * 公告栏启动触发器：无渲染组件，仅消费启动 Hook（含 CoachTour 排定竞态保护）。
+ */
+function BulletinStartupTrigger(): null {
+  useBulletinStartupTrigger()
+  return null
 }

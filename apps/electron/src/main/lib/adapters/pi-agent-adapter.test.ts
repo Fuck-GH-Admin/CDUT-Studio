@@ -58,6 +58,20 @@ describe('Pi AskUserQuestion 提问闭环（工具注册契约）', () => {
     expect(JSON.stringify(askUser?.parameters)).toContain('proferConfirmation')
   })
 
+  test('Given AskUserQuestion When inspecting schema Then supports single/multiple/fill-blank', () => {
+    const { sdk } = createPiSdkStub()
+
+    const definitions = buildPromaProductToolDefinitions(sdk, async () => ({ behavior: 'allow' }))
+    const askUser = (definitions as unknown as CapturedTool[]).find((tool) => tool.name === 'AskUserQuestion')
+    const schema = JSON.stringify(askUser?.parameters)
+
+    expect(schema).toContain('fill-blank')
+    expect(schema).toContain('placeholder')
+    expect(schema).toContain('"type"')
+    expect(askUser?.description).toContain('单选')
+    expect(askUser?.description).toContain('多选')
+  })
+
   test('Given 用户回答注入 answers When AskUserQuestion executes Then 统一 canUseTool 被调用且答案返回给模型', async () => {
     const { sdk } = createPiSdkStub()
     const calls: Array<{ toolName: string; input: Record<string, unknown>; toolUseID: string; displayName: string }> = []

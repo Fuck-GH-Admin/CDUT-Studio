@@ -10,13 +10,12 @@
 
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
-import { ImageIcon, MapPin, Sigma, Table2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { documentHighlightTargetAtom } from '@/atoms/preview-atoms'
+import { DOCUMENT_ANCHOR_IN_TEXT_RE, pickAnchorIcon } from '@/lib/document-anchor'
 
-/** 与对话流一致的拓扑锚点形态：`#f1:p3-b2` / `#f1:p3` / `#p3-b2` */
-const ANCHOR_IN_TEXT_RE = /#((?:[a-zA-Z]+\d+)[:\-])?p\d+(?:-(?:b\d+|tbl\d+|r\d+|c[a-zA-Z]+\d+(?::[a-zA-Z]+\d+)?))?/i
+/** 与对话流一致的拓扑锚点正则与图标推断统一收敛至 @/lib/document-anchor（单一口径来源） */
 
 interface ParsedTrace {
   /** 锚点串（含前导 `#`） */
@@ -35,21 +34,13 @@ function parseTrace(raw: string): ParsedTrace | null {
     const label = (link[1] ?? '').trim() || anchor
     return { anchor, label }
   }
-  const bare = ANCHOR_IN_TEXT_RE.exec(text)
+  const bare = DOCUMENT_ANCHOR_IN_TEXT_RE.exec(text)
   if (bare) {
     const anchor = bare[0]
     const label = text.replace(anchor, '').replace(/[·，,：:、\s]+$/g, '').trim() || anchor
     return { anchor, label }
   }
   return null
-}
-
-/** 依据位置标签推断图标（公式 / 表格 / 插图 / 通用定位） */
-function pickIcon(label: string): typeof MapPin {
-  if (label.includes('公式')) return Sigma
-  if (label.includes('表')) return Table2
-  if (label.includes('图')) return ImageIcon
-  return MapPin
 }
 
 interface StudySourceTraceProps {
@@ -95,7 +86,7 @@ export function StudySourceTrace({ sessionId, trace, className }: StudySourceTra
   if (!trace || !trace.trim()) return null
   if (!parsed) return <span className={className}>{trace}</span>
 
-  const Icon = pickIcon(parsed.label)
+  const Icon = pickAnchorIcon(parsed.label)
   return (
     <button
       type="button"
@@ -106,6 +97,7 @@ export function StudySourceTrace({ sessionId, trace, className }: StudySourceTra
         'inline-flex items-center gap-1 rounded-full px-2 py-[1.5px] align-baseline',
         'text-[10px] font-medium text-primary transition-colors',
         'bg-primary/12 hover:bg-primary/20 disabled:opacity-60',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1',
         className,
       )}
     >

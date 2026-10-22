@@ -192,6 +192,29 @@ describe('evaluateTitleSource', () => {
     expect(evaluateTitleSource(withPayload)).toEqual({ text: '帮我改这个组件', informative: true })
   })
 
+  // 回归：SYSTEM_CONTEXT 连内容剥离，USER_REQUEST 只去标签保留正文。
+  test('Given 新消息封装 When 判定 Then 不把系统上下文当主题', () => {
+    const packaged = [
+      '<SYSTEM_CONTEXT>',
+      '<document_evidence>',
+      '第1页：这份材料讲的是热力学',
+      '</document_evidence>',
+      '</SYSTEM_CONTEXT>',
+      '',
+      '<USER_REQUEST>',
+      '修复登录流程',
+      '</USER_REQUEST>',
+    ].join('\n')
+
+    expect(evaluateTitleSource(packaged)).toEqual({ text: '修复登录流程', informative: true })
+    expect(evaluateTitleSource('<SYSTEM_CONTEXT>\n<document_evidence>材料</document_evidence>\n</SYSTEM_CONTEXT>').informative).toBe(false)
+  })
+
+  test('Given 划词引用块 When 判定 Then 剥离引用后保留用户正文', () => {
+    const withQuote = '<quoted_context source="agent-history" label="Agent 历史">\n被引用内容\n</quoted_context>\n\n继续任务'
+    expect(evaluateTitleSource(withQuote)).toEqual({ text: '继续任务', informative: true })
+  })
+
   test('Given 调度标记 When 判定 Then 剥离后正常判断', () => {
     const result = evaluateTitleSource('<!--PROMA_SCHEDULED_RUN-->巡检线上错误日志')
     expect(result).toEqual({ text: '巡检线上错误日志', informative: true })

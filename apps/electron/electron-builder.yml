@@ -104,9 +104,17 @@ extraResources:
   # 版本更新日志（设置 → 软件更新 → 版本历史；changelog-service 读取 process.resourcesPath/CHANGELOG.json）
   - from: resources/CHANGELOG.json
     to: CHANGELOG.json
+  # 本地系统公告栏（bulletin-service 读取 process.resourcesPath/bulletin.json）
+  - from: resources/bulletin.json
+    to: bulletin.json
   # 背景图
   - from: resources/background.png
     to: background.png
+  # 新手引导演示资产（《红楼梦》全书等；主进程按 process.resourcesPath/demo 解析）
+  - from: resources/demo
+    to: demo
+    filter:
+      - "**/*"
   # CDUT Science 可选 Python 增强脚本（TS 主实现缺失能力时的增强通道）
   - from: resources/cslab
     to: cslab

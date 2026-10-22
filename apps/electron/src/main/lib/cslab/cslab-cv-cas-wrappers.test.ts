@@ -63,7 +63,7 @@ describe('digitizePlot 包装层', () => {
         ok: true,
         width: 400,
         height: 300,
-        rotationDeg: 1.25,
+        rotationDeg: 0,
         axisFit: {
           x: { scale: 'log', r2: 0.999 },
           y: { scale: 'weird', r2: 0.81 },
@@ -100,7 +100,7 @@ describe('digitizePlot 包装层', () => {
     expect(result.ok).toBe(true)
     expect(result.width).toBe(400)
     expect(result.height).toBe(300)
-    expect(result.rotationDeg).toBe(1.25)
+    expect(result.rotationDeg).toBe(0)
     expect(result.axisFit?.x.scale).toBe('log')
     expect(result.axisFit?.y.scale).toBe('linear')
     expect(result.series).toHaveLength(2)

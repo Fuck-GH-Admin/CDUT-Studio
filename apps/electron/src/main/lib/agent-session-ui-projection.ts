@@ -31,6 +31,7 @@ export function buildAgentSessionUiProjection(meta: AgentSessionMeta): AgentSess
     presetReference,
     openAIThinkingLevel: meta.openAIThinkingLevel ?? null,
     codexFastMode: meta.codexFastMode ?? false,
+    studyTeachingMode: meta.studyTeachingMode ?? null,
     autoQueueSendEnabled: meta.autoQueueSendEnabled ?? true,
     workspaceId: meta.workspaceId ?? null,
     pinned: meta.pinned ?? false,

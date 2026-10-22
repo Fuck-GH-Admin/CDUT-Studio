@@ -136,6 +136,13 @@ cmd.exe /c ".\apps\electron\out\win-unpacked\CDUT Studio.exe --enable-logging"
 - **思考链 (Thinking) 流式体验**：
   - 支持思考的模型（如 DeepSeek/Claude）思考块必须正常渲染并支持折叠收纳；
   - 无工具调用时正文必须直接外置流式输出，**严禁将纯回复误收纳进折叠过程组**导致界面出现假死无限 Spinner。
+- **系统提示词管线（三层封装与模式隔离）**：
+  - **三层 Context Sandwich**：静态 system prompt → `<SYSTEM_CONTEXT>`（引用会话、工具提示、附件文档、RAG 证据、附件清单与划词引用）→ `<USER_REQUEST>`（仅用户正文）。**严禁把材料/系统注入内容再包进 `<USER_REQUEST>`**，封装逻辑收敛在 `agent-message-envelope.ts`。
+  - **三模式身份互斥**：常规 Agent / AI 速课堂 / CSLab 各有独立 `<identity>`；速课堂省略 `<artifacts>`、`<slash_commands>`、`<messaging>`，CSLab 省略 `<artifacts>` 与 `<slash_commands>`。
+  - **双轨锚点单一事实源**：锚点文法定义在 `packages/shared/src/constants/document-anchor.ts`，主进程提示词与渲染进程 `DOCUMENT_ANCHOR_RE` 共用，支持 Excel 区间/表格/图表块，并禁止自定义 XML 与表格标签内竖线。
+  - **Pi 静态裁剪只删不搬**：`pi-task-prompt.ts` 按工具挂载原位保留或删除低频 SOP，**严禁把段落搬到文档末尾**导致 `<subagents>` / `<guidelines>` 悬空。
+  - **近因提醒恒为最后一段**：运行时段落必须通过 `appendSystemPromptSections()` 插到 `RECENCY_LANGUAGE_REMINDER` 之前；缺少 marker 时兜底补齐。
+  - **零盲搜路径契约**：速课堂只注入 `study-materials/{sessionId}` 的 Study Materials Store，禁止暴露开发者 `workspace-files/.context` / `workspace-profile.md` / `CLAUDE.md`，提示词侧也不列内部附加目录；大纲必须为每份资料直出 `document.md` 绝对路径。常规 Agent 仅在项目候选唯一时标记 `Primary Active Project Root`；CSLab 只列真实 vault 子目录（figures/plots/lit/notes/raw/tables/manuscripts），并明确不存在 `structures/`。
 - **权限安全体系**：`packages/shared/src/constants/permission-rules.ts` 定义只读/安全白名单与危险命令拦截。
 
 ---

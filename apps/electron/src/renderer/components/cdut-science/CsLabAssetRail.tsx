@@ -16,6 +16,7 @@ import {
   Image as ImageIcon,
   Loader2,
   Lock,
+  PanelLeftClose,
   PenLine,
   Plus,
   Search,
@@ -30,6 +31,7 @@ import type {
 } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { cslabAssetDragAtom } from '@/atoms/cslab-atoms'
+import { supportsMol3dView } from './cslab-capability'
 import {
   CSLAB_ASSET_MIME,
   CSLAB_CELL_MIME,
@@ -53,6 +55,9 @@ interface CsLabAssetRailProps {
     manuscript: CsLabManuscriptSummary,
     cellRef: CsLabCellRef,
   ) => void
+  /** 是否折叠至 0 宽度（会话级状态，由工作台持有）。 */
+  collapsed: boolean
+  onToggleCollapse: () => void
 }
 
 interface AssetGroup {
@@ -97,6 +102,8 @@ export function CsLabAssetRail({
   onSelectPlot,
   onCreateManuscript,
   onAppendCellToManuscript,
+  collapsed,
+  onToggleCollapse,
 }: CsLabAssetRailProps): React.ReactElement {
   const [query, setQuery] = React.useState('')
   const [dropTargetUri, setDropTargetUri] = React.useState<string | null>(null)
@@ -129,10 +136,15 @@ export function CsLabAssetRail({
   const grouped = React.useMemo(() => {
     const map = new Map<string, CsLabAssetSummary[]>()
     for (const group of [...GROUPS, EXTRA_GROUP]) {
-      map.set(
-        group.id,
-        filtered.filter((asset) => group.layerTypes.includes(asset.layerType)),
-      )
+      const items = filtered.filter((asset) => group.layerTypes.includes(asset.layerType))
+      // 分子与晶体：支持 3D 视图的结构文件置顶，体数据（等值面）随后。
+      // sort 稳定，同能力档内保持 listAssets 的更新时间倒序。
+      if (group.id === 'mol') {
+        items.sort(
+          (left, right) => Number(supportsMol3dView(right)) - Number(supportsMol3dView(left)),
+        )
+      }
+      map.set(group.id, items)
     }
     return map
   }, [filtered])
@@ -144,21 +156,42 @@ export function CsLabAssetRail({
   }, [manuscripts, query])
 
   return (
-    <aside className="flex w-[248px] shrink-0 flex-col border-r border-cslab-border bg-cslab-bg">
-      <div className="px-3 pb-2 pt-3">
-        <div className="flex items-center gap-2 rounded-xl border border-cslab-border bg-cslab-elevated px-2.5 py-1.5">
-          <Search size={13} className="shrink-0 text-cslab-muted" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索资产…"
-            aria-label="搜索资产"
-            className="w-full bg-transparent text-xs text-cslab-text placeholder:text-cslab-muted/60 focus:outline-none"
-          />
+    <aside
+      aria-hidden={collapsed}
+      data-tour="cslab-asset-rail"
+      className={cn(
+        'relative flex h-full shrink-0 flex-col overflow-hidden bg-cslab-bg transition-[width] duration-200 ease-out contain-layout',
+        collapsed
+          ? 'w-0 border-r-0 pointer-events-none'
+          : 'w-[248px] border-r border-cslab-border',
+      )}
+    >
+      {/* 两个子块固定最小宽度 248px：折叠动画期间子元素不折行、不抖动。 */}
+      <div className="min-w-[248px] px-3 pb-2 pt-3">
+        <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-cslab-border bg-cslab-elevated px-2.5 py-1.5">
+            <Search size={13} className="shrink-0 text-cslab-muted" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索资产…"
+              aria-label="搜索资产"
+              className="w-full bg-transparent text-xs text-cslab-text placeholder:text-cslab-muted/60 focus:outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            title="收起资产栏"
+            aria-label="收起资产栏"
+            className="shrink-0 rounded-lg p-1.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+          >
+            <PanelLeftClose size={13} />
+          </button>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      <div className="min-h-0 min-w-[248px] flex-1 overflow-y-auto px-2 pb-4">
         {loading && (
           <div className="flex items-center gap-2 px-2 py-4 text-[11px] text-cslab-muted">
             <Loader2 size={12} className="animate-spin" />
@@ -173,7 +206,7 @@ export function CsLabAssetRail({
           // 万篇笔记场景下避免一次性渲染全部条目；搜索框仍可在全量资产中定位。
           const visibleItems = items.slice(0, 80)
           return (
-            <section key={group.id} className="mt-3">
+            <section key={group.id} data-tour={`cslab-group-${group.id}`} className="mt-3">
               <div className="flex items-center gap-1.5 px-2 pb-1">
                 <Icon size={11} className="text-cslab-muted" />
                 <span className="text-[10px] uppercase tracking-[0.16em] text-cslab-muted">
@@ -254,7 +287,7 @@ export function CsLabAssetRail({
         })}
 
         {plotList && plotList.length > 0 ? (
-          <section className="mt-3">
+          <section data-tour="cslab-plot-group" className="mt-3">
             <div className="flex items-center gap-1.5 px-2 pb-1">
               <ImageIcon size={11} className="text-cslab-muted" />
               <span className="text-[10px] uppercase tracking-[0.16em] text-cslab-muted">
@@ -269,6 +302,7 @@ export function CsLabAssetRail({
                 <li key={plot.id}>
                   <button
                     type="button"
+                    data-plot-id={plot.id}
                     onClick={() => onSelectPlot?.(plot.id)}
                     className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-cslab-muted transition-colors hover:bg-cslab-surface/70 hover:text-cslab-text"
                   >

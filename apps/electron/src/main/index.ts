@@ -1,13 +1,16 @@
 // 彻底抑制开发环境下控制台 Electron Security Warning 输出，避免被瑞数等反爬脚本通过 console.warn 探针识破
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
 
-import { app, BrowserWindow, dialog, Menu, powerMonitor, protocol, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, Menu, powerMonitor, protocol, screen, session as electronSession, shell } from 'electron'
 import { join } from 'path'
 import { createConnection } from 'net'
 import { existsSync } from 'fs'
 import { getDevInstanceId, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
 import { isCdutDomain } from './lib/cdut/yanhu/yanhu-domain-gatekeeper'
+import { CDUT_AUTH_CERT_SESSION_ID, CDUT_AUTH_PARTITION } from './lib/cdut/cdut-auth-manager'
+import { installCertificateSecurityPolicy, isCompromisedEmudhraCertificate } from './lib/security/cert-blacklist'
+import { confirmExecutableFileOpen } from './lib/security/executable-open-guard'
 
 /**
  * dev 模式下等待 Vite dev server 就绪的轮询参数。
@@ -127,13 +130,29 @@ function registerProtocolsAndHandlers(): void {
 
   // 智联万站内网白屏根除：校内站点普遍使用内网中间证书/自签名证书，
   // 一律信任 *.cdut.edu.cn，避免证书校验失败把整页拦成白屏；站外域名保持默认拒绝策略。
-  app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
-    if (isCdutDomain(url)) {
+  // eMudhra 泄露链（2026-10 事件）红线：校内/外网命中泄露链证书一律拒绝，
+  // 此判定严格先于校内豁免（顺序即安全）。已装 verifyProc 的会话不会走到本兜底。
+  app.on('certificate-error', (event, _webContents, url, _error, certificate, callback) => {
+    // 防御性包裹：Chromium 一次性回调若已被别处消费，再次调用会抛致命异常，
+    // 进而触发 Electron 默认的 Win32 同步模态错误弹窗并冻结整个主进程消息泵。
+    const safeCallback = (allow: boolean): void => {
+      try {
+        callback(allow)
+      } catch (err) {
+        console.warn('[安全策略] 证书错误回调执行异常（已防御）:', err)
+      }
+    }
+    if (isCompromisedEmudhraCertificate(certificate)) {
       event.preventDefault()
-      callback(true)
+      safeCallback(false)
       return
     }
-    callback(false)
+    if (isCdutDomain(url)) {
+      event.preventDefault()
+      safeCallback(true)
+      return
+    }
+    safeCallback(false)
   })
 }
 
@@ -776,7 +795,10 @@ function createWindow(): void {
       shell.openExternal(url)
     } else {
       const sysPath = toSystemPath(url)
-      if (sysPath) shell.openPath(sysPath)
+      // CVE-2026-96951 防御：Windows 下打开可执行/脚本文件前弹安全确认框。
+      if (sysPath) void confirmExecutableFileOpen(sysPath).then((allowed) => {
+        if (allowed) shell.openPath(sysPath)
+      })
     }
   })
 
@@ -786,7 +808,9 @@ function createWindow(): void {
       shell.openExternal(url)
     } else {
       const sysPath = toSystemPath(url)
-      if (sysPath) shell.openPath(sysPath)
+      if (sysPath) void confirmExecutableFileOpen(sysPath).then((allowed) => {
+        if (allowed) shell.openPath(sysPath)
+      })
     }
     return { action: 'deny' }
   })
@@ -886,6 +910,12 @@ async function bootstrap(): Promise<void> {
   protocol.handle('cdut-file', handleProferFileRequest)
   protocol.handle('cdut-skin', handleProferSkinRequest)
   protocol.handle('cdut-resource', handleProferResourceRequest)
+
+  // eMudhra 泄露链证书防御（2026-10 事件）：在默认会话与特区账户分区上安装
+  // verifyProc（幂等）。校内非标证书放行现状保持不变；泄露链一律拒绝，
+  // 保障 LLM API、CDUT 教务 fetch 与常规外网 HTTPS 的证书链安全。
+  installCertificateSecurityPolicy(electronSession.defaultSession)
+  installCertificateSecurityPolicy(electronSession.fromPartition(CDUT_AUTH_PARTITION), CDUT_AUTH_CERT_SESSION_ID)
 
   // 初始化运行时环境（Shell 环境 + Bun + Git 检测）
   // 热启动时从磁盘缓存恢复，耗时 < 10ms

@@ -29,15 +29,15 @@ export interface CsLabPersonaMeta {
 export const CSLAB_PERSONA_META: Record<CsLabSuggestionPersona, CsLabPersonaMeta> = {
   human: {
     title: '人工审阅',
-    color: '#242220',
-    background: 'rgba(36,34,32,0.05)',
-    border: 'rgba(36,34,32,0.18)',
+    color: 'hsl(var(--cslab-text))',
+    background: 'hsl(var(--cslab-text) / 0.05)',
+    border: 'hsl(var(--cslab-text) / 0.18)',
   },
   Methodology_Reviewer: {
     title: '方法论审稿人',
-    color: '#D97757',
-    background: 'rgba(217,119,87,0.08)',
-    border: 'rgba(217,119,87,0.42)',
+    color: 'hsl(var(--cslab-accent))',
+    background: 'hsl(var(--cslab-accent) / 0.08)',
+    border: 'hsl(var(--cslab-accent) / 0.42)',
   },
   Data_Analyst: {
     title: '数据可靠性',
@@ -129,7 +129,7 @@ export const InsertionMark = Mark.create({
       'ins',
       mergeAttributes(HTMLAttributes, {
         style:
-          'text-decoration: underline; text-decoration-color: #D97757; text-underline-offset: 2px; background: rgba(217,119,87,0.06);',
+          'text-decoration: underline; text-decoration-color: hsl(var(--cslab-accent)); text-underline-offset: 2px; background: hsl(var(--cslab-accent) / 0.06);',
       }),
       0,
     ]
@@ -149,7 +149,7 @@ export const DeletionMark = Mark.create({
     return [
       'del',
       mergeAttributes(HTMLAttributes, {
-        style: 'text-decoration: line-through; color: #7A7672; opacity: 0.85;',
+        style: 'text-decoration: line-through; color: hsl(var(--cslab-muted)); opacity: 0.85;',
       }),
       0,
     ]
@@ -178,7 +178,7 @@ export const CommentMark = Mark.create({
       'span',
       mergeAttributes(HTMLAttributes, {
         style:
-          'background: rgba(217,119,87,0.10); border-bottom: 1px dashed rgba(217,119,87,0.65); padding-bottom: 1px;',
+          'background: hsl(var(--cslab-accent) / 0.10); border-bottom: 1px dashed hsl(var(--cslab-accent) / 0.65); padding-bottom: 1px;',
       }),
       0,
     ]

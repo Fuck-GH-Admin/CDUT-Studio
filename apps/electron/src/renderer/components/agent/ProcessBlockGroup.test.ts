@@ -9,6 +9,8 @@ const tool = (id: string, name = 'Read'): SDKContentBlock => ({
   input: {},
 })
 
+const askTool = (id = 'ask-1'): SDKContentBlock => tool(id, 'AskUserQuestion')
+
 const thinking = (text = '分析中'): SDKContentBlock => ({
   type: 'thinking',
   thinking: text,
@@ -251,5 +253,62 @@ describe('Agent 过程块折叠分组', () => {
     ])
 
     expect(toolNames).toEqual(['Grep', 'Read', 'Bash'])
+  })
+
+  test('given text followed by AskUserQuestion when grouping then text is externalized and AskUser is silently hidden', () => {
+    // grill-me 修复：AskUserQuestion 由底部横幅承接，消息流静默隐藏；
+    // 「质询开场白 + AskUserQuestion」过滤后即纯正文，必须外置展示。
+    const items = buildAssistantTurnRenderItems([
+      text('我需要先弄清楚你的并发模型预期'),
+      askTool(),
+    ])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]?.type).toBe('block')
+    if (items[0]?.type === 'block') {
+      expect(items[0].item.block).toEqual(text('我需要先弄清楚你的并发模型预期'))
+    }
+  })
+
+  test('given streaming text followed by AskUserQuestion when grouping then text stays externalized during streaming', () => {
+    const items = buildAssistantTurnRenderItems([
+      text('我需要先弄清楚你的并发模型预期'),
+      askTool(),
+    ], { isStreaming: true, completedToolResultIds: new Set() })
+
+    expect(items).toHaveLength(1)
+    expect(items[0]?.type).toBe('block')
+  })
+
+  test('given thinking then text then AskUserQuestion when grouping then only thinking folds and text externalizes', () => {
+    const items = buildAssistantTurnRenderItems([
+      thinking('先分析背景'),
+      text('质询正文'),
+      askTool(),
+    ])
+
+    expect(items.map((item) => item.type)).toEqual(['process-group', 'block'])
+    if (items[0]?.type === 'process-group') {
+      expect(items[0].items.map((item) => item.index)).toEqual([0])
+    }
+    if (items[1]?.type === 'block') {
+      expect(items[1].item.index).toBe(1)
+    }
+  })
+
+  test('given streaming text followed by trailing thinking when grouping then text externalizes even at index 0', () => {
+    // 去除 textStartIndex > 0 硬阻碍的回归守卫：首段正文 + 尾随 thinking 流式期间也必须外置。
+    const items = buildAssistantTurnRenderItems([
+      text('首段正文'),
+      thinking('收尾思考'),
+    ], { isStreaming: true, completedToolResultIds: new Set() })
+
+    expect(items.map((item) => item.type)).toEqual(['process-group', 'block'])
+    if (items[0]?.type === 'process-group') {
+      expect(items[0].items.map((item) => item.index)).toEqual([1])
+    }
+    if (items[1]?.type === 'block') {
+      expect(items[1].item.index).toBe(0)
+    }
   })
 })

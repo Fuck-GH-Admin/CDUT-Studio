@@ -209,6 +209,86 @@ export function parseLocpot(text: string): CsLabVolumeGrid {
   return parseVaspGrid(text, 'locpot')
 }
 
+/**
+ * 逐格点差分电荷密度：Δρ = ρ_total − Σρ_sub
+ *
+ * - 1 个减数：两体体系，例如 ρ_host+dopant − ρ_host；
+ * - 2 个减数：三体体系，例如 ρ_AB − ρ_A − ρ_B；
+ * - 任意个减数：表面吸附等多体体系。
+ *
+ * 约束：所有网格维度必须与总量网格一致，否则明确报错，绝不静默截断或补零。
+ */
+export function computeDifferentialGrid(
+  total: CsLabVolumeGrid,
+  ...subtrahends: CsLabVolumeGrid[]
+): CsLabVolumeGrid {
+  if (subtrahends.length === 0) {
+    throw new CsLabVolumeParseError('差分计算至少需要一个减数网格')
+  }
+  const [nx, ny, nz] = total.dimensions
+  const voxelCount = nx * ny * nz
+  if (total.values.length !== voxelCount) {
+    throw new CsLabVolumeParseError(
+      `总量网格数值数 ${total.values.length} 与维度 ${total.dimensions.join('×')} 不匹配`,
+    )
+  }
+
+  subtrahends.forEach((grid, index) => {
+    const sameDimensions =
+      grid.dimensions[0] === nx && grid.dimensions[1] === ny && grid.dimensions[2] === nz
+    if (!sameDimensions) {
+      throw new CsLabVolumeParseError(
+        `第 ${index + 1} 个减数网格维度 ${grid.dimensions.join('×')} 与总量网格 ${total.dimensions.join('×')} 不一致`,
+      )
+    }
+    if (grid.values.length !== voxelCount) {
+      throw new CsLabVolumeParseError(
+        `第 ${index + 1} 个减数网格数值数 ${grid.values.length} 与维度 ${grid.dimensions.join('×')} 不匹配`,
+      )
+    }
+  })
+
+  const values = new Float32Array(total.values)
+  for (const grid of subtrahends) {
+    const source = grid.values
+    for (let index = 0; index < voxelCount; index += 1) {
+      values[index] = values[index]! - source[index]!
+    }
+  }
+
+  let min = Infinity
+  let max = -Infinity
+  for (let index = 0; index < voxelCount; index += 1) {
+    const value = values[index]!
+    if (!Number.isFinite(value)) {
+      throw new CsLabVolumeParseError('差分网格包含非有限数值，请检查输入体数据')
+    }
+    if (value < min) min = value
+    if (value > max) max = value
+  }
+
+  const warnings = [
+    ...new Set([...total.warnings, ...subtrahends.flatMap((grid) => grid.warnings)]),
+  ]
+  warnings.push('差分网格由 Δρ = ρ_total − Σρ_sub 逐格点计算生成')
+
+  return {
+    format: total.format,
+    dimensions: [nx, ny, nz],
+    origin: [...total.origin],
+    voxelVectors: total.voxelVectors.map((vector) => [...vector]) as [
+      number[],
+      number[],
+      number[],
+    ],
+    values,
+    min,
+    max,
+    atomCount: total.atomCount,
+    warnings,
+  }
+}
+
 /** 三线性采样（分数坐标 0-1，周期边界）。 */
 export function sampleGrid(grid: CsLabVolumeGrid, u: number, v: number, w: number): number {
   const [nx, ny, nz] = grid.dimensions

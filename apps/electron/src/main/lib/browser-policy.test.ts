@@ -43,4 +43,12 @@ describe('受管浏览器 URL 策略', () => {
     expect(isSafeBrowserSubresourceUrl('https://user:pass@example.com/app.js')).toBe(false)
     expect(isSafeBrowserSubresourceUrl('not a url')).toBe(false)
   })
+
+  test('NUL 截断攻击（CVE-2026-105482）在顶层与子资源校验中一律拒止', () => {
+    expect(() => assertSafeBrowserUrl('https://example.com%00.evil.net/')).toThrow('空字符或控制字符')
+    expect(() => assertSafeBrowserUrl('https://example.com/\0')).toThrow('空字符或控制字符')
+    expect(() => assertSafeBrowserUrl('https://exa\u0000mple.com/')).toThrow('空字符或控制字符')
+    expect(isSafeBrowserSubresourceUrl('https://cdn.example.com/app.js%00')).toBe(false)
+    expect(isSafeBrowserSubresourceUrl('https://cdn.example\0.com/app.js')).toBe(false)
+  })
 })

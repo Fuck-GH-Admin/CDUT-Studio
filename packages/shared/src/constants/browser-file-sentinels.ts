@@ -52,3 +52,27 @@ export function parseBrowserLocalFileSelection(url: string): string | null {
     ? decoded.slice(0, BROWSER_LOCAL_FILE_SELECTION_MAX_CHARS)
     : decoded
 }
+
+/**
+ * 证书安全插页（eMudhra 泄露链拦截）伪哨兵。
+ *
+ * 插页以 `data:text/html` 渲染，源为 opaque；若用自定义伪协议做按钮回投，
+ * Chromium 可能对「data: 源 → 非标准 scheme 的顶层导航」静默丢弃。因此改用
+ * 标准 HTTPS 形式的伪域名（不会真实解析），主进程在 `will-navigate` /
+ * `setWindowOpenHandler` 中 `preventDefault` 拦截；session 的 `onBeforeRequest`
+ * 对该 host 显式 cancel 兜底，保证导航永不触达网络栈。
+ */
+export const BROWSER_CERT_INTERSTITIAL_HOST = 'profer-security.local'
+
+/** 插页【我已知晓风险，忽略并继续访问】按钮哨兵。 */
+export const BROWSER_CERT_INTERSTITIAL_ALLOW_URL = `https://${BROWSER_CERT_INTERSTITIAL_HOST}/cert-allow`
+
+/** 插页【返回安全页面】按钮哨兵。 */
+export const BROWSER_CERT_INTERSTITIAL_BACK_URL = `https://${BROWSER_CERT_INTERSTITIAL_HOST}/cert-back`
+
+/** 识别证书插页哨兵：'allow' / 'back'，非哨兵返回 null。 */
+export function parseCertInterstitialSentinel(url: string): 'allow' | 'back' | null {
+  if (url === BROWSER_CERT_INTERSTITIAL_ALLOW_URL || url.startsWith(`${BROWSER_CERT_INTERSTITIAL_ALLOW_URL}?`)) return 'allow'
+  if (url === BROWSER_CERT_INTERSTITIAL_BACK_URL || url.startsWith(`${BROWSER_CERT_INTERSTITIAL_BACK_URL}?`)) return 'back'
+  return null
+}

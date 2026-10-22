@@ -5,6 +5,9 @@
  * 输出的 systemPrompt 必须字节级稳定：这里不再根据用户提问文本（正则）动态增删 SOP，
  * 只按「会话稳定」的工具挂载与能力开关裁剪。工具的可用能力始终由 ToolDefinition 暴露，
  * 裁剪只影响辅助说明文案，不隐藏能力、也不改变权限。
+ *
+ * 结构约束：裁剪只做「原位删除」，绝不把段落搬到文档末尾。
+ * 低频 SOP 保留时必须留在原父级 XML 标签内，近因提醒因此天然保持最后一段。
  */
 
 export interface PiTaskPromptOptions {
@@ -58,6 +61,23 @@ function removeHeadingSection(prompt: string, startMarker: string): PromptSectio
   }
 }
 
+function pruneSection(
+  prompt: string,
+  startMarker: string,
+  endMarkers: string | string[],
+  keep: boolean,
+): string {
+  if (keep) return prompt
+  const section = removeSection(prompt, startMarker, endMarkers)
+  return section ? section.rest : prompt
+}
+
+function pruneHeadingSection(prompt: string, startMarker: string, keep: boolean): string {
+  if (keep) return prompt
+  const section = removeHeadingSection(prompt, startMarker)
+  return section ? section.rest : prompt
+}
+
 function hasAnyTool(toolNames: Set<string>, predicate: (name: string) => boolean): boolean {
   return [...toolNames].some(predicate)
 }
@@ -65,82 +85,73 @@ function hasAnyTool(toolNames: Set<string>, predicate: (name: string) => boolean
 /**
  * 返回本轮 Pi 实际使用的 system prompt。
  *
- * 低频 SOP 从基础 prompt 中取出后，仅按「会话稳定」的判定（工具是否实际注册、能力是否
- * 激活）决定是否追加，完全不参考用户提问文本。因此同一会话内（工具集合不变时）输出
- * 字节级一致，前缀缓存 100% 命中。如果以后某段文案变更导致未找到 marker，函数保守地
- * 保留原始 prompt，绝不静默丢失安全指令。
+ * 低频 SOP 仅按「会话稳定」的判定（工具是否实际注册、能力是否激活）决定保留或删除，
+ * 完全不参考用户提问文本。因此同一会话内（工具集合不变时）输出字节级一致，
+ * 前缀缓存 100% 命中；段落保留时仍位于原 XML 标签内，杜绝标签悬空。
+ * 如果以后某段文案变更导致未找到 marker，函数保守地保留原始 prompt，绝不静默丢失安全指令。
  */
 export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
   const tools = new Set(options.toolNames)
-  const lowFrequency: string[] = []
   let prompt = options.basePrompt
 
-  const collaboration = removeSection(prompt, '## SubAgent Delegation Policy', ['</subagents>', '## Pi Agent Runtime'])
-  if (collaboration) {
-    prompt = collaboration.rest
-    if (hasAnyTool(tools, (name) => name.startsWith('mcp__collaboration__'))) lowFrequency.push(collaboration.text)
-  }
+  const hasCollaborationTool = hasAnyTool(tools, (name) => name.startsWith('mcp__collaboration__'))
+  prompt = pruneSection(
+    prompt,
+    '## SubAgent Delegation Policy',
+    ['</subagents>', '## Pi Agent Runtime'],
+    hasCollaborationTool,
+  )
 
-  const piMemory = removeHeadingSection(prompt, '### Pi Runtime & File Memory')
-  if (piMemory) {
-    prompt = piMemory.rest
-    const hasMemoryTool = hasAnyTool(tools, (name) => name.startsWith('mcp__memory-archive__') || name.startsWith('mcp__team-memory__'))
-    // 完整的知识维护与收尾回写规则由常驻的「CDUT Studio 知识维护架构」承载；此处只保留
-    // Pi 专属文件操作细节，按记忆工具是否注册恢复，避免普通本地任务重复携带长段落。
-    if (hasMemoryTool) lowFrequency.push(piMemory.text)
-  }
+  const hasMemoryTool = hasAnyTool(tools, (name) => name.startsWith('mcp__memory-archive__') || name.startsWith('mcp__team-memory__'))
+  // 完整的知识维护与收尾回写规则由常驻的「CDUT Studio 知识维护架构」承载；此处只保留
+  // Pi 专属文件操作细节，按记忆工具是否注册决定保留，避免普通本地任务重复携带长段落。
+  prompt = pruneHeadingSection(prompt, '### Pi Runtime & File Memory', hasMemoryTool)
 
-  const teamMemory = removeSection(prompt, '## Team Shared Knowledge Memory', '## Uncertainty Handling')
-  if (teamMemory) {
-    prompt = teamMemory.rest
-    if (hasAnyTool(tools, (name) => name.startsWith('mcp__team-memory__'))) lowFrequency.push(teamMemory.text)
-  }
+  const hasTeamMemoryTool = hasAnyTool(tools, (name) => name.startsWith('mcp__team-memory__'))
+  prompt = pruneSection(prompt, '## Team Shared Knowledge Memory', '## Uncertainty Handling', hasTeamMemoryTool)
 
-  const knowledgeGovernance = removeSection(prompt, '## CDUT Studio Knowledge Maintenance Architecture', '## Task Completion Criteria')
-  if (knowledgeGovernance) {
-    prompt = knowledgeGovernance.rest
-    // 知识维护是跨任务的常驻行为约束，不能只在出现“记忆”关键词时注入。
-    lowFrequency.push(knowledgeGovernance.text)
-  }
+  // 知识维护是跨任务的常驻行为约束，不能只在出现“记忆”关键词时注入。
+  // 该段始终保留原位，因此这里不做任何裁剪。
 
-  const automation = removeSection(prompt, '7. **Scheduled tasks (Automation)**', '8. **Sending existing local images**')
-  if (automation) {
-    prompt = automation.rest
-    // 定时任务工具按会话注册；forceAutomation 用于自动任务运行上下文强制保留。
-    const hasAutomationTool = hasAnyTool(tools, (name) => name.startsWith('mcp__automation__'))
-    if (hasAutomationTool || options.forceAutomation === true) lowFrequency.push(automation.text)
-  }
+  // 定时任务工具按会话注册；forceAutomation 用于自动任务运行上下文强制保留。
+  // 后续第 8/9/10 条按图像能力动态生成，任意一条都可能缺席，
+  // 因此 endMarker 必须给出全部候选与后续标题兜底，避免整条裁剪链静默失效。
+  const hasAutomationTool = hasAnyTool(tools, (name) => name.startsWith('mcp__automation__'))
+  prompt = pruneSection(
+    prompt,
+    '7. **Scheduled tasks (Automation)**',
+    [
+      '8. **Sending existing local images**',
+      '9. **AI image generation**',
+      '10. **Creating CDUT Studio skins**',
+      '## CDUT Studio Managed Browser',
+      '## CDUT Studio Web Search',
+      '## Capabilities Disabled by the Current Preset',
+      '</guidelines>',
+    ],
+    hasAutomationTool || options.forceAutomation === true,
+  )
 
-  const delivery = removeSection(prompt, '8. **Sending existing local images**', ['## CDUT Studio Managed Browser', '</guidelines>'])
-  if (delivery) {
-    prompt = delivery.rest
-    const hasImageOutput = tools.has('send_local_image')
-    const hasPptWorkflow = options.pptCapabilityActive === true
-      && tools.has('plan_ppt_visuals')
-      && tools.has('audit_ppt_delivery')
-      && tools.has('open_file_preview')
-      && tools.has('inspect_file_preview')
-    // 图片发送/生成/皮肤与 PPT 交付共用同一段 SOP：任一相关工具实际注册即恢复。
-    const hasDeliveryTools = hasImageOutput
-      || tools.has('generate_image')
-      || tools.has('create_skin')
-      || hasPptWorkflow
-    if (hasDeliveryTools) lowFrequency.push(delivery.text)
-  }
+  const hasImageOutput = tools.has('send_local_image')
+  const hasPptWorkflow = options.pptCapabilityActive === true
+    && tools.has('plan_ppt_visuals')
+    && tools.has('audit_ppt_delivery')
+    && tools.has('open_file_preview')
+    && tools.has('inspect_file_preview')
+  // 图片发送/生成/皮肤与 PPT 交付共用同一段 SOP：任一相关工具实际注册即保留。
+  const hasDeliveryTools = hasImageOutput
+    || tools.has('generate_image')
+    || tools.has('create_skin')
+    || hasPptWorkflow
+  prompt = pruneSection(
+    prompt,
+    '8. **Sending existing local images**',
+    ['## CDUT Studio Managed Browser', '</guidelines>'],
+    hasDeliveryTools,
+  )
 
-  const browser = removeHeadingSection(prompt, '## CDUT Studio Managed Browser')
-  if (browser) {
-    prompt = browser.rest
-    if (hasAnyTool(tools, (name) => name.startsWith('Browser'))) lowFrequency.push(browser.text)
-  }
+  const hasBrowserTool = hasAnyTool(tools, (name) => name.startsWith('Browser'))
+  prompt = pruneHeadingSection(prompt, '## CDUT Studio Managed Browser', hasBrowserTool)
 
-  if (lowFrequency.length > 0) {
-    const recencyMarker = '> **CRITICAL EXECUTION REMINDER**:'
-    const reminderIdx = prompt.lastIndexOf(recencyMarker)
-    if (reminderIdx >= 0) {
-      return `${prompt.slice(0, reminderIdx).trim()}\n\n${lowFrequency.join('\n\n')}\n\n${prompt.slice(reminderIdx).trim()}`
-    }
-    return `${prompt.trim()}\n\n${lowFrequency.join('\n\n')}`
-  }
   return prompt.trim()
 }

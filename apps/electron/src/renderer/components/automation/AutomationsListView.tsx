@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 定时任务列表视图（codex Automations 风格）
  *
  * 由侧边栏 Automations 入口触发显示，全屏占据中间内容区（隐藏 TabBar）。
@@ -303,7 +303,7 @@ function Section({ title, automations, onEdit, onRefresh, variant, presetNames }
                     'p-1.5 -m-1.5 shrink-0 flex items-center justify-center rounded-md transition-colors',
                     a.active
                       ? 'text-foreground/35 hover:bg-foreground/[0.06] hover:text-foreground/70 group-hover:text-foreground/55'
-                      : 'text-foreground/30 hover:bg-emerald-500/10 hover:text-emerald-500 group-hover:text-foreground/45',
+                      : 'text-foreground/50 hover:bg-emerald-500/10 hover:text-emerald-500 group-hover:text-foreground/45',
                   )}
                 >
                   {a.active ? <Pause className="size-3.5" /> : <Power className="size-3.5" />}
@@ -324,7 +324,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }): React.ReactElement 
   return (
     <div className="max-w-2xl mx-auto pt-24 flex flex-col items-center text-center gap-4">
       <div className="size-16 rounded-2xl bg-foreground/[0.04] flex items-center justify-center">
-        <Clock className="size-8 text-foreground/30" />
+        <Clock className="size-8 text-foreground/50" />
       </div>
       <div className="flex flex-col gap-1.5">
         <div className="text-[16px] font-medium text-foreground/85">暂无定时任务</div>

@@ -64,6 +64,7 @@ import {
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
   askUserAnswersAtom,
+  askUserCollapsedAtom,
   allPendingExitPlanRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -90,7 +91,6 @@ import { sidebarViewModeAtom, workspaceSortModeAtom } from '@/atoms/sidebar-atom
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
-import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
@@ -267,8 +267,6 @@ export function useLeftSidebar() {
   const mode = useAtomValue(appModeAtom)
   const isMac = React.useMemo(() => detectIsMac(), [])
   const hasEnvironmentIssues = useAtomValue(hasEnvironmentIssuesAtom)
-  const promptConfig = useAtomValue(promptConfigAtom)
-  const setSelectedPromptId = useSetAtom(selectedPromptIdAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
 
@@ -392,7 +390,6 @@ export function useLeftSidebar() {
   const setConvContextLength = useSetAtom(conversationContextLengthAtom)
   const setConvThinking = useSetAtom(conversationThinkingEnabledAtom)
   const setConvParallel = useSetAtom(conversationParallelModeAtom)
-  const setConvPromptId = useSetAtom(conversationPromptIdAtom)
   const setPreviewFile = useSetAtom(previewFileMapAtom)
   const setBrowserState = useSetAtom(browserStateMapAtom)
   const setBrowserDismissed = useSetAtom(browserPanelDismissedSessionIdsAtom)
@@ -409,6 +406,7 @@ export function useLeftSidebar() {
   const setAllPendingPermissionRequests = useSetAtom(allPendingPermissionRequestsAtom)
   const setAllPendingAskUserRequests = useSetAtom(allPendingAskUserRequestsAtom)
   const setAskUserAnswers = useSetAtom(askUserAnswersAtom)
+  const setAskUserCollapsed = useSetAtom(askUserCollapsedAtom)
   const setAllPendingExitPlanRequests = useSetAtom(allPendingExitPlanRequestsAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
@@ -423,7 +421,6 @@ export function useLeftSidebar() {
     setConvContextLength(deleteKey)
     setConvThinking(deleteKey)
     setConvParallel(deleteKey)
-    setConvPromptId(deleteKey)
     setPreviewFile(deleteKey)
     setBrowserState(deleteKey)
     setBrowserDismissed((prev) => {
@@ -464,6 +461,12 @@ export function useLeftSidebar() {
           for (const rid of askUserRequestIds) if (map.delete(rid)) changed = true
           return changed ? map : prev
         })
+        setAskUserCollapsed((prev) => {
+          let changed = false
+          const next = new Set(prev)
+          for (const rid of askUserRequestIds) if (next.delete(rid)) changed = true
+          return changed ? next : prev
+        })
       }
     }
     setAllPendingExitPlanRequests(deleteKey)
@@ -492,7 +495,7 @@ export function useLeftSidebar() {
     sessionExistsAtom.remove(id)
 
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewFile, setBrowserState, setBrowserDismissed, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store, setAgentMessagesCache, setResolvedBlobMessages])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setPreviewFile, setBrowserState, setBrowserDismissed, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store, setAgentMessagesCache, setResolvedBlobMessages])
 
 
   const currentWorkspaceSlug = React.useMemo(() => {
@@ -719,10 +722,6 @@ export function useLeftSidebar() {
       openSession('chat', meta.id, meta.title)
       // 确保在对话视图
       setActiveView('conversations')
-      // 根据默认提示词重置选中
-      if (promptConfig.defaultPromptId) {
-        setSelectedPromptId(promptConfig.defaultPromptId)
-      }
     } catch (error) {
       console.error('[侧边栏] 创建对话失败:', error)
     }

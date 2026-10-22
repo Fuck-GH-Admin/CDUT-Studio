@@ -11,6 +11,8 @@ import { DEFAULT_RUISHU_DOMAIN, stripStaleRuiShuCookies } from './yanhu-cookie-u
 
 interface FakeCookie {
   name: string
+  domain?: string
+  path?: string
 }
 
 interface FakeSessionHandles {
@@ -56,10 +58,9 @@ describe('stripStaleRuiShuCookies 成对签名识别', () => {
     const removed = await stripStaleRuiShuCookies(session)
 
     expect(removed).toBe(1)
-    // 同时尝试 https 与 http 两种来源，确保彻底摘除
+    // 缺省路径按根路径处理，删除 URL 必须携带与 Cookie 作用域一致的路径
     expect(removeCalls).toEqual([
-      { url: `https://${DEFAULT_RUISHU_DOMAIN}`, name: 'sMLAeTqisZbFP' },
-      { url: `http://${DEFAULT_RUISHU_DOMAIN}`, name: 'sMLAeTqisZbFP' },
+      { url: `https://${DEFAULT_RUISHU_DOMAIN}/`, name: 'sMLAeTqisZbFP' },
     ])
   })
 
@@ -97,7 +98,46 @@ describe('stripStaleRuiShuCookies 成对签名识别', () => {
     const removed = await stripStaleRuiShuCookies(session)
 
     expect(removed).toBe(2)
-    expect(removeCalls.map((c) => c.name)).toEqual(['aaaP', 'aaaP', 'bbbP', 'bbbP'])
+    expect(removeCalls.map((c) => c.name)).toEqual(['aaaP', 'bbbP'])
+  })
+
+  test('按 Cookie 自身 domain/path 构造删除 URL，路径作用域不丢失', async () => {
+    const { session, removeCalls } = createFakeSession([
+      { name: 'ruiO', domain: '.jw.cdut.edu.cn', path: '/jsxsd' },
+      { name: 'ruiP', domain: '.jw.cdut.edu.cn', path: '/jsxsd' },
+    ])
+
+    const removed = await stripStaleRuiShuCookies(session)
+
+    expect(removed).toBe(1)
+    expect(removeCalls).toEqual([
+      { url: 'https://jw.cdut.edu.cn/jsxsd', name: 'ruiP' },
+    ])
+  })
+
+  test('精确路径删除失败时兜底尝试 /jsxsd/ 作用域', async () => {
+    const removeCalls: Array<{ url: string; name: string }> = []
+    const session = {
+      cookies: {
+        get: async () => [
+          { name: 'ruiO', domain: 'jw.cdut.edu.cn', path: '/' },
+          { name: 'ruiP', domain: 'jw.cdut.edu.cn', path: '/' },
+        ],
+        remove: async (url: string, name: string) => {
+          removeCalls.push({ url, name })
+          // 根路径不存在，仅 /jsxsd/ 作用域可成功删除
+          if (!url.endsWith('/jsxsd/')) throw new Error('cookie not found')
+        },
+      },
+    } as unknown as Session
+
+    const removed = await stripStaleRuiShuCookies(session)
+
+    expect(removed).toBe(1)
+    expect(removeCalls.at(-1)).toEqual({
+      url: 'https://jw.cdut.edu.cn/jsxsd/',
+      name: 'ruiP',
+    })
   })
 })
 
@@ -121,8 +161,7 @@ describe('stripStaleRuiShuCookies 目标域与兜底', () => {
     expect(removed).toBe(1)
     expect(getFilters).toEqual([{ domain: 'bsdt.cdut.edu.cn' }])
     expect(removeCalls).toEqual([
-      { url: 'https://bsdt.cdut.edu.cn', name: 'xP' },
-      { url: 'http://bsdt.cdut.edu.cn', name: 'xP' },
+      { url: 'https://bsdt.cdut.edu.cn/', name: 'xP' },
     ])
   })
 

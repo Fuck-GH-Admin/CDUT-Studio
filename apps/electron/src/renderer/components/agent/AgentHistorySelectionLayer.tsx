@@ -150,8 +150,9 @@ export function AgentHistorySelectionLayer({
     const role = sameMessage
       ? (startMessageEl.getAttribute('data-message-role') as AgentHistorySelection['messageRole'] | null)
       : null
+    // 只认回复卡片绑定的真实 fork 节点；data-message-id 可能是 turn-1 之类的合成 ID。
     const messageId = sameMessage
-      ? startMessageEl.getAttribute('data-message-fork-id') ?? startMessageEl.getAttribute('data-message-id') ?? undefined
+      ? startMessageEl.getAttribute('data-message-fork-id') ?? undefined
       : undefined
 
     setSelection({

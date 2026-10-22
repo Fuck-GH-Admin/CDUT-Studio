@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { getToolDisplayName, getToolIcon } from './tool-utils'
+import { getToolDisplayName, getToolIcon, isSilentStreamToolName } from './tool-utils'
 import type {
   SDKContentBlock,
   SDKMessage,
@@ -9,7 +9,6 @@ import type {
   SDKToolUseBlock,
   SDKUserMessage,
 } from '@profer/shared'
-import { isGoalUpdateToolName } from '@profer/shared'
 
 interface ProcessBlockGroupProps {
   blocks: SDKContentBlock[]
@@ -71,7 +70,10 @@ interface TrailingOutputSplit {
  *  - 同一条 assistant 消息里 reasoning 晚于正文到达（`[text, thinking]`）；
  *  - 正文之后紧跟一条只含 thinking 的收尾消息（turn 内聚合后同样以 thinking 结尾）。
  * 这两种情况下正文才是应当直接可见的交付内容，必须外置；末尾 thinking 归入过程组。
- * 若正文之后还跟着 tool_use 等块，说明这段 text 更可能是给工具看的中间说明，保持整组折叠。
+ * 若正文之后还跟着普通工具（Read/Bash 等）块，说明这段 text 更可能是给工具看的中间说明，保持整组折叠。
+ *
+ * AskUserQuestion 工具块在 buildAssistantTurnRenderItems 中已被静默过滤（交互完全由底部
+ * AskUserBanner 承接），因此「正文 + AskUserQuestion」过滤后即纯正文，天然外置展示。
  *
  * 注意：Pi runtime 下 thinking 块不渲染（showThinking={agentRuntime !== 'pi'}），
  * 一旦正文被一起折叠，用户会看到整轮只剩「执行过程：N 条消息」一行、正文彻底看不见。
@@ -137,18 +139,19 @@ export function buildAssistantTurnRenderItems(
 ): AssistantTurnRenderItem[] {
   const visibleBlocks = blocks
     .map((block, index) => ({ block, index }))
-    .filter(({ block }) => block.type !== 'tool_use' || !isGoalUpdateToolName((block as SDKToolUseBlock).name))
+    // 静默工具不进消息流：Goal 更新由目标面板承接，AskUserQuestion 完全由底部 AskUserBanner 承接。
+    .filter(({ block }) => block.type !== 'tool_use' || !isSilentStreamToolName((block as SDKToolUseBlock).name))
   if (visibleBlocks.length === 0) return []
   const renderBlocks = visibleBlocks.map(({ block }) => block)
 
-  // 流式阶段最后的 text 还不稳定，后续工具调用可能会把它变成中间过程。
-  // 只有当前面所有工具都有结果时，才把尾部 text 视作最终输出，降低完成瞬间的跳动。
+  // 流式阶段最后的 text 还不稳定。只有当前面所有工具都有结果时，才把尾部 text 视作
+  // 最终输出外置；普通工具尾随时 getTrailingOutputSplit 直接返回 null，中间说明仍整组折叠，
+  // 因此无需再限制 textStartIndex > 0（首段正文 + 尾随 thinking / AskUserQuestion 也可安全外置）。
   const hasProcessBlock = renderBlocks.some((block) => block.type === 'tool_use' || block.type === 'thinking')
   const outputSplit = getTrailingOutputSplit(renderBlocks)
   const canSplitStreamingFinalOutput = options.isStreaming
     && hasProcessBlock
     && outputSplit !== null
-    && outputSplit.textStartIndex > 0
     && areToolsBeforeIndexCompleted(renderBlocks, outputSplit.textStartIndex, options.completedToolResultIds)
 
   if (options.isStreaming && hasProcessBlock && !canSplitStreamingFinalOutput) {
@@ -186,7 +189,7 @@ function buildProcessGroupSummary(blocks: SDKContentBlock[]): string {
 
   for (const block of blocks) {
     if (block.type === 'tool_use') {
-      if (isGoalUpdateToolName((block as SDKToolUseBlock).name)) continue
+      if (isSilentStreamToolName((block as SDKToolUseBlock).name)) continue
       toolCount += 1
     } else if (block.type === 'thinking' || block.type === 'text') {
       messageCount += 1
@@ -207,7 +210,7 @@ export function buildProcessGroupToolNames(blocks: SDKContentBlock[]): string[] 
   for (const block of blocks) {
     if (block.type !== 'tool_use') continue
     const toolBlock = block as SDKToolUseBlock
-    if (isGoalUpdateToolName(toolBlock.name)) continue
+    if (isSilentStreamToolName(toolBlock.name)) continue
     if (seen.has(toolBlock.name)) continue
     seen.add(toolBlock.name)
     toolNames.push(toolBlock.name)

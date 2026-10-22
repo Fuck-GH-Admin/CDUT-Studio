@@ -1391,18 +1391,24 @@ export function buildPromaProductToolDefinitions(
     sdk.defineTool({
       name: 'AskUserQuestion',
       label: '询问用户',
-      description: '当需要用户选择、补充信息或确认偏好时调用，Profer 会展示可交互问答横幅。',
+      description: '当需要用户选择、补充信息或确认偏好时调用，Profer 会展示可交互问答横幅。支持单选（single）、多选（multiple）与填空/简答（fill-blank）；options 仅在选择题中提供。',
       promptSnippet: '向用户提出结构化问题并等待回答。',
       parameters: Type.Object({
         questions: Type.Array(Type.Object({
           question: Type.String({ description: '要询问用户的问题。' }),
           header: Type.Optional(Type.String({ description: '简短标题。' })),
-          multiSelect: Type.Optional(Type.Boolean({ description: '是否允许多选。' })),
+          type: Type.Optional(Type.Union([
+            Type.Literal('single'),
+            Type.Literal('multiple'),
+            Type.Literal('fill-blank'),
+          ], { description: '题型：single=单选，multiple=多选，fill-blank=填空/简答。' })),
+          placeholder: Type.Optional(Type.String({ description: '填空题的输入引导占位符，例如「填写拉普拉斯算子表达式」。' })),
+          multiSelect: Type.Optional(Type.Boolean({ description: '是否允许多选（等价于 type="multiple"，保留以兼容存量调用）。' })),
           options: Type.Optional(Type.Array(Type.Object({
             label: Type.String({ description: '选项标签。' }),
             description: Type.Optional(Type.String({ description: '选项说明。' })),
             preview: Type.Optional(Type.String({ description: '可选预览内容。' })),
-          }))),
+          }), { description: '选择题（single/multiple）必填 2–5 个选项；fill-blank 留空。' })),
         })),
         answers: Type.Optional(Type.Record(Type.String(), Type.String())),
         // 受管的 Deck Brief 确认 metadata 只由主进程消费，不进入 renderer 展示。

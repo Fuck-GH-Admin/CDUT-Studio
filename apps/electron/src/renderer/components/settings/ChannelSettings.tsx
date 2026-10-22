@@ -13,6 +13,7 @@ import { Switch } from '@profer/ui/primitives/switch'
 import { PROVIDER_LABELS, isAgentEnabledForChannel } from '@profer/shared'
 import type { Channel, OfficialChannelHealth, ProviderType } from '@profer/shared'
 import { getChannelLogo } from '@/lib/model-logo'
+import { useIsDarkTheme } from '@/hooks/use-is-dark-theme'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/conversation-atoms'
 import { authStatusAtom } from '@/atoms/identity-atoms'
@@ -360,6 +361,7 @@ function groupOfficialChannels(channels: Channel[]): OfficialChannelGroup[] {
 
 function OfficialChannelGroupRow({ channels, health, isModelFamily }: { channels: Channel[]; health: OfficialChannelHealth[]; isModelFamily: boolean }): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
+  const isDark = useIsDarkTheme()
   const representative = channels[0]!
   const enabledModels = new Map<string, string>()
   for (const channel of channels) for (const model of channel.models) if (model.enabled) enabledModels.set(model.id, model.name)
@@ -377,7 +379,7 @@ function OfficialChannelGroupRow({ channels, health, isModelFamily }: { channels
   return (
     <div className="group border-b border-border/50 last:border-b-0">
       <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30" aria-expanded={expanded}>
-        <img src={getChannelLogo(representative)} alt="" className="h-8 w-8 shrink-0 rounded" />
+        <img src={getChannelLogo(representative, isDark)} alt="" className="h-8 w-8 shrink-0 rounded" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium">{isModelFamily ? getOfficialChannelDisplayName(representative) : `${representative.name} · 官方`}{multiple ? ` · ${channels.length} 个渠道` : ''}</span>
           <span className="block truncate text-xs text-muted-foreground">{isModelFamily ? `${PROVIDER_LABELS[representative.provider]} 协议 · 当前账号 ${enabledModels.size} 个模型可用` : `${PROVIDER_LABELS[representative.provider]} · ${enabledModels.size} 个模型已启用`}</span>
@@ -410,6 +412,7 @@ interface ChannelRowProps {
 function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSelfConfig, health }: ChannelRowProps): React.ReactElement {
   const isOfficial = isOfficialChannel(channel)
   const [expanded, setExpanded] = React.useState(false)
+  const isDark = useIsDarkTheme()
   const enabledCount = channel.models.filter((m) => m.enabled).length
   const canExpand = isOfficial && !!health?.models.length
   const toggleExpanded = () => {
@@ -467,7 +470,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
     return (
       <SettingsRow
         label={channel.name + (isOfficial ? ' · 官方' : '')}
-        icon={<img src={getChannelLogo(channel)} alt="" className="w-8 h-8 rounded" />}
+        icon={<img src={getChannelLogo(channel, isDark)} alt="" className="w-8 h-8 rounded" />}
         description={description}
         className="group"
       >
@@ -484,7 +487,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
         className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30"
         aria-expanded={expanded}
       >
-        <img src={getChannelLogo(channel)} alt="" className="h-8 w-8 shrink-0 rounded" />
+        <img src={getChannelLogo(channel, isDark)} alt="" className="h-8 w-8 shrink-0 rounded" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium">{channel.name} · 官方</span>
           <span className="block truncate text-xs text-muted-foreground">{description}</span>

@@ -23,6 +23,7 @@ import {
 import { Button } from '@profer/ui/primitives/button'
 import { allPendingExitPlanRequestsAtom } from '@/atoms/agent-atoms'
 import { isEditableTarget } from '@/lib/navigation-controller'
+import { resolveBannerKeyScope, shouldHandleBannerKey } from '@/lib/banner-key-scope'
 import type { ExitPlanModeAction, ExitPlanAllowedPrompt } from '@profer/shared'
 
 /** 选项定义 */
@@ -81,6 +82,7 @@ export function ExitPlanModeBanner({ sessionId, onRequestStop }: ExitPlanModeBan
   const request = requests[0] ?? null
 
   // ===== Refs：确保 keydown handler 始终读取最新值，消除闭包过期问题 =====
+  const bannerRef = React.useRef<HTMLDivElement>(null)
   const focusedIdxRef = React.useRef(focusedIdx)
   focusedIdxRef.current = focusedIdx
   const feedbackTextRef = React.useRef(feedbackText)
@@ -136,6 +138,9 @@ export function ExitPlanModeBanner({ sessionId, onRequestStop }: ExitPlanModeBan
     if (!request) return
 
     const handleKeyDown = (e: KeyboardEvent): void => {
+      // 作用域守卫：外部输入框 / 侧边栏按钮等一律放行，不 preventDefault
+      if (!shouldHandleBannerKey(resolveBannerKeyScope(e, bannerRef.current))) return
+
       const curFocusIdx = focusedIdxRef.current
 
       // 反馈输入框与富文本编辑器内：仅 Enter 提交（输入法组合中跳过）。
@@ -193,7 +198,7 @@ export function ExitPlanModeBanner({ sessionId, onRequestStop }: ExitPlanModeBan
   if (!request) return null
 
   return (
-    <div className="mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
+    <div ref={bannerRef} className="mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
       {/* 头部 */}
       <div className="px-4 pt-3 pb-2">
         <div className="flex items-center gap-2 mb-1">

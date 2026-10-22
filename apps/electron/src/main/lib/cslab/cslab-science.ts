@@ -114,8 +114,13 @@ function plotsDir(labId: string): string {
   return join(resolveLabDir(assertLabId(labId)), 'vault', 'plots')
 }
 
+/** 严格判定绘图标识：必须是合规字符串，杜绝 RegExp.test(undefined) 的字符串强转误判 */
+export function isValidPlotId(value: unknown): value is string {
+  return typeof value === 'string' && PLOT_ID_RE.test(value)
+}
+
 export function plotPath(labId: string, plotId: string): string {
-  if (!PLOT_ID_RE.test(plotId)) throw new Error('绘图标识非法')
+  if (!isValidPlotId(plotId)) throw new Error('绘图标识非法')
   return join(plotsDir(labId), `${plotId}.json`)
 }
 
@@ -126,7 +131,7 @@ export async function savePlot(input: {
 }): Promise<CsLabPlotSummary> {
   const labId = assertLabId(input.labId)
   const plot = normalizePlotDocument(input.plot)
-  if (!PLOT_ID_RE.test(plot.id)) throw new Error('绘图标识非法')
+  if (!isValidPlotId(plot.id)) throw new Error('绘图标识非法')
   if (plot.labId !== labId) throw new Error('绘图文档与实验室不匹配')
   await fs.mkdir(plotsDir(labId), { recursive: true })
   const payload = { ...plot, updatedAt: Date.now() }

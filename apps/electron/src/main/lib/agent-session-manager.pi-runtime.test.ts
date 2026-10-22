@@ -305,6 +305,70 @@ describe('Pi runtime 会话持久化隔离', () => {
     const remaining = sessions.getAgentSessionSDKMessages(meta.id)
     expect(remaining.length).toBe(2)
   })
+
+  test('Given 历史会话元数据缺 workspaceId When 撤销本轮 Then 文件回退成功且元数据自动补写 workspaceId', async () => {
+    const meta = sessions.createAgentSession('rewind missing workspace', undefined, undefined, undefined, 'pi')
+    const transcript = writePiTranscript('pi-rewind-missing-workspace')
+    const sessionDir = join(root, 'agent-workspaces', 'default', meta.id)
+    mkdirSync(sessionDir, { recursive: true })
+    writeFileSync(join(sessionDir, 'file.txt'), '基线')
+    const checkpoint = createPiFileCheckpoint(meta.id, sessionDir, configPaths.getPiCheckpointsDir())
+    writeFileSync(join(sessionDir, 'file.txt'), '本轮改动')
+
+    sessions.updateAgentSessionMeta(meta.id, {
+      piSessionFile: transcript,
+      sdkSessionId: 'pi-rewind-missing-workspace',
+      piEntryBindings: { 'assistant-1': 'entry-1', 'assistant-2': 'entry-2' },
+      piFileCheckpoints: { 'entry-2': checkpoint.path },
+    })
+    sessions.appendSDKMessages(meta.id, [
+      {
+        type: 'user',
+        uuid: 'user-1',
+        message: { content: [{ type: 'text', text: '第一轮提问' }] },
+        parent_tool_use_id: null,
+      } as any,
+      {
+        type: 'assistant',
+        uuid: 'assistant-1',
+        message: { content: [{ type: 'text', text: '第一轮回复' }] },
+        parent_tool_use_id: null,
+      } as any,
+      {
+        type: 'user',
+        uuid: 'user-2',
+        message: { content: [{ type: 'text', text: '第二轮提问' }] },
+        parent_tool_use_id: null,
+      } as any,
+      {
+        type: 'assistant',
+        uuid: 'assistant-2',
+        message: { content: [{ type: 'text', text: '第二轮回复' }] },
+        parent_tool_use_id: null,
+      } as any,
+    ])
+
+    // 抹掉 workspaceId，模拟早期或异常损坏的会话元数据。
+    const indexPath = configPaths.getAgentSessionsIndexPath()
+    const index = JSON.parse(readFileSync(indexPath, 'utf-8')) as {
+      sessions: Array<{ id: string; workspaceId?: string }>
+    }
+    const target = index.sessions.find((item) => item.id === meta.id)
+    expect(target).toBeTruthy()
+    delete target!.workspaceId
+    writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8')
+
+    const result = await sessions.rewindPiSession(meta.id, 'user-2')
+
+    expect(result.fileRewind?.canRewind).toBe(true)
+    expect(readFileSync(join(sessionDir, 'file.txt'), 'utf-8')).toBe('基线')
+    const workspaces = JSON.parse(readFileSync(configPaths.getAgentWorkspacesIndexPath(), 'utf-8')) as {
+      workspaces: Array<{ id: string; slug: string }>
+    }
+    const defaultWorkspace = workspaces.workspaces.find((workspace) => workspace.slug === 'default')
+    expect(defaultWorkspace).toBeTruthy()
+    expect(sessions.getAgentSessionMeta(meta.id)?.workspaceId).toBe(defaultWorkspace!.id)
+  })
 })
 
 // 回归：一次最终失败的传输错误曾经在写入/读取时被静默丢弃，

@@ -374,7 +374,7 @@ export function CsLabDatasetView({
   const showTable = displayMode === 'table' || displayMode === 'split'
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-cslab-bg">
+    <div data-tour="cslab-dataset" className="flex h-full min-h-0 flex-col bg-cslab-bg">
       <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-cslab-border px-2 py-1.5">
         <div className="flex overflow-hidden rounded-md border border-cslab-border">
           {DISPLAY_OPTIONS.map((option) => {

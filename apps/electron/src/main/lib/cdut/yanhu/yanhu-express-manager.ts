@@ -20,6 +20,7 @@ import { BrowserWindow, Menu, View, WebContentsView, clipboard, session as elect
 import {
   buildYanhuBlockedUrl,
   isYanhuBlockedUrl,
+  parseCertInterstitialSentinel,
   parseYanhuBlockedTarget,
   YANHU_EXPRESS_IPC_CHANNELS,
   type YanhuConsoleEntry,
@@ -32,7 +33,15 @@ import {
   type YanhuUrlChangedEvent,
   type YanhuViewLayout,
 } from '@profer/shared'
-import { CDUT_AUTH_PARTITION } from '../cdut-auth-manager'
+import { CDUT_AUTH_CERT_SESSION_ID, CDUT_AUTH_PARTITION } from '../cdut-auth-manager'
+import {
+  allowDomainTemporarily,
+  buildSecurityInterstitialHtml,
+  getCertBlockedRecord,
+  revokeTabGrants,
+  wipeSessionGrants,
+} from '../../security/cert-blacklist'
+import { resolveYanhuCertBlockTarget } from './yanhu-cert-interstitial'
 import {
   YANHU_DORMANT_IDLE_MS,
   YANHU_DORMANT_MAX_BACKGROUND,
@@ -43,7 +52,7 @@ import {
   resolveYanhuViewBackground,
   stripOneTimeTicket,
 } from './yanhu-constants'
-import { isCdutDomain, yanhuDomainGatekeeper } from './yanhu-domain-gatekeeper'
+import { isCdutDomain, isWebUrl, yanhuDomainGatekeeper } from './yanhu-domain-gatekeeper'
 import { yanhuTabsStore } from './yanhu-tabs-store'
 import { yanhuFingerprintEngine } from './yanhu-fingerprint-engine'
 import { yanhuDevToolsHub } from './yanhu-devtools-hub'
@@ -77,6 +86,22 @@ interface YanhuTabRecord {
   healAttempted: boolean
   /** 触发自愈的导航 URL；成功后复位，避免同一失败 URL 被反复重试 */
   healedUrl: string | null
+  /** 本次主框架实际请求的目标 URL（含重定向目标），供证书阻断登记比对与插页重载 */
+  lastRequestedUrl: string | null
+  /** 最近一次真实落地的页面 URL（不含 data: / chrome-error），供「返回安全页面」精确回退 */
+  lastCommittedUrl: string | null
+  /** 当前展示证书安全插页时的上下文；null 表示不在插页态 */
+  certInterstitial: YanhuCertInterstitialState | null
+}
+
+/** 证书安全插页运行时上下文 */
+interface YanhuCertInterstitialState {
+  /** 被阻断目标的主机名（小写） */
+  hostname: string
+  /** 用户实际请求的完整目标 URL（含路径与查询参数） */
+  targetUrl: string
+  /** 「返回安全页面」的落点；null 时回退办事大厅首页 */
+  returnUrl: string | null
 }
 
 /** 已应用的布局快照 */
@@ -432,6 +457,9 @@ export class YanhuExpressManager {
         blockedPreviousUrl: null,
         healAttempted: false,
         healedUrl: null,
+        lastRequestedUrl: null,
+        lastCommittedUrl: null,
+        certInterstitial: null,
       }
       this.tabs.set(item.id, record)
       this.tabOrder.push(item.id)
@@ -484,6 +512,8 @@ export class YanhuExpressManager {
   /** 彻底销毁（登出等场景）：释放全部底层视图与宿主 */
   public dispose(): void {
     for (const id of [...this.tabOrder]) this.disposeTabView(id)
+    // 全部标签已销毁：清空该会话下的证书临时放行（仅内存态）
+    wipeSessionGrants(CDUT_AUTH_CERT_SESSION_ID)
     if (this.hostView && this.owner && !this.owner.isDestroyed()) {
       try {
         this.owner.contentView.removeChildView(this.hostView)
@@ -519,7 +549,18 @@ export class YanhuExpressManager {
       canGoBack: false,
       canGoForward: false,
     }
-    return { id, item, view: null, blockedTarget: null, blockedPreviousUrl: null, healAttempted: false, healedUrl: null }
+    return {
+      id,
+      item,
+      view: null,
+      blockedTarget: null,
+      blockedPreviousUrl: null,
+      healAttempted: false,
+      healedUrl: null,
+      lastRequestedUrl: null,
+      lastCommittedUrl: null,
+      certInterstitial: null,
+    }
   }
 
   /**
@@ -593,7 +634,13 @@ export class YanhuExpressManager {
   /** 彻底销毁标签底层视图资源 */
   private disposeTabView(tabId: string): void {
     const tab = this.tabs.get(tabId)
-    if (!tab || !tab.view) return
+    if (!tab) return
+    // 授权撤销必须先于 view 判空：休眠标签同样已脱离浏览上下文，不能漏撤
+    revokeTabGrants(CDUT_AUTH_CERT_SESSION_ID, tabId)
+    tab.certInterstitial = null
+    tab.lastRequestedUrl = null
+    tab.lastCommittedUrl = null
+    if (!tab.view) return
     const view = tab.view
     tab.view = null
     yanhuDevToolsHub.release(tabId)
@@ -616,8 +663,19 @@ export class YanhuExpressManager {
     if (!view) return
     const wc = view.webContents
 
-    // 主框架导航：统一走安全网关
+    // 主框架导航起点：记录本次真实请求目标（data: 等内部页面不覆盖）
+    wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
+      if (isMainFrame && isWebUrl(url)) tab.lastRequestedUrl = url
+    })
+
+    // 主框架导航：统一走安全网关（证书插页哨兵优先拦截）
     wc.on('will-navigate', (event, url) => {
+      const certSentinel = parseCertInterstitialSentinel(url)
+      if (certSentinel) {
+        event.preventDefault()
+        this.handleCertInterstitialSentinel(tab, certSentinel)
+        return
+      }
       const allowed = yanhuDomainGatekeeper.isAllowed(url)
       logYanhuEvent('will-navigate', { tabId: tab.id, url, allowed, via: 'main' })
       if (allowed) return
@@ -625,8 +683,16 @@ export class YanhuExpressManager {
       this.blockTab(tab, url)
     })
 
-    // 重定向同样受网关约束
+    // 重定向同样受网关约束；同步刷新请求目标，保证服务端 301/302 跳到证书异常站点时
+    // 阻断登记比对的是最终目标而非起始地址
     wc.on('will-redirect', (event, url) => {
+      const certSentinel = parseCertInterstitialSentinel(url)
+      if (certSentinel) {
+        event.preventDefault()
+        this.handleCertInterstitialSentinel(tab, certSentinel)
+        return
+      }
+      if (isWebUrl(url)) tab.lastRequestedUrl = url
       const allowed = yanhuDomainGatekeeper.isAllowed(url)
       logYanhuEvent('will-navigate', { tabId: tab.id, url, allowed, via: 'redirect' })
       if (allowed) return
@@ -636,6 +702,11 @@ export class YanhuExpressManager {
 
     // 新窗口一律不外弹：http/https 转内嵌新标签，非网页协议转内置拦截页
     wc.setWindowOpenHandler(({ url }) => {
+      const certSentinel = parseCertInterstitialSentinel(url)
+      if (certSentinel) {
+        this.handleCertInterstitialSentinel(tab, certSentinel)
+        return { action: 'deny' }
+      }
       if (yanhuDomainGatekeeper.isAllowed(url)) {
         this.openTabFromWindow(tab, url)
       } else {
@@ -662,6 +733,10 @@ export class YanhuExpressManager {
     })
 
     wc.on('did-navigate', () => {
+      // 记录最近一次真实落地的页面：证书失败后 Chromium 可能把 URL 改成 chrome-error://，
+      // 只有这里留存的地址才能作为「返回安全页面」的可信落点
+      const committedUrl = wc.getURL()
+      if (isWebUrl(committedUrl)) tab.lastCommittedUrl = committedUrl
       yanhuDomDistillationEngine.markDirty(tab.id)
       this.recomputeNavigation(tab)
       logYanhuEvent('did-navigate', { tabId: tab.id, url: tab.item.url })
@@ -697,6 +772,10 @@ export class YanhuExpressManager {
       // 忽略非主框架与用户主动取消（-3 ERR_ABORTED）
       if (!isMainFrame || errorCode === -3) return
 
+      // 证书类失败：-200 段为 Chromium ERR_CERT_*；-2 为会话 verifyProc 拒绝泄露链后
+      // 返回的 net::ERR_FAILED。是否展示插页最终由「该主机存在真实阻断登记」决定。
+      if ((errorCode <= -200 || errorCode === -2) && this.tryLoadCertInterstitial(tab)) return
+
       tab.item.loading = false
       tab.item.error = {
         errorCode,
@@ -710,6 +789,7 @@ export class YanhuExpressManager {
 
     wc.on('destroyed', () => {
       // 视图被外部销毁（渲染进程崩溃等）时复位为休眠，避免脏引用
+      tab.certInterstitial = null
       if (this.tabs.get(tab.id)?.view === view) {
         tab.view = null
         tab.item.isDormant = true
@@ -730,7 +810,7 @@ export class YanhuExpressManager {
       tab.item.canGoForward = false
       return
     }
-    if (!tab.blockedTarget) {
+    if (!tab.blockedTarget && !tab.certInterstitial) {
       const currentUrl = wc.getURL()
       // 落盘前剔除一次性票据：废票一旦被持久化，下次唤醒重发必然被踢回 CAS（空壳根因）
       if (currentUrl && !currentUrl.startsWith('chrome-error://')) tab.item.url = stripOneTimeTicket(currentUrl)
@@ -809,12 +889,107 @@ export class YanhuExpressManager {
     tab.blockedPreviousUrl = null
     tab.item.url = restoreUrl
     // 休眠标签返回上一页时需惰性唤醒，否则恢复后无底层视图可显示
-    if (!tab.view) this.instantiateTab(tab)
+    if (!tab.view) this.instantiateTab(tab, { restoring: false })
     this.recomputeNavigation(tab)
     this.applyLayoutToActive()
     this.emitTabs()
     this.persist()
     return this.buildState()
+  }
+
+  // ===== 证书安全插页 =====
+
+  /**
+   * 尝试为主框架证书类失败加载 eMudhra 泄露链安全插页。
+   *
+   * 仅当本次请求目标主机存在阻断登记（会话 verifyProc 拒绝泄露链证书时写入）时返回 true，
+   * 否则交回通用网络错误处理。插页态下 `tab.item.error` 保持 null，
+   * 从而底层视图继续可见（见 applyLayoutToActive 的可见性判定）。
+   */
+  private tryLoadCertInterstitial(tab: YanhuTabRecord): boolean {
+    const wc = tab.view?.webContents
+    if (!wc || wc.isDestroyed()) return false
+
+    const target = resolveYanhuCertBlockTarget(
+      tab.lastRequestedUrl ?? tab.item.url,
+      (hostname) => getCertBlockedRecord(CDUT_AUTH_CERT_SESSION_ID, hostname),
+    )
+    if (!target) return false
+
+    // 重载目标必须是本次真实请求 URL：阻断登记中的 url 是 verifyProc 构造的
+    // `https://<hostname>/` 伪地址，丢失了路径与查询参数。
+    const targetUrl = tab.lastRequestedUrl && isWebUrl(tab.lastRequestedUrl) ? tab.lastRequestedUrl : target.record.url
+    // 「返回安全页面」落点取失败前最近一次真实落地的页面；与阻断目标同主机时回退首页
+    let returnUrl: string | null = null
+    if (tab.lastCommittedUrl && isWebUrl(tab.lastCommittedUrl)) {
+      try {
+        if (new URL(tab.lastCommittedUrl).hostname.toLowerCase() !== target.hostname) {
+          returnUrl = tab.lastCommittedUrl
+        }
+      } catch {
+        returnUrl = null
+      }
+    }
+
+    tab.certInterstitial = { hostname: target.hostname, targetUrl, returnUrl }
+    tab.item.loading = false
+    tab.item.error = null
+    tab.item.url = targetUrl
+    tab.item.title = '连接已被安全策略拦截'
+
+    const html = buildSecurityInterstitialHtml(targetUrl, {
+      issuerName: target.record.issuerName,
+      subjectName: target.record.subjectName,
+    })
+    // 主进程 loadURL 不触发 will-navigate；data: 协议不触网，安全插页由此渲染。
+    void wc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => undefined)
+
+    logYanhuEvent('cert-blocked', { tabId: tab.id, hostname: target.hostname, url: targetUrl })
+    yanhuDiagnosticConsole.log({
+      category: 'network',
+      level: 'warn',
+      badge: 'CERT.BLOCK',
+      badgeClass: 'badge-console-warn',
+      title: `已拦截 ${target.hostname} 的泄露链证书，展示安全警告插页`,
+      details: `证书主题: ${target.record.subjectName || '未知'}\n签发者: ${target.record.issuerName || '未知'}`,
+      url: targetUrl,
+    })
+    this.applyLayoutToActive()
+    this.emitTabs()
+    this.persist()
+    return true
+  }
+
+  /**
+   * 处理证书插页按钮哨兵回投（will-navigate / will-redirect / setWindowOpenHandler 三通道拦截）。
+   * allow：登记标签页级内存态临时放行并重新加载真实目标；
+   * back：显式加载 returnUrl（无则办事大厅首页），不走 goBack 以免回到被阻断条目形成插页循环。
+   */
+  private handleCertInterstitialSentinel(tab: YanhuTabRecord, action: 'allow' | 'back'): void {
+    const state = tab.certInterstitial
+    if (!state) return
+    // 先复位插页态：允许重载路径上的事件正常回写 URL / 标题
+    tab.certInterstitial = null
+
+    const wc = tab.view?.webContents
+    if (!wc || wc.isDestroyed()) return
+
+    const nextUrl = action === 'allow' ? state.targetUrl : (state.returnUrl ?? YANHU_HOME_URL)
+    if (action === 'allow') {
+      allowDomainTemporarily(CDUT_AUTH_CERT_SESSION_ID, tab.id, state.hostname)
+    }
+    logYanhuEvent(action === 'allow' ? 'cert-allow' : 'cert-back', {
+      tabId: tab.id,
+      hostname: state.hostname,
+      url: nextUrl,
+    })
+
+    tab.item.url = nextUrl
+    tab.item.loading = true
+    tab.item.error = null
+    void this.loadWithFreshSignature(wc, nextUrl)
+    this.emitTabs()
+    this.persist()
   }
 
   // ===== 标签操作 =====
@@ -826,23 +1001,25 @@ export class YanhuExpressManager {
 
   public createTab(input: YanhuCreateTabInput = {}): YanhuTabsState {
     if (!this.initialized) this.initOrRestore()
-    const url = input.url && input.url.trim() ? input.url.trim() : YANHU_HOME_URL
-    const decision = yanhuDomainGatekeeper.evaluate(url)
+    const rawUrl = input.url && input.url.trim() ? input.url.trim() : YANHU_HOME_URL
+    // 与 navigate 保持同一入口语义：裸域名自动补全 https，无法规范化的输入转拦截页
+    const decision = yanhuDomainGatekeeper.resolveAddressInput(rawUrl) ?? { allowed: false, url: rawUrl }
+    const targetUrl = decision.url
 
     const record = this.createTabRecord(YANHU_HOME_URL, '新标签页')
     this.tabs.set(record.id, record)
     this.tabOrder.push(record.id)
-    logYanhuEvent('tab-create', { tabId: record.id, url, activate: input.activate !== false })
+    logYanhuEvent('tab-create', { tabId: record.id, url: targetUrl, activate: input.activate !== false })
 
     if (!decision.allowed) {
       // 非网页协议新建：直接呈现拦截卡片
-      record.blockedTarget = url
+      record.blockedTarget = targetUrl
       record.blockedPreviousUrl = this.tabs.get(this.activeTabId)?.item.url ?? YANHU_HOME_URL
-      record.item.url = buildYanhuBlockedUrl(url)
+      record.item.url = buildYanhuBlockedUrl(targetUrl)
       record.item.title = '无法访问该网站'
       record.item.isDormant = false
     } else {
-      record.item.url = url
+      record.item.url = targetUrl
       // 新建标签：URL 是刚刚拿到的有效目标，按原样加载（不做 SSO 恢复回退）
       this.instantiateTab(record, { restoring: false })
     }
@@ -930,7 +1107,10 @@ export class YanhuExpressManager {
         const nextId = this.tabOrder[index] ?? this.tabOrder[index - 1] ?? ''
         this.activeTabId = nextId
         const next = this.tabs.get(nextId)
-        if (next && !next.view && !next.blockedTarget) this.instantiateTab(next)
+        // 关闭触发的相邻标签唤醒属于用户主动操作，必须保留其原页面（带票据的 SSO 应用页不被重置）
+        if (next && !next.view && !next.blockedTarget) {
+          this.instantiateTab(next, { restoring: false })
+        }
       }
     }
     this.applyLayoutToActive()
@@ -951,7 +1131,7 @@ export class YanhuExpressManager {
     }
     this.tabOrder = [tabId]
     this.activeTabId = tabId
-    if (!keep.view && !keep.blockedTarget) this.instantiateTab(keep)
+    if (!keep.view && !keep.blockedTarget) this.instantiateTab(keep, { restoring: false })
     this.applyLayoutToActive()
     this.emitTabs()
     this.persist()
@@ -970,7 +1150,7 @@ export class YanhuExpressManager {
     if (!this.tabs.has(this.activeTabId)) {
       this.activeTabId = tabId
       const tab = this.tabs.get(tabId)
-      if (tab && !tab.view && !tab.blockedTarget) this.instantiateTab(tab)
+      if (tab && !tab.view && !tab.blockedTarget) this.instantiateTab(tab, { restoring: false })
     }
     this.applyLayoutToActive()
     this.emitTabs()
@@ -996,9 +1176,10 @@ export class YanhuExpressManager {
     const decision = yanhuDomainGatekeeper.resolveAddressInput(input.url)
     if (!decision) return this.buildState()
 
-    // 已处于拦截态：先退出拦截态再裁决
+    // 已处于拦截态或证书插页态：先退出该状态再裁决
     tab.blockedTarget = null
     tab.blockedPreviousUrl = null
+    tab.certInterstitial = null
 
     if (!decision.allowed) {
       this.blockTab(tab, decision.url)
@@ -1079,6 +1260,7 @@ export class YanhuExpressManager {
     if (!tab) return this.buildState()
     tab.blockedTarget = null
     tab.blockedPreviousUrl = null
+    tab.certInterstitial = null
     if (!tab.view) this.instantiateTab(tab)
     tab.item.url = url
     tab.item.loading = true
@@ -1095,6 +1277,11 @@ export class YanhuExpressManager {
   public goBack(tabId?: string): YanhuTabsState {
     const tab = this.resolveTab(tabId)
     if (tab?.blockedTarget) return this.returnFromBlocked(tab.id)
+    // 插页态下后退等价于「返回安全页面」，避免历史中的 data URL / 失败条目把界面留在插页态
+    if (tab?.certInterstitial) {
+      this.handleCertInterstitialSentinel(tab, 'back')
+      return this.buildState()
+    }
     try {
       const wc = tab?.view?.webContents
       if (wc && !wc.isDestroyed() && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
@@ -1127,20 +1314,29 @@ export class YanhuExpressManager {
     return this.buildState()
   }
 
-  /** 一键自愈：重载当前标签（供故障诊断卡片调用） */
+  /** 一键自愈：摘除陈旧瑞数签名 + 剥离已消费票据后重新加载（供故障诊断卡片调用） */
   public async retryTabWithClean(tabId?: string): Promise<YanhuTabsState> {
     const tab = this.resolveTab(tabId)
     if (!tab) return this.buildState()
     tab.item.error = null
+    const liveUrl =
+      tab.view && !tab.view.webContents.isDestroyed() ? tab.view.webContents.getURL() : ''
+    // chrome-error:// 是失败页自身地址，不可作为重载目标
+    const source = liveUrl && !liveUrl.startsWith('chrome-error://') ? liveUrl : tab.item.url
+    const cleanUrl = stripOneTimeTicket(source || YANHU_HOME_URL)
+    tab.item.url = cleanUrl
+    tab.item.loading = true
     if (!tab.view) {
-      // 休眠或无底层视图时惰性唤醒，重新加载至当前 URL
-      this.instantiateTab(tab)
+      // 休眠或无底层视图时惰性唤醒：按净化后的地址重新加载
+      this.instantiateTab(tab, { restoring: false })
     } else if (!tab.view.webContents.isDestroyed()) {
-      logYanhuEvent('reload', { tabId: tab.id, url: tab.view.webContents.getURL(), reason: 'retry-clean' })
-      tab.view.webContents.reload()
+      logYanhuEvent('reload', { tabId: tab.id, url: cleanUrl, reason: 'retry-clean' })
+      // 入场清洗（stripStaleRuiShuCookies）+ 新鲜签名加载，避免携带陈旧 *P 再次 400
+      await this.loadWithFreshSignature(tab.view.webContents, cleanUrl)
     }
     if (this.activeTabId === tab.id) this.applyLayoutToActive()
     this.emitTabs()
+    this.persist()
     return this.buildState()
   }
 

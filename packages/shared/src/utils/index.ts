@@ -40,6 +40,11 @@ export {
   normalizeThinkingSignatureError,
 } from './thinking-signature-error'
 export { normalizePathForCompare } from './normalize-path'
+// URL 空字符（NUL）截断防御（CVE-2026-105482 加固，主/渲染进程共用）
+export { UnsafeUrlCharacterError, assertSafeUrlNoNul } from './url-nul-safety'
+// CSLab 实验室多字段拼音首字母模糊搜索
+export { getPinyinInitials, matchLabFuzzy } from './cslab-fuzzy-search'
+export type { CsLabFuzzyMatchResult } from './cslab-fuzzy-search'
 export {
   DEFAULT_IMAGE_ATTACHMENT_PROMPT,
   resolveAgentAttachmentPrompt,
@@ -235,6 +240,7 @@ export type {
 export { buildNeighborList, buildPolyhedra } from './cslab-polyhedra'
 export {
   CsLabVolumeParseError,
+  computeDifferentialGrid,
   downsampleGrid,
   gridSlice,
   parseChgcar,
@@ -267,3 +273,16 @@ export {
   renderPlotSvg,
   svgToDataUrl,
 } from './cslab-plot-svg'
+// CDUT 专区：标准北京时间 / 教学作息 / 24 小时课程雷达（主进程与渲染进程共用）
+export {
+  CDUT_SECTION_PERIODS,
+  getBeijingTimeInfo,
+  computeBeijingTeachingWeek,
+  evaluateCourseLiveStatus,
+} from './beijing-time'
+export type {
+  BeijingTimeInfo,
+  CdutSectionPeriod,
+  LiveScheduleCourse,
+  CourseLiveStatus,
+} from './beijing-time'

@@ -28,6 +28,12 @@ import type {
   CdutToolDomain,
   CdutToolParamsMap,
 } from '@profer/shared'
+import {
+  CDUT_SECTION_PERIODS,
+  computeBeijingTeachingWeek,
+  evaluateCourseLiveStatus,
+  getBeijingTimeInfo,
+} from '@profer/shared'
 import { stripStaleRuiShuCookies } from './yanhu/yanhu-cookie-utils'
 
 /** 青果教务系统站点根 */
@@ -816,100 +822,35 @@ export function parseWeekSpecification(text: string): number[] {
 
 /**
  * 成都理工大学官方作息表（11 节制契约，严禁出现第 12 节课）。
- * 每节课 45 分钟、节间休息 5 分钟；第 11 节为单节（全校最晚时段 20:50-21:35）。
+ * 事实源已迁移至 `@profer/shared`（主进程与渲染进程共用），此处保持同名再导出以兼容既有导入。
  */
-export const CDUT_SECTION_PERIODS: ReadonlyArray<{
-  startSection: number
-  endSection: number
-  /** 当日起始分钟（如 08:10 → 490） */
-  startMin: number
-  /** 当日结束分钟（如 09:45 → 585） */
-  endMin: number
-}> = [
-  { startSection: 1, endSection: 2, startMin: 8 * 60 + 10, endMin: 9 * 60 + 45 }, // 08:10-09:45
-  { startSection: 3, endSection: 4, startMin: 10 * 60 + 15, endMin: 11 * 60 + 50 }, // 10:15-11:50
-  { startSection: 5, endSection: 6, startMin: 14 * 60 + 30, endMin: 16 * 60 + 5 }, // 14:30-16:05
-  { startSection: 7, endSection: 8, startMin: 16 * 60 + 25, endMin: 18 * 60 }, // 16:25-18:00
-  { startSection: 9, endSection: 10, startMin: 19 * 60 + 10, endMin: 20 * 60 + 45 }, // 19:10-20:45
-  { startSection: 11, endSection: 11, startMin: 20 * 60 + 50, endMin: 21 * 60 + 35 }, // 20:50-21:35
-]
+export { CDUT_SECTION_PERIODS }
 
 /**
- * 估算当前教学周次：以「秋学期 9 月首个周一 / 春学期 3 月首个周一」为第 1 周起点，
- * 周次夹取至 [1, 25]。纯启发式（不与任何特定学期日期硬编码耦合），足够支撑默认选中周与雷达周次判定。
+ * 估算当前教学周次：严格按北京时间（Asia/Shanghai）计算，与宿主系统时区无关。
+ * 以「秋学期 9 月首个周一 / 春学期 3 月首个周一」为第 1 周起点，周次夹取至 [1, 25]。
  */
 export function computeCurrentWeek(now: Date = new Date()): number {
-  const year = now.getFullYear()
-  const month = now.getMonth() + 1 // 1-12
-  const isAutumn = month >= 7 || month <= 1
-  const startYear = month <= 1 ? year - 1 : year
-  // 秋学期起点 9 月（0-indexed 8），春学期起点 3 月（0-indexed 2）
-  const firstDay = new Date(startYear, isAutumn ? 8 : 2, 1)
-  // 该月 1 日所在周的周一
-  const monday = new Date(firstDay)
-  monday.setDate(firstDay.getDate() - ((firstDay.getDay() === 0 ? 7 : firstDay.getDay()) - 1))
-  const week = Math.floor((now.getTime() - monday.getTime()) / (7 * 86400000)) + 1
-  return Math.max(1, Math.min(25, week))
+  return computeBeijingTeachingWeek(now)
 }
 
 /**
- * 实时课程雷达（24 小时精准窗口版）：结合当前实时时间标记 isOngoing / isNext。
+ * 实时课程雷达（24 小时精准窗口版）：严格按北京时间标记 isOngoing / isNext。
  *   - isOngoing：当前周次、今天、且课程节次区间与当前时刻相交（正在上课）；
  *   - isNext：未来 24 小时内最早开课且尚未开课的一门课（周日夜间自动衔接下周次与下周周单）；
  *     严格限定 courseStartMs - nowMs <= 24h，未来 24 小时无课程时不标记任何「下节课」。
- * 纯函数：直接原地修改传入数组，并返回同引用。
+ * 雷达算法收敛于 shared 纯函数；此处按下标写回原数组，维持「原地修改 + 同引用」契约。
  */
 export function markOngoingAndNext<T extends ScheduleCourse>(courses: T[], now: Date = new Date()): T[] {
-  const nowMs = now.getTime()
-  const today = now.getDay() === 0 ? 7 : now.getDay()
-  const minutes = now.getHours() * 60 + now.getMinutes()
-  const currentWeek = computeCurrentWeek(now)
-  const DAY_MS = 86400000
-  const WINDOW_MS = 24 * 3600 * 1000
-
-  /** 课程是否在指定教学周排课（weekList 为空视为全学期排课） */
-  const scheduledInWeek = (course: T, week: number): boolean =>
-    course.weekList.length === 0 || course.weekList.includes(week)
-
-  /** 课程节次映射到当日分钟区间（跨大节取最早开始与最晚结束） */
-  const rangeFor = (course: T): { start: number; end: number } | null => {
-    let start = Number.MAX_SAFE_INTEGER
-    let end = -1
-    for (const p of CDUT_SECTION_PERIODS) {
-      if (course.startSection <= p.endSection && course.endSection >= p.startSection) {
-        start = Math.min(start, p.startMin)
-        end = Math.max(end, p.endMin)
-      }
-    }
-    return end >= 0 ? { start, end } : null
-  }
-
-  // 正在上课判定：本周次 + 今天 + 时刻落在课程时段内
-  for (const course of courses) {
-    if (course.dayOfWeek !== today || !scheduledInWeek(course, currentWeek)) continue
-    const range = rangeFor(course)
-    if (range && minutes >= range.start && minutes <= range.end) course.isOngoing = true
-  }
-  if (courses.some((c) => c.isOngoing)) return courses
-
-  // 下节课判定：未来 24 小时内最早开课的一门（跨周自动衔接下周周单）
-  const midnight = new Date(now)
-  midnight.setHours(0, 0, 0, 0)
-  const baseMs = midnight.getTime()
-  let best: { course: T; startMs: number } | null = null
-  for (const course of courses) {
-    const range = rangeFor(course)
-    if (!range) continue
-    const dist = (course.dayOfWeek - today + 7) % 7 // 0 = 今天，1-6 = 本周后续 / 下周同日
-    const weekOffset = Math.floor((today - 1 + dist) / 7) // 周日夜间跨周时周次 +1
-    if (!scheduledInWeek(course, currentWeek + weekOffset)) continue
-    const startMs = baseMs + dist * DAY_MS + range.start * 60000
-    const delta = startMs - nowMs
-    // 必须严格在未来且不超过 24 小时；今天已开课/已结束的时段顺延下周后自然超出窗口被排除
-    if (delta <= 0 || delta > WINDOW_MS) continue
-    if (!best || startMs < best.startMs) best = { course, startMs }
-  }
-  if (best) best.course.isNext = true
+  const { markedCourses } = evaluateCourseLiveStatus(courses, getBeijingTimeInfo(now))
+  courses.forEach((course, index) => {
+    const marked = markedCourses[index]
+    if (!marked) return
+    if (marked.isOngoing) course.isOngoing = true
+    else delete course.isOngoing
+    if (marked.isNext) course.isNext = true
+    else delete course.isNext
+  })
   return courses
 }
 
@@ -1608,8 +1549,9 @@ export function buildGpaTracks(records: GradeRecord[]): { latest: GpaTrackSummar
           const sb = `${b.makeupSemester || b.semester}`
           return sa === sb ? 0 : sa > sb ? 1 : -1
         }
-        const ga = a.gp ?? a.scoreNumber ?? -Infinity
-        const gb = b.gp ?? b.scoreNumber ?? -Infinity
+        // 统一换算为绩点量纲：gp 为 0–5，scoreNumber 为 0–100，不能直接比较
+        const ga = a.gp ?? (a.scoreNumber !== undefined ? scoreToGp(a.scoreNumber) : -Infinity)
+        const gb = b.gp ?? (b.scoreNumber !== undefined ? scoreToGp(b.scoreNumber) : -Infinity)
         return ga === gb ? 0 : ga > gb ? 1 : -1
       }).at(-1)
       if (chosen) picked.push(chosen)
@@ -1706,14 +1648,32 @@ export async function executeGradesDomain(
           sfxsbcxq1: '',
           mold: '',
         }
-        const res = await fetchJwPage(ses, '/kscj/cjcx_list', { method: 'POST', form })
+        // 青果网关按 Referer 判定表单来源：缺省沿用框架页会被部分网关判为非法提交并返回空表
+        const gradesReferer = `${JW_ROOT}/kscj/cjcx_query`
+        const res = await fetchJwPage(ses, '/kscj/cjcx_list', { method: 'POST', form, referer: gradesReferer })
         if (res.expired) return expiredResult()
         if (!res.ok) return errorResult(`成绩单接口返回 HTTP ${res.status}`)
 
         let records = parseGradeRecords(res.html)
         if (records.length === 0) {
-          // 旧版式兜底：/kscj/cj.do 宽表解析
-          const fallback = await fetchJwPage(ses, '/kscj/cj.do', { method: 'POST', form })
+          // 空表兜底 1：预热查询页，刷新页面级瑞数签名与会话后重试一次
+          const warmup = await fetchJwPage(ses, '/kscj/cjcx_query')
+          if (warmup.expired) return expiredResult()
+          const retry = await fetchJwPage(ses, '/kscj/cjcx_list', {
+            method: 'POST',
+            form,
+            referer: gradesReferer,
+          })
+          if (retry.expired) return expiredResult()
+          if (retry.ok) records = parseGradeRecords(retry.html)
+        }
+        if (records.length === 0) {
+          // 空表兜底 2：旧版式 /kscj/cj.do 宽表解析
+          const fallback = await fetchJwPage(ses, '/kscj/cj.do', {
+            method: 'POST',
+            form,
+            referer: gradesReferer,
+          })
           if (fallback.expired) return expiredResult()
           if (fallback.ok) {
             const legacy = parseGradeCourses(fallback.html).map(
@@ -1737,7 +1697,10 @@ export async function executeGradesDomain(
             if (legacy.length > 0) records = legacy
           }
         }
-        if (!res.ok && records.length === 0) return errorResult(`成绩单接口返回 HTTP ${res.status}`)
+        // 空表绝不作为「在线成功」返回：避免渲染层以 0 条记录覆盖有效离线缓存
+        if (records.length === 0) {
+          return errorResult('成绩接口未返回任何记录（会话未就绪或网络波动），已保留本地离线成绩缓存')
+        }
 
         const tracks = buildGpaTracks(records)
         const markdown = [
@@ -2169,16 +2132,18 @@ export function parseClassroomFreeRooms(html: string): { periodColumns: Classroo
   return { periodColumns, rooms }
 }
 
-/** 依据日期构造 jsjy_query2 所需的 yyyy-mm-dd 查询日期（默认当天） */
+/** 依据日期构造 jsjy_query2 所需的 yyyy-mm-dd 查询日期（默认北京时间当天） */
 function buildJsjyDate(dayOfWeek?: number): string {
-  const now = new Date()
-  if (dayOfWeek && dayOfWeek >= 1 && dayOfWeek <= 7) {
-    // 按目标星期顺延：本周第 N 天（周一为 1）
-    const current = now.getDay() === 0 ? 7 : now.getDay()
-    now.setDate(now.getDate() + (dayOfWeek - current))
-  }
+  const info = getBeijingTimeInfo()
   const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  if (!dayOfWeek || dayOfWeek < 1 || dayOfWeek > 7) {
+    return `${info.year}-${pad(info.month)}-${pad(info.day)}`
+  }
+  // 以北京时间当日为基准顺延到目标星期（周一为 1）
+  const shift = (dayOfWeek - info.dayOfWeek + 7) % 7
+  // midnightMs 已是北京零点，加 8h 后改用 UTC 字段读取，即为目标日的北京日历日
+  const target = new Date(info.midnightMs + shift * 86400000 + 8 * 3600000)
+  return `${target.getUTCFullYear()}-${pad(target.getUTCMonth() + 1)}-${pad(target.getUTCDate())}`
 }
 
 /** 教学楼条目（jsjy_processAjax 动态发现结果） */

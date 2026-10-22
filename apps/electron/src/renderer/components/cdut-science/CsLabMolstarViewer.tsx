@@ -2,7 +2,7 @@
  * CsLabMolstarViewer — 3D 分子/晶体表征（Mol* PluginContext）
  *
  * 设计红线：
- * - 直接使用 PluginContext（无默认 UI），背景硬编码社论暖白 #FAF9F5；
+ * - 直接使用 PluginContext（无默认 UI），背景随 CSLab 深浅主题切换；
  * - 卸载三部曲强杀 WebGL 上下文，避免 Electron 上下文上限崩溃；
  * - 所有 Mol* 深路径 API 收敛在 cslab-molstar-state.ts；
  * - XRD 峰 -> 晶面、原子 -> 谱带均为「可解释的启发式联动」，失败必须明确提示。
@@ -33,7 +33,10 @@ import {
   type CsLabTableSeries,
 } from '@profer/shared'
 import { cn } from '@/lib/utils'
-import { Atom as AtomIcon, Box, Loader2, Ruler, Triangle } from 'lucide-react'
+import { useIsDarkTheme } from '@/hooks/use-is-dark-theme'
+import { registerCsLabSnapshotProvider } from '@/lib/cslab/cslab-snapshot-registry'
+import type { CsLabPaneId } from '@/atoms/cslab-atoms'
+import { Atom as AtomIcon, Box, Camera, Loader2, Ruler, Triangle } from 'lucide-react'
 import { CsLabSpectrumStrip } from './CsLabSpectrumStrip'
 import { findVibrationalBands } from './cslab-vibrational'
 import {
@@ -45,8 +48,14 @@ import {
 
 interface CsLabMolstarViewerProps {
   labId: string
+  /** 所属舞台窗格；用于按窗格注册 3D 视窗截图能力。 */
+  paneId: CsLabPaneId
   asset: CsLabMolAsset
-  onToast: (kind: 'info' | 'success' | 'error', text: string) => void
+  onToast: (
+    kind: 'info' | 'success' | 'error',
+    text: string,
+    action?: { label: string; path: string },
+  ) => void
   onAtomSelection?: (selection: CsLabAtomSiteSelection) => void
   /** 配位多面体（由 VESTA 工作台计算）。 */
   polyhedra?: CsLabPolyhedron[]
@@ -69,6 +78,7 @@ const WAVELENGTH_OPTIONS = [
 
 export function CsLabMolstarViewer({
   labId,
+  paneId,
   asset,
   onToast,
   onAtomSelection,
@@ -93,12 +103,74 @@ export function CsLabMolstarViewer({
   const [plane, setPlane] = React.useState<CsLabMillerPlane | null>(null)
   const [wavelengthId, setWavelengthId] =
     React.useState<(typeof WAVELENGTH_OPTIONS)[number]['id']>('Cu-Kα')
+  const isDark = useIsDarkTheme()
 
   const [tables, setTables] = React.useState<CsLabAssetSummary[]>([])
   const [tableUri, setTableUri] = React.useState('')
   const [series, setSeries] = React.useState<CsLabTableSeries | null>(null)
   const [seriesLoading, setSeriesLoading] = React.useState(false)
   const [pickedX, setPickedX] = React.useState<number | undefined>(undefined)
+  const [exportingSnapshot, setExportingSnapshot] = React.useState(false)
+
+  /**
+   * 用 Mol* 的 ImagePass 全量重绘并导出当前视口 PNG。
+   * 不走 canvas.toDataURL：WebGL 默认 preserveDrawingBuffer=false，直接抓帧会黑屏。
+   */
+  const captureViewport = React.useCallback(async (scale: number): Promise<string> => {
+    const plugin = pluginRef.current
+    if (!plugin?.canvas3d) throw new Error('3D 视窗尚未初始化完成')
+    const helper = plugin.helpers.viewportScreenshot
+    if (!helper) throw new Error('当前 Mol* 运行时不支持视口截图')
+    const base = helper.getSizeAndViewport()
+    if (base.viewport.width <= 0 || base.viewport.height <= 0) {
+      throw new Error('3D 视窗当前不可见，无法截图')
+    }
+    const maxSide = Math.min(
+      plugin.canvas3d.webgl.maxRenderbufferSize,
+      plugin.canvas3d.webgl.maxTextureSize,
+    )
+    const factor = Math.max(1, Math.min(3, Math.round(scale)))
+    const width = Math.min(maxSide, Math.round(base.viewport.width * factor))
+    const height = Math.min(maxSide, Math.round(base.viewport.height * factor))
+    const previous = helper.values
+    helper.behaviors.values.next({
+      ...previous,
+      resolution: { name: 'custom', params: { width, height } },
+      format: { name: 'png', params: {} },
+      transparent: false,
+    })
+    try {
+      return await helper.getImageDataUri()
+    } finally {
+      helper.behaviors.values.next(previous)
+    }
+  }, [])
+
+  React.useEffect(
+    () => registerCsLabSnapshotProvider(paneId, captureViewport),
+    [paneId, captureViewport],
+  )
+
+  const handleExportSnapshot = React.useCallback(async (): Promise<void> => {
+    setExportingSnapshot(true)
+    try {
+      const dataUrl = await captureViewport(2)
+      const result = await window.electronAPI.cslab.snapshotStructure({
+        labId,
+        dataUrl,
+        scale: 2,
+        filenamePrefix: asset.title,
+      })
+      onToast('success', `已导出 3D 快照 ${result.width}×${result.height}`, {
+        label: '打开所在文件夹',
+        path: result.path,
+      })
+    } catch (error) {
+      onToast('error', error instanceof Error ? error.message : '3D 快照导出失败')
+    } finally {
+      setExportingSnapshot(false)
+    }
+  }, [asset.title, captureViewport, labId, onToast])
 
   const cell = React.useMemo<CsLabCrystalCell | null>(
     () => (asset.format === 'cif' ? parseCifLattice(asset.text) : null),
@@ -143,7 +215,7 @@ export function CsLabMolstarViewer({
               settings: {
                 renderer: {
                   ...renderer,
-                  backgroundColor: Color(0xfaf9f5),
+                  backgroundColor: Color(isDark ? 0x171614 : 0xfaf9f5),
                 },
               },
             })
@@ -196,7 +268,7 @@ export function CsLabMolstarViewer({
         canvas.remove()
       }
     }
-  }, [onToast])
+  }, [onToast, isDark])
 
   // ===== 结构载入 =====
   React.useEffect(() => {
@@ -601,6 +673,16 @@ export function CsLabMolstarViewer({
           </span>
         )}
         <div className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => void handleExportSnapshot()}
+            disabled={!ready || exportingSnapshot}
+            className="inline-flex items-center gap-1 rounded-md border border-cslab-border px-1.5 py-0.5 text-[10px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text disabled:opacity-50"
+            title="导出当前晶体视角为 2× 超清 PNG"
+          >
+            {exportingSnapshot ? <Loader2 size={9} className="animate-spin" /> : <Camera size={9} />}
+            快照
+          </button>
           <button
             type="button"
             onClick={() => setSupercell((value) => !value)}

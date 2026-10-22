@@ -47,8 +47,11 @@ function computeR2(actual: number[], predicted: number[]): number {
   return 1 - ssRes / ssTot
 }
 
-function fitLinear(ticks: CsLabAxisTick[]): CsLabAxisScaleFit | null {
-  const pixels = ticks.map((tick) => tick.px)
+function fitLinear(
+  ticks: CsLabAxisTick[],
+  coordinate: 'px' | 'py' = 'px',
+): CsLabAxisScaleFit | null {
+  const pixels = ticks.map((tick) => tick[coordinate])
   const values = ticks.map((tick) => tick.value)
   const pixelMean = mean(pixels)
   const valueMean = mean(values)
@@ -70,9 +73,12 @@ function fitLinear(ticks: CsLabAxisTick[]): CsLabAxisScaleFit | null {
   }
 }
 
-function fitLogarithmic(ticks: CsLabAxisTick[]): CsLabAxisScaleFit | null {
+function fitLogarithmic(
+  ticks: CsLabAxisTick[],
+  coordinate: 'px' | 'py' = 'px',
+): CsLabAxisScaleFit | null {
   if (ticks.some((tick) => !(tick.value > 0))) return null
-  const pixels = ticks.map((tick) => tick.px)
+  const pixels = ticks.map((tick) => tick[coordinate])
   const logs = ticks.map((tick) => Math.log10(tick.value))
   const pixelMean = mean(pixels)
   const logMean = mean(logs)
@@ -102,18 +108,20 @@ function fitLogarithmic(ticks: CsLabAxisTick[]): CsLabAxisScaleFit | null {
  *
  * @param ticks 至少 2 个刻度；3 个及以上时 R² 判别更有意义
  * @param preferred 'auto' 时取 R² 更高者；若对数不可用则回退线性
+ * @param coordinate 拟合所用的像素方向：X 轴传 'px'，Y 轴传 'py'（Y 轴刻度通常共线于同一 px）
  */
 export function fitAxisScale(
   ticks: CsLabAxisTick[],
   preferred: 'auto' | 'linear' | 'log' = 'auto',
+  coordinate: 'px' | 'py' = 'px',
 ): CsLabAxisScaleFit | null {
   const valid = ticks.filter(
     (tick) => Number.isFinite(tick.px) && Number.isFinite(tick.py) && Number.isFinite(tick.value),
   )
   if (valid.length < 2) return null
 
-  const linear = fitLinear(valid)
-  const logarithmic = fitLogarithmic(valid)
+  const linear = fitLinear(valid, coordinate)
+  const logarithmic = fitLogarithmic(valid, coordinate)
 
   if (preferred === 'linear') return linear ?? logarithmic
   if (preferred === 'log') return logarithmic ?? linear
@@ -124,13 +132,14 @@ export function fitAxisScale(
   return logarithmic.r2 > linear.r2 + 1e-9 ? logarithmic : linear
 }
 
-/** 将像素坐标映射为物理数值；无法拟合时返回 null。 */
+/** 将像素坐标映射为物理数值；无法拟合时返回 null。X 轴传 'px'，Y 轴传 'py'。 */
 export function mapPixelToValue(
   pixel: number,
   ticks: CsLabAxisTick[],
   scale: 'auto' | 'linear' | 'log' = 'auto',
+  coordinate: 'px' | 'py' = 'px',
 ): number | null {
-  const fit = fitAxisScale(ticks, scale)
+  const fit = fitAxisScale(ticks, scale, coordinate)
   if (!fit) return null
   const value = fit.predict(pixel)
   return Number.isFinite(value) ? value : null

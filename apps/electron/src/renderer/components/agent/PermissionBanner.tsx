@@ -13,6 +13,7 @@ import { useAtom } from 'jotai'
 import { Shield, ShieldAlert, Check, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { allPendingPermissionRequestsAtom } from '@/atoms/agent-atoms'
+import { resolveBannerKeyScope, shouldHandleBannerKey } from '@/lib/banner-key-scope'
 import { isCsLabExecutionTool } from '@profer/shared'
 import type { DangerLevel } from '@profer/shared'
 
@@ -42,19 +43,16 @@ export function PermissionBanner({ sessionId, onRequestStop }: PermissionBannerP
   const [allRequests, setAllRequests] = useAtom(allPendingPermissionRequestsAtom)
   const requests = allRequests.get(sessionId) ?? []
   const [responding, setResponding] = React.useState(false)
+  const bannerRef = React.useRef<HTMLDivElement>(null)
   const respondRef = React.useRef<(behavior: 'allow' | 'deny', alwaysAllow?: boolean) => void>()
 
   const request = requests[0] ?? null
 
-  // Enter 键快捷允许
+  // Enter 键快捷允许（仅在横幅内或页面无控件焦点时生效，避免劫持外部输入）
   React.useEffect(() => {
     if (!request) return
     const handleKeyDown = (e: KeyboardEvent): void => {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        (e.target instanceof HTMLElement && e.target.isContentEditable)
-      ) return
+      if (!shouldHandleBannerKey(resolveBannerKeyScope(e, bannerRef.current))) return
       if (e.key === 'Enter') {
         e.preventDefault()
         respondRef.current?.('allow')
@@ -113,6 +111,7 @@ export function PermissionBanner({ sessionId, onRequestStop }: PermissionBannerP
 
   return (
     <div
+      ref={bannerRef}
       className="mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200"
     >
       {/* 头部 */}

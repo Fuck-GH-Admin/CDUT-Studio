@@ -41,6 +41,8 @@ function BringBackAction({
   const messageCache = useAtomValue(agentSDKMessagesCacheAtom)
   const liveMessages = useAtomValue(liveMessagesMapAtom).get(branchSessionId) ?? []
   const [loadedMessages, setLoadedMessages] = React.useState<SDKMessage[]>([])
+  const fetchedBranchRef = React.useRef<string | null>(null)
+  const branchMessagesRef = React.useRef<SDKMessage[]>([])
   const parentDrafts = useAtomValue(agentSessionDraftsAtom)
   const parentDraftHtml = useAtomValue(agentSessionDraftHtmlAtom)
   const setParentDrafts = useSetAtom(agentSessionDraftsAtom)
@@ -49,6 +51,8 @@ function BringBackAction({
     () => mergeExplorationMessages(loadedMessages, messageCache.get(branchSessionId) ?? []),
     [branchSessionId, loadedMessages, messageCache],
   )
+  // 供拉取 effect 读取最新派生消息，同时不让派生数组成为 effect 依赖（否则自激）。
+  branchMessagesRef.current = branchMessages
   const allBranchMessages = React.useMemo(
     () => mergeExplorationMessages(branchMessages, liveMessages),
     [branchMessages, liveMessages],
@@ -58,8 +62,17 @@ function BringBackAction({
     [allBranchMessages, sourceMessageId],
   )
 
+  // 切换分支时重置本地缓存，避免上一个分支的历史串台。
   React.useEffect(() => {
-    if (conclusion || branchMessages.some((message) => (message as { uuid?: unknown }).uuid === sourceMessageId)) return
+    fetchedBranchRef.current = null
+    setLoadedMessages([])
+  }, [branchSessionId])
+
+  React.useEffect(() => {
+    if (conclusion || fetchedBranchRef.current === branchSessionId) return
+    if (branchMessagesRef.current.some((message) => (message as { uuid?: unknown }).uuid === sourceMessageId)) return
+
+    fetchedBranchRef.current = branchSessionId
     const api = window.electronAPI as unknown as {
       getAgentSessionSDKMessages?: (id: string) => Promise<unknown>
     }
@@ -69,9 +82,12 @@ function BringBackAction({
         if (cancelled || !Array.isArray(messages)) return
         setLoadedMessages(messages as SDKMessage[])
       })
-      .catch(() => {})
+      .catch(() => {
+        // 失败时释放闸门，允许下一次依赖变化重试
+        if (!cancelled) fetchedBranchRef.current = null
+      })
     return () => { cancelled = true }
-  }, [branchSessionId, sourceMessageId, branchMessages, conclusion])
+  }, [branchSessionId, sourceMessageId, conclusion])
 
   const handleBringBack = React.useCallback(() => {
     if (!conclusion) {

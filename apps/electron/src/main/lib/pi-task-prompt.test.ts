@@ -80,6 +80,51 @@ describe('buildPiTaskPrompt', () => {
     expect(prompt).not.toContain('BROWSER_RULES')
   })
 
+  // 回归：第 8/9/10 条按图像能力动态生成，第 8 条缺席时裁剪链不能静默失效。
+  test('Given 图像能力未挂载导致第 8 条缺失 When 没有自动化工具 Then 定时任务 SOP 仍被裁剪', () => {
+    const promptWithoutLocalImage = `<guidelines>
+## Interaction Norms
+7. **Scheduled tasks (Automation)**
+AUTOMATION_RULES
+
+9. **AI image generation**
+IMAGE_GENERATION_RULES
+10. **Creating CDUT Studio skins**
+SKIN_RULES
+
+## CDUT Studio Managed Browser
+BROWSER_RULES
+</guidelines>`
+
+    const prompt = buildPiTaskPrompt({
+      basePrompt: promptWithoutLocalImage,
+      userMessage: '任意',
+      toolNames: ['generate_image', 'create_skin', 'BrowserObserve'],
+    })
+
+    expect(prompt).not.toContain('AUTOMATION_RULES')
+    expect(prompt).toContain('IMAGE_GENERATION_RULES')
+    expect(prompt).toContain('SKIN_RULES')
+    expect(prompt).toContain('BROWSER_RULES')
+  })
+
+  test('Given 图像能力完全缺席且仅剩关闭标签 When 没有自动化工具 Then 第 7 条被裁剪且标签完整', () => {
+    const minimalPrompt = `<guidelines>
+## Interaction Norms
+7. **Scheduled tasks (Automation)**
+AUTOMATION_RULES
+</guidelines>`
+
+    const prompt = buildPiTaskPrompt({
+      basePrompt: minimalPrompt,
+      userMessage: '任意',
+      toolNames: [],
+    })
+
+    expect(prompt).not.toContain('AUTOMATION_RULES')
+    expect(prompt).toContain('</guidelines>')
+  })
+
   // Context Sandwich：同一会话（工具集合不变）内 systemPrompt 必须字节级稳定，
   // 不随用户提问文本变化，否则前缀缓存全部失效、每轮按 1.25 倍价重写。
   test('输出只随工具集合变化，不随用户文本变化（前缀缓存友好）', () => {
@@ -182,5 +227,67 @@ ALWAYS_PRESENT_RULES`
     expect(prompt).not.toContain('COLLABORATION_RULES')
     // 知识治理属于常驻行为规则，避免普通任务完全跳过收尾检查。
     expect(prompt).toContain('KNOWLEDGE_GOVERNANCE_RULES')
+  })
+
+  // 回归：低频 SOP 被切出后重新追加到文档末尾，会让 <subagents>/<guidelines> 悬空。
+  // 裁剪必须只做原位删除，保留时仍留在父级 XML 标签内。
+  test('裁剪不搬移段落，XML 拓扑与近因提醒位置保持不变', () => {
+    const TAGGED_PROMPT = `<subagents>
+## SubAgent Delegation Policy
+COLLABORATION_RULES
+</subagents>
+
+<guidelines>
+### Pi Runtime & File Memory
+PI_MEMORY_RULES
+
+## Team Shared Knowledge Memory
+TEAM_MEMORY_RULES
+
+## Uncertainty Handling
+UNCERTAINTY
+
+## CDUT Studio Knowledge Maintenance Architecture
+KNOWLEDGE_GOVERNANCE_RULES
+
+## Task Completion Criteria
+DELIVERY_CORE
+
+7. **Scheduled tasks (Automation)**
+AUTOMATION_RULES
+
+8. **Sending existing local images**
+LOCAL_IMAGE_RULES
+9. **AI image generation**
+IMAGE_GENERATION_RULES
+10. **PPT visual delivery gate**
+PPT_VISUAL_GATE
+
+## CDUT Studio Managed Browser
+BROWSER_RULES
+</guidelines>
+
+> **CRITICAL EXECUTION REMINDER**: think in English, answer in the user's language.`
+
+    const prompt = buildPiTaskPrompt({
+      basePrompt: TAGGED_PROMPT,
+      userMessage: '任意',
+      toolNames: ALL_TOOLS,
+      pptCapabilityActive: true,
+    })
+
+    const count = (text: string, token: string) => text.split(token).length - 1
+    expect(count(prompt, '<subagents>')).toBe(1)
+    expect(count(prompt, '</subagents>')).toBe(1)
+    expect(count(prompt, '<guidelines>')).toBe(1)
+    expect(count(prompt, '</guidelines>')).toBe(1)
+
+    // 保留的低频 SOP 仍位于各自父级标签内
+    expect(prompt.indexOf('COLLABORATION_RULES')).toBeLessThan(prompt.indexOf('</subagents>'))
+    expect(prompt.indexOf('KNOWLEDGE_GOVERNANCE_RULES')).toBeLessThan(prompt.indexOf('</guidelines>'))
+    expect(prompt.indexOf('BROWSER_RULES')).toBeLessThan(prompt.indexOf('</guidelines>'))
+
+    // 近因提醒恒为最后一段
+    expect(prompt.trimEnd().endsWith('> **CRITICAL EXECUTION REMINDER**: think in English, answer in the user\'s language.')).toBe(true)
   })
 })
