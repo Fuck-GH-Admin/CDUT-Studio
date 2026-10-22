@@ -48,6 +48,19 @@ describe('图表标定纯函数', () => {
     ]
     expect(fitAxisScale(ticks, 'log')?.scale).toBe('linear')
   })
+
+  test('Y 轴刻度按 py 拟合（同一 px 垂直线不再失效）', () => {
+    const ticks = [
+      { px: 80.5, py: 419.5, value: 0 },
+      { px: 80.5, py: 40.5, value: 100 },
+    ]
+    const fit = fitAxisScale(ticks, 'auto', 'py')
+    expect(fit?.scale).toBe('linear')
+    expect(fit?.r2).toBeCloseTo(1, 6)
+    expect(mapPixelToValue(419.5, ticks, 'auto', 'py')).toBeCloseTo(0, 6)
+    expect(mapPixelToValue(230, ticks, 'auto', 'py')).toBeCloseTo(50, 1)
+    expect(mapPixelToValue(40.5, ticks, 'auto', 'py')).toBeCloseTo(100, 6)
+  })
 })
 
 describe('磁性吸附', () => {

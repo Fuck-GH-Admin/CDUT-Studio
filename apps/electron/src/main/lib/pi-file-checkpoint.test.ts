@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   adoptPiFileCheckpoints,
   createPiFileCheckpoint,
+  isAgentWorkspaceSandbox,
   loadPiFileCheckpoint,
   prunePiFileCheckpoints,
   removePiFileCheckpoints,
@@ -344,6 +345,32 @@ describe('git 引擎特性', () => {
     } else {
       expect(toGitPath('sub/dir/file.txt')).toBe('sub/dir/file.txt')
       expect(fromGitPath('sub/dir/file.txt')).toBe('sub/dir/file.txt')
+    }
+  })
+})
+
+describe('沙箱路径校验', () => {
+  test.skipIf(process.platform !== 'win32')('Given Windows 盘符大小写不同 When 校验沙箱 Then 仍判定为合法', () => {
+    const previousConfigDir = process.env.PROFER_CONFIG_DIR
+    const previousNodeEnv = process.env.NODE_ENV
+    const previousBunTest = process.env.BUN_TEST
+    const root = makeTempRoot()
+    process.env.PROFER_CONFIG_DIR = join(root, 'config')
+    // 关闭测试环境的临时目录容错，确保真正走到 agent-workspaces 根路径比较分支。
+    delete process.env.NODE_ENV
+    delete process.env.BUN_TEST
+    try {
+      const sandbox = join(root, 'config', 'agent-workspaces', 'default', 'session-1')
+      mkdirSync(sandbox, { recursive: true })
+      expect(isAgentWorkspaceSandbox(sandbox.toLowerCase())).toBe(true)
+      expect(isAgentWorkspaceSandbox(join(root, 'not-sandbox').toLowerCase())).toBe(false)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.PROFER_CONFIG_DIR
+      else process.env.PROFER_CONFIG_DIR = previousConfigDir
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = previousNodeEnv
+      if (previousBunTest === undefined) delete process.env.BUN_TEST
+      else process.env.BUN_TEST = previousBunTest
     }
   })
 })

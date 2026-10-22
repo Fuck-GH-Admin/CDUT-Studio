@@ -31,6 +31,54 @@ const BEIJING_TIME_FMT = new Intl.DateTimeFormat('zh-CN', {
 })
 
 /**
+ * 北京时间 HH:mm:ss 分解格式化器。
+ * 通过 formatToParts 取纯数字，既不依赖本地化后缀，也避免每秒重建实例。
+ */
+const BEIJING_HMS_PARTS_FMT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Shanghai',
+  hourCycle: 'h23',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+
+/** 北京时间时分秒数字 */
+export interface BeijingTimeNumbers {
+  /** 0-23 */
+  hour: number
+  /** 0-59 */
+  minute: number
+  /** 0-59 */
+  second: number
+}
+
+/** 北京时间表盘角度（0 <= angle < 360）与 HH:mm:ss 文本 */
+export interface BeijingClockAngles extends BeijingTimeNumbers {
+  /** 时针角度：每小时 30°，每分钟 0.5°，每秒 1/120° */
+  hourAngle: number
+  /** 分针角度：每分钟 6°，每秒 0.1° */
+  minuteAngle: number
+  /** 秒针角度：每秒 6° */
+  secondAngle: number
+  /** HH:mm:ss 文本 */
+  clockText: string
+}
+
+/** 两位补零 */
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+/** 从 formatToParts 结果中安全读取某一段的纯数字；缺失或非法时返回 null */
+function readNumericPart(
+  parts: Intl.DateTimeFormatPart[],
+  type: 'hour' | 'minute' | 'second',
+): number | null {
+  const parsed = Number(parts.find((part) => part.type === type)?.value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/**
  * 取得北京时间的纯数字小时（0-23）。
  *
  * 严禁使用 `Intl.DateTimeFormat('zh-CN', { hour: 'numeric' })` —— 该组合输出「17时」，
@@ -60,14 +108,41 @@ export function getBeijingGreetingParts(now: Date = new Date()): BeijingGreeting
   }
 }
 
+/**
+ * 取得北京时间的时分秒纯数字（与宿主系统时区无关）。
+ * 解析失败时兜底为 12:00:00，保证调用方永不拿到 NaN。
+ */
+export function getBeijingTimeNumbers(now: Date = new Date()): BeijingTimeNumbers {
+  const parts = BEIJING_HMS_PARTS_FMT.formatToParts(now)
+  const hour = readNumericPart(parts, 'hour')
+  return {
+    hour: hour === null ? 12 : ((hour % 24) + 24) % 24,
+    minute: readNumericPart(parts, 'minute') ?? 0,
+    second: readNumericPart(parts, 'second') ?? 0,
+  }
+}
+
 /** 北京时间 HH:mm:ss 时钟文本（抽屉右上角时钟药丸消费） */
 export function formatBeijingClock(now: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Shanghai',
-    hourCycle: 'h23',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(now)
-  return parts
+  const { hour, minute, second } = getBeijingTimeNumbers(now)
+  return `${pad2(hour)}:${pad2(minute)}:${pad2(second)}`
+}
+
+/**
+ * 北京时间表盘指针角度。
+ *
+ * 角度公式精确联动：时针随分、秒连续微动，分针随秒连续微动，
+ * 但秒针取整到 6° 的整数倍（1 秒 1 跳）。
+ */
+export function getBeijingClockAngles(now: Date = new Date()): BeijingClockAngles {
+  const { hour, minute, second } = getBeijingTimeNumbers(now)
+  return {
+    hour,
+    minute,
+    second,
+    hourAngle: (hour % 12) * 30 + minute * 0.5 + second / 120,
+    minuteAngle: minute * 6 + second * 0.1,
+    secondAngle: second * 6,
+    clockText: `${pad2(hour)}:${pad2(minute)}:${pad2(second)}`,
+  }
 }

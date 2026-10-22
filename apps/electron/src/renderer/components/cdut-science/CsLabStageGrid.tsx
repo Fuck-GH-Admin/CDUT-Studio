@@ -123,7 +123,7 @@ export function CsLabStageGrid({
     layout === 'single' ? [activePaneId] : VISIBLE_PANES[layout]
 
   return (
-    <div className={cn('grid h-full min-h-0 gap-2 bg-cslab-bg p-2', LAYOUT_CLASS[layout])}>
+    <div data-tour="cslab-stage-grid" className={cn('grid h-full min-h-0 gap-2 bg-cslab-bg p-2', LAYOUT_CLASS[layout])}>
       {/* 所有窗格保持挂载，仅通过 hidden 控制可见性，避免切换布局时销毁编辑器/丢失未保存内容。 */}
       {CSLAB_PANE_IDS.map((paneId) => {
         const pane = panes[paneId]
@@ -134,6 +134,7 @@ export function CsLabStageGrid({
         return (
           <CsLabStagePane
             key={paneId}
+            paneId={paneId}
             pane={pane}
             isHidden={!visiblePanes.includes(paneId)}
             active={activePaneId === paneId}

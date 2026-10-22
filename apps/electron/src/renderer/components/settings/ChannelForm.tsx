@@ -47,6 +47,7 @@ import type {
 } from '@profer/shared'
 import { isAnthropicShapedEndpoint, normalizeAnthropicProviderUrl } from '@profer/core/providers'
 import { getProviderLogo } from '@/lib/model-logo'
+import { useIsDarkTheme } from '@/hooks/use-is-dark-theme'
 import { applyModelDiscoveryResult, buildModelDiscoveryAttemptKey, shouldAutoDiscoverModels } from '@/lib/channel-model-discovery'
 import { addManualModel } from '@/lib/channel-manual-model'
 import { resolveModel1MToggleState } from '@/lib/model-1m-toggle'
@@ -88,15 +89,17 @@ const GLOBAL_PROVIDERS: ProviderType[] = ['anthropic-compatible', 'ollama', 'cus
 /** 所有可选供应商 */
 const PROVIDER_OPTIONS: ProviderType[] = [...CN_PROVIDERS, ...GLOBAL_PROVIDERS]
 
-/** 供应商选项（用于 SettingsSelect） */
-const PROVIDER_SELECT_OPTIONS = PROVIDER_OPTIONS.map((p) => {
-  const label = PROVIDER_LABELS[p]
-  const icon = getProviderLogo(p)
-  if (CN_PROVIDERS.includes(p)) {
-    return { value: p, label: `${label}（国内 · 推荐）`, icon }
-  }
-  return { value: p, label, icon }
-})
+/** 供应商选项（用于 SettingsSelect）；图标按当前主题解析，避免把亮色/暗色写死在模块级 */
+function buildProviderSelectOptions(isDark: boolean) {
+  return PROVIDER_OPTIONS.map((p) => {
+    const label = PROVIDER_LABELS[p]
+    const icon = getProviderLogo(p, isDark)
+    if (CN_PROVIDERS.includes(p)) {
+      return { value: p, label: `${label}（国内 · 推荐）`, icon }
+    }
+    return { value: p, label, icon }
+  })
+}
 
 /** 各供应商的 Chat 端点路径，用于 Base URL 预览 */
 const PROVIDER_CHAT_PATHS: Record<ProviderType, string> = {
@@ -246,6 +249,8 @@ function Model1MToggle({
 
 export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCancel }: ChannelFormProps): React.ReactElement {
   const isEdit = channel !== null
+  const isDark = useIsDarkTheme()
+  const providerSelectOptions = React.useMemo(() => buildProviderSelectOptions(isDark), [isDark])
 
   // 表单状态
   const [name, setName] = React.useState(channel?.name ?? '')
@@ -705,7 +710,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             label="供应商类型"
             value={provider}
             onValueChange={handleProviderChange}
-            options={PROVIDER_SELECT_OPTIONS}
+            options={providerSelectOptions}
             placeholder="选择供应商"
           />
           <SettingsInput

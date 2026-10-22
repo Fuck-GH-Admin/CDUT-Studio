@@ -279,6 +279,15 @@ export const cslabDrawerAtom = atom<CsLabDrawerState>({
   mode: 'asset',
 })
 
+/** 左侧六维资产导航折叠态（会话级内存原子，不落盘，离开实验室即复位）。 */
+export const cslabAssetRailCollapsedAtom = atom<boolean>(false)
+
+/** 右侧抽屉普通模式的自定义宽度（持久化，单位 px）。 */
+export const cslabDrawerNormalWidthAtom = atomWithStorage<number>('cslab-drawer-normal-width', 380)
+
+/** 右侧抽屉宽屏模式的自定义宽度（持久化，单位 px）。 */
+export const cslabDrawerWideWidthAtom = atomWithStorage<number>('cslab-drawer-wide-width', 520)
+
 /** 处于陈旧状态的胶囊 id 集合（驱动琥珀色呼吸灯）。 */
 export const cslabStaleCapsulesAtom = atom<Set<string>>(new Set<string>())
 

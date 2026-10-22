@@ -84,10 +84,14 @@ import {
 } from './cslab-security'
 import {
   createLab,
+  deleteLab,
   getLab,
   getLabSnapshot,
   listLabs,
   openLab,
+  renameLab,
+  toggleArchiveLab,
+  togglePinLab,
 } from './cslab-manager'
 import {
   exportAssetTableToFile,
@@ -117,7 +121,9 @@ import { runOoxmlTask } from './cslab-ooxml'
 import { getPythonCapability } from './cslab-python'
 import { broadcastCsLabEvent } from './cslab-events'
 import { restorePlotUndoSnapshot } from './cslab-plot-history'
+import { submitStructureSnapshot } from './cslab-structure-snapshot'
 import {
+  closeCsLabAgentWindowForLab,
   getCsLabAgentWindowContext,
   openCsLabAgentWindow,
   sendCsLabAgentContext,
@@ -457,6 +463,35 @@ export function registerCsLabIpc(): void {
     CSLAB_IPC_CHANNELS.GET_LAB_SNAPSHOT,
     async (_event, labId: unknown): Promise<CsLabLabSnapshot> =>
       getLabSnapshot(asString(labId, '实验室标识')),
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.RENAME_LAB,
+    async (_event, input: unknown): Promise<CsLabLab> => {
+      const record = asObject(input, '实验室重命名参数')
+      return renameLab(asString(record.labId, '实验室标识'), asString(record.name, '实验室名称'))
+    },
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.DELETE_LAB,
+    async (_event, labId: unknown): Promise<void> => {
+      const normalizedLabId = asString(labId, '实验室标识')
+      await deleteLab(normalizedLabId)
+      closeCsLabAgentWindowForLab(normalizedLabId)
+    },
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.TOGGLE_PIN_LAB,
+    async (_event, labId: unknown): Promise<CsLabLab> =>
+      togglePinLab(asString(labId, '实验室标识')),
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.TOGGLE_ARCHIVE_LAB,
+    async (_event, labId: unknown): Promise<CsLabLab> =>
+      toggleArchiveLab(asString(labId, '实验室标识')),
   )
 
   // ===== 数据铁笼 =====
@@ -1759,6 +1794,19 @@ export function registerCsLabIpc(): void {
       return exportFigure({ labId, plot, options, targetPath: result.filePath })
     },
   )
+
+  // ===== 3D 晶体视窗快照 =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.SNAPSHOT_STRUCTURE, async (_event, input: unknown) => {
+    const record = asObject(input, '结构快照参数')
+    return submitStructureSnapshot({
+      labId: asString(record.labId, '实验室标识'),
+      requestId: typeof record.requestId === 'string' ? record.requestId : undefined,
+      dataUrl: typeof record.dataUrl === 'string' ? record.dataUrl : undefined,
+      scale: typeof record.scale === 'number' ? record.scale : undefined,
+      filenamePrefix: typeof record.filenamePrefix === 'string' ? record.filenamePrefix : undefined,
+      error: typeof record.error === 'string' ? record.error : undefined,
+    })
+  })
 
   // ===== 学术审稿 =====
   ipcMain.handle(CSLAB_IPC_CHANNELS.REVIEW_SUGGEST, async (_event, input: unknown) => {

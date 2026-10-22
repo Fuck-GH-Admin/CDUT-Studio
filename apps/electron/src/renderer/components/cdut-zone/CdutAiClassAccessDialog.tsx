@@ -9,7 +9,7 @@ import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
 import { LogIn, Clock } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
-import cdutCeLogo from '@assets/CDUT/CDUT-CE.png'
+import { CdutLogo } from '@/components/shared/CdutLogo'
 import { activeViewAtom } from '@/atoms/active-view'
 import { cdutAiClassLockPromptAtom } from '@/atoms/cdut-account-atoms'
 import { useGlobalOverlay } from '@/atoms/overlay-atoms'
@@ -38,11 +38,7 @@ export function CdutAiClassAccessDialog(): React.ReactElement | null {
             className="pointer-events-none absolute left-1/2 top-2 size-40 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl"
             aria-hidden="true"
           />
-          <img
-            src={cdutCeLogo}
-            alt="成都理工大学校徽"
-            className="relative h-16 w-auto object-contain drop-shadow-sm dark:brightness-125 dark:drop-shadow-[0_0_18px_rgba(255,255,255,0.3)]"
-          />
+          <CdutLogo className="relative h-16 w-auto drop-shadow-sm" />
           <div className="relative space-y-1 text-center">
             <h3 className="text-base font-semibold text-foreground">需要登录 CDUT 特区账户</h3>
             <p className="text-xs text-muted-foreground">「AI速课堂」仅对已登录的特区账户开放。</p>

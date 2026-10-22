@@ -23,11 +23,12 @@ import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download, MessageSquareText, Link2, Copy, Check, ListChecks, X, Play, Code, MapPin, Sigma, Table2, Image as ImageIcon } from 'lucide-react'
+import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download, MessageSquareText, Link2, Copy, Check, ListChecks, X, Play, Code } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
 import { normalizeMarkdownEmphasisWhitespace } from '@/lib/normalize-markdown-emphasis'
 import { getFileBaseName } from '@/lib/file-utils'
+import { DOCUMENT_ANCHOR_RE, pickAnchorIcon } from '@/lib/document-anchor'
 import { Button } from '@profer/ui/primitives/button'
 import { ImageLightbox } from '@profer/ui/primitives/image-lightbox'
 import {
@@ -532,8 +533,7 @@ const WIKILINK_URL_RE = /^wikilink:\/\/(.+)$/
 /** mention:// URL 匹配 */
 const MENTION_URL_RE = /^mention:\/\/(file|skill|mcp|session)\/(.+)$/
 
-/** 双平行拓扑文档锚点匹配（如 #f1:p1-b11, #f2-p3-b4, #f1:p2-tbl1, #f3:p1-cB4, #f3:p3-cA10:B10, #f3:p3-r10, #p1-b11, #p2） */
-const DOCUMENT_ANCHOR_RE = /^#(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-(?:b\d+|tbl\d+|r\d+|c[a-zA-Z]+\d+(?::[a-zA-Z]+\d+)?))?)$/i
+// 双平行拓扑文档锚点正则（含 Excel 无 c 前缀范围、tbl/r/c 扩展块）统一收敛至 @/lib/document-anchor，与速课堂溯源胶囊共用同一口径。
 
 /** 外部链接 / mention chip / 学术溯源胶囊 渲染器 */
 const MarkdownLink = React.memo(function MarkdownLink({
@@ -588,13 +588,7 @@ const MarkdownLink = React.memo(function MarkdownLink({
       const cleanLabel = rawText.replace(/^\[+|\]+$/g, '').trim() || `第${anchorMatch[3]}页`
       const badgeTag = scopedFileId ? `${scopedFileId}·${blockId}` : blockId
 
-      const IconComp = cleanLabel.includes('公式')
-        ? Sigma
-        : cleanLabel.includes('表格') || cleanLabel.includes('表')
-          ? Table2
-          : cleanLabel.includes('插图') || cleanLabel.includes('图')
-            ? ImageIcon
-            : MapPin
+      const IconComp = pickAnchorIcon(cleanLabel)
 
       const handleCitationClick = async (e: React.MouseEvent | React.KeyboardEvent) => {
         e.preventDefault()
@@ -634,39 +628,40 @@ const MarkdownLink = React.memo(function MarkdownLink({
       }
 
       return (
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={handleCitationClick}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    void handleCitationClick(e)
-                  }
-                }}
-                className={cn(
-                  'group/cite inline-flex items-center gap-1 rounded-full px-2 py-[1.5px] mx-0.5 align-baseline',
-                  'text-[12px] leading-[1.35] font-medium no-underline select-none cursor-pointer',
-                  'bg-primary/12 text-primary dark:bg-primary/20 dark:text-primary',
-                  'shadow-[0_1px_2px_rgba(0,0,0,0.07),inset_0_1px_0_rgba(255,255,255,0.22)]',
-                  'hover:bg-primary/20 dark:hover:bg-primary/28 hover:shadow-[0_3px_8px_rgba(0,0,0,0.12)] hover:-translate-y-[0.5px]',
-                  'active:translate-y-0 transition-all duration-150',
-                )}
-              >
-                <IconComp className="size-3 shrink-0 opacity-85 transition-transform duration-150 group-hover/cite:scale-110" />
-                <span>{cleanLabel}</span>
-                <span className="ml-0.5 rounded-full bg-primary/14 dark:bg-primary/25 px-1.5 py-[0.5px] font-mono text-[10px] leading-tight tracking-tight opacity-85">
-                  {badgeTag}
-                </span>
+        // TooltipProvider 由 MessageResponse 根部统一提供，胶囊自身仅挂载 Tooltip，
+        // 避免一条消息内 10-20 个胶囊各自挂载 Provider 树造成上下文冗余。
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={handleCitationClick}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  void handleCitationClick(e)
+                }
+              }}
+              className={cn(
+                'group/cite inline-flex items-center gap-1 rounded-full px-2 py-[1.5px] mx-0.5 align-baseline',
+                'text-[12px] leading-[1.35] font-medium no-underline select-none cursor-pointer',
+                'bg-primary/12 text-primary dark:bg-primary/20 dark:text-primary',
+                'shadow-[0_1px_2px_rgba(0,0,0,0.07),inset_0_1px_0_rgba(255,255,255,0.22)]',
+                'hover:bg-primary/20 dark:hover:bg-primary/28 hover:shadow-[0_3px_8px_rgba(0,0,0,0.12)] hover:-translate-y-[0.5px]',
+                'active:translate-y-0 transition-all duration-150',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1',
+              )}
+            >
+              <IconComp className="size-3 shrink-0 opacity-85 transition-transform duration-150 group-hover/cite:scale-110" />
+              <span>{cleanLabel}</span>
+              <span className="ml-0.5 rounded-full bg-primary/14 dark:bg-primary/25 px-1.5 py-[0.5px] font-mono text-[10px] leading-tight tracking-tight opacity-85">
+                {badgeTag}
               </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              点击在右侧定位原文区域 · {cleanLabel} ({href})
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            点击在右侧定位原文区域 · {cleanLabel} ({href})
+          </TooltipContent>
+        </Tooltip>
       )
     }
   }
@@ -804,7 +799,7 @@ function HtmlPreviewFrame({ html }: { html: string }): React.ReactElement {
       title="HTML 渲染预览"
       srcDoc={srcDoc}
       sandbox="allow-scripts allow-forms allow-popups"
-      className="block w-full border-0 bg-white"
+      className="block w-full border-0 bg-background dark:[color-scheme:dark]"
     />
   )
 }
@@ -1433,11 +1428,19 @@ export const MessageResponse = React.memo(
 
     if (!enableBlockCopy) {
       const plugins = [...(remarkPlugins ? [...REMARK_PLUGINS, ...remarkPlugins] : [...REMARK_PLUGINS]), remarkTableSource(processed)]
-      return <div className={containerClassName}><Markdown remarkPlugins={plugins} rehypePlugins={REHYPE_PLUGINS} urlTransform={mentionUrlTransform} components={components}>{processed}</Markdown></div>
+      return (
+        // 消息级统一 TooltipProvider：对话流内所有学术溯源胶囊共享同一上下文（见 MarkdownLink）
+        <TooltipProvider delayDuration={200}>
+          <div className={containerClassName}>
+            <Markdown remarkPlugins={plugins} rehypePlugins={REHYPE_PLUGINS} urlTransform={mentionUrlTransform} components={components}>{processed}</Markdown>
+          </div>
+        </TooltipProvider>
+      )
     }
 
     return (
-      <>
+      // 消息级统一 TooltipProvider：对话流内所有学术溯源胶囊共享同一上下文（见 MarkdownLink）
+      <TooltipProvider delayDuration={200}>
         {/* 不再静态施加 select-none：块选择模式下仍保留原生文字选区能力，
             点击勾选与拖拽选中通过 pointerDown 位移阈值区分（见 toggleBlock） */}
         <div
@@ -1459,7 +1462,7 @@ export const MessageResponse = React.memo(
             return <CopyableMarkdownBlock key={block.id} block={block} components={components} remarkPlugins={plugins} selected={selectedIds.has(block.id)} selectedBefore={selectedIds.has(previousBlock?.id ?? '')} selectedAfter={selectedIds.has(nextBlock?.id ?? '')} selecting={selecting} toolbarVisible={toolbarBlock !== null} toolbarBlock={toolbarBlock} toolbarBlockSelected={selectedIds.has(toolbarTarget.id)} copied={copied} toolbarExpanded={toolbarExpanded} previewVisible={!selecting && toolbarExpanded && toolbarBlock?.id === block.id} marginClassName={margin.className} selectionBridgeAfterClassName={bridgeClassName} markdownFormat={markdownFormat} selectionFormatMode={selectionFormatMode} onSelect={(event) => toggleBlock(block, event)} onHover={() => hoverBlock(block)} onToolbarEnter={enterToolbar} onToolbarLeave={leaveToolbar} onCopy={() => void (selecting ? copySelected() : copyBlock(toolbarTarget))} onEnterSelection={(event) => enterSelection(toolbarTarget, event)} onExitSelection={exitSelectionFromButton} onMarkdownFormatChange={setMarkdownFormat} tableFormat={tableFormatFor(toolbarTarget)} onTableFormatChange={(format) => updateTableFormat(toolbarTarget.id, format)} />
           })}
         </div>
-      </>
+      </TooltipProvider>
     )
   },
   (prevProps, nextProps) => prevProps.children === nextProps.children && prevProps.basePath === nextProps.basePath && prevProps.basePaths === nextProps.basePaths && prevProps.remarkPlugins === nextProps.remarkPlugins && prevProps.enableBlockCopy === nextProps.enableBlockCopy

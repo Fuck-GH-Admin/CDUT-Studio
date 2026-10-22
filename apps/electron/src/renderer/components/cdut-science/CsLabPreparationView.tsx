@@ -7,9 +7,38 @@
 
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
-import { ArrowUpRight, Loader2, Lock, Plus, Search, Sparkles, X } from 'lucide-react'
-import type { CsLabLab } from '@profer/shared'
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowUpRight,
+  Loader2,
+  Lock,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  Search,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react'
+import { matchLabFuzzy, type CsLabLab } from '@profer/shared'
 import { detectIsMac, detectIsWindows } from '@profer/ui'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@profer/ui/primitives/context-menu'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@profer/ui/primitives/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { resolveWindowControlsRightInset } from '@/lib/window-controls-layout'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -20,11 +49,32 @@ import {
   cslabSnapshotAtom,
 } from '@/atoms/cslab-atoms'
 import { CsLabCreateLabDialog } from './CsLabCreateLabDialog'
+import { CsLabRenameLabDialog } from './CsLabRenameLabDialog'
+import { CsLabDeleteLabDialog } from './CsLabDeleteLabDialog'
 
 const STATUS_STYLES: Record<CsLabLab['status'], { dot: string; text: string }> = {
   运行中: { dot: 'bg-[#6E8B6A]', text: 'text-[#5C7358]' },
   调试中: { dot: 'bg-cslab-accent', text: 'text-cslab-accent' },
   筹建中: { dot: 'bg-cslab-muted/60', text: 'text-cslab-muted' },
+  已归档: { dot: 'bg-cslab-muted/40', text: 'text-cslab-muted' },
+}
+
+type LabFilter = 'all' | 'active' | 'archived'
+
+const FILTER_LABELS: Record<LabFilter, string> = {
+  all: '全部',
+  active: '进行中',
+  archived: '已归档',
+}
+
+/** 置顶优先（最近置顶在前），其余按 updatedAt 倒序。 */
+function sortLabs(list: CsLabLab[]): CsLabLab[] {
+  return [...list].sort((a, b) => {
+    const pinnedDelta = Number(!!b.pinned) - Number(!!a.pinned)
+    if (pinnedDelta !== 0) return pinnedDelta
+    if (a.pinned && b.pinned) return (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0)
+    return b.updatedAt - a.updatedAt
+  })
 }
 
 export function CsLabPreparationView(): React.ReactElement {
@@ -38,17 +88,21 @@ export function CsLabPreparationView(): React.ReactElement {
 
   const [labs, setLabs] = React.useState<CsLabLab[]>([])
   const [query, setQuery] = React.useState('')
+  const [filter, setFilter] = React.useState<LabFilter>('all')
   const [loading, setLoading] = React.useState(true)
   const [openingId, setOpeningId] = React.useState<string | null>(null)
+  const [actionBusyId, setActionBusyId] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [createOpen, setCreateOpen] = React.useState(false)
   const [demoLoading, setDemoLoading] = React.useState(false)
+  const [renameTarget, setRenameTarget] = React.useState<CsLabLab | null>(null)
+  const [deleteTarget, setDeleteTarget] = React.useState<CsLabLab | null>(null)
 
   const refresh = React.useCallback(async (): Promise<void> => {
     setLoading(true)
     setError(null)
     try {
-      setLabs(await window.electronAPI.cslab.listLabs())
+      setLabs(sortLabs(await window.electronAPI.cslab.listLabs()))
     } catch (err) {
       setError(err instanceof Error ? err.message : '实验室列表读取失败')
     } finally {
@@ -60,15 +114,34 @@ export function CsLabPreparationView(): React.ReactElement {
     void refresh()
   }, [refresh])
 
+  const counts = React.useMemo(
+    () => ({
+      all: labs.length,
+      active: labs.filter((lab) => !lab.archived).length,
+      archived: labs.filter((lab) => !!lab.archived).length,
+    }),
+    [labs],
+  )
+
   const filteredLabs = React.useMemo(() => {
-    const keyword = query.trim().toLowerCase()
-    if (!keyword) return labs
-    return labs.filter((lab) =>
-      [lab.name, lab.code, lab.description, ...lab.tags].some((value) =>
-        value.toLowerCase().includes(keyword),
-      ),
-    )
-  }, [labs, query])
+    const scoped = labs.filter((lab) => {
+      if (filter === 'active') return !lab.archived
+      if (filter === 'archived') return !!lab.archived
+      return true
+    })
+    const keyword = query.trim()
+    if (!keyword) return scoped
+    return scoped
+      .map((lab) => ({ lab, match: matchLabFuzzy(lab, keyword) }))
+      .filter((entry) => entry.match.matched)
+      .sort(
+        (a, b) =>
+          b.match.score - a.match.score ||
+          Number(!!b.lab.pinned) - Number(!!a.lab.pinned) ||
+          b.lab.updatedAt - a.lab.updatedAt,
+      )
+      .map((entry) => entry.lab)
+  }, [filter, labs, query])
 
   const handleOpen = async (lab: CsLabLab): Promise<void> => {
     if (openingId) return
@@ -116,6 +189,96 @@ export function CsLabPreparationView(): React.ReactElement {
       setAuth({ isInitialized: true, isVerified: false, hydrated: true })
     }
   }
+
+  /** 统一处理置顶 / 归档等返回更新后清单的操作。 */
+  const runLabMutation = async (
+    labId: string,
+    mutate: () => Promise<CsLabLab>,
+  ): Promise<void> => {
+    if (actionBusyId) return
+    setActionBusyId(labId)
+    setError(null)
+    try {
+      const updated = await mutate()
+      setLabs((previous) =>
+        sortLabs(previous.map((lab) => (lab.id === updated.id ? updated : lab))),
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '实验室操作失败')
+    } finally {
+      setActionBusyId(null)
+    }
+  }
+
+  const handleRenamed = (updated: CsLabLab): void => {
+    setLabs((previous) =>
+      sortLabs(previous.map((lab) => (lab.id === updated.id ? updated : lab))),
+    )
+  }
+
+  const handleDeleted = (labId: string): void => {
+    setLabs((previous) => previous.filter((lab) => lab.id !== labId))
+  }
+
+  const renderMenuItems = (
+    MenuItem: typeof ContextMenuItem | typeof DropdownMenuItem,
+    MenuSeparator: typeof ContextMenuSeparator | typeof DropdownMenuSeparator,
+    lab: CsLabLab,
+  ): React.ReactNode => (
+    <>
+      <MenuItem
+        className="text-xs py-1 [&>svg]:size-3.5"
+        onSelect={() => {
+          void runLabMutation(lab.id, () => window.electronAPI.cslab.togglePinLab(lab.id))
+        }}
+      >
+        {lab.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+        {lab.pinned ? '取消置顶' : '置顶实验室'}
+      </MenuItem>
+      <MenuItem
+        className="text-xs py-1 [&>svg]:size-3.5"
+        onSelect={() => setRenameTarget(lab)}
+      >
+        <Pencil size={14} />
+        重命名实验室
+      </MenuItem>
+      <MenuItem
+        className="text-xs py-1 [&>svg]:size-3.5"
+        onSelect={() => {
+          void runLabMutation(lab.id, () => window.electronAPI.cslab.toggleArchiveLab(lab.id))
+        }}
+      >
+        {lab.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+        {lab.archived ? '解除归档' : '归档实验室'}
+      </MenuItem>
+      <MenuSeparator className="my-0.5" />
+      <MenuItem
+        className="text-xs py-1 [&>svg]:size-3.5 text-destructive focus:text-destructive"
+        onSelect={() => setDeleteTarget(lab)}
+      >
+        <Trash2 size={14} />
+        删除实验室
+      </MenuItem>
+    </>
+  )
+
+  const emptyTitle =
+    labs.length === 0
+      ? '还没有实验室'
+      : query.trim()
+        ? '没有找到匹配的实验室'
+        : filter === 'archived'
+          ? '还没有归档的实验室'
+          : '没有进行中的实验室'
+
+  const emptyHint =
+    labs.length === 0
+      ? '新建一间实验室，开始建立你的数据铁笼与活体论文。'
+      : query.trim()
+        ? '尝试更换关键词，或清空搜索查看全部实验室。'
+        : filter === 'archived'
+          ? '在实验室卡片的菜单中选择「归档实验室」即可收纳到这里。'
+          : '切换到「全部」或「已归档」查看其他实验室。'
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -175,7 +338,7 @@ export function CsLabPreparationView(): React.ReactElement {
               type="text"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索实验室、编号或研究方向…"
+              placeholder="搜索实验室、编号或研究方向（支持拼音首字母）…"
               aria-label="搜索实验室"
               className="w-full bg-transparent text-sm text-cslab-text placeholder:text-cslab-muted/70 focus:outline-none"
             />
@@ -191,16 +354,31 @@ export function CsLabPreparationView(): React.ReactElement {
             )}
           </div>
 
-          <div className="mt-7 flex items-baseline justify-between border-b border-cslab-border/70 pb-2.5">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-cslab-muted">
-              全部实验室
-            </span>
+          <div className="mt-7 flex flex-wrap items-center justify-between gap-3 border-b border-cslab-border/70 pb-2.5">
+            <div role="tablist" aria-label="实验室状态过滤" className="flex items-center gap-1">
+              {(Object.keys(FILTER_LABELS) as LabFilter[]).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === key}
+                  onClick={() => setFilter(key)}
+                  className={cn(
+                    'rounded-full px-2.5 py-1 text-[11px] transition-colors',
+                    filter === key
+                      ? 'bg-cslab-accent/10 font-medium text-cslab-accent'
+                      : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+                  )}
+                >
+                  {FILTER_LABELS[key]}
+                  <span className="ml-1 tabular-nums">{counts[key]}</span>
+                </button>
+              ))}
+            </div>
             <div className="flex items-center gap-3">
-              <span className="text-[11px] tabular-nums text-cslab-muted">
-                {filteredLabs.length} 间
-              </span>
               <button
                 type="button"
+                data-tour="cslab-demo-lab"
                 onClick={() => void handleCreateDemo()}
                 disabled={demoLoading || !!openingId}
                 className="inline-flex items-center gap-1 rounded-full border border-cslab-border px-2.5 py-1 text-[11px] font-medium text-cslab-muted transition-colors hover:border-cslab-accent/40 hover:text-cslab-accent disabled:cursor-wait disabled:opacity-60"
@@ -232,14 +410,8 @@ export function CsLabPreparationView(): React.ReactElement {
             </div>
           ) : filteredLabs.length === 0 ? (
             <div className="mt-4 rounded-xl border border-dashed border-cslab-border px-6 py-12 text-center">
-              <p className="font-serif text-base text-cslab-text">
-                {labs.length === 0 ? '还没有实验室' : '没有找到匹配的实验室'}
-              </p>
-              <p className="mt-1.5 text-xs leading-relaxed text-cslab-muted">
-                {labs.length === 0
-                  ? '新建一间实验室，开始建立你的数据铁笼与活体论文。'
-                  : '尝试更换关键词，或清空搜索查看全部实验室。'}
-              </p>
+              <p className="font-serif text-base text-cslab-text">{emptyTitle}</p>
+              <p className="mt-1.5 text-xs leading-relaxed text-cslab-muted">{emptyHint}</p>
               {labs.length === 0 && (
                 <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
                   <button
@@ -269,53 +441,107 @@ export function CsLabPreparationView(): React.ReactElement {
                 const opening = openingId === lab.id
                 return (
                   <li key={lab.id}>
-                    <button
-                      type="button"
-                      disabled={!!openingId}
-                      onClick={() => void handleOpen(lab)}
-                      className="group w-full rounded-xl border border-cslab-border bg-cslab-bg px-5 py-4 text-left transition-all duration-200 hover:border-cslab-accent/40 hover:bg-cslab-surface disabled:cursor-wait"
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                            <h3 className="font-serif text-[17px] font-medium tracking-tight text-cslab-text transition-colors group-hover:text-cslab-accent">
-                              {lab.name}
-                            </h3>
-                            <span className="text-[10px] uppercase tracking-[0.12em] text-cslab-muted">
-                              {lab.code}
+                    <ContextMenu>
+                      <ContextMenuTrigger asChild>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          data-tour={`cslab-lab-${lab.id}`}
+                          aria-disabled={!!openingId || undefined}
+                          onClick={() => {
+                            if (!openingId) void handleOpen(lab)
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Enter' && event.key !== ' ') return
+                            event.preventDefault()
+                            if (!openingId) void handleOpen(lab)
+                          }}
+                          className={cn(
+                            'group relative w-full rounded-xl border border-cslab-border bg-cslab-bg px-5 py-4 text-left transition-all duration-200 hover:border-cslab-accent/40 hover:bg-cslab-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cslab-accent/40',
+                            openingId && 'cursor-wait opacity-80',
+                            !openingId && 'cursor-pointer',
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                                {lab.pinned && (
+                                  <Pin
+                                    size={13}
+                                    className="shrink-0 self-center text-cslab-accent"
+                                    aria-label="已置顶"
+                                  />
+                                )}
+                                <h3 className="font-serif text-[17px] font-medium tracking-tight text-cslab-text transition-colors group-hover:text-cslab-accent">
+                                  {lab.name}
+                                </h3>
+                                <span className="text-[10px] uppercase tracking-[0.12em] text-cslab-muted">
+                                  {lab.code}
+                                </span>
+                                {lab.archived && (
+                                  <span className="rounded-full border border-cslab-border px-1.5 py-0.5 text-[10px] text-cslab-muted">
+                                    已归档
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1.5 line-clamp-1 text-[13px] leading-relaxed text-cslab-muted">
+                                {lab.description}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    type="button"
+                                    aria-label={`${lab.name} 的操作菜单`}
+                                    onClick={(event) => event.stopPropagation()}
+                                    onKeyDown={(event) => event.stopPropagation()}
+                                    className="rounded-md p-1 text-cslab-muted opacity-0 transition-all hover:bg-cslab-surface hover:text-cslab-text group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cslab-accent/40 data-[state=open]:opacity-100"
+                                  >
+                                    <MoreHorizontal size={15} />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-44 min-w-0 p-0.5">
+                                  {renderMenuItems(
+                                    DropdownMenuItem,
+                                    DropdownMenuSeparator,
+                                    lab,
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                              {opening ? (
+                                <Loader2 size={15} className="animate-spin text-cslab-accent" />
+                              ) : (
+                                <ArrowUpRight
+                                  size={15}
+                                  className="text-cslab-border transition-colors group-hover:text-cslab-accent"
+                                />
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                            {lab.tags.map((tag) => (
+                              <span
+                                key={tag}
+                                className="rounded-full border border-cslab-border px-2 py-0.5 text-[11px] text-cslab-muted"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                            <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-cslab-muted">
+                              <span className={cn('size-1.5 rounded-full', status.dot)} />
+                              <span className={status.text}>{lab.status}</span>
+                              <span className="text-cslab-border">·</span>
+                              <span className="tabular-nums">{lab.members} 名研究员</span>
                             </span>
                           </div>
-                          <p className="mt-1.5 line-clamp-1 text-[13px] leading-relaxed text-cslab-muted">
-                            {lab.description}
-                          </p>
                         </div>
-                        {opening ? (
-                          <Loader2 size={15} className="mt-1 shrink-0 animate-spin text-cslab-accent" />
-                        ) : (
-                          <ArrowUpRight
-                            size={15}
-                            className="mt-1 shrink-0 text-cslab-border transition-colors group-hover:text-cslab-accent"
-                          />
-                        )}
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                        {lab.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded-full border border-cslab-border px-2 py-0.5 text-[11px] text-cslab-muted"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                        <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-cslab-muted">
-                          <span className={cn('size-1.5 rounded-full', status.dot)} />
-                          <span className={status.text}>{lab.status}</span>
-                          <span className="text-cslab-border">·</span>
-                          <span className="tabular-nums">{lab.members} 名研究员</span>
-                        </span>
-                      </div>
-                    </button>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent className="w-44 min-w-0 p-0.5">
+                        {renderMenuItems(ContextMenuItem, ContextMenuSeparator, lab)}
+                      </ContextMenuContent>
+                    </ContextMenu>
                   </li>
                 )
               })}
@@ -325,6 +551,9 @@ export function CsLabPreparationView(): React.ReactElement {
           <p className="mt-10 text-center text-[11px] leading-relaxed text-cslab-muted">
             实验室沙箱默认位于 ~/.cdutai/cslab-workspaces/ · 数据仅保存在本机
           </p>
+          <p className="mt-1 text-center text-[10px] leading-relaxed text-cslab-muted/70">
+            Powered by 雫窝中央实验室 · 2026
+          </p>
         </div>
       </div>
 
@@ -332,6 +561,16 @@ export function CsLabPreparationView(): React.ReactElement {
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onCreated={(lab) => void handleCreated(lab)}
+      />
+      <CsLabRenameLabDialog
+        lab={renameTarget}
+        onClose={() => setRenameTarget(null)}
+        onRenamed={handleRenamed}
+      />
+      <CsLabDeleteLabDialog
+        lab={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={handleDeleted}
       />
     </div>
   )

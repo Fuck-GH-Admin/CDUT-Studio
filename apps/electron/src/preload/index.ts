@@ -6,12 +6,12 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, REVIEW_IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision, type ChangelogEntry, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult } from '@profer/shared'
+import { IPC_CHANNELS, REVIEW_IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, BULLETIN_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision, type ChangelogEntry, type BulletinItem, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
 import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
-import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
+import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetChatStatus, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetTourFillEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
 import {
   CSLAB_IPC_CHANNELS,
   type CsLabAuthStatus,
@@ -116,6 +116,9 @@ import {
   type CsLabPlotExportOptions,
   type CsLabPlotExportResult,
   type CsLabPlotUpdatedEvent,
+  type CsLabStructureSnapshotRequest,
+  type CsLabStructureSnapshotResult,
+  type CsLabStructureSnapshotSubmitInput,
   type CsLabDemoLabResult,
   type CsLabAgentContext,
   type CsLabStructureFocusedEvent,
@@ -157,6 +160,7 @@ import type {
   AgentRuntime,
   AgentEffort,
   AgentThinkingLevel,
+  StudyTeachingMode,
   ProviderType,
   ReasoningCapability,
   SDKMessage,
@@ -203,10 +207,6 @@ import type {
   AskUserRequest,
   AskUserResponse,
   ExitPlanModeResponse,
-  SystemPromptConfig,
-  SystemPrompt,
-  SystemPromptCreateInput,
-  SystemPromptUpdateInput,
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
@@ -1025,6 +1025,8 @@ export interface ElectronAPI {
   updateSessionOpenAIThinkingLevel: (sessionId: string, level: AgentThinkingLevel | null) => Promise<AgentSessionMeta>
   /** 切换当前会话的推理强度覆盖（Claude/Pi 通用；null=清除覆盖，运行中拒绝，下一轮生效）。 */
   updateSessionAgentEffort: (sessionId: string, effort: AgentEffort | null) => Promise<AgentSessionMeta>
+  /** 切换当前会话的 AI 速课堂带教模式（fast/balanced/strict，跨会话持久化，运行中允许，下一轮生效）。 */
+  updateSessionStudyTeachingMode: (sessionId: string, mode: StudyTeachingMode) => Promise<AgentSessionMeta>
   /** 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单动态展示）。 */
   getPiReasoningCapability: (provider: ProviderType, modelId: string | undefined) => Promise<ReasoningCapability | undefined>
 
@@ -1287,26 +1289,6 @@ export interface ElectronAPI {
   /** 搜索工作区文件（用于 @ 引用，支持附加目录） */
   searchWorkspaceFiles: (rootPath: string, query: string, limit?: number, additionalPaths?: string[], sessionPaths?: string[]) => Promise<FileSearchResult>
 
-  // ===== 系统提示词管理 =====
-
-  /** 获取系统提示词配置 */
-  getSystemPromptConfig: () => Promise<SystemPromptConfig>
-
-  /** 创建提示词 */
-  createSystemPrompt: (input: SystemPromptCreateInput) => Promise<SystemPrompt>
-
-  /** 更新提示词 */
-  updateSystemPrompt: (id: string, input: SystemPromptUpdateInput) => Promise<SystemPrompt>
-
-  /** 删除提示词 */
-  deleteSystemPrompt: (id: string) => Promise<void>
-
-  /** 更新追加日期时间和用户名开关 */
-  updateAppendSetting: (enabled: boolean) => Promise<void>
-
-  /** 设置默认提示词 */
-  setDefaultPrompt: (id: string | null) => Promise<void>
-
   // GitHub Release
   getLatestRelease: () => Promise<GitHubRelease | null>
   listReleases: (options?: GitHubReleaseListOptions) => Promise<GitHubRelease[]>
@@ -1314,6 +1296,9 @@ export interface ElectronAPI {
 
   /** 版本更新日志（内置本地 CHANGELOG） */
   getChangelog: () => Promise<ChangelogEntry[]>
+
+  /** 本地系统公告栏（内置 bulletin.json） */
+  getBulletins: () => Promise<BulletinItem[]>
 
   // 工作区文件变化通知
   onCapabilitiesChanged: (callback: () => void) => () => void
@@ -1715,6 +1700,10 @@ export interface ElectronAPI {
     createDemoLab: () => Promise<CsLabDemoLabResult>
     openLab: (labId: string) => Promise<CsLabLabSnapshot>
     getLabSnapshot: (labId: string) => Promise<CsLabLabSnapshot>
+    renameLab: (input: { labId: string; name: string }) => Promise<CsLabLab>
+    deleteLab: (labId: string) => Promise<void>
+    togglePinLab: (labId: string) => Promise<CsLabLab>
+    toggleArchiveLab: (labId: string) => Promise<CsLabLab>
 
     /** 数据铁笼 */
     ingestFiles: (input: CsLabIngestRequest) => Promise<CsLabIngestResult[]>
@@ -1934,6 +1923,7 @@ export interface ElectronAPI {
       plot: CsLabPlotDocument
       options: CsLabPlotExportOptions
     }) => Promise<CsLabPlotExportResult>
+    snapshotStructure: (input: CsLabStructureSnapshotSubmitInput) => Promise<CsLabStructureSnapshotResult>
 
     /** 科学助理独立窗口 */
     openAgentWindow: (input: CsLabAgentWindowInput) => Promise<CsLabAgentWindowRef | null>
@@ -1964,6 +1954,9 @@ export interface ElectronAPI {
     onPlotUpdated: (handler: (event: CsLabPlotUpdatedEvent) => void) => () => void
     onAgentContext: (handler: (context: CsLabAgentContext) => void) => () => void
     onStructureFocused: (handler: (event: CsLabStructureFocusedEvent) => void) => () => void
+    onRequestStructureSnapshot: (
+      handler: (event: CsLabStructureSnapshotRequest) => void,
+    ) => () => void
   }
 
   // ===== CDUT 专区 · 智联万站（Yanhu Express）内置浏览器 =====
@@ -2019,6 +2012,16 @@ export interface ElectronAPI {
     onPetStateChanged: (callback: (state: YanhuPetStateEvent) => void) => () => void
     /** 订阅桌宠记忆被清空（原生菜单触发时同步 UI） */
     onPetHistoryCleared: (callback: () => void) => () => void
+    /** 新手引导：查询桌宠窗口就绪与对话运行态 */
+    petGetChatStatus: () => Promise<YanhuPetChatStatus>
+    /** 新手引导：把演示指令填入桌宠输入框（不代发送） */
+    petTourFill: (text: string) => Promise<{ success: boolean }>
+    /** 新手引导：前置桌宠窗口并展开伴随卡片 */
+    petTourPresent: () => Promise<YanhuPetChatStatus>
+    /** 新手引导：结束桌宠保活 */
+    petTourRelease: () => Promise<{ success: boolean }>
+    /** 新手引导：订阅主进程下发的输入框填充事件（桌宠窗口消费） */
+    onPetTourFill: (callback: (event: YanhuPetTourFillEvent) => void) => () => void
     /** 桌宠透明区域鼠标穿透控制 */
     petSetIgnoreMouse: (ignore: boolean) => Promise<{ success: boolean }>
     /** 唤起桌宠原生上下文菜单 */
@@ -2066,6 +2069,13 @@ export interface ElectronAPI {
   cdutAiClass: {
     listSessions: () => Promise<AiClassSessionSummary[]>
     createSession: (courseName: string) => Promise<AiClassSessionSummary>
+    /** 新手引导：确保演示课堂与《红楼梦》资料就绪（幂等） */
+    ensureDemoSession: () => Promise<{
+      session: AiClassSessionSummary
+      created: boolean
+      documentIngested: boolean
+      novelPath: string | null
+    }>
     deleteSession: (sessionId: string) => Promise<{ success: boolean }>
     /** 按用户选定模式生成资料树图谱（用户主动触发，不再静默偷跑） */
     generateGraphRelations: (input: StudyGraphGenerateInput) => Promise<KnowledgeGraphData>
@@ -3098,6 +3108,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_EFFORT, sessionId, effort)
   },
 
+  updateSessionStudyTeachingMode: (sessionId: string, mode: StudyTeachingMode) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_STUDY_TEACHING_MODE, sessionId, mode)
+  },
+
   getPiReasoningCapability: (provider: ProviderType, modelId: string | undefined) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY, provider, modelId)
   },
@@ -3474,31 +3488,6 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES, rootPath, query, limit, additionalPaths, sessionPaths)
   },
 
-  // 系统提示词管理
-  getSystemPromptConfig: () => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.GET_CONFIG)
-  },
-
-  createSystemPrompt: (input: SystemPromptCreateInput) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.CREATE, input)
-  },
-
-  updateSystemPrompt: (id: string, input: SystemPromptUpdateInput) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.UPDATE, id, input)
-  },
-
-  deleteSystemPrompt: (id: string) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.DELETE, id)
-  },
-
-  updateAppendSetting: (enabled: boolean) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.UPDATE_APPEND_SETTING, enabled)
-  },
-
-  setDefaultPrompt: (id: string | null) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.SET_DEFAULT, id)
-  },
-
   // GitHub Release
   getLatestRelease: () => {
     return ipcRenderer.invoke(GITHUB_RELEASE_IPC_CHANNELS.GET_LATEST_RELEASE)
@@ -3514,6 +3503,9 @@ const electronAPI: ElectronAPI = {
 
   // 版本更新日志（内置本地 CHANGELOG）
   getChangelog: () => ipcRenderer.invoke(CHANGELOG_IPC_CHANNELS.GET),
+
+  // 本地系统公告栏（内置 bulletin.json）
+  getBulletins: () => ipcRenderer.invoke(BULLETIN_IPC_CHANNELS.GET),
 
   // ===== Lark 用户云端能力 =====
   getLarkCliStatus: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.GET_STATUS),
@@ -4156,6 +4148,13 @@ const electronAPI: ElectronAPI = {
     openLab: (labId: string) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OPEN_LAB, labId),
     getLabSnapshot: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LAB_SNAPSHOT, labId),
+    renameLab: (input: { labId: string; name: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RENAME_LAB, input),
+    deleteLab: (labId: string) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.DELETE_LAB, labId),
+    togglePinLab: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TOGGLE_PIN_LAB, labId),
+    toggleArchiveLab: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TOGGLE_ARCHIVE_LAB, labId),
 
     ingestFiles: (input: CsLabIngestRequest) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.INGEST_FILES, input),
@@ -4385,6 +4384,8 @@ const electronAPI: ElectronAPI = {
       plot: CsLabPlotDocument
       options: CsLabPlotExportOptions
     }) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.EXPORT_FIGURE, input),
+    snapshotStructure: (input: CsLabStructureSnapshotSubmitInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SNAPSHOT_STRUCTURE, input),
 
     // ===== 科学助理独立窗口 =====
     openAgentWindow: (input: CsLabAgentWindowInput) =>
@@ -4474,6 +4475,13 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_STRUCTURE_FOCUSED, listener)
       return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_STRUCTURE_FOCUSED, listener)
     },
+    onRequestStructureSnapshot: (handler: (event: CsLabStructureSnapshotRequest) => void) => {
+      const listener = (_event: unknown, payload: CsLabStructureSnapshotRequest): void =>
+        handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.REQUEST_STRUCTURE_SNAPSHOT, listener)
+      return () =>
+        ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.REQUEST_STRUCTURE_SNAPSHOT, listener)
+    },
     onAgentContext: (handler: (context: CsLabAgentContext) => void) => {
       const listener = (_event: unknown, payload: CsLabAgentContext): void => handler(payload)
       ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_AGENT_CONTEXT, listener)
@@ -4562,6 +4570,19 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(YANHU_EXPRESS_IPC_CHANNELS.PET_HISTORY_CLEARED, handler)
       return () => ipcRenderer.removeListener(YANHU_EXPRESS_IPC_CHANNELS.PET_HISTORY_CLEARED, handler)
     },
+    petGetChatStatus: () =>
+      ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.PET_GET_CHAT_STATUS),
+    petTourFill: (text: string) =>
+      ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_FILL, { text }),
+    petTourPresent: () =>
+      ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_PRESENT),
+    petTourRelease: () =>
+      ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_RELEASE),
+    onPetTourFill: (callback: (event: YanhuPetTourFillEvent) => void) => {
+      const handler = (_: unknown, event: YanhuPetTourFillEvent) => callback(event)
+      ipcRenderer.on(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_FILL, handler)
+      return () => ipcRenderer.removeListener(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_FILL, handler)
+    },
     openDiagnosticConsole: () =>
       ipcRenderer.invoke(YANHU_EXPRESS_IPC_CHANNELS.OPEN_DIAGNOSTIC_CONSOLE),
     petSetIgnoreMouse: (ignore: boolean) =>
@@ -4624,6 +4645,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CDUT_AI_CLASS_IPC_CHANNELS.LIST_SESSIONS),
     createSession: (courseName: string) =>
       ipcRenderer.invoke(CDUT_AI_CLASS_IPC_CHANNELS.CREATE_SESSION, courseName),
+    ensureDemoSession: () =>
+      ipcRenderer.invoke(CDUT_AI_CLASS_IPC_CHANNELS.ENSURE_DEMO_SESSION),
     deleteSession: (sessionId: string) =>
       ipcRenderer.invoke(CDUT_AI_CLASS_IPC_CHANNELS.DELETE_SESSION, sessionId),
     generateGraphRelations: (input: StudyGraphGenerateInput) =>

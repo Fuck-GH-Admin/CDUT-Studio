@@ -2,14 +2,18 @@ import { app, BrowserWindow, View, WebContentsView, session as electronSession, 
 import type { BrowserDownloadBlockedEvent, BrowserExecutionSource, BrowserExtractInput, BrowserExtractResult, BrowserOperationStatus, BrowserScrollInput, BrowserScrollResult, BrowserTraceAction, BrowserTraceItem, BrowserTranslateResult, BrowserViewLayout, BrowserViewState, BrowserTabListResult, BrowserTabState } from '@profer/shared'
 import {
   AGENT_IPC_CHANNELS,
+  BROWSER_CERT_INTERSTITIAL_HOST,
   BROWSER_LOCAL_FILE_OPEN_DEFAULT_URL,
   BROWSER_LOCAL_FILE_SELECTION_URL_PREFIX,
   parseBrowserLocalFileSelection,
+  parseCertInterstitialSentinel,
   promoteMru,
   removeMruId,
   selectMruFallbackId,
 } from '@profer/shared'
 import { assertSafeBrowserDestination, assertSafeBrowserSubresourceDestination, assertSafeBrowserUrl } from './browser-policy'
+import { allowDomainTemporarily, buildSecurityInterstitialHtml, getCertBlockedRecord, installCertificateSecurityPolicy, revokeTabGrants, wipeSessionGrants } from './security/cert-blacklist'
+import { confirmExecutableFileOpen } from './security/executable-open-guard'
 import { basename, extname } from 'node:path'
 import { createAuthorizedPreviewUrl, createViewerPreviewUrl, isAuthorizedPreviewProtocol, viewerPreviewThemeSignature, type ViewerPreviewTheme } from './browser-preview-service'
 import { resolveAppThemeIsDark } from './app-theme-service'
@@ -527,13 +531,76 @@ export class BrowserController {
       return
     }
     const filePath = tab.localFilePath
-    void shell.openPath(filePath).then((errorMessage) => {
-      if (errorMessage) {
-        this.trace(browserSession, tab, 'navigate', `用默认应用打开失败：${errorMessage}`, 'failed')
+    void confirmExecutableFileOpen(filePath).then((allowed) => {
+      if (!allowed) {
+        this.trace(browserSession, tab, 'navigate', `已拒止打开可执行文件 ${basename(filePath)}`, 'failed')
         return
       }
-      this.trace(browserSession, tab, 'navigate', `已用默认应用打开 ${basename(filePath)}`, 'verified')
+      void shell.openPath(filePath).then((errorMessage) => {
+        if (errorMessage) {
+          this.trace(browserSession, tab, 'navigate', `用默认应用打开失败：${errorMessage}`, 'failed')
+          return
+        }
+        this.trace(browserSession, tab, 'navigate', `已用默认应用打开 ${basename(filePath)}`, 'verified')
+      })
     })
+  }
+
+  /**
+   * 尝试为主框架证书类失败加载 eMudhra 泄露链安全插页。
+   * 仅当该标签目标主机存在阻断登记（verifyProc 拒绝泄露链时写入）时返回 true，
+   * 否则返回 false 交给通用失败逻辑处理。
+   */
+  private tryLoadCertInterstitial(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): boolean {
+    const targetUrl = tab.lastRequestedUrl
+    if (!targetUrl) return false
+    let hostname: string
+    try {
+      hostname = new URL(targetUrl).hostname
+    } catch {
+      return false
+    }
+    const record = getCertBlockedRecord(browserSession.sessionId, hostname)
+    if (!record) return false
+    const html = buildSecurityInterstitialHtml(record.url, { issuerName: record.issuerName, subjectName: record.subjectName })
+    tab.state.loading = false
+    tab.state.loadError = null
+    // 主进程 loadURL 不触发 will-navigate；data: 协议在该 session 的 onBeforeRequest 中本就放行。
+    void tab.view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => undefined)
+    this.trace(browserSession, tab, 'navigate', `已拦截 ${hostname} 的 eMudhra 泄露链证书，展示安全警告插页`, 'failed')
+    this.emit(browserSession)
+    return true
+  }
+
+  /**
+   * 处理证书插页按钮哨兵回投（will-navigate / setWindowOpenHandler 双通道拦截）。
+   * allow：登记内存态临时放行（会话×标签页×域名）并重新加载原目标；
+   * back：返回上一页，无历史则置空白页。
+   */
+  private handleCertInterstitialSentinel(browserSession: BrowserSessionRecord, tab: BrowserTabRecord, action: 'allow' | 'back'): void {
+    if (action === 'allow') {
+      const blockedUrl = tab.lastRequestedUrl
+      if (!blockedUrl) return
+      let hostname: string
+      try {
+        hostname = new URL(blockedUrl).hostname
+      } catch {
+        return
+      }
+      allowDomainTemporarily(browserSession.sessionId, tab.tabId, hostname)
+      this.trace(browserSession, tab, 'navigate', `已对 ${hostname} 临时放行（仅内存态，关闭标签页或重启后失效）`, 'dispatched')
+      void this.runTabOperation(browserSession, tab, undefined, async () => {
+        await this.loadUrl(tab, blockedUrl)
+        this.updateNavigationState(browserSession, tab)
+      }).catch(() => undefined)
+      return
+    }
+    const wc = tab.view.webContents
+    if (wc.navigationHistory.canGoBack()) {
+      wc.navigationHistory.goBack()
+    } else {
+      void wc.loadURL('about:blank').catch(() => undefined)
+    }
   }
 
   /**
@@ -624,9 +691,11 @@ export class BrowserController {
     }
   }
 
-  private installSessionGuards(browserSession: Session): void {
+  private installSessionGuards(browserSession: Session, sessionId?: string): void {
     if (this.guardedSessions.has(browserSession)) return
     this.guardedSessions.add(browserSession)
+    // eMudhra 泄露链证书拦截：校内非标证书放行现状保持不变，泄露链一律拒绝。
+    installCertificateSecurityPolicy(browserSession, sessionId)
     browserSession.setPermissionRequestHandler((_contents, permission, callback) => {
       // 放开剪贴板读写（用户已确认）：页面可通过 navigator.clipboard 复制/粘贴。
       // Chromium 中 clipboard-read 同时覆盖读取与净化写入；clipboard-sanitized-write 另加兜底。
@@ -638,8 +707,15 @@ export class BrowserController {
       callback(false)
     })
     browserSession.webRequest.onBeforeRequest((details, callback) => {
-      let protocol = ''
-      try { protocol = new URL(details.url).protocol } catch { callback({ cancel: true }); return }
+      let parsed: URL
+      try { parsed = new URL(details.url) } catch { callback({ cancel: true }); return }
+      // 证书插页伪哨兵兜底：即使 will-navigate/setWindowOpenHandler 拦截意外失效，
+      // 也不允许该伪域名触达真实网络栈。
+      if (parsed.host === BROWSER_CERT_INTERSTITIAL_HOST) {
+        callback({ cancel: true })
+        return
+      }
+      const protocol = parsed.protocol
       if (protocol !== 'http:' && protocol !== 'https:' && protocol !== 'ws:' && protocol !== 'wss:') {
         callback({ cancel: false })
         return
@@ -715,7 +791,7 @@ export class BrowserController {
     // 圆角由 BrowserViewport 的固定 frame 契约驱动，不再读取 DOM 的卡片样式。
     record.hostView.setVisible(false)
     this.owner.contentView.addChildView(record.hostView)
-    this.installSessionGuards(browserSession)
+    this.installSessionGuards(browserSession, sessionId)
     this.installPreviewProtocol(browserSession)
     this.sessions.set(sessionId, record)
     return record
@@ -763,6 +839,11 @@ export class BrowserController {
     // WebContentsView 不应放任 target=_blank 创建脱离主窗口的 BrowserWindow；此前直接 deny
     // 也导致用户和 Agent 点击站外链接没有任何反应。将安全的 HTTP(S) 目标转为当前受管浏览器的新标签。
     view.webContents.setWindowOpenHandler(({ url }) => {
+      const certSentinel = parseCertInterstitialSentinel(url)
+      if (certSentinel) {
+        this.handleCertInterstitialSentinel(browserSession, tab, certSentinel)
+        return { action: 'deny' }
+      }
       if (url === BROWSER_LOCAL_FILE_OPEN_DEFAULT_URL) {
         this.openLocalFileWithDefaultApp(browserSession, tab)
         return { action: 'deny' }
@@ -778,6 +859,12 @@ export class BrowserController {
       // 在校验及真正导航前失效，避免 Observe 后在新页面按旧坐标操作。
       this.invalidateTabDocument(tab)
       try {
+        const certSentinel = parseCertInterstitialSentinel(url)
+        if (certSentinel) {
+          event.preventDefault()
+          this.handleCertInterstitialSentinel(browserSession, tab, certSentinel)
+          return
+        }
         if (url === BROWSER_LOCAL_FILE_OPEN_DEFAULT_URL) {
           this.openLocalFileWithDefaultApp(browserSession, tab)
           event.preventDefault()
@@ -797,6 +884,12 @@ export class BrowserController {
     })
     view.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
       if (!isMainFrame || this.sessions.get(browserSession.sessionId) !== browserSession || !browserSession.tabs.has(tab.tabId)) return
+      // eMudhra 泄露链证书插页：主框架证书类失败（-200 及以下）且目标主机存在阻断登记时，
+      // 渲染安全警告插页（绝不静默白屏/普通错误页），用户可在插页中知情选择临时放行。
+      if (errorCode <= -200) {
+        const interstitial = this.tryLoadCertInterstitial(browserSession, tab)
+        if (interstitial) return
+      }
       // Chromium 失败页的 chrome-error:// URL 不属于受管浏览器地址；只保留导航前
       // 已通过策略的目标，让用户可以直接重试，也避免内部协议进入 BrowserNavigate。
       tab.state.loading = false
@@ -825,6 +918,8 @@ export class BrowserController {
     view.webContents.on('did-navigate-in-page', () => { this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
     view.webContents.on('destroyed', () => {
       if (this.sessions.get(browserSession.sessionId) !== browserSession || !browserSession.tabs.has(tab.tabId)) return
+      // 证书临时放行粒度 = 会话×标签页×域名：关标签页即撤销（安全决策）。
+      revokeTabGrants(browserSession.sessionId, tab.tabId)
       const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
       browserSession.tabs.delete(tab.tabId)
       if (browserSession.tabs.size === 0) {
@@ -2004,6 +2099,8 @@ export class BrowserController {
   private disposeSession(browserSession: BrowserSessionRecord): void {
     if (this.sessions.get(browserSession.sessionId) !== browserSession) return
     this.sessions.delete(browserSession.sessionId)
+    // 会话销毁即清空该会话全部证书临时放行（内存态登记的生命周期终点）。
+    wipeSessionGrants(browserSession.sessionId)
     browserSession.lastVisible = false
     try {
       // 即使 removeChildView 因窗口销毁竞态失败，也把命中区域先收敛为零，避免留下透明死区。

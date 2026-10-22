@@ -162,6 +162,17 @@
     --diff-deletion-bg: 0 84% 60% / 0.12;
     --diff-deletion-fg: 0 65% 36%;
     --browser-host-surface: 0 0% 100%;
+    /* CDUT Science（CSLab）暖调编辑色板：语义变量化后随 .dark 自动切换，
+     * 785 处 cslab-* 类名无需改动。 */
+    --cslab-bg: 48 33.3% 97.1%;
+    --cslab-surface: 42.9 22.6% 93.9%;
+    --cslab-elevated: 0 0% 100%;
+    --cslab-border: 40 16.4% 89.2%;
+    --cslab-text: 30 5.9% 13.3%;
+    --cslab-muted: 30 3.4% 46.3%;
+    --cslab-accent: 14.8 63.1% 59.6%;
+    --cslab-accent-hover: 14.5 52% 51.8%;
+    --cslab-highlight: 48 60% 99%;
     /* 分栏背景契约：工作区承托与卡片表面分离，避免 shell 渐变和阴影参与圆角绘制。 */
     --workspace-canvas: var(--sunken-surface);
     --panel-surface: var(--raised-surface);
@@ -236,6 +247,16 @@
     --diff-deletion-bg: 0 70% 52% / 0.20;
     --diff-deletion-fg: 0 80% 78%;
     --browser-host-surface: 0 0% 7%;
+    /* CSLab 深色：低饱和暖石墨工作台，赤陶强调适度提亮以维持对比度 */
+    --cslab-bg: 40 7% 8.4%;
+    --cslab-surface: 36 9.1% 10.8%;
+    --cslab-elevated: 34.3 10.1% 13.5%;
+    --cslab-border: 33.3 9.3% 19%;
+    --cslab-text: 38.2 22.4% 90.4%;
+    --cslab-muted: 35.3 8.5% 60.6%;
+    --cslab-accent: 15.1 65% 65.3%;
+    --cslab-accent-hover: 15.1 70.1% 71.2%;
+    --cslab-highlight: 34.3 11.5% 12%;
     --success: 142 65% 45%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;

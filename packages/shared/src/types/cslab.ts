@@ -25,6 +25,10 @@ export const CSLAB_IPC_CHANNELS = {
   CREATE_DEMO_LAB: 'cslab:create-demo-lab',
   OPEN_LAB: 'cslab:open-lab',
   GET_LAB_SNAPSHOT: 'cslab:get-lab-snapshot',
+  RENAME_LAB: 'cslab:rename-lab',
+  DELETE_LAB: 'cslab:delete-lab',
+  TOGGLE_PIN_LAB: 'cslab:toggle-pin-lab',
+  TOGGLE_ARCHIVE_LAB: 'cslab:toggle-archive-lab',
 
   // ===== 数据铁笼 =====
   INGEST_FILES: 'cslab:ingest-files',
@@ -151,6 +155,8 @@ export const CSLAB_IPC_CHANNELS = {
   LIST_PLOTS: 'cslab:list-plots',
   LOAD_PLOT: 'cslab:load-plot',
   EXPORT_FIGURE: 'cslab:export-figure',
+  SNAPSHOT_STRUCTURE: 'cslab:snapshot-structure',
+  REQUEST_STRUCTURE_SNAPSHOT: 'cslab:request-structure-snapshot',
 
   // ===== 学术审稿（Phase 4） =====
   REVIEW_SUGGEST: 'cslab:review-suggest',
@@ -249,7 +255,7 @@ export type CsLabLayerType =
   | 'doc'
   | 'capsule'
 
-export type CsLabLabStatus = '运行中' | '调试中' | '筹建中'
+export type CsLabLabStatus = '运行中' | '调试中' | '筹建中' | '已归档'
 
 // ===== 文件类型驱动能力模型 =====
 
@@ -332,6 +338,16 @@ export interface CsLabLab {
   rootPath: string
   createdAt: number
   updatedAt: number
+  /** 是否置顶（列表排序优先于 updatedAt）。 */
+  pinned?: boolean
+  /** 置顶时间戳；取消置顶时清除。 */
+  pinnedAt?: number
+  /** 是否已归档；归档实验室默认不进入「进行中」过滤。 */
+  archived?: boolean
+  /** 归档时间戳；解除归档时清除。 */
+  archivedAt?: number
+  /** 归档前的业务状态；解除归档时恢复，避免把「调试中/筹建中」误还原为「运行中」。 */
+  statusBeforeArchive?: CsLabLabStatus
 }
 
 export interface CsLabCreateLabInput {
@@ -342,11 +358,24 @@ export interface CsLabCreateLabInput {
   rootPath?: string
 }
 
+/** 演示实验室关键科学指标（由演示图版构建时一次性计算）。 */
+export interface CsLabDemoStats {
+  /** 硅理论 PXRD 前 6 峰与 NIST SRM 640 标样的最大 2θ 偏差（度）。 */
+  nistMaxDeviationDeg: number
+  /** 拉曼分峰拟合的决定系数。 */
+  ramanRSquared: number
+  /** 拉曼分峰解析面积与离散梯形积分的相对误差。 */
+  ramanAreaRelativeError: number
+}
+
 /** 演示实验室创建结果（含预生成出版图）。 */
 export interface CsLabDemoLabResult {
   lab: CsLabLab
   assets: CsLabAssetSummary[]
   plotId?: string
+  /** 全部预生成出版图 ID（顺序固定）。 */
+  plotIds?: string[]
+  stats?: CsLabDemoStats
 }
 
 export interface CsLabAssetSummary {
@@ -1509,6 +1538,44 @@ export interface CsLabTableSeries {
   series: Record<string, number[]>
   totalRows: number
   downsampled: boolean
+}
+
+/** 3D 晶体视窗快照参数（Agent 工具 / 渲染层共用）。 */
+export interface CsLabStructureSnapshotOptions {
+  labId: string
+  /** 超采样倍率，1|2|3，默认 2。 */
+  scale?: number
+  /** 可选文件名前缀，缺省 structure。 */
+  filenamePrefix?: string
+}
+
+/** 渲染进程提交快照（应答主进程请求或用户手动导出）。 */
+export interface CsLabStructureSnapshotSubmitInput {
+  labId: string
+  /** 由主进程 REQUEST_STRUCTURE_SNAPSHOT 下发；手动导出时省略。 */
+  requestId?: string
+  dataUrl?: string
+  scale?: number
+  filenamePrefix?: string
+  /** 渲染进程无法截图时回传失败原因；存在时主进程直接拒绝等待中的请求。 */
+  error?: string
+}
+
+/** 主进程 -> 渲染进程：请求当前 3D 视窗快照。 */
+export interface CsLabStructureSnapshotRequest {
+  requestId: string
+  labId: string
+  scale: number
+}
+
+export interface CsLabStructureSnapshotResult {
+  /** 绝对路径。 */
+  path: string
+  /** 实验室内 POSIX 相对路径（vault/figures/xxx.png）。 */
+  relPath: string
+  width: number
+  height: number
+  bytes: number
 }
 
 // ===== Phase 4：学术审稿 =====

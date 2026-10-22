@@ -2,6 +2,7 @@ import { BrowserWindow, nativeTheme } from 'electron'
 import type { ThemeMode, ThemeStyle } from '../../types'
 import { getSettings } from './settings-service'
 import { scanSkins } from './skin-service'
+import { resolveAppThemeIsDark } from './app-theme-service'
 
 interface OverlayColors {
   color: string
@@ -71,24 +72,9 @@ export function getWindowFrameColor(): string {
  * 受管浏览器 WebContentsView / hostView 的背景必须与它一致，否则圆角边缘会出现色差分层。
  */
 export function getBrowserHostSurfaceColor(): string {
-  const settings = getSettings()
-  const systemIsDark = nativeTheme.shouldUseDarkColors
-  let isDark: boolean
-  if (settings.themeMode === 'system') {
-    isDark = systemIsDark
-  } else if (settings.themeMode === 'dark') {
-    isDark = true
-  } else if (
-    settings.themeMode === 'special'
-    && settings.themeStyle
-    && settings.themeStyle !== 'default'
-  ) {
-    // 特殊主题的亮暗按风格名判定（与 globals .dark 覆盖机制一致的主流皮肤命名）
-    isDark = /dark|midnight|night|ink|black/i.test(settings.themeStyle)
-  } else {
-    isDark = false
-  }
-  return isDark ? '#121212' : '#ffffff'
+  // 与渲染进程 resolvedThemeAtom 同口径：special 模式优先读皮肤 manifest 的 tone，
+  // 不再靠 id 正则猜测，避免自定义皮肤名导致明暗判断与 DOM 不一致。
+  return resolveAppThemeIsDark() ? '#121212' : '#ffffff'
 }
 
 /**

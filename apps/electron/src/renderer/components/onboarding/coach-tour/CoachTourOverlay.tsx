@@ -14,24 +14,30 @@
 
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { useAtom, useStore } from 'jotai'
-import { KeyRound, Terminal, X } from 'lucide-react'
+import { useAtom, useAtomValue, useStore } from 'jotai'
+import { Crosshair, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { coachTourOpenAtom } from '@/atoms/coach-tour-atoms'
 import { activeViewAtom, type ActiveView } from '@/atoms/active-view'
-import { agentComposerInjectionAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import {
+  agentSessionStreamingStateAtomFamily,
+  currentAgentSessionIdAtom,
+} from '@/atoms/agent-atoms'
+import { cdutAccountAtom, cdutSubViewAtom } from '@/atoms/cdut-account-atoms'
+import { cslabAuthAtom } from '@/atoms/cslab-atoms'
+import { useGlobalOverlay } from '@/atoms/overlay-atoms'
 import { Button } from '@profer/ui/primitives/button'
 import { Z_LAYER } from '@profer/ui'
 import { cn } from '@/lib/utils'
 import {
   COACH_TOUR_STEPS,
   CURRENT_COACH_TOUR_VERSION,
-  DEMO_BROWSER_PROMPT,
-  DEMO_CDUT_ACCOUNT,
   type CoachTourStep,
 } from './coach-tour-steps'
 import { computeCardPosition, unionRects, type AnchorRect, type CardSize } from './coach-tour-position'
 import { claimCoachTourOwnership } from './coach-tour-owner'
+import { useCoachTourRunner } from './coach-tour-runner'
+import { useCoachTourWait } from './coach-tour-wait'
 
 /** 未测量前的气泡估算尺寸；首个 layout effect 会用真实值收敛，避免跳动 */
 const FALLBACK_CARD_SIZE: CardSize = { width: 320, height: 190 }
@@ -106,6 +112,7 @@ export function CoachTourOverlay(): React.ReactElement | null {
   const [open, setOpen] = useAtom(coachTourOpenAtom)
   const [stepIndex, setStepIndex] = React.useState(0)
   const [rect, setRect] = React.useState<AnchorRect | null>(null)
+  const [pulseRects, setPulseRects] = React.useState<AnchorRect[]>([])
   const [cardSize, setCardSize] = React.useState<CardSize>(FALLBACK_CARD_SIZE)
   const cardRef = React.useRef<HTMLDivElement>(null)
   /** 打开引导时用户所在的主内容区视图，退出时恢复 */
@@ -116,9 +123,41 @@ export function CoachTourOverlay(): React.ReactElement | null {
   const totalSteps = COACH_TOUR_STEPS.length
   const step = COACH_TOUR_STEPS[stepIndex]
   const isLast = stepIndex === totalSteps - 1
+  const sessionId = useAtomValue(currentAgentSessionIdAtom)
+  const streamState = useAtomValue(
+    agentSessionStreamingStateAtomFamily(sessionId ?? '__coach-tour-none__'),
+  )
+  const cdutAccount = useAtomValue(cdutAccountAtom)
+  const cslabAuth = useAtomValue(cslabAuthAtom)
+  // 引导蒙层高于一切 DOM，但原生 WebContentsView 会硬性遮挡：播放期间让内嵌网页瞬时让位。
+  // 例外：智联万站步骤需让原生网页视图正常呈现，用户才能看到砚小龙驱动百度搜索与官网跳转的实时过程；
+  // 离开该步骤时 cdutSubView 切走 → YanhuExpressView 卸载 → HIDE_VIEW 已兜底释放桌宠保活，无残留。
+  const isYanhuStep = step?.cdutSubView === 'yanhu-express'
+  useGlobalOverlay(open && !isYanhuStep)
+  const runner = useCoachTourRunner(open, step)
+  const wait = useCoachTourWait({
+    enabled: open && runner.phase === 'ready' && step?.advanceOn === 'wait',
+    stepKey: step?.key ?? '',
+    waitFor: step?.waitFor,
+    sessionId,
+    running: streamState?.running ?? false,
+    backgroundWaiting: streamState?.backgroundWaiting ?? false,
+    contentLength: streamState?.content.length,
+    startedAt: streamState?.startedAt,
+    cdutActive: cdutAccount.status === 'active',
+    cslabVerified: cslabAuth.isVerified,
+  })
+  const prepareReady = runner.phase === 'ready'
+  /** 关闭时按当前步骤决定是否恢复进入前视图 */
+  const stepRef = React.useRef<CoachTourStep | undefined>(step)
+  stepRef.current = step
   /** 交互步骤：镂空放行真实点击，等用户点击锚点后自动前进；锚点缺失时降级为手动下一步 */
   const isClickToAdvance = step?.advanceOn === 'click-anchor'
-  const interactive = isClickToAdvance && rect !== null
+  const interactive = isClickToAdvance && rect !== null && prepareReady
+  /** 需要用户操作真实 UI 的步骤：不铺整屏点击捕获层 */
+  const requiresInteraction = Boolean(
+    step?.prepare || step?.waitFor || step?.passthrough || isClickToAdvance,
+  )
 
   // 打开时：回到第一步 + 记住当前视图（退出恢复）
   React.useEffect(() => {
@@ -127,13 +166,15 @@ export function CoachTourOverlay(): React.ReactElement | null {
     restoreViewRef.current = store.get(activeViewAtom)
   }, [open, store])
 
-  // 关闭（完成 / Esc / 点击 ×）即视为看过：恢复原视图 + 写入当前引导版本
+  // 关闭（完成 / Esc / 点击 ×）即视为看过：按步骤恢复原视图 + 写入当前引导版本
   const close = React.useCallback(() => {
     setOpen(false)
-    if (restoreViewRef.current) {
+    // 关闭即归零：避免下次打开的首帧用旧步骤触发一次准备动作
+    setStepIndex(0)
+    if (stepRef.current?.restoreViewOnExit !== false && restoreViewRef.current) {
       store.set(activeViewAtom, restoreViewRef.current)
-      restoreViewRef.current = null
     }
+    restoreViewRef.current = null
     window.electronAPI.updateSettings({ coachTourVersion: CURRENT_COACH_TOUR_VERSION }).catch((error) => {
       console.error('[CoachTour] 持久化引导版本失败:', error)
     })
@@ -169,41 +210,20 @@ export function CoachTourOverlay(): React.ReactElement | null {
     setStepIndex((current) => Math.max(0, current - 1))
   }, [])
 
-  // 气泡专属操作①：把演示特区账户填入 CDUT 专区登录表单。
-  // 受控 input 必须走「原型 value setter + input 事件」，否则 React 不会感知改动。
-  const fillDemoAccount = React.useCallback((): void => {
-    const setNativeValue = (el: HTMLInputElement | null, value: string): boolean => {
-      if (!el) return false
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-      setter?.call(el, value)
-      el.dispatchEvent(new Event('input', { bubbles: true }))
-      return true
-    }
-    const usernameEl = document.querySelector<HTMLInputElement>('[data-tour="cdut-login-username"]')
-    const passwordEl = document.querySelector<HTMLInputElement>('[data-tour="cdut-login-password"]')
-    const filledUser = setNativeValue(usernameEl, DEMO_CDUT_ACCOUNT.username)
-    const filledPwd = setNativeValue(passwordEl, DEMO_CDUT_ACCOUNT.password)
-    if (filledUser && filledPwd) {
-      toast.success('已填入演示账号，点「一键连接特区账户」即可登录')
-    } else {
-      toast.info('未找到登录表单，请先进入 CDUT 专区')
-    }
-  }, [])
+  // 等待型步骤：业务状态完成后自动前进，留一小段沉降时间让用户看到结果
+  React.useEffect(() => {
+    if (!open || step?.advanceOn !== 'wait' || wait.status !== 'done') return
+    const timer = window.setTimeout(next, 600)
+    return () => window.clearTimeout(timer)
+  }, [open, step, wait.status, next])
 
-  // 气泡专属操作②：把内置浏览器演示指令注入当前会话输入框（只填入、不代发送）。
-  const fillBrowserPrompt = React.useCallback((): void => {
-    const sessionId = store.get(currentAgentSessionIdAtom)
-    if (!sessionId) {
-      toast.info('请先新建或选择一个会话')
-      return
-    }
-    store.set(agentComposerInjectionAtom, {
-      sessionId,
-      text: DEMO_BROWSER_PROMPT,
-      nonce: Date.now(),
-    })
-    toast.success('已填入演示指令，按 Enter 即可发送')
-  }, [store])
+  // 轮播型步骤（数据表 / 分子晶体）：准备完成后停留固定时长再前进
+  React.useEffect(() => {
+    if (!open || !step?.autoAdvanceMs || step.advanceOn === 'wait') return
+    if (runner.phase !== 'ready') return
+    const timer = window.setTimeout(next, step.autoAdvanceMs)
+    return () => window.clearTimeout(timer)
+  }, [open, step, runner.phase, next])
 
   // 切步/退出时清掉未触发的交互前进定时器
   React.useEffect(() => {
@@ -233,17 +253,33 @@ export function CoachTourOverlay(): React.ReactElement | null {
       advanceTimerRef.current = window.setTimeout(() => {
         advanceTimerRef.current = null
         next()
-      }, 350)
+      }, step?.settleMs ?? 350)
     }
     window.addEventListener('click', handleClick, true)
     return () => window.removeEventListener('click', handleClick, true)
-  }, [open, interactive, rect, next])
+  }, [open, interactive, rect, next, step])
+
+  // 桌宠步骤保活：离开该步或关闭引导时恢复常规显隐裁决
+  React.useEffect(() => {
+    if (!open || step?.key !== 'yanhu') return
+    return () => {
+      void window.electronAPI.yanhuExpress.petTourRelease().catch(() => undefined)
+    }
+  }, [open, step?.key])
 
   // 步骤声明了 view 时先切主内容区，聚光灯跟随新视图里的锚点
   React.useEffect(() => {
     if (!open || !step?.view) return
     if (store.get(activeViewAtom) !== step.view) {
       store.set(activeViewAtom, step.view)
+    }
+  }, [open, step, store])
+
+  // 步骤声明了 cdutSubView 时切入对应子页面；null 表示退出子页面
+  React.useEffect(() => {
+    if (!open || !step || step.cdutSubView === undefined) return
+    if (store.get(cdutSubViewAtom) !== step.cdutSubView) {
+      store.set(cdutSubViewAtom, step.cdutSubView)
     }
   }, [open, step, store])
 
@@ -255,12 +291,20 @@ export function CoachTourOverlay(): React.ReactElement | null {
     let lastKey = ''
     const tick = (): void => {
       const found = findStepRect(step)
-      const key = found
-        ? `${found.left.toFixed(1)}|${found.top.toFixed(1)}|${found.width.toFixed(1)}|${found.height.toFixed(1)}`
-        : 'none'
+      const pulses = step.pulseSelectors?.flatMap(collectVisibleRects) ?? []
+      const key = [
+        found
+          ? `${found.left.toFixed(1)}|${found.top.toFixed(1)}|${found.width.toFixed(1)}|${found.height.toFixed(1)}`
+          : 'none',
+        ...pulses.map(
+          (item) =>
+            `${item.left.toFixed(1)}|${item.top.toFixed(1)}|${item.width.toFixed(1)}|${item.height.toFixed(1)}`,
+        ),
+      ].join(';')
       if (key !== lastKey) {
         lastKey = key
         setRect(found)
+        setPulseRects(pulses)
       }
       raf = requestAnimationFrame(tick)
     }
@@ -318,8 +362,8 @@ export function CoachTourOverlay(): React.ReactElement | null {
 
   return createPortal(
     <div className={`pointer-events-none fixed inset-0 ${Z_LAYER.overlay}`}>
-      {/* 点击捕获：手动步骤为整屏点击前进；交互步骤拆成锚点四周的四块惰性挡板，镂空区放行真实点击 */}
-      {!interactive && (
+      {/* 点击捕获：纯讲解步骤为整屏点击前进；需要用户操作真实 UI 的步骤完全不拦截 */}
+      {!interactive && !requiresInteraction && (
         <div
           className={cn('pointer-events-auto absolute inset-0', !rect && 'bg-black/55')}
           onClick={next}
@@ -329,6 +373,24 @@ export function CoachTourOverlay(): React.ReactElement | null {
       {interactive && rect && (
         <CaptureAround rect={rect} />
       )}
+
+      {/* 额外呼吸光圈：提示用户点击发送等关键动作，不参与气泡定位 */}
+      {pulseRects.map((pulse, index) => {
+        const pulseFrame = clampFrameToViewport(pulse)
+        return (
+          <div
+            key={`pulse-${index}`}
+            aria-hidden="true"
+            className="coach-tour-pulse-ring pointer-events-none absolute rounded-lg"
+            style={{
+              left: pulseFrame.left,
+              top: pulseFrame.top,
+              width: pulseFrame.width,
+              height: pulseFrame.height,
+            }}
+          />
+        )
+      })}
 
       {/* 聚光灯：box-shadow 巨影形成遮罩镂空；pointer-events-none 让点击穿透到捕获层。
           几何钳制进视口，否则顶满窗口的锚点会让白圈缺边 */}
@@ -408,27 +470,37 @@ export function CoachTourOverlay(): React.ReactElement | null {
             </p>
           )}
 
-          {/* 气泡专属快捷操作：仅在引导气泡内出现，绝不入侵真实业务界面 */}
-          {step.action === 'fill-demo-account' && (
-            <Button
-              type="button"
-              size="sm"
-              className="mt-3 h-8 w-full gap-1.5 text-xs font-semibold"
-              onClick={fillDemoAccount}
-            >
-              <KeyRound size={13} />
-              一键填入演示账号
-            </Button>
+          {/* 准备 / 等待 / 异常状态：让用户知道引导正在做什么，而不是看起来卡死 */}
+          {!interactive && runner.phase === 'preparing' && (
+            <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="inline-block size-1.5 animate-pulse rounded-full bg-muted-foreground/60" aria-hidden="true" />
+              {runner.message}
+            </p>
           )}
-          {step.action === 'fill-browser-prompt' && (
+          {runner.phase === 'error' && (
+            <p className="mt-2 text-[11px] leading-relaxed text-[#B4472F]">{runner.message}</p>
+          )}
+          {step.advanceOn === 'wait' && wait.status === 'waiting' && (
+            <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="inline-block size-1.5 animate-pulse rounded-full bg-muted-foreground/60" aria-hidden="true" />
+              {wait.message}
+            </p>
+          )}
+          {step.advanceOn === 'wait' && wait.status === 'timeout' && (
+            <p className="mt-2 text-[11px] leading-relaxed text-[#B4472F]">{wait.message}</p>
+          )}
+
+          {/* 气泡专属快捷操作：仅在引导气泡内出现，绝不入侵真实业务界面 */}
+          {step.action === 'demo-digitize' && (
             <Button
               type="button"
               size="sm"
               className="mt-3 h-8 w-full gap-1.5 text-xs font-semibold"
-              onClick={fillBrowserPrompt}
+              disabled={!rect}
+              onClick={() => window.dispatchEvent(new CustomEvent('cslab:demo-digitize'))}
             >
-              <Terminal size={13} />
-              填入演示指令
+              <Crosshair size={13} />
+              一键演示标定
             </Button>
           )}
         </div>
@@ -453,8 +525,12 @@ export function CoachTourOverlay(): React.ReactElement | null {
                 上一步
               </Button>
             )}
-            {/* 交互步骤等用户亲自点击锚点；锚点缺失（降级）时恢复手动下一步 */}
-            {!interactive && (
+            {/* 交互步骤等用户亲自点击锚点，同时保留跳过入口；其余步骤始终可手动前进 */}
+            {isClickToAdvance && interactive ? (
+              <Button type="button" variant="ghost" size="sm" className="h-7 px-2.5 text-xs" onClick={next}>
+                跳过本步
+              </Button>
+            ) : (
               <Button type="button" size="sm" className="h-7 px-2.5 text-xs" onClick={next}>
                 {isLast ? '完成' : '下一步'}
               </Button>

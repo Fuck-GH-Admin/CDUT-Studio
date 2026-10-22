@@ -17,10 +17,14 @@ export interface PiForkedSession {
 export async function forkPiSessionArtifact(input: {
   sourceSessionFile: string
   sessionDir: string
-  sourceDir?: string
-  destinationDir?: string
+  sourceDir: string
+  destinationDir: string
   entryId: string
 }): Promise<PiForkedSession> {
+  // 沙箱红线：分叉必须显式给定源/目标会话目录，绝不退回进程启动目录。
+  if (!input.sourceDir || !input.destinationDir) {
+    throw new Error('Pi 分叉缺少会话沙箱目录，已拒绝执行')
+  }
   const sdk = await import('@earendil-works/pi-coding-agent')
   const sourceManager = sdk.SessionManager.open(input.sourceSessionFile, input.sessionDir, input.sourceDir)
   const branchFile = sourceManager.createBranchedSession(input.entryId)
@@ -30,7 +34,7 @@ export async function forkPiSessionArtifact(input: {
 
   return sdk.SessionManager.forkFrom(
     branchFile,
-    input.destinationDir ?? input.sourceDir ?? process.cwd(),
+    input.destinationDir,
     input.sessionDir,
   )
 }

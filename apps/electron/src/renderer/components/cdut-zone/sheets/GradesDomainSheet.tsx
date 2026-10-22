@@ -216,9 +216,11 @@ export function GradesDomainSheet(): React.ReactElement {
         params: { action: 'query_grades' },
       })
       setResult(res)
-      // SWR 第二步：网络成功后原子写入离线缓存，下次打开秒开（同样防御式调用）
+      // SWR 第二步：仅当真实在线且确有成绩记录时才原子写入离线缓存。
+      // 严禁空表（0 条）或演示回退数据覆盖磁盘上的有效缓存。
       const api = window.electronAPI?.cdutZone
-      if (typeof api?.writeDomainCache === 'function') {
+      const hasRecords = normalizeGrades(res.json).records.length > 0
+      if (res.success && res.isDemo !== true && hasRecords && typeof api?.writeDomainCache === 'function') {
         void api.writeDomainCache({ name: 'grades', payload: res }).catch(() => {})
       }
     } catch (err) {
@@ -258,7 +260,14 @@ export function GradesDomainSheet(): React.ReactElement {
     else if (!planResult) void fetchPlan()
   }, [tab, fetchGrades, fetchPlan, planResult])
 
-  const { latest, highest, records } = React.useMemo(() => normalizeGrades((result ?? cachedResult)?.json), [result, cachedResult])
+  // SWR 防御性合并：真实在线数据优先；网络失败/空表/演示回退时，若磁盘缓存含有效记录则优雅降级，绝不白屏
+  const liveGrades = React.useMemo(() => normalizeGrades(result?.json), [result?.json])
+  const cachedGrades = React.useMemo(() => normalizeGrades(cachedResult?.json), [cachedResult?.json])
+  const hasLiveRecords = liveGrades.records.length > 0 && result?.isDemo !== true && result?.success !== false
+  const hasCachedRecords = cachedGrades.records.length > 0
+  const useCachedSnapshot = !hasLiveRecords && hasCachedRecords
+  const { latest, highest, records } = useCachedSnapshot ? cachedGrades : liveGrades
+  const displayedResult = useCachedSnapshot ? cachedResult : result
   const modules = React.useMemo(() => normalizeCurriculum(planResult?.json), [planResult?.json])
   const summary = track === 'latest' ? latest : highest
 
@@ -303,7 +312,7 @@ export function GradesDomainSheet(): React.ReactElement {
         </div>
 
         <div className="flex items-center gap-2">
-          {(result ?? cachedResult)?.isDemo && (
+          {displayedResult?.isDemo && (
             <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
               <Sparkles className="size-3" />
               演示数据
@@ -320,6 +329,28 @@ export function GradesDomainSheet(): React.ReactElement {
           </button>
         </div>
       </div>
+
+      {/* SWR 同步状态：缓存秒开时给出轻量提示，同步失败时提供重试入口，绝不整屏空白 */}
+      {tab === 'grades' && loading && hasCachedRecords && (
+        <div className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Loader2 className="size-3 animate-spin text-primary" />
+          <span>已加载离线数据，正在同步最新成绩…</span>
+        </div>
+      )}
+      {tab === 'grades' && !loading && useCachedSnapshot && (
+        <div className="mb-2 flex items-center gap-2 text-[11px] text-amber-600 dark:text-amber-400">
+          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 font-medium">
+            离线快照 · 同步未完成
+          </span>
+          <button
+            type="button"
+            onClick={() => void fetchGrades()}
+            className="underline underline-offset-2 transition-colors hover:text-amber-500"
+          >
+            点击重试
+          </button>
+        </div>
+      )}
 
       {tab === 'grades' ? (
         <>

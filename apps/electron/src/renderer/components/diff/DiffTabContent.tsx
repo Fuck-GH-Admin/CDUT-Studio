@@ -465,7 +465,26 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     return
   }, [previewViewport, isPdf, pdfSrc, isImage, imageDataUrl, imageZoomBy, resetImageZoom, imagePanBy])
 
-  // 当用户点击消息中的学术溯源胶囊（#f1:p1-b11 / #p1-b11）时，向目标 PDF iframe 发送精确坐标聚光灯定位指令
+  // 回执监听：PDF iframe 成功绘制聚光灯（ok: true）或页码越界终态失败（ok: false）后，
+  // 均回执 { type: 'pdf-highlight-rendered', requestId }。收到匹配 requestId 的回执即释放
+  // 高亮请求 Atom——成功/失败均为请求生命周期终点，替代旧的「180ms 盲目清空」竞态路径。
+  React.useEffect(() => {
+    if (!isPdf) return
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type !== 'pdf-highlight-rendered') return
+      const requestId = e.data.requestId as number | undefined
+      if (typeof requestId !== 'number') return
+      setPdfHighlightTarget((prev) => (prev?.requestId === requestId ? null : prev))
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [isPdf, setPdfHighlightTarget])
+
+  // 当用户点击消息中的学术溯源胶囊（#f1:p1-b11 / #p1-b11）时，向目标 PDF iframe 发送精确坐标聚光灯定位指令。
+  // 可靠性设计（对齐 OfficePreview 模式）：Atom 在收到回执前绝不盲目清除——
+  // - 首次/慢速加载时 iframe 监听器尚未注册，投递会被静默丢弃，此时保留 Atom；
+  // - pdfReadyTick 自增（agent-preview:pdf-ready）触发本 effect 重跑，自然向已就绪的 iframe 重投递；
+  // - 180ms 补投仅提高早期送达率，不清空状态；8s 宽限期仅兜底「回执彻底丢失」（如 iframe 崩溃）。
   React.useEffect(() => {
     if (!isPdf || !pdfSrc || !pdfHighlightTarget) return
     const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
@@ -477,34 +496,35 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     const win = pdfIframeRef.current?.contentWindow
     if (!win) return
 
-    win.postMessage(
-      {
-        type: 'pdf-navigate-highlight',
-        page: pdfHighlightTarget.pageNumber,
-        bbox: pdfHighlightTarget.bbox,
-        label: pdfHighlightTarget.label,
-        blockId: pdfHighlightTarget.blockId,
-        requestId: pdfHighlightTarget.requestId,
-      },
-      '*',
-    )
-
-    // 若 PDF 已完成渲染（pdfReadyTick > 0）或短暂延迟后再次确保送达并消费本次高亮请求
-    const timer = setTimeout(() => {
+    const target = pdfHighlightTarget
+    const postHighlight = () => {
       pdfIframeRef.current?.contentWindow?.postMessage(
         {
           type: 'pdf-navigate-highlight',
-          page: pdfHighlightTarget.pageNumber,
-          bbox: pdfHighlightTarget.bbox,
-          label: pdfHighlightTarget.label,
-          blockId: pdfHighlightTarget.blockId,
-          requestId: pdfHighlightTarget.requestId,
+          page: target.pageNumber,
+          bbox: target.bbox,
+          label: target.label,
+          blockId: target.blockId,
+          requestId: target.requestId,
         },
         '*',
       )
-      setPdfHighlightTarget((prev) => (prev?.requestId === pdfHighlightTarget.requestId ? null : prev))
-    }, 180)
-    return () => clearTimeout(timer)
+    }
+
+    postHighlight()
+
+    // 短暂延迟补投一次，覆盖「effect 首跑早于 iframe HTML 解析完成」的窗口
+    const retryTimer = setTimeout(postHighlight, 180)
+
+    // 宽限期兜底：若始终未收到任何回执（iframe 加载失败/崩溃），避免 Atom 永久悬挂
+    const graceTimer = setTimeout(() => {
+      setPdfHighlightTarget((prev) => (prev?.requestId === target.requestId ? null : prev))
+    }, 8000)
+
+    return () => {
+      clearTimeout(retryTimer)
+      clearTimeout(graceTimer)
+    }
   }, [isPdf, pdfSrc, pdfReadyTick, pdfHighlightTarget, filePath, setPdfHighlightTarget])
 
   // 上次加载的内容（refreshVersion 触发时用来对比是否变化）
@@ -1153,7 +1173,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               htmlPreviewUrl ? (
                 <iframe
                   src={htmlPreviewUrl}
-                  className="h-full w-full border-0 bg-white"
+                  className="h-full w-full border-0 bg-background dark:[color-scheme:dark]"
                   title={`${getFileBaseName(filePath) || 'HTML'} 渲染预览`}
                   sandbox="allow-scripts allow-forms"
                   referrerPolicy="no-referrer"

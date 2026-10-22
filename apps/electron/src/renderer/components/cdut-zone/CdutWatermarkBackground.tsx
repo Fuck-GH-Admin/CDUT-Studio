@@ -5,14 +5,13 @@
  * - 浅色模式：multiply 混合 + 适当透明度，白色底自然滤除；
  * - 深色模式：反相 + hue-rotate + screen 发光，适配暗色背景；
  * - 结合径向渐变遮罩羽化边缘，绝不遮挡任何交互与文字。
+ *
+ * 红线：深色模式不得恢复 mask-image。带蒙版的元素会形成隔离合成群组，
+ * 阻断 mix-blend-screen 与宿主背景的滤色计算，反相黑底会变成半透明灰斑。
  */
 
 import * as React from 'react'
 import mascotImg from '@assets/IP/IP_1.jpg'
-
-/** 径向遮罩：自左下角向外柔和羽化，营造环境水印质感 */
-const FEATHER_MASK =
-  'radial-gradient(circle at bottom left, black 50%, transparent 95%)'
 
 export function CdutWatermarkBackground(): React.ReactElement {
   return (
@@ -24,8 +23,7 @@ export function CdutWatermarkBackground(): React.ReactElement {
         src={mascotImg}
         alt=""
         draggable={false}
-        className="w-[260px] max-w-[42vw] object-contain opacity-30 mix-blend-multiply dark:opacity-20 dark:invert dark:hue-rotate-180 dark:mix-blend-screen sm:w-[320px]"
-        style={{ WebkitMaskImage: FEATHER_MASK, maskImage: FEATHER_MASK }}
+        className="w-[260px] max-w-[42vw] object-contain opacity-30 mix-blend-multiply [mask-image:radial-gradient(circle_at_bottom_left,black_50%,transparent_95%)] sm:w-[320px] dark:opacity-20 dark:invert dark:hue-rotate-180 dark:mix-blend-screen dark:[mask-image:none]"
       />
     </div>
   )

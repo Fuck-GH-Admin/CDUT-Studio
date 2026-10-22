@@ -1,4 +1,4 @@
-/**
+﻿/**
  * DiffChangesList — 代码改动文件列表
  *
  * 显示当前工作树相对 HEAD 的代码改动，按目录分组，支持 hover 操作按钮。
@@ -355,9 +355,9 @@ export const DiffChangesList = React.memo(function DiffChangesList({
                     )
                   })}
                   <span className="ml-auto shrink-0 flex items-center gap-1.5">
-                    <span className="text-foreground/30">{group.files.length} changed files</span>
-                    {group.totalAdditions > 0 && <span className="text-foreground/30">+{group.totalAdditions}</span>}
-                    {group.totalDeletions > 0 && <span className="text-foreground/30">-{group.totalDeletions}</span>}
+                    <span className="text-foreground/50">{group.files.length} changed files</span>
+                    {group.totalAdditions > 0 && <span className="text-foreground/50">+{group.totalAdditions}</span>}
+                    {group.totalDeletions > 0 && <span className="text-foreground/50">-{group.totalDeletions}</span>}
                   </span>
                 </button>
 
@@ -444,11 +444,11 @@ function FileRow({
             <span className="shrink-0">
               {fileName}
               {file.status === 'deleted' && (
-                <span className="ml-1 text-foreground/30 text-[12px]">(已删除)</span>
+                <span className="ml-1 text-foreground/50 text-[12px]">(已删除)</span>
               )}
             </span>
             {dir && (
-              <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+              <span className="text-[11px] text-foreground/50 truncate">{dir}</span>
             )}
           </span>
         </TooltipTrigger>
@@ -510,7 +510,7 @@ function UntrackedFileRow({
           <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
             <span className="shrink-0">{fileName}</span>
             {dir && (
-              <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+              <span className="text-[11px] text-foreground/50 truncate">{dir}</span>
             )}
           </span>
         </TooltipTrigger>

@@ -142,10 +142,10 @@ const WINDOW_TITLE_PROMPT = 'Based on the user\'s messages from the first few tu
  * 这些块是 Profer 自己拼上去的（附件清单、引用片段、探索分支增量说明等），
  * 不属于用户意图；命名前必须剥离，否则会把注入内容当主题。
  */
-const INJECTED_BLOCK = /<(attached_files|quoted_file|exploration_delta|mentioned_tools|session_recovery|knowledge_context|user_browser_context|attached_directories|workspace_state|working_directory)[^>]*>[\s\S]*?<\/\1>/gi
+const INJECTED_BLOCK = /<(attached_files|quoted_file|quoted_context|exploration_delta|mentioned_tools|session_recovery|knowledge_context|user_browser_context|attached_directories|workspace_state|working_directory|system_context)[^>]*>[\s\S]*?<\/\1>/gi
 
-/** 剥离注入块后可能残留的孤立标签。 */
-const INJECTED_TAG = /<\/?(?:attached_files|quoted_file|exploration_delta|mentioned_tools|session_recovery|knowledge_context|user_browser_context|attached_directories|workspace_state|working_directory|scheduled_run)[^>]*>/gi
+/** 剥离注入块后可能残留的孤立标签。`user_request` 只去标签、保留正文。 */
+const INJECTED_TAG = /<\/?(?:attached_files|quoted_file|quoted_context|exploration_delta|mentioned_tools|session_recovery|knowledge_context|user_browser_context|attached_directories|workspace_state|working_directory|scheduled_run|system_context|user_request)[^>]*>/gi
 
 /**
  * 纯斜杠命令前缀：整条消息只有 `/命令`，或 `/命令 载荷`。

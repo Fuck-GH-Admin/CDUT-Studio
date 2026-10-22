@@ -252,7 +252,12 @@ export function CsLabOriginPlotPane({
     const entry = model.series[0]
     if (!entry) return
     const rect = event.currentTarget.getBoundingClientRect()
-    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
+    // 以真实绘图区（plotRect，毫米）换算到 CSS 像素，排除坐标轴与留白导致的锚点漂移
+    const localX = event.clientX - rect.left
+    const plotLeft = model.plotRect.x * model.scale
+    const plotWidth = model.plotRect.width * model.scale
+    const ratio =
+      plotWidth > 0 ? Math.max(0, Math.min(1, (localX - plotLeft) / plotWidth)) : 0.5
     const factor = event.deltaY > 0 ? 1.2 : 1 / 1.2
     const min = layer.xAxis.min ?? entry.xBounds.min
     const max = layer.xAxis.max ?? entry.xBounds.max
@@ -357,7 +362,7 @@ export function CsLabOriginPlotPane({
   }
 
   return (
-    <div className="relative flex h-full min-h-0">
+    <div data-tour="cslab-origin-plot" data-plot-id={pane.plotId} className="relative flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
           <select
@@ -413,7 +418,7 @@ export function CsLabOriginPlotPane({
           </button>
         </div>
 
-        <div ref={containerRef} className="relative min-h-0 flex-1 bg-white">
+        <div ref={containerRef} className="relative min-h-0 flex-1 bg-cslab-elevated">
           <canvas
             ref={canvasRef}
             className={cn('absolute inset-0', roiMode ? 'cursor-crosshair' : 'cursor-grab')}

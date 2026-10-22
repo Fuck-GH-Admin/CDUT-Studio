@@ -191,7 +191,7 @@ export function WeChatSettings(): React.ReactElement {
         >
           <SettingsCard divided={false}>
             <div className="flex flex-col items-center py-8 px-4">
-              <div className="bg-white rounded-xl p-4 shadow-sm">
+              <div className="bg-white rounded-xl p-4 shadow-sm ring-1 ring-border/60 dark:ring-border">
                 <img
                   src={bridgeState.qrCodeData}
                   alt="微信登录二维码"

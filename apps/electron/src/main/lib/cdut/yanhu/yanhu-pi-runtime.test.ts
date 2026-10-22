@@ -196,3 +196,34 @@ describe('healYanhuMessages 与 resolveInjectedHistory（孤儿消息与角色�
     expect(injected[injected.length - 1]?.role).toBe('assistant')
   })
 })
+
+describe('padAbortedToolResults（中止回执配对）', () => {
+  test('部分执行后中止：为剩余 toolCall 补齐占位回执，保持 1:1 配对', async () => {
+    const { padAbortedToolResults } = await import('./yanhu-pi-runtime')
+    const calls = [
+      { id: 'call-1', name: 'yanhu_fill', arguments: {} },
+      { id: 'call-2', name: 'yanhu_click', arguments: {} },
+      { id: 'call-3', name: 'yanhu_navigate', arguments: {} },
+    ]
+    const padded = padAbortedToolResults(calls, [
+      { toolCallId: 'call-1', content: '已填写', isError: false },
+    ])
+    expect(padded).toHaveLength(3)
+    expect(padded.map((item) => item.toolCallId)).toEqual(['call-1', 'call-2', 'call-3'])
+    expect(padded[1]!.isError).toBe(true)
+    expect(padded[2]!.content).toContain('中止')
+  })
+
+  test('结果已齐时原样返回（不追加占位）', async () => {
+    const { padAbortedToolResults } = await import('./yanhu-pi-runtime')
+    const calls = [
+      { id: 'call-1', name: 'yanhu_fill', arguments: {} },
+      { id: 'call-2', name: 'yanhu_click', arguments: {} },
+    ]
+    const results = [
+      { toolCallId: 'call-1', content: '已填写', isError: false },
+      { toolCallId: 'call-2', content: '已点击', isError: false },
+    ]
+    expect(padAbortedToolResults(calls, results)).toBe(results)
+  })
+})

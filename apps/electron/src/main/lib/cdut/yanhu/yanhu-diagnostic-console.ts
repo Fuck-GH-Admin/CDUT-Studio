@@ -209,17 +209,19 @@ class YanhuDiagnosticConsoleManager {
     })
 
     // 6. 捕获 SSL/证书异常
-    wc.on('certificate-error', (_event, url, error, certificate, callback) => {
+    // 只读审计：诊断控制台是观察者，严禁消费一次性 callback（重复调用会抛
+    // "One-time callback was called more than once" 并卡死主进程）。
+    // 证书放行/拒绝决策统一由 app 级安全策略与会话 verifyProc 承担。
+    wc.on('certificate-error', (_event, url, error, certificate) => {
       this.log({
         category: 'network',
         level: 'warn',
         badge: 'SSL.WARN',
         badgeClass: 'badge-console-warn',
         title: `SSL 证书异常: ${error}`,
-        details: `颁发者: ${certificate.issuerName}\n域名: ${url}`,
+        details: `颁发者: ${certificate?.issuerName || '未知'}\n域名: ${url}`,
         url,
       })
-      callback(true) // 保持继续放行，避免内网非标证书导致白屏
     })
   }
 

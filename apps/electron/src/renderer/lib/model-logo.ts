@@ -57,10 +57,6 @@ import DoubaoDarkLogo from '@/assets/models/doubao_dark.png'
 import ZhipuLogo from '@/assets/models/zhipu.png'
 import ZhipuDarkLogo from '@/assets/models/zhipu_dark.png'
 
-// ChatGLM
-import ChatGLMLogo from '@/assets/models/chatglm.png'
-import ChatGLMDarkLogo from '@/assets/models/chatglm_dark.png'
-
 // Llama / Meta
 import LlamaLogo from '@/assets/models/llama.png'
 import LlamaDarkLogo from '@/assets/models/llama_dark.png'
@@ -218,6 +214,111 @@ const MODEL_LOGO_MAP: Record<string, string> = {
 }
 
 /**
+ * 模型 Logo 暗色映射表
+ *
+ * 与 MODEL_LOGO_MAP 的 key 集合和顺序**完全一致**：没有暗色资源的品牌
+ * 回退到亮色资源，保证深色模式下不会因为缺少某条规则而误命中更宽泛的规则
+ * （例如 deepgemini 回退成 gemini 的暗色图标）。
+ */
+const MODEL_LOGO_DARK_MAP: Record<string, string> = {
+  // === GPT 系列（具体型号优先） ===
+  'gpt-image': GPTDarkLogo,
+  'gpt-3': GPTDarkLogo,
+  'gpt-4': GPTDarkLogo,
+  o1: GPTDarkLogo,
+  o3: GPTDarkLogo,
+  o4: GPTDarkLogo,
+  'gpt-6-astra': GPTDarkLogo,
+  'gpt-5-mini': GPTDarkLogo,
+  'gpt-5-nano': GPTDarkLogo,
+  'gpt-5-chat': GPTDarkLogo,
+  'gpt-5-codex': GPTDarkLogo,
+  'gpt-5\\.1-codex-mini': GPTDarkLogo,
+  'gpt-5\\.1-codex': GPTDarkLogo,
+  'gpt-5\\.1-chat': GPTDarkLogo,
+  'gpt-5\\.1': GPTDarkLogo,
+  'gpt-5': GPTDarkLogo,
+  gpts: GPTDarkLogo,
+
+  // === Claude / Anthropic ===
+  '(claude|anthropic-)': ClaudeDarkLogo,
+
+  // === DeepSeek ===
+  deepseek: DeepSeekDarkLogo,
+
+  // === 自定义 Gemini 衍生模型（必须在通用 gemini 规则之前） ===
+  deepgemini: DeepGeminiLogo,
+  kimigemini: KimiGeminiLogo,
+  qwengemini: QwenGeminiLogo,
+  seedgemini: SeedGeminiLogo,
+
+  // === Google / Gemini ===
+  veo: GeminiDarkLogo,
+  gemma: GemmaDarkLogo,
+  gemini: GeminiDarkLogo,
+
+  // === Qwen / 通义千问 ===
+  '(qwen|qwq|qvq|wan-)': QwenDarkLogo,
+
+  // === Grok / xAI ===
+  grok: GrokDarkLogo,
+
+  // === Kimi ===
+  kimi: KimiLogo,
+
+  // === Doubao / 豆包 ===
+  doubao: DoubaoDarkLogo,
+  'ep-202': DoubaoDarkLogo,
+  seed: DoubaoDarkLogo,
+
+  // === Zhipu / 智谱 ===
+  zhipu: ZhipuDarkLogo,
+  cogview: ZhipuDarkLogo,
+  glm: ZhipuDarkLogo,
+
+  // === Meta / Llama ===
+  llama: LlamaDarkLogo,
+
+  // === Mistral ===
+  codestral: CodestralLogo,
+  mixtral: MistralDarkLogo,
+  mistral: MistralDarkLogo,
+  ministral: MistralDarkLogo,
+  magistral: MistralDarkLogo,
+
+  // === Yi / 零一万物 ===
+  'yi-': YiDarkLogo,
+
+  // === 百度文心 / ERNIE ===
+  'ernie-': WenxinDarkLogo,
+  'tao-': WenxinDarkLogo,
+
+  // === 腾讯混元 ===
+  hunyuan: HunyuanDarkLogo,
+
+  // === 讯飞星火 ===
+  sparkdesk: SparkDeskDarkLogo,
+  generalv: SparkDeskDarkLogo,
+
+  // === Step / 阶跃星辰 ===
+  step: StepDarkLogo,
+
+  // === MiniMax ===
+  minimax: MiniMaxLogo,
+
+  // === Xiaomi / MiMo ===
+  mimo: XiaomiLogo,
+
+  // === Cohere ===
+  cohere: CohereDarkLogo,
+  command: CohereDarkLogo,
+
+  // === Embedding 通用 ===
+  'text-embedding': EmbeddingLogo,
+  embedding: EmbeddingLogo,
+}
+
+/**
  * 供应商 Logo 映射
  *
  * 当模型 ID 无法匹配时，按供应商类型回退。
@@ -248,10 +349,41 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
   custom: DefaultLogo,
 }
 
+/** 供应商 Logo 暗色映射表（key 与 PROVIDER_LOGO_MAP 完全一致，无暗色资源回退亮色） */
+const PROVIDER_LOGO_DARK_MAP: Record<ProviderType, string> = {
+  anthropic: ClaudeDarkLogo,
+  'anthropic-compatible': DefaultLogo,
+  openai: GPTDarkLogo,
+  'openai-responses': GPTDarkLogo,
+  deepseek: DeepSeekDarkLogo,
+  google: GeminiDarkLogo,
+  'kimi-api': KimiLogo,
+  'kimi-coding': KimiLogo,
+  'opencode-go-openai': GPTDarkLogo,
+  zhipu: ZhipuDarkLogo,
+  'zhipu-coding': ZhipuDarkLogo,
+  'zhipu-coding-team': ZhipuDarkLogo,
+  'ark-coding-plan': DoubaoDarkLogo,
+  minimax: MiniMaxLogo,
+  doubao: DoubaoDarkLogo,
+  qwen: QwenDarkLogo,
+  'qwen-anthropic': QwenDarkLogo,
+  xiaomi: XiaomiLogo,
+  'xiaomi-token-plan': XiaomiLogo,
+  'openai-codex': GPTDarkLogo,
+  xai: GrokDarkLogo,
+  ollama: DefaultLogo,
+  custom: DefaultLogo,
+}
+
 // ===== 公共 API =====
 
 /** 预编译的正则匹配列表，避免每次查找时重复创建 RegExp */
 const COMPILED_LOGO_MAP: Array<[RegExp, string]> = Object.entries(MODEL_LOGO_MAP)
+  .map(([key, logo]) => [new RegExp(key, 'i'), logo])
+
+/** 暗色版预编译列表（与亮色列表同序、同 key 集合） */
+const COMPILED_LOGO_DARK_MAP: Array<[RegExp, string]> = Object.entries(MODEL_LOGO_DARK_MAP)
   .map(([key, logo]) => [new RegExp(key, 'i'), logo])
 
 /**
@@ -261,11 +393,13 @@ const COMPILED_LOGO_MAP: Array<[RegExp, string]> = Object.entries(MODEL_LOGO_MAP
  * 未匹配到返回 undefined。
  *
  * @param modelId 模型 ID（如 "gpt-4-turbo"、"claude-3-opus-20240229"）
+ * @param isDark 是否使用深色主题资源（默认 false，保持既有调用行为）
  */
-export function getModelLogoById(modelId: string): string | undefined {
+export function getModelLogoById(modelId: string, isDark = false): string | undefined {
   if (!modelId) return undefined
 
-  for (const [regex, logo] of COMPILED_LOGO_MAP) {
+  const compiled = isDark ? COMPILED_LOGO_DARK_MAP : COMPILED_LOGO_MAP
+  for (const [regex, logo] of compiled) {
     if (regex.test(modelId)) {
       return logo
     }
@@ -282,10 +416,11 @@ export function getModelLogoById(modelId: string): string | undefined {
  *
  * @param modelId 模型 ID
  * @param provider 供应商类型（可选）
+ * @param isDark 是否使用深色主题资源
  */
-export function getModelLogo(modelId: string, provider?: ProviderType): string {
-  return getModelLogoById(modelId)
-    ?? (provider ? PROVIDER_LOGO_MAP[provider] : undefined)
+export function getModelLogo(modelId: string, provider?: ProviderType, isDark = false): string {
+  return getModelLogoById(modelId, isDark)
+    ?? (provider ? getProviderLogo(provider, isDark) : undefined)
     ?? DefaultLogo
 }
 
@@ -293,9 +428,11 @@ export function getModelLogo(modelId: string, provider?: ProviderType): string {
  * 根据供应商类型获取 Logo
  *
  * @param provider 供应商类型
+ * @param isDark 是否使用深色主题资源
  */
-export function getProviderLogo(provider: ProviderType): string {
-  return PROVIDER_LOGO_MAP[provider] ?? DefaultLogo
+export function getProviderLogo(provider: ProviderType, isDark = false): string {
+  const map = isDark ? PROVIDER_LOGO_DARK_MAP : PROVIDER_LOGO_MAP
+  return map[provider] ?? DefaultLogo
 }
 
 /**
@@ -328,6 +465,27 @@ const URL_LOGO_MAP: Array<[RegExp, string]> = [
   [/yi\.com|lingyiwanwu/i, YiLogo],
 ]
 
+/** Base URL 域名 → 暗色 Logo（与 URL_LOGO_MAP 同序，无暗色资源回退亮色） */
+const URL_LOGO_DARK_MAP: Array<[RegExp, string]> = [
+  [/proma\.cool/i, CDUTStudioLogo],
+  [/moonshot\.cn|kimi/i, KimiLogo],
+  [/bigmodel\.cn|zhipuai/i, ZhipuDarkLogo],
+  [/minimax/i, MiniMaxLogo],
+  [/xiaomimimo|mimo/i, XiaomiLogo],
+  [/volces\.com|volcengine/i, DoubaoDarkLogo],
+  [/dashscope|aliyuncs/i, QwenDarkLogo],
+  [/deepseek/i, DeepSeekDarkLogo],
+  [/openai\.com/i, GPTDarkLogo],
+  [/googleapis|generativelanguage/i, GeminiDarkLogo],
+  [/grok|x\.ai/i, GrokDarkLogo],
+  [/stepfun/i, StepDarkLogo],
+  [/cohere/i, CohereDarkLogo],
+  [/spark-api|xfyun/i, SparkDeskDarkLogo],
+  [/hunyuan/i, HunyuanDarkLogo],
+  [/ernie|baidu/i, WenxinDarkLogo],
+  [/yi\.com|lingyiwanwu/i, YiDarkLogo],
+]
+
 /** provider 类型本身无法判断真实品牌、需按 URL 识别的「泛化」类型 */
 const GENERIC_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
   'anthropic',
@@ -352,27 +510,27 @@ export function getChannelLogo(channel: {
   name?: string
   familyId?: string
   models?: Array<Pick<import('@profer/shared').ChannelModel, 'id'>>
-}): string {
+}, isDark = false): string {
   // 模型族虚拟渠道的 provider 表示请求协议，不一定代表真实品牌。
   // 先看具体模型，再看服务端提供的 familyId/name，覆盖后续新增的别名模型。
   const modelLogo = channel.models
-    ?.map((model) => getModelLogoById(model.id))
+    ?.map((model) => getModelLogoById(model.id, isDark))
     .find((logo): logo is string => Boolean(logo))
   if (modelLogo) return modelLogo
 
   const familyLogo = [channel.familyId, channel.name]
-    .map((value) => getModelLogoById(value ?? ''))
+    .map((value) => getModelLogoById(value ?? '', isDark))
     .find((logo): logo is string => Boolean(logo))
   if (familyLogo) return familyLogo
 
   if (GENERIC_PROVIDERS.has(channel.provider) && channel.baseUrl) {
-    for (const [regex, logo] of URL_LOGO_MAP) {
+    for (const [regex, logo] of (isDark ? URL_LOGO_DARK_MAP : URL_LOGO_MAP)) {
       if (regex.test(channel.baseUrl)) {
         return logo
       }
     }
   }
-  return getProviderLogo(channel.provider)
+  return getProviderLogo(channel.provider, isDark)
 }
 
 /**

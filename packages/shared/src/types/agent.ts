@@ -770,6 +770,8 @@ export interface AgentSessionUiProjection {
   presetReference: import('./agent-preset').PresetReference | null
   openAIThinkingLevel: AgentThinkingLevel | null
   codexFastMode: boolean
+  /** AI 速课堂带教模式；null = 未设置（消费端按 'balanced' 处理）。 */
+  studyTeachingMode: import('./study').StudyTeachingMode | null
   autoQueueSendEnabled: boolean
   workspaceId: string | null
   pinned: boolean
@@ -845,6 +847,8 @@ export interface AgentSessionMeta {
   sessionWorkbenchLayout?: SessionWorkbenchLayout
   /** ChatGPT Codex Fast Mode；仅 Pi + Codex 的受支持模型实际生效。 */
   codexFastMode?: boolean
+  /** AI 速课堂专用：带教强度模式（fast/balanced/strict）；缺省视为 'balanced'。 */
+  studyTeachingMode?: import('./study').StudyTeachingMode
   /** ChatGPT Codex 推理档位；跨会话持久化（off/low/medium/high/xhigh）。null/undefined 表示未设置，使用全局默认值。 */
   openAIThinkingLevel?: AgentThinkingLevel | null
   /** 会话级推理强度覆盖（low/medium/high/max）；由思考强度选择器手动切换，优先于预设/全局默认。null=清除覆盖跟随预设或全局。 */
@@ -1408,6 +1412,8 @@ export interface AgentSendInput {
   disableContextMemory?: boolean
   /** 本轮上下文模式；缺省为 classic。全局索引开关开启时主进程强制 index。 */
   contextMode?: AgentContextMode
+  /** AI 速课堂专用：本轮消息的带教模式；缺省回退会话元数据，再回退 'balanced'。 */
+  studyTeachingMode?: import('./study').StudyTeachingMode
   /** 用户通过 /skill:xxx 引用的 Skill slug 列表 */
   mentionedSkills?: string[]
   /** 用户通过 #mcp:xxx 引用的 MCP 服务器名称列表 */
@@ -1832,15 +1838,22 @@ export interface AskUserQuestionOption {
   preview?: string
 }
 
+/** AskUserQuestion 题型：单选 / 多选 / 填空简答 */
+export type AskUserQuestionType = 'single' | 'multiple' | 'fill-blank'
+
 /** AskUserQuestion 工具的问题定义 */
 export interface AskUserQuestion {
   /** 问题内容 */
   question: string
   /** 短标签（chip 显示） */
   header?: string
-  /** 可选项列表 */
-  options: AskUserQuestionOption[]
-  /** 是否支持多选 */
+  /** 题型；缺省时由主进程按 options 与 multiSelect 归一化 */
+  type?: AskUserQuestionType
+  /** 填空/简答题的输入引导占位符 */
+  placeholder?: string
+  /** 可选项列表；填空题可为空 */
+  options?: AskUserQuestionOption[]
+  /** 是否支持多选（保留以兼容存量调用） */
   multiSelect?: boolean
 }
 
@@ -2338,6 +2351,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_OPENAI_THINKING: 'agent:update-session-openai-thinking',
   /** 切换指定会话的推理强度覆盖（Claude/Pi 通用；null=清除覆盖）。运行中拒绝，下一轮生效。 */
   UPDATE_SESSION_AGENT_EFFORT: 'agent:update-session-agent-effort',
+  /** 切换指定会话的 AI 速课堂带教模式（fast/balanced/strict，跨会话持久化）。运行中允许切换，下一轮生效。 */
+  UPDATE_SESSION_STUDY_TEACHING_MODE: 'agent:update-session-study-teaching-mode',
   /** 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单展示）。 */
   GET_PI_REASONING_CAPABILITY: 'agent:get-pi-reasoning-capability',
   /** 切换指定空闲会话的 Agent runtime；跨 runtime 时清除 SDK 会话恢复 ID。 */

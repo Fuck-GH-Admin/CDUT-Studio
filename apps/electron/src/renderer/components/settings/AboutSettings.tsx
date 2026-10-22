@@ -6,17 +6,19 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { RefreshCw, Loader2, AlertCircle, Info, Terminal, Users } from 'lucide-react'
+import { RefreshCw, Loader2, AlertCircle, Info, Terminal, Users, Megaphone } from 'lucide-react'
 import type { EnvironmentCheckResult, RuntimeStatus } from '@profer/shared'
 import {
   SettingsSection,
   SettingsCard,
 } from './primitives'
 import { Alert, AlertDescription } from '@profer/ui/primitives/alert'
+import { Button } from '@profer/ui/primitives/button'
 import {
   environmentCheckResultAtom,
   hasEnvironmentIssuesAtom,
 } from '@/atoms/environment'
+import { bulletinDialogOpenAtom } from '@/atoms/bulletin-atoms'
 import { EnvironmentCheckCard } from '@/components/environment/EnvironmentCheckCard'
 import { Badge } from '@profer/ui/primitives/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
@@ -314,6 +316,29 @@ function TeamCreditsCard(): React.ReactElement {
   )
 }
 
+/** 系统公告卡片：公告栏唯一常驻手动入口（数据由弹窗打开时自兜底拉取） */
+function BulletinCard(): React.ReactElement {
+  const setBulletinOpen = useSetAtom(bulletinDialogOpenAtom)
+  return (
+    <SettingsCard divided={false}>
+      <div className="p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Megaphone className="size-4 text-primary" />
+            <h3 className="text-sm font-medium">系统公告</h3>
+          </div>
+          <Button variant="secondary" size="sm" onClick={() => setBulletinOpen(true)}>
+            查看系统公告
+          </Button>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          版本更新与使用指引（本地数据，随时翻阅）
+        </p>
+      </div>
+    </SettingsCard>
+  )
+}
+
 export function AboutSettings(): React.ReactElement {
   return (
     <div className="space-y-8">
@@ -329,6 +354,9 @@ export function AboutSettings(): React.ReactElement {
 
         {/* 3. Shell 环境卡片（仅 Windows） */}
         <ShellEnvironmentCard />
+
+        {/* 4. 系统公告卡片（公告栏常驻手动入口） */}
+        <BulletinCard />
       </SettingsSection>
     </div>
   )

@@ -23,7 +23,8 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import type { CdutDomainToolResult } from '@profer/shared'
+import type { BeijingTimeInfo, CdutDomainToolResult } from '@profer/shared'
+import { evaluateCourseLiveStatus, getBeijingTimeInfo } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { formatBeijingClock } from '@/lib/beijing-greeting'
 
@@ -96,14 +97,14 @@ function deleteRecentClass(className: string): string[] {
   return loadRecentClasses()
 }
 
-/** 北京时间实时时钟（秒级跳动；与宿主时区无关，绝对标准 Asia/Shanghai） */
-function useBeijingClock(): string {
-  const [text, setText] = React.useState(() => formatBeijingClock(new Date()))
+/** 北京时间实时时钟与原子信息（秒级跳动；与宿主时区无关，绝对标准 Asia/Shanghai） */
+function useBeijingNow(): { text: string; info: BeijingTimeInfo } {
+  const [now, setNow] = React.useState(() => new Date())
   React.useEffect(() => {
-    const timer = window.setInterval(() => setText(formatBeijingClock(new Date())), 1000)
+    const timer = window.setInterval(() => setNow(new Date()), 1000)
     return () => window.clearInterval(timer)
   }, [])
-  return text
+  return React.useMemo(() => ({ text: formatBeijingClock(now), info: getBeijingTimeInfo(now) }), [now])
 }
 
 /** 规范化个人课表课程数据（兼容实时解析与 Demo 假数据两种 JSON 结构） */
@@ -137,8 +138,6 @@ function normalizeCourses(rawJson: unknown): ScheduleCourseItem[] {
       teacher,
       weeks,
       weekList,
-      isOngoing: c.isOngoing === true,
-      isNext: c.isNext === true,
     })
   }
 
@@ -172,14 +171,18 @@ function normalizeOtherClassCourses(rawJson: unknown): OtherClassCourseItem[] {
 
 /**
  * 独立顶部横幅雷达卡片：与周次切换器严格正交，常驻展示。
- *   - 正在上课 / 下节课预告（未来 24 小时内，由主进程 24h 雷达标记）；
+ *   - 正在上课 / 下节课预告（未来 24 小时内，由北京时间纯函数按分钟实时重算）；
  *   - 未来 24 小时无课程时渲染友好空闲文案，坚决不展示数天后的遥远课程。
  */
-function RadarBanner({ courses }: { courses: ScheduleCourseItem[] }): React.ReactElement {
-  const ongoing = courses.find((c) => c.isOngoing)
-  const next = courses.find((c) => c.isNext && !c.isOngoing)
+function RadarBanner({
+  ongoing,
+  next,
+}: {
+  ongoing: ScheduleCourseItem | null
+  next: ScheduleCourseItem | null
+}): React.ReactElement {
   const target = ongoing ?? next
-  const isOngoing = !!ongoing
+  const isOngoing = ongoing !== null
 
   if (!target) {
     return (
@@ -240,10 +243,8 @@ export function ScheduleDomainSheet(): React.ReactElement {
   const [week, setWeek] = React.useState<number>(1)
   // 用户是否手动切换过周次（自动识别的当前教学周仅作首次默认值，绝不覆盖用户选择）
   const weekTouchedRef = React.useRef(false)
-  const [selectedDay, setSelectedDay] = React.useState<number>(() => {
-    const day = new Date().getDay()
-    return day === 0 ? 7 : day
-  })
+  // 星期默认值锁定北京时间（与宿主系统时区无关）
+  const [selectedDay, setSelectedDay] = React.useState<number>(() => getBeijingTimeInfo().dayOfWeek)
   const [loading, setLoading] = React.useState(true)
   const [data, setData] = React.useState<CdutDomainToolResult | null>(null)
   // SWR 陈旧数据：抽屉打开先读离线缓存秒开渲染，网络成功后热更新并原子落盘
@@ -257,7 +258,7 @@ export function ScheduleDomainSheet(): React.ReactElement {
   const [otherData, setOtherData] = React.useState<CdutDomainToolResult | null>(null)
   const [otherError, setOtherError] = React.useState<string | null>(null)
 
-  const beijingTime = useBeijingClock()
+  const beijing = useBeijingNow()
 
   // SWR 第一步：抽屉打开立即读取课表离线缓存，完成前台初次秒开渲染。
   // 防御式调用：主进程未随渲染层一起更新时 readDomainCache 可能不存在，
@@ -338,6 +339,14 @@ export function ScheduleDomainSheet(): React.ReactElement {
   // 全学期课程（雷达横幅与周次网格共用同一份数据源）
   const courses = React.useMemo(() => normalizeCourses((data ?? cachedData)?.json), [data, cachedData])
 
+  // 实时雷达：以北京星期 + 当日分钟为依赖按分钟重算，秒级时钟仅驱动文案，避免每秒克隆全量课程
+  const radar = React.useMemo(
+    () => evaluateCourseLiveStatus(courses, beijing.info),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 秒级 info 对象无需参与依赖，分钟级字段变化即重算
+    [courses, beijing.info.dayOfWeek, beijing.info.minutesOfDay],
+  )
+  const markedCourses = radar.markedCourses
+
   // 当前教学周自动识别：主进程返回 currentWeek 时，仅在用户未手动切周的情况下默认选中
   React.useEffect(() => {
     if (weekTouchedRef.current) return
@@ -346,10 +355,10 @@ export function ScheduleDomainSheet(): React.ReactElement {
     if (typeof currentWeek === 'number' && currentWeek >= 1) setWeek(currentWeek)
   }, [data, cachedData])
 
-  // 周次网格：严格客户端过滤（weekList 空 = 全学期排课）
+  // 周次网格：严格客户端过滤（weekList 空 = 全学期排课），使用雷达重算后的课程标记
   const weekCourses = React.useMemo(
-    () => courses.filter((c) => c.weekList.length === 0 || c.weekList.includes(week)),
-    [courses, week],
+    () => markedCourses.filter((c) => c.weekList.length === 0 || c.weekList.includes(week)),
+    [markedCourses, week],
   )
   const filteredCourses = React.useMemo(() => {
     return weekCourses.filter((c) => c.dayOfWeek === selectedDay)
@@ -392,14 +401,14 @@ export function ScheduleDomainSheet(): React.ReactElement {
         {/* 实时北京时间时钟药丸（无论宿主时区，恒为绝对标准 Asia/Shanghai） */}
         <div className="ml-auto flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
           <Clock className="size-3.5 animate-pulse" />
-          <span className="font-mono tabular-nums">北京时间 {beijingTime}</span>
+          <span className="font-mono tabular-nums">北京时间 {beijing.text}</span>
         </div>
       </div>
 
       {tab === 'mine' ? (
         <>
           {/* 独立下节课预告专区：常驻横幅雷达卡片，位于周次选择器正上方，与周次切换严格正交 */}
-          {!error && courses.length > 0 && <RadarBanner courses={courses} />}
+          {!error && courses.length > 0 && <RadarBanner ongoing={radar.ongoing} next={radar.next} />}
           {/* 陈旧缓存已在渲染（后台静默重验证）时给出轻量提示，避免用户误以为数据未刷新 */}
           {loading && courses.length > 0 && (
             <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">

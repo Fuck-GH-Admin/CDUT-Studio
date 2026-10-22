@@ -70,11 +70,17 @@ describe('CSLab 科学工具集', () => {
     const createTool = tools.find((t) => t.name === 'cslab_create_structure')
     expect(createTool).toBeDefined()
 
-    const result = (await createTool!.execute('call-1', {
-      title: '钛酸锶钙钛矿',
-      format: 'cif',
-      content: SAMPLE_CIF,
-    })) as any
+    const result = (await createTool!.execute(
+      'call-1',
+      {
+        title: '钛酸锶钙钛矿',
+        format: 'cif',
+        content: SAMPLE_CIF,
+      },
+      undefined,
+      undefined,
+      {} as never,
+    )) as any
 
     expect(result.isError).toBeFalsy()
     expect(result.details.uri).toContain('mol')
@@ -92,14 +98,35 @@ describe('CSLab 科学工具集', () => {
     const focusTool = tools.find((t) => t.name === 'cslab_focus_structure')
     expect(focusTool).toBeDefined()
 
-    const result = (await focusTool!.execute('call-2', {
-      uri: `lab://${lab.id}/mol/fake-123`,
-      supercell: { na: 2, nb: 2, nc: 2 },
-      highlightPolyhedra: true,
-    })) as any
+    const result = (await focusTool!.execute(
+      'call-2',
+      {
+        uri: `lab://${lab.id}/mol/fake-123`,
+        supercell: { na: 2, nb: 2, nc: 2 },
+        highlightPolyhedra: true,
+      },
+      undefined,
+      undefined,
+      {} as never,
+    )) as any
 
     expect(result.isError).toBeFalsy()
     expect(result.details.status).toBe('focused')
+  })
+
+  test('Given 绑定实验室会话 When 构建科学工具 Then 注册 cslab_snapshot_structure', async () => {
+    const { buildCsLabScienceTools } = await import('./cslab-scientific-tools')
+    const fakeSdk = {
+      defineTool: (def: unknown) => def,
+    } as any
+
+    const tools = buildCsLabScienceTools(fakeSdk, { sessionId: fakeSessionId })
+    const snapshotTool = tools.find((t) => t.name === 'cslab_snapshot_structure')
+    expect(snapshotTool).toBeDefined()
+
+    const schema = JSON.stringify((snapshotTool as any).parameters)
+    expect(schema).toContain('scale')
+    expect(schema).toContain('filenamePrefix')
   })
 
   test('Given 绑定实验室会话 When buildSystemPrompt Then 注入包含双引擎规范且禁止手搓 3D 的系统提示词', async () => {
@@ -111,6 +138,8 @@ describe('CSLab 科学工具集', () => {
     expect(labInfo!.labName).toBe('Origin × VESTA 测试实验室')
 
     const prompt = buildSystemPrompt({
+      sessionId: fakeSessionId,
+      permissionMode: 'auto',
       cslabLabBound: true,
       cslabLabInfo: labInfo,
     })
@@ -120,7 +149,24 @@ describe('CSLab 科学工具集', () => {
     expect(prompt).toContain('VESTA 3D Crystal & Molecular Engine')
     expect(prompt).toContain('cslab_create_structure')
     expect(prompt).toContain('cslab_focus_structure')
+    expect(prompt).toContain('cslab_snapshot_structure')
+    expect(prompt).toContain('cslab_export_figure')
+    expect(prompt).toContain('It cannot export the 3D crystal viewport')
+    expect(prompt).toContain('Intent Fidelity & No Scavenging (CRITICAL)')
+    expect(prompt).toContain('Never substitute an unrelated plot')
     expect(prompt).toContain('CRITICAL NEGATIVE CONSTRAINT')
     expect(prompt).toContain('NEVER attempt to write Python scripts')
+    // 真实 vault 拓扑：只列存在的确定性子目录，并明确不存在 structures/
+    expect(prompt).toContain('Vault Root Directory:')
+    expect(prompt).toContain('figures/')
+    expect(prompt).toContain('plots/')
+    expect(prompt).toContain('lit/')
+    expect(prompt).toContain('notes/')
+    expect(prompt).toContain('raw/')
+    expect(prompt).toContain('tables/')
+    expect(prompt).toContain('manuscripts/')
+    expect(prompt).toContain('there is NO `structures/` directory')
+    expect(prompt).not.toContain('Structures Directory')
+    expect(prompt).toContain('Do NOT run `ls -R` or `find` on the vault')
   })
 })

@@ -122,3 +122,39 @@ describe('CSLab 科学服务', () => {
     expect(svg).not.toContain('<image')
   })
 })
+
+describe('CSLab 绘图标识与 PDF 导出尺寸', () => {
+  test('Given 合规与非合规标识 When isValidPlotId Then 只接受字符串形式的安全 id', async () => {
+    const { isValidPlotId } = await import('./cslab-science')
+    expect(isValidPlotId('plot-1a2b3c4d')).toBe(true)
+    expect(isValidPlotId('plot_test-01')).toBe(true)
+    expect(isValidPlotId(undefined)).toBe(false)
+    expect(isValidPlotId(123)).toBe(false)
+    expect(isValidPlotId('')).toBe(false)
+    expect(isValidPlotId('..')).toBe(false)
+    expect(isValidPlotId('a'.repeat(65))).toBe(false)
+  })
+
+  test('Given 非字符串 id When savePlot Then 报绘图标识非法，不再落成 undefined.json', async () => {
+    const { savePlot } = await import('./cslab-science')
+    const plot = createPlotDocument({
+      id: 'plot-invalid',
+      labId: lab.id,
+      title: '非法标识绘图',
+    })
+    await expect(
+      savePlot({ labId: lab.id, plot: { ...plot, id: undefined as unknown as string } }),
+    ).rejects.toThrow('绘图标识非法')
+  })
+
+  test('Given 85×60mm When 计算 PDF 页尺寸 Then 英寸与 96 CSS DPI 视口均正确', async () => {
+    const { pdfPageSizeInches, pdfViewportPx } = await import('./cslab-figure-export')
+    const page = pdfPageSizeInches(85, 60)
+    expect(page).toEqual({ width: 3.346, height: 2.362 })
+    const viewport = pdfViewportPx(85, 60)
+    expect(viewport).toEqual({ widthPx: 321, heightPx: 226 })
+    // 打印视口不得超出纸张，否则会横向切页或产生空白尾页
+    expect(viewport.widthPx).toBeLessThanOrEqual(page.width * 96)
+    expect(viewport.heightPx).toBeLessThanOrEqual(page.height * 96)
+  })
+})

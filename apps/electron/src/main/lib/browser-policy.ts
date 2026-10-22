@@ -1,6 +1,8 @@
 /** 受管浏览器的纯 URL 边界；保持无 Electron 依赖，便于在普通 Bun 测试中验证。 */
 import { lookup } from 'node:dns/promises'
 
+import { assertSafeUrlNoNul } from '@profer/shared'
+
 const BROWSER_DNS_LOOKUP_TIMEOUT_MS = 3_000
 
 function isPrivateAddress(hostname: string): boolean {
@@ -47,6 +49,8 @@ export function normalizeBrowserUrl(input: string): string {
 }
 
 export function assertSafeBrowserUrl(input: string): string {
+  // NUL/控制字符前置硬校验（CVE-2026-105482）：杜绝 %00、\0 欺骗 DNS 解析或绕过主机名校验。
+  assertSafeUrlNoNul(input)
   const normalized = normalizeBrowserUrl(input)
   let parsed: URL
   try { parsed = new URL(normalized) } catch { throw new Error('浏览器地址无效。请输入公共域名或完整的 HTTP/HTTPS URL。') }
@@ -63,6 +67,8 @@ export function assertSafeBrowserUrl(input: string): string {
  */
 export function isSafeBrowserSubresourceUrl(input: string): boolean {
   try {
+    // 子资源同样前置 NUL/控制字符校验，杜绝编码残留绕过协议检查。
+    assertSafeUrlNoNul(input)
     const parsed = new URL(input)
     return ['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)
       && !parsed.username

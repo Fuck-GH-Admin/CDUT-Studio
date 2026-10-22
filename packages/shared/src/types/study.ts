@@ -476,3 +476,13 @@ export interface AiClassSessionSummary {
   documentCount: number
   lastTopicSnippet?: string
 }
+
+// ===== 带教模式 / 回复强度 =====
+
+/**
+ * AI 速课堂带教模式 / 回复强度
+ * - 'fast': ⚡ 轻快查证 — 极速直答，无随堂测验打断，无元思考负担
+ * - 'balanced': 🎯 专项精讲 — 标准教学，输出考点对比与思维图谱，按需巩固（默认）
+ * - 'strict': 🏆 考霸硬核 — 原版带教铁律，双轨锚点，强制 AskUserQuestion 闭环测验与认知回写
+ */
+export type StudyTeachingMode = 'fast' | 'balanced' | 'strict'

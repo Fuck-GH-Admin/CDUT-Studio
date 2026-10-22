@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CsLabReviewMarginalia — 审稿旁注（Marginalia）
  *
  * 性能红线：
@@ -167,7 +167,7 @@ export function CsLabReviewMarginalia({
                 key={`connector-${item.id}`}
                 d={buildConnectorPath(0, item.targetTop + 14, 14, item.actualTop + 14)}
                 fill="none"
-                stroke="#D97757"
+                className="stroke-cslab-accent"
                 strokeWidth={1}
                 strokeDasharray="3 3"
                 vectorEffect="non-scaling-stroke"

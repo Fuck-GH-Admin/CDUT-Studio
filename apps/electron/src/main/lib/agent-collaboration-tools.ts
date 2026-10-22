@@ -11,6 +11,7 @@ import type {
   AgentSessionMeta,
   AgentStreamPayload,
   AskUserRequest,
+  AskUserQuestionType,
   PermissionRequest,
   PresetReference,
   ProferPermissionMode,
@@ -111,7 +112,13 @@ interface BlockedEvent {
   childSessionId: string
   type: 'ask_user' | 'permission'
   askUserRequestId?: string
-  askUserQuestions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }> }>
+  askUserQuestions?: Array<{
+    question: string
+    header?: string
+    type?: AskUserQuestionType
+    placeholder?: string
+    options: Array<{ label: string; description?: string }>
+  }>
   permissionRequestId?: string
   permissionToolName?: string
   resolved: boolean
@@ -145,7 +152,9 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
         askUserQuestions: req.questions.map((q) => ({
           question: q.question,
           header: q.header,
-          options: q.options.map((o) => ({ label: o.label, description: o.description })),
+          type: q.type,
+          placeholder: q.placeholder,
+          options: (q.options ?? []).map((o) => ({ label: o.label, description: o.description })),
         })),
         resolved: false,
         createdAt: Date.now(),

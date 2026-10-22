@@ -16,7 +16,6 @@ import {
   currentAgentWorkspaceIdAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
-import { promptConfigAtom, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from './useOpenSession'
 
@@ -44,8 +43,6 @@ export function useCreateSession(): CreateSessionActions {
   // Chat
   const setConversations = useSetAtom(conversationsAtom)
   const selectedModel = useAtomValue(selectedModelAtom)
-  const promptConfig = useAtomValue(promptConfigAtom)
-  const setSelectedPromptId = useSetAtom(selectedPromptIdAtom)
 
   // Agent
   const setAgentSessions = useSetAtom(agentSessionsAtom)
@@ -63,9 +60,6 @@ export function useCreateSession(): CreateSessionActions {
       setConversations((prev) => [meta, ...prev])
       openSession('chat', meta.id, meta.title)
       setActiveView('conversations')
-      if (promptConfig.defaultPromptId) {
-        setSelectedPromptId(promptConfig.defaultPromptId)
-      }
       if (options?.draft) {
         setDraftSessionIds((prev: Set<string>) => { const next = new Set(prev); next.add(meta.id); return next })
       }

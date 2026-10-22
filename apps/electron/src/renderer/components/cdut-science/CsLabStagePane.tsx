@@ -32,7 +32,7 @@ import type {
 } from '@profer/shared'
 import { canvasTitleFromRelPath } from '@profer/shared'
 import { cn } from '@/lib/utils'
-import type { CsLabPaneState, CsLabPdfSelection } from '@/atoms/cslab-atoms'
+import type { CsLabPaneId, CsLabPaneState, CsLabPdfSelection } from '@/atoms/cslab-atoms'
 import { CsLabDatasetView } from './CsLabDatasetView'
 import { CsLabFigureView } from './CsLabFigureView'
 import { CsLabManuscriptEditor } from './CsLabManuscriptEditor'
@@ -48,6 +48,7 @@ import {
 } from './cslab-dnd'
 
 interface CsLabStagePaneProps {
+  paneId: CsLabPaneId
   pane: CsLabPaneState
   active: boolean
   isHidden?: boolean
@@ -92,6 +93,7 @@ interface CsLabStagePaneProps {
 }
 
 export function CsLabStagePane({
+  paneId,
   pane,
   active,
   isHidden = false,
@@ -146,6 +148,8 @@ export function CsLabStagePane({
   return (
     <section
       aria-label={displayTitle}
+      data-tour={`cslab-pane-${pane.id}`}
+      data-cslab-pane-id={pane.id}
       onMouseDown={onActivate}
       onDragOver={(event) => {
         if (!hasDragType(event.dataTransfer, CSLAB_ASSET_MIME)) return
@@ -266,7 +270,7 @@ export function CsLabStagePane({
             onToast={onToast}
           />
         ) : pane.viewType === 'mol' && mol ? (
-          <CsLabVestaCrystalPane labId={labId} asset={mol} onToast={onToast} />
+          <CsLabVestaCrystalPane paneId={paneId} labId={labId} asset={mol} onToast={onToast} />
         ) : pane.viewType === 'origin-plot' ? (
           <CsLabOriginPlotPane labId={labId} pane={pane} onToast={onToast} />
         ) : (

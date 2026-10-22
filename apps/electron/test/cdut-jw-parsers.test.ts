@@ -165,8 +165,8 @@ describe('markOngoingAndNext + computeCurrentWeek（实时课程雷达 BDD-JW-SC
   })
 
   it('Given 周一 09:00（01-02 节时段）When 标记 Then 当天相交课程置 isOngoing', () => {
-    // 2026-08-31 为秋学期第 1 周周一（启发式起点当周）
-    const monday9 = new Date(2026, 7, 31, 9, 0)
+    // 2026-08-31 为秋学期第 1 周周一；显式 +08:00 构造，杜绝宿主时区干扰
+    const monday9 = new Date('2026-08-31T09:00:00+08:00')
     const cloned = [course({ name: '甲', dayOfWeek: 1, startSection: 1, endSection: 2 }), course({ name: '乙', dayOfWeek: 2 })]
     markOngoingAndNext(cloned, monday9)
     const ongoing = cloned.filter((c) => c.isOngoing)
@@ -175,7 +175,7 @@ describe('markOngoingAndNext + computeCurrentWeek（实时课程雷达 BDD-JW-SC
   })
 
   it('Given 当前周次不在课程周单内 When 标记 Then 不误判为正在上课（周单过滤）', () => {
-    const monday9 = new Date(2026, 7, 31, 9, 0) // 第 1 周
+    const monday9 = new Date('2026-08-31T09:00:00+08:00') // 第 1 周
     const cloned = [course({ name: '甲', dayOfWeek: 1, weekList: [7] })]
     markOngoingAndNext(cloned, monday9)
     expect(cloned.some((c) => c.isOngoing)).toBe(false)
@@ -183,7 +183,7 @@ describe('markOngoingAndNext + computeCurrentWeek（实时课程雷达 BDD-JW-SC
 
   it('Given 周六 22:00 与周日 19:10 课程 When 标记 Then 24h 窗口内标记周日课为 isNext，34h 外的周一课被排除', () => {
     // 2026-10-17 为周六；周日 19:10 距今约 21h（窗口内），周一 08:10 距今约 34h（窗口外）
-    const saturdayNight = new Date(2026, 9, 17, 22, 0)
+    const saturdayNight = new Date('2026-10-17T22:00:00+08:00')
     const cloned = [
       course({ name: '周日课', dayOfWeek: 7, startSection: 9, endSection: 10 }),
       course({ name: '周一课', dayOfWeek: 1, startSection: 1, endSection: 2 }),
@@ -196,7 +196,7 @@ describe('markOngoingAndNext + computeCurrentWeek（实时课程雷达 BDD-JW-SC
 
   it('Given 未来 24 小时无任何课程 When 标记 Then 不产生 isNext（坚决不展示数天后的遥远课程）', () => {
     // 周六 22:00 → 下一门课在 34h 之外，严格超出 24 小时窗口
-    const saturdayNight = new Date(2026, 9, 17, 22, 0)
+    const saturdayNight = new Date('2026-10-17T22:00:00+08:00')
     const cloned = [course({ name: '周一课', dayOfWeek: 1 })]
     markOngoingAndNext(cloned, saturdayNight)
     expect(cloned.some((c) => c.isNext)).toBe(false)
@@ -204,16 +204,24 @@ describe('markOngoingAndNext + computeCurrentWeek（实时课程雷达 BDD-JW-SC
   })
 
   it('Given computeCurrentWeek When 计算教学周 Then 秋学期 8 月末为第 1 周、10 月中旬为第 7 周，且始终夹取在 [1,25]', () => {
-    expect(computeCurrentWeek(new Date(2026, 7, 31))).toBe(1) // 2026-08-31 周一
-    expect(computeCurrentWeek(new Date(2026, 9, 12))).toBe(7) // 2026-10-12 周一
-    expect(computeCurrentWeek(new Date(2027, 5, 15))).toBeGreaterThanOrEqual(1) // 学期末仍在界内
-    expect(computeCurrentWeek(new Date(2026, 4, 10))).toBeLessThanOrEqual(25)
+    expect(computeCurrentWeek(new Date('2026-08-31T09:00:00+08:00'))).toBe(1) // 2026-08-31 周一
+    expect(computeCurrentWeek(new Date('2026-10-12T09:00:00+08:00'))).toBe(7) // 2026-10-12 周一
+    expect(computeCurrentWeek(new Date('2027-06-15T09:00:00+08:00'))).toBeGreaterThanOrEqual(1) // 学期末仍在界内
+    expect(computeCurrentWeek(new Date('2026-05-10T09:00:00+08:00'))).toBeLessThanOrEqual(25)
+  })
+
+  it('Given 宿主处于美东时区 When 以美东表达同一绝对时刻标记 Then 仍按北京时间判定', () => {
+    // 2026-08-30T21:00-04:00 === 北京 2026-08-31 09:00（周一 01-02 节）
+    const eastern = new Date('2026-08-30T21:00:00-04:00')
+    const cloned = [course({ name: '甲', dayOfWeek: 1 })]
+    markOngoingAndNext(cloned, eastern)
+    expect(cloned.some((c) => c.isOngoing)).toBe(true)
   })
 
   it('Given 真实课表 fixture When 标记 Then 至多一门 isNext 且不抛异常', () => {
     const courses = parseScheduleCourses(loadFixture('xskb_list.do'))
     const cloned = courses.map((c) => ({ ...c }))
-    markOngoingAndNext(cloned, new Date(2026, 9, 17, 20, 0))
+    markOngoingAndNext(cloned, new Date('2026-10-17T20:00:00+08:00'))
     expect(cloned.filter((c) => c.isNext).length).toBeLessThanOrEqual(1)
   })
 })

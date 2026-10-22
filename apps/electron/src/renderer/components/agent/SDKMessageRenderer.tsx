@@ -45,6 +45,7 @@ import { Badge } from '@profer/ui/primitives/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
 import { formatMessageTime } from '@/lib/format-time'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
+import { useIsDarkTheme } from '@/hooks/use-is-dark-theme'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom, requestModelSelectorOpen } from '@/atoms/conversation-atoms'
 import { agentProcessGroupsKeepExpandedAtom, agentSessionsAtom, currentAgentSessionIdAtom, resolvedBlobMessagesAtom } from '@/atoms/agent-atoms'
@@ -297,10 +298,11 @@ function parseTaskCreateResultFromStructuredValue(
 
 function AssistantLogo({ model }: { model?: string }): React.ReactElement {
   const channels = useAtomValue(channelsAtom)
+  const isDark = useIsDarkTheme()
   if (model) {
     return (
       <img
-        src={getModelLogo(model, resolveModelProvider(model, channels))}
+        src={getModelLogo(model, resolveModelProvider(model, channels), isDark)}
         alt={model}
         className="size-[35px] rounded-[25%] object-cover"
       />
@@ -732,8 +734,6 @@ export interface AssistantTurnRendererProps {
   onFork?: (upToMessageUuid: string) => void
   /** 探索分支回调（Pi `/tree`；hover 分叉按钮时可用） */
   onExplore?: (upToMessageUuid: string) => void
-  /** 回退回调（传入 assistant message uuid） */
-  onRewind?: (assistantMessageUuid: string) => void
   /** 错误重试回调（仅当 turn 含错误消息时使用） */
   onRetry?: () => void
   /** 在新会话中重试回调（仅当 turn 含错误消息时使用） */
@@ -750,7 +750,7 @@ export interface AssistantTurnRendererProps {
   showThinking?: boolean
 }
 
-export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true }: AssistantTurnRendererProps): React.ReactElement | null {
   // 折叠区状态属于当前 turn，而不是瞬时的窗口/工具块组件；工具完成导致内容重算时保留用户选择。
   const [expandedProcessSegments, setExpandedProcessSegments] = React.useState(false)
   const [expandedReplySegments, setExpandedReplySegments] = React.useState(false)
@@ -1633,7 +1633,8 @@ export interface MessageGroupRendererProps {
   onFork?: (upToMessageUuid: string) => void
   /** 探索分支回调（Pi `/tree`），由回复操作栏 hover 分叉按钮时触发。 */
   onExplore?: (upToMessageUuid: string) => void
-  onRewind?: (assistantMessageUuid: string) => void
+  /** 撤销本轮及之后对话（目标消息 uuid；当前由用户提问卡片消费） */
+  onRewind?: (targetMessageUuid: string) => void
   /** 错误重试回调（仅当 turn 含错误消息时使用） */
   onRetry?: () => void
   /** 在新会话中重试回调（仅当 turn 含错误消息时使用） */
@@ -1786,7 +1787,6 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
         basePaths={basePaths}
         onFork={onFork}
         onExplore={onExplore}
-        onRewind={onRewind}
         onRetry={onRetry}
         onRetryInNewSession={onRetryInNewSession}
         onCompact={onCompact}

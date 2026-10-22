@@ -352,7 +352,7 @@ export function CsLabFigureView({
     : undefined
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-cslab-bg">
+    <div data-tour="cslab-figure" className="flex h-full min-h-0 flex-col bg-cslab-bg">
       <div className="flex h-8 shrink-0 flex-wrap items-center gap-1.5 border-b border-cslab-border px-2">
         <span className="max-w-[220px] truncate text-[10px] text-cslab-muted">{asset.title}</span>
         {dimensions && (
@@ -398,6 +398,7 @@ export function CsLabFigureView({
           <span className="mx-0.5 h-4 w-px bg-cslab-border" aria-hidden="true" />
           <button
             type="button"
+            data-tour="cslab-figure-digitize"
             disabled={!image || !naturalSize || busy !== null || tooLarge}
             onClick={() => void handleDigitize()}
             className="inline-flex items-center gap-1 rounded-md bg-cslab-accent px-2 py-1 text-[10px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
@@ -443,7 +444,8 @@ export function CsLabFigureView({
 
       <div
         ref={viewportRef}
-        className="relative min-h-0 flex-1 overflow-hidden bg-[#FAF9F5]"
+        data-tour="cslab-figure-viewport"
+        className="relative min-h-0 flex-1 overflow-hidden bg-cslab-bg"
       >
         {loading && (
           <div className="flex h-full items-center justify-center gap-2 text-[11px] text-cslab-muted">

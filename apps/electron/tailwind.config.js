@@ -122,27 +122,18 @@ export default {
           DEFAULT: 'hsl(var(--info) / <alpha-value>)',
           foreground: 'hsl(var(--info-foreground) / <alpha-value>)',
         },
-        // CDUT Science（CSLab）专用暖调编辑风格色板：
-        // 羊皮纸底色 + 赤陶强调 + 微暖墨黑，不参与全局主题切换。
-        claude: {
-          bg: '#FAF9F5',
-          surface: '#F3F1EC',
-          border: '#E8E5DF',
-          text: '#242220',
-          muted: '#7A7672',
-          accent: '#D97757',
-          accentHover: '#C46344',
-        },
-        // 规范 Token（UI_cdut_science.md）：新组件统一使用 cslab-*。
+        // CDUT Science（CSLab）暖调编辑风格色板：
+        // 语义变量化后随 .dark 自动切换（变量定义在 globals.css）。
+        // 带 <alpha-value> 以兼容既有的 /60、/70 等透明度修饰类。
         cslab: {
-          bg: '#FAF9F5',
-          surface: '#F3F1EC',
-          elevated: '#FFFFFF',
-          border: '#E8E5DF',
-          text: '#242220',
-          muted: '#7A7672',
-          accent: '#D97757',
-          accentHover: '#C46344',
+          bg: 'hsl(var(--cslab-bg) / <alpha-value>)',
+          surface: 'hsl(var(--cslab-surface) / <alpha-value>)',
+          elevated: 'hsl(var(--cslab-elevated) / <alpha-value>)',
+          border: 'hsl(var(--cslab-border) / <alpha-value>)',
+          text: 'hsl(var(--cslab-text) / <alpha-value>)',
+          muted: 'hsl(var(--cslab-muted) / <alpha-value>)',
+          accent: 'hsl(var(--cslab-accent) / <alpha-value>)',
+          accentHover: 'hsl(var(--cslab-accent-hover) / <alpha-value>)',
         },
       },
       // ===== 字体栈：Inter Variable 优先，回退 SF Pro Text / 系统中文字体 =====

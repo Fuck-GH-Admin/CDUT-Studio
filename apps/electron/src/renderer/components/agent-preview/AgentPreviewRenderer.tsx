@@ -6,6 +6,15 @@ import { createOfficeViewer, destroyOfficeViewer, normalizeOfficeFormat, type Of
 import { markdownToHtml } from '@/lib/markdown-rich-text'
 
 const MAX_OVERVIEW_PAGES = 12
+/**
+ * 离屏文档截图底色：必须保持白色，与深色 UI 无关。
+ *
+ * 本组件运行在主进程创建的 show:false 无头窗口里，产出的截图直接作为
+ * 文档预览图呈现给用户；跟随深色主题会把 PPT/PDF 的纸面刷黑。
+ */
+const PREVIEW_CAPTURE_BACKGROUND = '#ffffff'
+/** 截图宿主的前景色，同样固定为纸面墨色 */
+const PREVIEW_CAPTURE_FOREGROUND = '#111111'
 const nextPaint = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
 const settleViewer = async (): Promise<void> => {
   await nextPaint()
@@ -60,7 +69,7 @@ function PreviewCanvas({ task, onRendered, onFailure }: {
           const iframe = document.createElement('iframe')
           iframe.src = task.sourceUrl
           iframe.setAttribute('sandbox', 'allow-scripts')
-          iframe.style.cssText = 'width:100%;height:852px;border:0;display:block;background:white;'
+          iframe.style.cssText = `width:100%;height:852px;border:0;display:block;background:${PREVIEW_CAPTURE_BACKGROUND};`
           host.replaceChildren(iframe)
           await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error('嵌入预览加载超时')), 20_000)
@@ -111,7 +120,7 @@ function PreviewCanvas({ task, onRendered, onFailure }: {
     }
   }, [format, onFailure, onRendered, task])
 
-  return <main ref={hostRef} style={{ width: 1200, minHeight: 852, padding: 24, background: '#fff', color: '#111', overflow: 'hidden' }} />
+  return <main ref={hostRef} style={{ width: 1200, minHeight: 852, padding: 24, background: PREVIEW_CAPTURE_BACKGROUND, color: PREVIEW_CAPTURE_FOREGROUND, overflow: 'hidden' }} />
 }
 
 function requestedPages(task: AgentPreviewRenderTask, pageCount: number, canNavigate: boolean): number[] {
@@ -182,7 +191,7 @@ function AgentPreviewApp(): React.ReactElement {
     return unsubscribe
   }, [])
 
-  if (!task) return <div style={{ width: 1200, height: 900, background: '#fff' }} />
+  if (!task) return <div style={{ width: 1200, height: 900, background: PREVIEW_CAPTURE_BACKGROUND }} />
   return <PreviewCanvas key={task.id} task={task} onRendered={handleRendered} onFailure={handleFailure} />
 }
 

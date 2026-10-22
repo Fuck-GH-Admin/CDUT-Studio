@@ -26,10 +26,12 @@ import { broadcastCsLabEvent } from '../cslab/cslab-events'
 import { CSLAB_IPC_CHANNELS } from '../cslab/cslab-types'
 import { getTableSeries, ingestMolAsset } from '../cslab/cslab-mol'
 import { createPlotUndoSnapshot } from '../cslab/cslab-plot-history'
+import { requestStructureSnapshot } from '../cslab/cslab-structure-snapshot'
 import {
   analyzeCrystalAsset,
   exportFigure,
   fitPeaks,
+  isValidPlotId,
   loadPlot,
   savePlot,
   simulatePxrdAsset,
@@ -301,7 +303,13 @@ export function buildCsLabScienceTools(
         try {
           let plot: CsLabPlotDocument
           if (input.plot) {
-            plot = { ...input.plot, labId }
+            // 模型常常不生成合规 id：无合法 id 时兜底生成，避免所有绘图落到同一个文件
+            const rawId = typeof input.plot.id === 'string' ? input.plot.id.trim() : ''
+            plot = {
+              ...input.plot,
+              id: isValidPlotId(rawId) ? rawId : `plot-${randomUUID().slice(0, 8)}`,
+              labId,
+            }
           } else if (input.plotId && input.appendSeries) {
             const current = await loadPlot({ labId, plotId: input.plotId })
             if (!current) return jsonToolError('绘图文档不存在')
@@ -412,7 +420,12 @@ export function buildCsLabScienceTools(
           tempPath = join(app.getPath('temp'), `${Date.now()}-${randomUUID().slice(0, 6)}-${safeTitle}${ext}`)
           await fs.writeFile(tempPath, input.content, 'utf8')
           const result = await ingestMolAsset(labId, tempPath)
-          broadcastCsLabEvent(CSLAB_IPC_CHANNELS.ON_ASSET_CHANGED, { labId, asset: result.asset })
+          broadcastCsLabEvent(CSLAB_IPC_CHANNELS.ON_ASSET_CHANGED, {
+            labId,
+            uri: result.asset.uri,
+            kind: 'created',
+            revision: result.asset.revision,
+          })
           return jsonToolResult({
             uri: result.asset.uri,
             title: result.asset.title,
@@ -467,6 +480,38 @@ export function buildCsLabScienceTools(
           })
         } catch (error) {
           return jsonToolError(error instanceof Error ? error.message : '聚焦展示结构失败')
+        }
+      },
+    }) as ToolDefinition,
+  )
+
+  tools.push(
+    sdk.defineTool({
+      name: 'cslab_snapshot_structure',
+      label: 'CSLab 导出 3D 晶体视窗快照',
+      description:
+        '截取当前 VESTA 3D 晶体/多面体视窗的高清 PNG 快照并落盘到 vault/figures/，默认 2× 超采样。',
+      promptSnippet: 'cslab_snapshot_structure: 导出当前 3D 晶体视窗高清 PNG 快照',
+      parameters: Type.Object({
+        scale: Type.Optional(
+          Type.Integer({ minimum: 1, maximum: 3, description: '超采样倍率，默认 2' }),
+        ),
+        filenamePrefix: Type.Optional(Type.String({ description: '可选文件名前缀' })),
+      }),
+      async execute(_toolCallId: string, params: unknown) {
+        const input = params as { scale?: number; filenamePrefix?: string }
+        try {
+          const result = await requestStructureSnapshot({
+            labId,
+            scale: input.scale ?? 2,
+            filenamePrefix: input.filenamePrefix,
+          })
+          return jsonToolResult({
+            ...result,
+            message: '3D 晶体视窗快照已导出到 vault/figures/',
+          })
+        } catch (error) {
+          return jsonToolError(error instanceof Error ? error.message : '3D 晶体视窗快照导出失败')
         }
       },
     }) as ToolDefinition,

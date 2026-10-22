@@ -42,7 +42,8 @@ import type {
   SDKToolResultBlock,
   SDKSystemMessage,
 } from '@profer/shared'
-import { isGoalUpdateToolName, stripGoalResultBlocks } from '@profer/shared'
+import { stripGoalResultBlocks } from '@profer/shared'
+import { isSilentStreamToolName } from './tool-utils'
 
 // ===== useToolResult Hook =====
 
@@ -789,7 +790,8 @@ const ContentBlockView = function ContentBlock({ block, allMessages, basePath, b
   // tool_use 块
   if (block.type === 'tool_use') {
     const toolBlock = block as SDKToolUseBlock
-    if (isGoalUpdateToolName(toolBlock.name)) return null
+    // 静默工具不渲染：Goal 更新由目标面板承接，AskUserQuestion 由底部 AskUserBanner 承接。
+    if (isSilentStreamToolName(toolBlock.name)) return null
     return (
       <ToolUseBlock
         block={toolBlock}

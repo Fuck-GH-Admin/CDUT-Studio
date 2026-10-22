@@ -8,7 +8,7 @@
 
 import * as React from 'react'
 import { BrainCircuit, ChevronRight, Compass, FileCheck2, type LucideIcon } from 'lucide-react'
-import cdutCeLogo from '@assets/CDUT/CDUT-CE.png'
+import { CdutLogo } from '@/components/shared/CdutLogo'
 
 interface CdutHeroSectionProps {
   /** 板块点击回调，预留给后续自动化流程或多智能体通道对接 */
@@ -78,11 +78,7 @@ export function CdutHeroSection({ onSelect }: CdutHeroSectionProps): React.React
             className="pointer-events-none absolute left-1/2 top-1/2 size-44 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-3xl"
             aria-hidden="true"
           />
-          <img
-            src={cdutCeLogo}
-            alt="成都理工大学校徽"
-            className="relative h-40 w-auto object-contain drop-shadow-sm sm:h-48 dark:brightness-125 dark:drop-shadow-[0_0_24px_rgba(255,255,255,0.3)]"
-          />
+          <CdutLogo className="relative h-40 w-auto drop-shadow-sm sm:h-48" />
         </div>
         <p className="text-xs font-medium tracking-wide text-muted-foreground">
           成理智能体矩阵 · 赋能教科研与校园生活

@@ -118,6 +118,7 @@ describe('upsertAgentSessionProjection', () => {
     presetReference: null,
     openAIThinkingLevel: null,
     codexFastMode: false,
+    studyTeachingMode: null,
     autoQueueSendEnabled: true,
     workspaceId: null,
     pinned: false,

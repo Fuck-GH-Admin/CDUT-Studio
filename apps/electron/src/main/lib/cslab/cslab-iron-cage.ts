@@ -225,6 +225,10 @@ export async function ingestFiles(
       })
     }
 
+    // 暂存文件追踪：先复制 + 只读加锁、后写库的两条分支（vault/lit 与 vault/raw）
+    // 一旦异常，必须在 catch 中解锁并删除，避免残留孤儿只读文件。
+    let stagedAbsPath: string | null = null
+
     try {
       const stat = await fs.stat(sourcePath)
       if (!stat.isFile()) throw new Error('目标不是文件')
@@ -241,6 +245,7 @@ export async function ingestFiles(
         emit('copy')
         const litRelPath = `vault/lit/${timestamp}-${nonce}-${safeName}`
         const litAbsPath = resolveLabRelativePath(labId, litRelPath)
+        stagedAbsPath = litAbsPath
         const litDigest = await copyFileWithHash(sourcePath, litAbsPath)
 
         emit('hash')
@@ -248,6 +253,7 @@ export async function ingestFiles(
         if (existingLit) {
           await unlockFile(litAbsPath).catch(() => undefined)
           await fs.rm(litAbsPath, { force: true })
+          stagedAbsPath = null
           emit('done', '检测到相同 SHA-256，复用既有文献资产')
           results.push({
             asset: toAssetSummary(existingLit),
@@ -292,6 +298,9 @@ export async function ingestFiles(
           return nextRevision
         })
 
+        // 事务已提交：文件归实体所有，异常清理不再接管
+        stagedAbsPath = null
+
         emit('done', 'PDF 已只读入笼为文献')
         const litEntity = getEntityByUri(db, litUri)
         if (!litEntity) throw new Error('文献实体写入失败')
@@ -315,6 +324,7 @@ export async function ingestFiles(
       emit('copy')
       const rawRelPath = `vault/raw/${timestamp}-${nonce}-${safeName}`
       const rawAbsPath = resolveLabRelativePath(labId, rawRelPath)
+      stagedAbsPath = rawAbsPath
       const digest = await copyFileWithHash(sourcePath, rawAbsPath)
 
       emit('hash')
@@ -322,6 +332,7 @@ export async function ingestFiles(
       if (existing) {
         await unlockFile(rawAbsPath).catch(() => undefined)
         await fs.rm(rawAbsPath, { force: true })
+        stagedAbsPath = null
         const tableUri = findTableUriFromRaw(db, existing.uri, existing.title)
         emit('done', '检测到相同 SHA-256，复用既有资产')
         results.push({
@@ -441,6 +452,9 @@ export async function ingestFiles(
         return nextRevision
       })
 
+      // 事务已提交：文件归实体所有，异常清理不再接管
+      stagedAbsPath = null
+
       options.onProgress?.({
         labId,
         fileName,
@@ -460,6 +474,11 @@ export async function ingestFiles(
         message: unsupported,
       })
     } catch (error) {
+      // 清理尚未入库的暂存副本，避免残留只读孤儿文件
+      if (stagedAbsPath) {
+        await unlockFile(stagedAbsPath).catch(() => undefined)
+        await fs.rm(stagedAbsPath, { force: true }).catch(() => undefined)
+      }
       emit('error', error instanceof Error ? error.message : String(error))
       results.push({
         asset: {
