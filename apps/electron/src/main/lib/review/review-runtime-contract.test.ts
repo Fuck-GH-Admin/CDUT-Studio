@@ -15,7 +15,7 @@ afterAll(() => rmSync(configDir, { recursive: true, force: true }))
 
 const {
   classifyRunAuthority, freezeAttemptIdentity, isSameAttempt, isCurrentBusinessRun,
-  resolveCurrentBusinessRun, decisionRunRelation, expectedCheckIdsFromPlan,
+  resolveCurrentBusinessRun, decisionRunRelation, expectedCheckIdsFromPlan, interruptedResumeGate,
 } = await import('./review-runtime-contract')
 const {
   INTERRUPTED_RUN_MARKER, isInterruptedRunV2, isResumableInterruptedRunV2,
@@ -203,5 +203,31 @@ describe('RUN-43 冷启动中断运行按原 RunId 续交', () => {
       status: 'failed', diagnostics: [], checks: [check('x')], checkpoints: [],
     })).toBe(false)
     expect(reopenInterruptedRunForResume(CASE, 'run-pi-absent')).toBeUndefined()
+  })
+})
+
+describe('RUN-43 中断续跑：未知 effect 不自动重放', () => {
+  test('未显式确认时失败关闭；确认续交或重新审核才放行', () => {
+    expect(interruptedResumeGate({ interruptedResumable: true }).allowed).toBe(false)
+    expect(interruptedResumeGate({ interruptedResumable: true, mode: 'update' }).allowed).toBe(false)
+    expect(interruptedResumeGate({ interruptedResumable: true, mode: 'update', resumeInterrupted: true }).allowed).toBe(true)
+    expect(interruptedResumeGate({ interruptedResumable: true, mode: 'restart' }).allowed).toBe(true)
+    expect(interruptedResumeGate({ interruptedResumable: false }).allowed).toBe(true)
+    expect(interruptedResumeGate({ interruptedResumable: true, mode: 'update' }).message).toContain('未确认的模型请求')
+  })
+
+  test('用户确认续交只恢复检查点，并明确记为“新回合”', () => {
+    saveRunV2(run({
+      id: 'run-pi-confirmed', status: 'running', startedAt: '2026-10-23T01:00:00Z',
+      checks: [check('t04:["a"]')],
+      checkpoints: [{ nodeId: 'n1', inputHash: 'h', status: 'done', attempts: 1 }],
+    }))
+    expect(markStaleRunsInterrupted(CASE)).toBe(1)
+    const reopened = reopenInterruptedRunForResume(CASE, 'run-pi-confirmed', { confirmedByUser: true })
+    expect(reopened?.status).toBe('partially-completed')
+    expect(reopened?.diagnostics.some((item) =>
+      item.startsWith('resume-interrupted') && item.includes('新回合'))).toBe(true)
+    expect(reopened?.diagnostics.some((item) => item.includes('不会被重放'))).toBe(true)
+    expect(isInterruptedRunV2(CASE, 'run-pi-confirmed')).toBe(false)
   })
 })

@@ -10,6 +10,7 @@ import { getCaseV2Aggregate } from './application-service'
 import { getReviewModuleSettings } from './module-settings-store'
 import { getBackgroundPiReviewState } from './review-background-state'
 import { admitPreparedPiReviewTurn } from './review-pi-admission'
+import { interruptedResumeGate } from './review-runtime-contract'
 import { finishPiReviewRunV2, getPiReviewBindingForSession, preparePiReviewRunV2 } from './pi-case-review-service'
 import { listAssignments, revokeAssignment } from './review-agent-assignment'
 import {
@@ -25,6 +26,7 @@ const busyCases = new Set<string>()
 export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequest, webContents: WebContents): Promise<ReviewBackgroundPiRunState> {
   assertSafeReviewStorageId(input?.caseId, 'caseId')
   if (input.mode !== undefined && input.mode !== 'update' && input.mode !== 'restart') throw new Error('审核启动模式非法')
+  if (input.resumeInterrupted !== undefined && typeof input.resumeInterrupted !== 'boolean') throw new Error('审核续交确认参数非法')
   if (!webContents || webContents.isDestroyed()) throw new Error('审核窗口已关闭，无法受理本次启动')
   if (busyCases.has(input.caseId)) throw new Error('该案卷正在启动或停止，请稍后再试')
   busyCases.add(input.caseId)
@@ -59,8 +61,15 @@ export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequ
     // 的运行都按同一 RunId 续交；后者先由 Main 恢复为 partially-completed 并
     // 解除启动拒止，绝不新建第二个 run-pi ID 冒充同一轮。
     const interruptedResumable = !!previous && isResumableInterruptedRunV2(previous)
+    // RUN-43：未知 effect 必须失败关闭。自动续跑会开新回合重放中断前未确认的
+    // 模型请求，因此只有用户显式确认后才允许按原 RunId 续交；显式续交也会
+    // 在运行诊断里记录“新回合”，不冒充原来的 Provider 请求已恢复。
+    const resumeGate = interruptedResumeGate({
+      interruptedResumable, resumeInterrupted: input.resumeInterrupted, mode: input.mode,
+    })
+    if (!resumeGate.allowed) throw new Error(resumeGate.message)
     const resumeEligible = !!reusable && !!previous
-      && (previous.status === 'partially-completed' || interruptedResumable)
+      && (previous.status === 'partially-completed' || (interruptedResumable && input.resumeInterrupted === true))
       && (previous.checks.some((check) => check.status === 'execution-failed')
         || previous.checks.length < (previous.coverage?.plannedChecks ?? Number.MAX_SAFE_INTEGER)
         || previous.checkpoints.length > 0)
@@ -69,7 +78,7 @@ export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequ
         && assignment.sessionId === session.id && assignment.activeRunId === previous.id)
     const resumeRunId = resumeEligible && previous
       ? (interruptedResumable
-        ? reopenInterruptedRunForResume(input.caseId, previous.id)?.id
+        ? reopenInterruptedRunForResume(input.caseId, previous.id, { confirmedByUser: true })?.id
         : previous.id)
       : undefined
     const turnId = randomUUID()

@@ -32,6 +32,8 @@ export function ReviewV3UnifiedRun({ caseId, stage, documentCount, technicalPlan
   const [piError, setPiError] = React.useState('')
   const [piState, setPiState] = React.useState<ReviewBackgroundPiRunState | null>(null)
   const [piRun, setPiRun] = React.useState<ReviewRunV2 | null>(null)
+  // RUN-43：中断续跑不自动重放未知请求；只有用户看过提示并显式确认后才放行。
+  const [resumePrompt, setResumePrompt] = React.useState(false)
   const running = !!piState?.runId && ['queued', 'running', 'awaiting-input', 'awaiting-decision'].includes(piState.runStatus ?? '')
   // 旧案的异步回读不得写进新案的卡片；以代次 + 目标 caseId 双重核对（UI-13）。
   const requestSeq = React.useRef(0)
@@ -68,11 +70,11 @@ export function ReviewV3UnifiedRun({ caseId, stage, documentCount, technicalPlan
     return () => clearInterval(timer)
   }, [running, refresh])
 
-  const start = async (mode: 'update' | 'restart'): Promise<void> => {
+  const start = async (mode: 'update' | 'restart', resumeInterrupted = false): Promise<void> => {
     if (busy || running || !caseId) return
     if (!canRun) { setPiError('请先根据材料匹配并确认审核模板，再开始执行'); return }
     if (documentCount === 0) { setPiError('请先导入实际材料，不能审核空案卷'); return }
-    setBusy(true); setRule(null); setRuleError(''); setSubmissionNotice(''); setPiError(''); setMessage('正在准备本案审核…')
+    setBusy(true); setRule(null); setRuleError(''); setSubmissionNotice(''); setPiError(''); setResumePrompt(false); setMessage('正在准备本案审核…')
     try {
       // 已发布业务模板尝试转入正式办理；材料先拖入时可能尚未分配
       // 必填槽位，这不应该阻断本地 AI 预审。正式提交失败必须明示。
@@ -97,13 +99,18 @@ export function ReviewV3UnifiedRun({ caseId, stage, documentCount, technicalPlan
       }
       setMessage('规则检查已处理，正在启动针对同一案卷的 AI 审核…')
       try {
-        const admitted = await window.reviewAPI.startBackgroundPiReviewV2({ caseId, mode })
+        const admitted = await window.reviewAPI.startBackgroundPiReviewV2({
+          caseId, mode, ...(resumeInterrupted ? { resumeInterrupted: true } : {}),
+        })
         if (admitted.caseId !== caseId || !admitted.runId) throw new Error('后台未返回本案真实审核运行')
         setPiState(admitted)
         setMessage('AI 审核已受理，下面会展示真实后台进度。')
         await refresh()
       } catch (cause) {
-        setPiError(cause instanceof Error ? cause.message : String(cause))
+        const detail = cause instanceof Error ? cause.message : String(cause)
+        setPiError(detail)
+        // Main 对冷启动中断的自动续跑失败关闭；只有这里显式确认才允许新回合续交。
+        if (detail.includes('继续上次检查点')) setResumePrompt(true)
         setMessage('规则检查与 AI 审核有独立回执；AI 未成功受理，不能把规则结果当成完整审核。')
       }
       await onUpdated()
@@ -126,6 +133,9 @@ export function ReviewV3UnifiedRun({ caseId, stage, documentCount, technicalPlan
         <Button size="sm" disabled={busy || running || !canRun || documentCount === 0 || stage === 'archived'} onClick={() => void start('update')}>
           {busy ? '正在启动…' : running ? '审核正在进行' : piRun ? '更新审核' : '开始审核'}
         </Button>
+        {resumePrompt && <Button size="sm" variant="outline" disabled={busy || running || !canRun} onClick={() => void start('update', true)}>
+          继续上次检查点（新回合）
+        </Button>}
         {!!piRun && <Button size="sm" variant="outline" disabled={busy || running || !canRun} onClick={() => void start('restart')}>重新审核全部</Button>}
       </div>
     </div>

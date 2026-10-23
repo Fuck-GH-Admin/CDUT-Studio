@@ -59,15 +59,24 @@ export function isResumableInterruptedRunV2(
  * RUN-43：Main 主动续交时把冷启动中断的运行恢复为 `partially-completed`，
  * 沿用同一 RunId 与既有检查点，并留下审计诊断。不是冒充 completed：
  * 未完成的检查仍需本轮补齐；同时解除该 Run 的启动拒止。
+ *
+ * `confirmedByUser` 只由用户显式确认的续交传入。即便确认，续交也是**新回合**：
+ * 中断前 Provider 请求的结果没有耐久 journal 可证明，不能宣称已恢复或已重放。
  */
-export function reopenInterruptedRunForResume(caseId: string, runId: string): ReviewRunV2 | undefined {
+export function reopenInterruptedRunForResume(
+  caseId: string,
+  runId: string,
+  options: { confirmedByUser?: boolean } = {},
+): ReviewRunV2 | undefined {
   const run = getRunV2(caseId, runId)
   if (!run || !isResumableInterruptedRunV2(run)) return undefined
   run.status = 'partially-completed'
   delete run.completedAt
   delete run.error
   run.diagnostics = [...(run.diagnostics ?? []),
-    'resume-interrupted: 冷启动后按原 RunId 续交，保留既有检查点与已接受结果'].slice(-50)
+    options.confirmedByUser
+      ? 'resume-interrupted: 用户确认按原 RunId 继续检查点；本次是新回合，中断前未确认的模型请求不会被重放或视为已恢复'
+      : 'resume-interrupted: 冷启动后按原 RunId 续交，保留既有检查点与已接受结果'].slice(-50)
   saveRunV2(run)
   interruptedRunIds.delete(interruptedRunKey(caseId, runId))
   return run
