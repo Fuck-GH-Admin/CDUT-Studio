@@ -261,7 +261,8 @@ export function reconcilePiReviewRunsWithReadReceipts(caseId: string, runs: Revi
   if (latest && ['completed', 'partially-completed'].includes(latest.status)
     && latest.diagnostics.some((line) => line.includes('由项目普通 Pi 会话直接审核'))) {
     // 同上：只返回内存视图，读路径不落盘（RUN-44）。
-    applyPiReadReceiptInheritance(aggregate, latest, reconciledRuns.filter((run) => run.id !== latest.id))
+    const inherited = applyPiReadReceiptInheritance(aggregate, latest, reconciledRuns.filter((run) => run.id !== latest.id), { persist: false })
+    if (inherited.names.length > 0) reconciledRuns[0] = inherited.run
   }
   return reconciledRuns
 }
@@ -503,7 +504,7 @@ export function preparePiReviewRunV2(input: { caseId: string; sessionId: string;
       run.diagnostics = [...run.diagnostics, '通过辅助审核工作台续交未完成的 Pi 检查；沿用原运行 ID 与已接受结果。'].slice(-50)
     }
     const inheritedReadDocumentNames = input.inheritReadReceipts
-      ? applyPiReadReceiptInheritance(aggregate, run, listRunsV2(input.caseId).filter((item) => item.id !== run.id))
+      ? applyPiReadReceiptInheritance(aggregate, run, listRunsV2(input.caseId).filter((item) => item.id !== run.id)).names
       : []
     saveRunV2(run)
     bindRunToAssignment(assignment.id, run.id)
@@ -781,14 +782,21 @@ function recalculateCoverage(run: ReviewRunV2, aggregate: CaseAggregateV2, rules
 
 function applyPiReadReceiptInheritance(
   aggregate: CaseAggregateV2,
-  run: ReviewRunV2,
+  sourceRun: ReviewRunV2,
   history: ReviewRunV2[],
-): string[] {
+  options?: { persist?: boolean },
+): { names: string[]; run: ReviewRunV2 } {
+  // RUN-44：读路径（历史查询/导出）必须传 persist:false，此时只在副本上计算视图，
+  // 既不写 artifact，也不改动调用方持有的已封存 Run。
+  const persist = options?.persist !== false
+  const run = persist ? sourceRun : structuredClone(sourceRun)
   const inherited = inheritPiReadReceipts(aggregate.caseV2.id, run, aggregate.caseV2.documents, history)
-  if (inherited.newDocumentVersionIds.length === 0) return []
+  if (inherited.newDocumentVersionIds.length === 0) return { names: [], run }
 
-  saveArtifact(aggregate.caseV2.id, run.id, 'node-pi-read-state', inherited.state)
-  saveArtifact(aggregate.caseV2.id, run.id, 'node-pi-read-inheritance', inherited.entries)
+  if (persist) {
+    saveArtifact(aggregate.caseV2.id, run.id, 'node-pi-read-state', inherited.state)
+    saveArtifact(aggregate.caseV2.id, run.id, 'node-pi-read-inheritance', inherited.entries)
+  }
   const manifestByVersion = new Map(run.inputManifest.documentVersions.map((item) => [item.versionId, item]))
   const runCoverageVersions = new Set(run.coverage.documents.map((item) => item.documentVersionId))
   const runDocuments = aggregate.caseV2.documents.filter((document) => {
@@ -837,8 +845,9 @@ function applyPiReadReceiptInheritance(
   }
   run.diagnostics = [...run.diagnostics, `已沿用未变化材料的完整读取凭据：${inherited.newDocumentVersionIds.length} 份。`].slice(-50)
   const newVersions = new Set(inherited.newDocumentVersionIds)
-  return inherited.entries.filter((entry) => newVersions.has(entry.documentVersionId))
+  const names = inherited.entries.filter((entry) => newVersions.has(entry.documentVersionId))
     .map((entry) => aggregate.caseV2.documents.find((document) => document.versionId === entry.documentVersionId)?.fileName ?? entry.documentVersionId)
+  return { names, run }
 }
 
 export function submitPiReviewResultV2(input: {
