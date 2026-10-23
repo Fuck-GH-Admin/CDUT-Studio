@@ -7,9 +7,11 @@
  * - 全部纯 Node（bun test 直跑），不引入本地数据库
  */
 
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
-import type { TemplateVersion } from '@profer/shared'
+import { countAuthoredCriteria, validateT01TypedCriteria, type TemplateVersion } from '@profer/shared'
 import { validatePolicyRef } from './policy-store'
 import { getConfigDir } from '../config-paths'
 import { archiveTemplateInCatalog, isTemplateArchived, listArchivedTemplateIds, orderTemplateIds, reorderTemplateCatalog, restoreTemplateInCatalog } from './template-catalog'
@@ -92,14 +94,95 @@ function registerPublicationControl(template: TemplateVersion, forceCandidate: b
   writeAtomic(controlPath(template.templateId, template.version), next)
   return next
 }
+interface VersionLockRecord {
+  schemaVersion: 1
+  token: string
+  pid: number
+  hostname: string
+  acquiredAt: string
+  operation: string
+}
+
+/** 单次保存/发布是短事务；超过该时限的锁按“崩溃遗留”隔离并留证据。 */
+const VERSION_LOCK_STALE_MS = 30 * 60 * 1000
+/** 旧版本没有写入锁内容，只能按 mtime 判定：短命进程正常持锁不会超过该值。 */
+const LEGACY_LOCK_STALE_MS = 10 * 60 * 1000
+
+function processAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  if (pid === process.pid) return true
+  try { process.kill(pid, 0); return true }
+  catch (error) { return (error as NodeJS.ErrnoException)?.code === 'EPERM' }
+}
+
+function readVersionLock(lockPath: string): { record?: VersionLockRecord; ageMs: number } {
+  const stats = statSync(lockPath)
+  try { return { record: JSON.parse(readFileSync(lockPath, 'utf8')) as VersionLockRecord, ageMs: Date.now() - stats.mtimeMs } }
+  catch { return { ageMs: Date.now() - stats.mtimeMs } }
+}
+
+/**
+ * TAR-17：版本锁不再“EExist 即永久阻塞”。
+ * - 同主机且 pid 已消失 → 立即视为遗留；
+ * - 任意锁超过 30 分钟（旧空锁 10 分钟）→ 视为遗留；
+ * - 隔离为 `.lock.stale-<ts>-<pid>` 保留证据，不静默删除；
+ * - 释放时核对 token，绝不删除后来者新建的锁。
+ */
+function acquireVersionLock(lockPath: string, operation: string): { fd: number; token: string } {
+  try {
+    const fd = openSync(lockPath, 'wx')
+    const token = randomUUID()
+    const record: VersionLockRecord = {
+      schemaVersion: 1, token, pid: process.pid, hostname: hostname(),
+      acquiredAt: new Date().toISOString(), operation,
+    }
+    writeFileSync(fd, JSON.stringify(record))
+    return { fd, token }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
+    let observed: { record?: VersionLockRecord; ageMs: number }
+    try { observed = readVersionLock(lockPath) }
+    catch (statError) {
+      if ((statError as NodeJS.ErrnoException)?.code === 'ENOENT') return acquireVersionLock(lockPath, operation)
+      throw error
+    }
+    const { record, ageMs } = observed
+    const sameHost = record?.hostname === hostname()
+    const limit = record ? VERSION_LOCK_STALE_MS : LEGACY_LOCK_STALE_MS
+    const stale = sameHost && record ? (!processAlive(record.pid) || ageMs > limit) : ageMs > limit
+    if (!stale) {
+      throw new Error(
+        `模板版本正在被其他进程保存/发布（pid ${record?.pid ?? '未知'}，已持有 ${Math.round(ageMs / 1000)}s）。`
+        + `如确认该进程已崩溃，可在锁超过 ${Math.round(limit / 60000)} 分钟后重试；不要手工删除仍在运行的锁`,
+      )
+    }
+    const quarantine = `${lockPath}.stale-${Date.now()}-${process.pid}`
+    try {
+      renameSync(lockPath, quarantine)
+      console.warn(`[审核模板] 已隔离崩溃遗留版本锁: ${quarantine}`)
+    } catch (renameError) {
+      if ((renameError as NodeJS.ErrnoException)?.code === 'ENOENT') return acquireVersionLock(lockPath, operation)
+      throw renameError
+    }
+    return acquireVersionLock(lockPath, operation)
+  }
+}
+
+function releaseVersionLock(lockPath: string, token: string): void {
+  try {
+    const record = JSON.parse(readFileSync(lockPath, 'utf8')) as VersionLockRecord
+    if (record?.token === token) unlinkSync(lockPath)
+  } catch { /* 已被隔离或替换：不能删除别人的锁 */ }
+}
+
 function withTemplateVersionLock<T>(templateId: string, version: number, operation: () => T): T {
   if (!isSafeTemplateId(templateId) || !Number.isSafeInteger(version) || version < 1) throw new Error('模板 ID/版本不合法')
   const dir = controlDir(templateId)
   mkdirSync(dir, { recursive: true })
   const lock = join(dir, version + '.lock')
-  const fd = openSync(lock, 'wx')
+  const { fd, token } = acquireVersionLock(lock, 'template-version')
   try { return operation() }
-  finally { closeSync(fd); unlinkSync(lock) }
+  finally { closeSync(fd); releaseVersionLock(lock, token) }
 }
 
 /**
@@ -397,8 +480,19 @@ export function validateTemplate(template: TemplateVersion): TemplateValidationI
     if (slot.minCount > slot.maxCount) issues.push({ level: 'error', message: `材料槽 ${slot.id} 的 minCount 大于 maxCount` })
   }
   // 政策引用存在性由仓库层核对（getPolicyVersion），模板侧仅检查非空数组声明
-  if (template.policyVersionIds.length === 0 && template.stages.some((stage) => stage.kind === 'auto-check') && !sections.some((section) => (section.criteria?.length ?? 0) > 0)) {
+  const authoredCriteria = countAuthoredCriteria(template)
+  // 旧模板可能只引用 policyVersionIds，由政策版本提供规则；发布门禁不把这条历史路径判死。
+  const hasPolicyBacking = (template.policyRefs?.length ?? 0) + template.policyVersionIds.length > 0
+  if (template.policyVersionIds.length === 0 && template.stages.some((stage) => stage.kind === 'auto-check') && authoredCriteria === 0) {
     issues.push({ level: 'warning', message: '模板声明了自动检查阶段但没有引用任何政策版本' })
+  }
+  // TAR-13：自动检查阶段必须真有可执行标准；纯材料模板（无自动检查）允许发布但会被显式标记。
+  if (authoredCriteria === 0 && !hasPolicyBacking && template.stages.some((stage) => stage.kind === 'auto-check')
+      && !sections.some((section) => (section.criteria ?? []).some((criterion) => criterion.dataCheck))) {
+    issues.push({ level: 'error', message: '模板声明了自动检查阶段，但没有任何审核标准；请配置标准，或改为仅材料完整性模板' })
+  }
+  if (authoredCriteria === 0 && !hasPolicyBacking && !sections.some((section) => (section.criteria ?? []).some((criterion) => criterion.dataCheck))) {
+    issues.push({ level: 'warning', message: '模板没有任何审核标准：发布后只能核对材料与人工办理，将被标记为仅材料/人工模板' })
   }
   // N1b：精确政策引用校验（存在+已发布+hash 一致；缺失即 error 阻止发布）
   for (const ref of template.policyRefs ?? []) {
@@ -472,8 +566,15 @@ export function publishTemplate(templateId: string, version: number): TemplateVe
     if (errors.length > 0) {
       throw new Error(`模板未通过发布检查：${errors.map((issue) => issue.message).join('；')}`)
     }
+    // TAR-08：Renderer 的编辑器校验不是可信门禁；发布事务必须重跑同一份 T01 校验。
+    const typedErrors = validateT01TypedCriteria(template)
+    if (typedErrors.length > 0) {
+      throw new Error(`模板未通过 T01 类型规则发布检查：${typedErrors.join('；')}`)
+    }
+    const hasPolicy = (template.policyRefs?.length ?? 0) + template.policyVersionIds.length > 0
+    const executionScope = countAuthoredCriteria(template) === 0 && !hasPolicy ? 'material-manual-only' as const : 'rules' as const
     const published: TemplateVersion = {
-      ...template, status: 'published', publishedAt: new Date().toISOString(),
+      ...template, status: 'published', executionScope, publishedAt: new Date().toISOString(),
     }
     writeAtomic(versionPath(templateId, version), published)
     console.log(`[审核模板] 已发布: ${templateId}@${version}`)

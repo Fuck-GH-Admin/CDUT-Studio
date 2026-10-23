@@ -3,9 +3,11 @@
  * 隔离：PROFER_CONFIG_DIR 指向唯一临时目录。
  */
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { ALL_DEFAULT_TEMPLATES_V2, BUILTIN_TEMPLATES_V2, ensureBuiltinTemplateDrafts } from './builtin-templates'
+import type { TemplateVersion } from '@profer/shared'
 import { deprecateTemplate, getTemplate, isSafeTemplateId, isTemplateVersionRetired, listArchivedTemplates, listTemplateVersions, listTemplates, publishTemplate, removeTemplateFromLibrary, reorderTemplates, restoreTemplateToLibrary, saveDraft, validateTemplate } from './template-store'
 import { resolveEffectiveRules } from './effective-rules'
 import { emptyAggregate } from './case-store-v2'
@@ -14,6 +16,76 @@ import { combineCoverage } from './coverage-ledger'
 const CONFIG_DIR = join(import.meta.dir, '../../../../../../work/tmp', `profer-test-template-${Date.now()}`)
 process.env.PROFER_CONFIG_DIR = CONFIG_DIR
 afterAll(() => rmSync(CONFIG_DIR, { recursive: true, force: true }))
+
+describe('模板发布信任（TAR-08/13/17）', () => {
+  const baseTemplate = (templateId: string, overrides: Record<string, unknown> = {}): TemplateVersion => ({
+    templateId, version: 1, schemaVersion: 2, name: '发布信任模板',
+    objectType: 'organization', displayName: { template: 'x' }, status: 'draft', createdAt: '',
+    fields: [{ key: 'amount', label: '金额', kind: 'number', required: true, visibility: 'public', scope: 'case' }],
+    sections: [], materialSlots: [], policyVersionIds: [], policyRefs: [], outputs: [],
+    stages: [{ id: 'end', name: '结束', kind: 'finalize', executorRole: 'reviewer' }],
+    ...overrides,
+  } as TemplateVersion)
+
+  test('TAR-08：Main 发布事务拒绝缺负责人确认的确定性数值规则', () => {
+    const templateId = 'tar08-typed-gate'
+    saveDraft(baseTemplate(templateId, {
+      sections: [{
+        id: 'limit', name: '限额检查', order: 0, required: false,
+        criteria: [{
+          id: 'cap', title: '金额上限', requirement: '金额不得超限', execution: 'deterministic', targetScope: 'case',
+          deterministicConstraint: { schemaVersion: 1, kind: 'field-number-limit', fieldKey: 'amount', fieldScope: 'case', operator: 'lte', threshold: 1000 },
+        }],
+      }],
+    }))
+    expect(() => publishTemplate(templateId, 1)).toThrow('T01 类型规则发布检查')
+    expect(getTemplate(templateId, 1)?.status).toBe('draft')
+  })
+
+  test('TAR-13：无审核标准的纯材料模板可发布但显式标记；自动检查空承诺被拒绝', () => {
+    const materialOnlyId = 'tar13-material-only'
+    saveDraft(baseTemplate(materialOnlyId, {
+      sections: [],
+      materialSlots: [{ id: 'proof', name: '证明材料', purpose: 'x', acceptedKinds: ['pdf'], minCount: 1, maxCount: 2, requiredElements: [], allowReuseAcrossSubjects: false }],
+    }))
+    const published = publishTemplate(materialOnlyId, 1)
+    expect(published.executionScope).toBe('material-manual-only')
+
+    const emptyAutoId = 'tar13-empty-auto'
+    saveDraft(baseTemplate(emptyAutoId, {
+      stages: [
+        { id: 'auto', name: '自动检查', kind: 'auto-check', executorRole: 'system', nextStageId: 'end' },
+        { id: 'end', name: '结束', kind: 'finalize', executorRole: 'reviewer' },
+      ],
+    }))
+    expect(() => publishTemplate(emptyAutoId, 1)).toThrow('没有任何审核标准')
+  })
+
+  test('TAR-17：崩溃遗留锁按 pid/时限隔离并留证据；活进程锁仍拒绝', () => {
+    const templateId = 'tar17-lock'
+    const lockDir = join(CONFIG_DIR, 'review-template-controls', templateId)
+    mkdirSync(lockDir, { recursive: true })
+    const lockPath = join(lockDir, '1.lock')
+    writeFileSync(lockPath, JSON.stringify({
+      schemaVersion: 1, token: 'dead', pid: 2147483646, hostname: hostname(),
+      acquiredAt: new Date(Date.now() - 3_600_000).toISOString(), operation: 'template-version',
+    }))
+    utimesSync(lockPath, new Date(Date.now() - 3_600_000), new Date(Date.now() - 3_600_000))
+    saveDraft(baseTemplate(templateId))
+    expect(readFileSync(join(CONFIG_DIR, 'review-templates', templateId, 'versions', '1.json'), 'utf-8').length).toBeGreaterThan(0)
+    expect(existsSync(lockPath)).toBe(false)
+    expect(readdirSync(lockDir).some((name) => name.startsWith('1.lock.stale-'))).toBe(true)
+
+    // 当前进程仍存活：不允许被“恢复”抢锁
+    const livePath = join(lockDir, '1.lock')
+    writeFileSync(livePath, JSON.stringify({
+      schemaVersion: 1, token: 'live', pid: process.pid, hostname: hostname(),
+      acquiredAt: new Date().toISOString(), operation: 'template-version',
+    }))
+    expect(() => saveDraft(baseTemplate(templateId, { name: '改名' }))).toThrow('正在被其他进程')
+    rmSync(livePath, { force: true })
+  })
+})
 
 describe('审核模板目录（M1）', () => {
   test('模板 ID 支持中文名称并拒绝路径穿越字符', () => {
