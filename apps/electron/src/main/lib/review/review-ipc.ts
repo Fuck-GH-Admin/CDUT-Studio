@@ -81,6 +81,17 @@ function requireString(value: unknown, name: string): string {
 }
 
 /**
+ * AUTH-06 / 旧写通道兼容边界：冻结 CanonicalPlan 的案卷已由 T05/T07 新权威
+ * 通道办理，旧 CAST_RATING / 合成 stage-decision 不得再改写该案卷的新权威状态。
+ */
+function assertLegacyChannelNotSuperseded(caseId: string, channel: string): void {
+  const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+  if (getCaseV2Aggregate(caseId)?.canonicalPlan) {
+    throw new Error(`${channel} 已被冻结 CanonicalPlan 的新权威通道取代；旧兼容写不得改写新权威`)
+  }
+}
+
+/**
  * 注册内容审核专区全部 IPC 处理器。
  *
  * 由 registerIpcHandlers() 在应用启动时调用一次（幂等由外层守卫保证）。
@@ -704,19 +715,23 @@ export function registerReviewIpc(): void {
     const { setEvidenceLinkC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')
     return setEvidenceLinkC0(command as Parameters<typeof setEvidenceLinkC0>[0])
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_DISPOSITION_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_DISPOSITION_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
     const { recordWorkspaceDispositionV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return recordWorkspaceDispositionV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordWorkspaceDispositionV2>[1])
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.OPEN_WORKSPACE_SUPPLEMENT_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.OPEN_WORKSPACE_SUPPLEMENT_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
     const { openWorkspaceSupplementV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return openWorkspaceSupplementV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof openWorkspaceSupplementV2>[1])
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.ACKNOWLEDGE_WORKSPACE_MATERIAL_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.ACKNOWLEDGE_WORKSPACE_MATERIAL_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
     const { acknowledgeWorkspaceMaterialV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return acknowledgeWorkspaceMaterialV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof acknowledgeWorkspaceMaterialV2>[1])
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.DECIDE_WORKSPACE_CASE_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.DECIDE_WORKSPACE_CASE_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
     const { decideWorkspaceCaseV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return decideWorkspaceCaseV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof decideWorkspaceCaseV2>[1])
   })
@@ -873,24 +888,34 @@ export function registerReviewIpc(): void {
       deps: {
         readAggregate: (caseId) => getCaseV2Aggregate(caseId),
         registerAsset: async (caseId, name, _mimeType, bytes) => {
-          // 附件必须成为真实原件：先落临时文件，再走原生材料登记
+          // 附件必须成为真实原件：先落临时文件，再走原生材料登记。
+          // 临时文件只是中转；权威原件在材料存储，finally 内即时删除。
           const safeName = String(name).replace(/[^A-Za-z0-9._-]/g, '_').slice(-120) || 'offline-asset.bin'
           const path = join(t09AssetTempRoot(), `${randomUUID()}-${safeName}`)
           writeFileSync(path, bytes)
-          const document = await registerNativeWorkspaceMaterialV3(caseId, path, 'evidence', undefined,
-            () => assertC0ReviewMainSender(event))
-          // SourceDocument 只给 documentId；真实版本号以案卷聚合为准
-          const after = getCaseV2Aggregate(caseId)
-          const version = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
-          if (!version) throw new Error('附件已登记但找不到对应原件版本')
-          return version.versionId
+          try {
+            const document = await registerNativeWorkspaceMaterialV3(caseId, path, 'evidence', undefined,
+              () => assertC0ReviewMainSender(event))
+            // SourceDocument 只给 documentId；真实版本号以案卷聚合为准
+            const after = getCaseV2Aggregate(caseId)
+            const version = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
+            if (!version) throw new Error('附件已登记但找不到对应原件版本')
+            return version.versionId
+          } finally {
+            const { unlinkSync } = require('node:fs') as typeof import('node:fs')
+            try { unlinkSync(path) } catch (error) {
+              if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') console.warn('[T09] 临时附件清理失败:', error)
+            }
+          }
         },
         respondSupplement: async (caseId, supplementId, note, documentVersionIds, expectedRevision) => {
           const aggregate = getCaseV2Aggregate(caseId)
           if (!aggregate) return { ok: false, message: '案卷不存在' }
+          // OFF-02: 必须使用预览时的 expectedRevision 做 CAS，不能重读最新 revision；
+          // requestId 以补件 ID 为幂等锚点，崩溃重放不产生第二份答复。
           const written = await respondSupplementV2(caseId, {
-            requestId: `t09-${supplementId}-${Date.now()}`, actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
-            expectedRevision: aggregate.caseV2.revision,
+            requestId: `t09-${supplementId}`, actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            expectedRevision,
             payload: { supplementId, note, documentVersionIds },
           })
           return { ok: written.ok, message: written.ok ? undefined : `${written.code}: ${written.message}` }
@@ -985,20 +1010,24 @@ export function registerReviewIpc(): void {
       requestId: input.requestId, claim: input.claim,
     })
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_SUBJECT_ADJUDICATION_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_WORKSPACE_SUBJECT_ADJUDICATION_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
     const { recordWorkspaceSubjectAdjudicationV2 } = require('./workspace-business-service-v2') as typeof import('./workspace-business-service-v2')
     return recordWorkspaceSubjectAdjudicationV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordWorkspaceSubjectAdjudicationV2>[1])
   })
 
   // ===== N3b：业务闭环命令（薄委托 stage-workflow） =====
-  ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_STAGE_DECISION_V2, (_e, input: { caseId: string; command: Record<string, unknown>; templateId: string; version: number }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RECORD_STAGE_DECISION_V2, (event, input: { caseId: string; command: Record<string, unknown>; templateId: string; version: number }) => {
+    assertC0ReviewMainSender(event)
+    assertLegacyChannelNotSuperseded(input?.caseId, REVIEW_IPC_CHANNELS.RECORD_STAGE_DECISION_V2)
     const { recordStageDecision } = require('./stage-workflow') as typeof import('./stage-workflow')
     const { getTemplate } = require('./template-store') as typeof import('./template-store')
     const template = getTemplate(input.templateId, input.version)
     if (!template) throw new Error(`模板不存在: ${input.templateId}@${input.version}`)
     return recordStageDecision(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof recordStageDecision>[1], template)
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.RESOLVE_SUPPLEMENT_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RESOLVE_SUPPLEMENT_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
     const { resolveSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
     return resolveSupplementV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof resolveSupplementV2>[1])
   })
@@ -1085,11 +1114,14 @@ export function registerReviewIpc(): void {
     revokeAssignment(binding.assignmentId)
     return true
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.CAST_RATING_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.CAST_RATING_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
+    assertLegacyChannelNotSuperseded(input?.caseId, REVIEW_IPC_CHANNELS.CAST_RATING_V2)
     const { castRating } = require('./rating-service') as typeof import('./rating-service')
     return castRating(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof castRating>[1])
   })
-  ipcMain.handle(REVIEW_IPC_CHANNELS.RESOLVE_APPEAL_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RESOLVE_APPEAL_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
+    assertC0ReviewMainSender(event)
     const { resolveAppealV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
     return resolveAppealV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof resolveAppealV2>[1])
   })
