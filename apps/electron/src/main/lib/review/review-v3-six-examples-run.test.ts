@@ -42,9 +42,10 @@ describe('六套业务示例的模板可走真实运行链路', () => {
             deterministicConstraint: {
               ...constraint,
               ownerStatement: {
-                actorId: 'local-template-owner',
-                confirmedAt,
-                statement: '负责人确认：示例门槛按示例制度执行',
+                kind: 'owner-statement',
+                text: '负责人确认：示例门槛按示例制度执行',
+                enteredBy: 'local-template-owner',
+                enteredAt: confirmedAt,
               },
             },
           } as never

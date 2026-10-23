@@ -42,7 +42,7 @@ describe('模板发布信任（TAR-08/13/17）', () => {
     expect(getTemplate(templateId, 1)?.status).toBe('draft')
   })
 
-  test('TAR-13：无审核标准的纯材料模板可发布但显式标记；自动检查空承诺被拒绝', () => {
+  test('TAR-13：无内置标准的纯材料/运行时规则模板可发布但显式标记', () => {
     const materialOnlyId = 'tar13-material-only'
     saveDraft(baseTemplate(materialOnlyId, {
       sections: [],
@@ -58,7 +58,10 @@ describe('模板发布信任（TAR-08/13/17）', () => {
         { id: 'end', name: '结束', kind: 'finalize', executorRole: 'reviewer' },
       ],
     }))
-    expect(() => publishTemplate(emptyAutoId, 1)).toThrow('没有任何审核标准')
+    const emptyAuto = publishTemplate(emptyAutoId, 1)
+    expect(emptyAuto.executionScope).toBe('material-manual-only')
+    expect(validateTemplate(getTemplate(emptyAutoId, 1)!).some((issue) =>
+      issue.level === 'warning' && issue.message.includes('自动检查阶段'))).toBe(true)
   })
 
   test('TAR-17：崩溃遗留锁按 pid/时限隔离并留证据；活进程锁仍拒绝', () => {

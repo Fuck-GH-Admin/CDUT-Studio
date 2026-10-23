@@ -20,7 +20,7 @@ const { evaluateT04Plan } = await import('./review-v3-t04-rules-scoring')
 const { resolveEffectiveRules } = await import('./effective-rules')
 
 const templateId = 'a15-s2-lab'
-const owner = { actorId: 'local-organizer', confirmedAt: '2026-10-21T00:00:00Z', statement: '本机负责人确认：人数不超过 20' }
+const owner = { kind: 'owner-statement' as const, text: '本机负责人确认：人数不超过 20', enteredBy: 'local-organizer', enteredAt: '2026-10-21T00:00:00Z' }
 
 function buildTemplate(): TemplateVersion {
   return {

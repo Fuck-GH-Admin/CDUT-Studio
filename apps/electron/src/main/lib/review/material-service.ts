@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import type { Actor, DocumentVersion, ReviewCommandResult, ReviewDocumentBlock, TemplateVersion } from '@profer/shared'
 import { CommandValidationError, readAggregate, submitCommand } from './case-store-v2'
 import { revokeCurrentSourceValidity } from './source-current-validity-v3'
-import { getTemplate } from './template-store'
+import { getTemplate, listTemplateVersions } from './template-store'
 import { getConfigDir } from '../config-paths'
 import { extractDocxReviewContent, extractSpreadsheetReviewContent, extractTextFromFile, type DocxReviewContent, type XlsxReviewContent } from '../document-parser'
 import { extractReviewableTextFile } from './document-service'
@@ -199,7 +199,14 @@ export async function registerMaterial(caseId: string, command: { requestId: str
       // 模板声明了材料槽时，绑定必须是真实槽位；模板完全没有槽位定义时保留
       // 历史“分组标签”语义，避免把兼容数据当成非法写入。
       if (template && template.materialSlots.length > 0 && !template.materialSlots.some((slot) => slot.id === payload.materialSlotId)) {
-        throw new CommandValidationError('VALIDATION_FAILED', `材料槽不存在于当前模板：${payload.materialSlotId}`)
+        // 历史版本可能使用已退休的槽 ID（旧案卷/迁移材料）。只接受同一模板谱系
+        // 真实出现过的槽，仍拒绝纯拼写错误或跨模板的槽。
+        let knownInLineage = false
+        try {
+          knownInLineage = listTemplateVersions().some((candidate) => candidate.templateId === aggregate.caseV2.templateId
+            && candidate.materialSlots.some((slot) => slot.id === payload.materialSlotId))
+        } catch { knownInLineage = false }
+        if (!knownInLineage) throw new CommandValidationError('VALIDATION_FAILED', `材料槽不存在于当前模板：${payload.materialSlotId}`)
       }
     }
     const sourcePath = payload.sourcePath

@@ -66,7 +66,7 @@ describe('单一工作台案卷映射到 V2 聚合', () => {
 
     const registered = await registerMaterial(legacy.id, {
       requestId: 'workspace-v2-only-material', actor: reviewer, expectedRevision: aggregate.caseV2.revision,
-      payload: { sourcePath, role: 'evidence', materialSlotId: 'certificates' },
+      payload: { sourcePath, role: 'evidence', materialSlotId: 'award-proof' },
     })
     if (!registered.ok) throw new Error(registered.message)
     const versionId = registered.entity!.versionId
