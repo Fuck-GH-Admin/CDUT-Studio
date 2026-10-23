@@ -10,7 +10,7 @@ process.env.PROFER_CONFIG_DIR = directory
 afterAll(() => rmSync(directory, { force: true, recursive: true }))
 
 const { createAggregate, readAggregate, submitCommand } = await import('./case-store-v2')
-const { submitLocalF13Appeal, reviewLocalF13Appeal, withdrawLocalF13Appeal } =
+const { submitLocalF13Appeal, reviewLocalF13Appeal, withdrawLocalF13Appeal, runCoversAppealEvidence } =
   await import('./review-v3-f13-main-service')
 
 const reviewer = { actorId: 'local-reviewer', actorSource: 'local' as const, role: 'reviewer' as const }
@@ -110,6 +110,21 @@ describe('F13 Main 本地申诉闭环', () => {
     })
     expect(result.ok).toBe(false)
     expect(readAggregate(caseId)?.decisions).toHaveLength(1)
+  })
+
+  test('RUN-24: 时间较新但未冻结新证据版本的 Run 不能为新证据背书', () => {
+    const manifest = (versions: Array<{ documentId: string; versionId: string; contentHash: string }>) => ({
+      hash: 'h', templateVersion: 1, policyVersions: [], documentVersions: versions,
+      observationIds: [], evidenceLinkIds: [],
+    })
+    const oldRun = { inputManifest: manifest([{ documentId: 'doc', versionId: 'doc-0', contentHash: 'c0' }]) }
+    const newRun = { inputManifest: manifest([{ documentId: 'doc', versionId: 'doc-1', contentHash: 'c1' }]) }
+    // 同 document 的旧版本不能为新 version 背书（QA RUN-24 exact-version）。
+    expect(runCoversAppealEvidence(oldRun, ['doc-1'])).toBe(false)
+    expect(runCoversAppealEvidence(oldRun, ['doc'])).toBe(false)
+    expect(runCoversAppealEvidence(newRun, ['doc-1'])).toBe(true)
+    expect(runCoversAppealEvidence(newRun, ['doc'])).toBe(false)
+    expect(runCoversAppealEvidence(newRun, [])).toBe(true)
   })
 
   test('Given 待处理申诉 When 本地原提交人撤回 Then 申诉关闭而原判与历史不删除', async () => {

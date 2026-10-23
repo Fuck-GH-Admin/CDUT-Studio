@@ -6,7 +6,7 @@
  * 不代表学校账号认证，也不允许改写原业务决定。
  */
 import { randomUUID } from 'node:crypto'
-import type { Actor, Appeal, BusinessDecision, ReviewCommandResult } from '@profer/shared'
+import type { Actor, Appeal, BusinessDecision, ReviewCommandResult, ReviewRunV2 } from '@profer/shared'
 import { CommandValidationError, readAggregate, submitCommand } from './case-store-v2'
 import { LOCAL_SUBMITTER_ACTOR } from './review-ipc-actor-guard'
 import { currentT05Run, deriveT05LocalActor, resolveT05BusinessMode } from './review-v3-t05-main-service'
@@ -128,6 +128,21 @@ export function submitLocalF13Appeal(input: F13SubmitAppealCommand): Promise<Rev
   })
 }
 
+
+/**
+ * RUN-24: a Run can only vouch for appeal evidence it actually froze. Matching
+ * is exact versionId only: a stale Run that froze an older version of the same
+ * document must not back the newly submitted version.
+ */
+export function runCoversAppealEvidence(
+  run: Pick<ReviewRunV2, 'inputManifest'>,
+  evidenceVersionIds: readonly string[],
+): boolean {
+  if (evidenceVersionIds.length === 0) return true
+  const versions = new Set(run.inputManifest.documentVersions.map((entry) => entry.versionId))
+  return evidenceVersionIds.every((id) => versions.has(id))
+}
+
 /** 独立复核必须从原子案卷中的真实指派核实本地身份。 */
 export function reviewLocalF13Appeal(input: F13ReviewAppealCommand): Promise<ReviewCommandResult<Appeal>> {
   assertCommand(input)
@@ -170,14 +185,9 @@ export function reviewLocalF13Appeal(input: F13ReviewAppealCommand): Promise<Rev
     // reviewed. The verifying Run must have frozen those exact document
     // versions in its immutable input manifest (and therefore in its checks).
     // A T04/partial Run that never saw the new versions cannot back the review.
-    const runDocumentIds = new Set<string>()
-    const runVersionIds = new Set<string>()
-    for (const entry of run?.inputManifest.documentVersions ?? []) {
-      runDocumentIds.add(entry.documentId)
-      runVersionIds.add(entry.versionId)
-    }
-    const evidenceCovered = appeal.newEvidenceDocumentVersionIds.every((versionId) =>
-      runVersionIds.has(versionId) || runDocumentIds.has(versionId))
+    const evidenceCovered = run
+      ? runCoversAppealEvidence(run, appeal.newEvidenceDocumentVersionIds)
+      : false
     const verifiedRunId = run
       && run.startedAt > appeal.createdAt
       && evidenceCovered
