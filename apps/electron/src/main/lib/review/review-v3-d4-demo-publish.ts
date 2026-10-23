@@ -42,31 +42,56 @@ interface D4Module {
 }
 
 /** 把一份 D4 冻结工作区转换成演示用 TemplateVersion（判据全语义、无政策引用）。 */
+/** 转换产物使用独立命名空间，避免占用 D4 冻结作者键（TAR-01）。 */
+export const D4_DEMO_TEMPLATE_ID_PREFIX = 'd4demo-'
+
+export function derivedDemoTemplateId(templateId: string): string {
+  return `${D4_DEMO_TEMPLATE_ID_PREFIX}${templateId}`
+}
+
+export function isDerivedDemoTemplateId(templateId: string): boolean {
+  return templateId.startsWith(D4_DEMO_TEMPLATE_ID_PREFIX)
+}
+
 export function demoTemplateFromD4(entry: D4UnifiedEntry, workspace: ReviewAuthoringWorkspaceV1): TemplateVersion {
   const definition = workspace.definitions.templates[0]!
   const modules = (workspace.definitions.modules ?? []) as unknown as D4Module[]
+  const moduleById = new Map(modules.map((module) => [module.moduleId, module]))
   const createdAt = new Date().toISOString()
-  const sections = modules.map((module, index) => ({
-    id: module.moduleId,
-    name: module.name,
-    order: index,
-    // 分项是否必填由人工判断；不因候选资产而强制用户先录事项
-    required: false,
-    criteria: (module.tasks ?? []).map((task): TemplateCriterionSpec => ({
-      id: task.id,
-      title: task.title.slice(0, 60),
-      requirement: task.requirement,
-      // 判据为语义执行，必须人工复核，不冒充确定性规则
-      execution: 'semantic',
-      targetScope: 'case',
-    } as TemplateCriterionSpec)),
-  }))
+  // 只消费模板显式引用的模块（TAR-02）：不再把 workspace 定义全集平铺。
+  // 场景限定保留为分项说明与要求前缀，供人工复核时判定是否适用，而不是静默套用。
+  const references = (definition.modules ?? []) as Array<{ id?: string; moduleId: string; version?: number; scenario?: string }>
+  const sections = references.flatMap((reference, index) => {
+    const module = moduleById.get(reference.moduleId)
+    if (!module) return []
+    const scenario = reference.scenario?.trim()
+    const scenarioNote = scenario ? `【适用场景：${scenario}；不适用时按人工待核处理】` : ''
+    return [{
+      id: reference.id ?? `${reference.moduleId}@${reference.version ?? module.version}`,
+      name: scenario ? `${module.name}（场景 ${scenario}）` : module.name,
+      description: scenario ? `原始模板仅在场景 ${scenario} 引用本模块。` : undefined,
+      order: index,
+      // 分项是否必填由人工判断；不因候选资产而强制用户先录事项
+      required: false,
+      criteria: (module.tasks ?? []).map((task): TemplateCriterionSpec => ({
+        id: task.id,
+        title: task.title.slice(0, 60),
+        requirement: scenarioNote ? `${scenarioNote}${task.requirement}` : task.requirement,
+        // 判据为语义执行，必须人工复核，不冒充确定性规则
+        execution: 'semantic',
+        targetScope: 'case',
+      } as TemplateCriterionSpec)),
+    }]
+  })
 
   // 用户看到的就是业务名称：不带任何项目编号或"演示/测试"前缀
   const displayTitle = stripCodePrefix(definition.name)
   return {
-    templateId: entry.templateId,
+    // 派生身份：原 D4 冻结 ID 仍归技术预审路径，演示版不占用它。
+    templateId: derivedDemoTemplateId(entry.templateId),
     version: entry.templateVersion,
+    catalogKind: 'reference',
+    sourceNote: `D4_DERIVED_DEMO:${entry.templateId}@${entry.templateVersion}；有损演示转换，不得替代原始 D4 技术计划`,
     schemaVersion: 2,
     name: displayTitle,
     displayName: { template: displayTitle },
@@ -101,21 +126,24 @@ export function publishD4Templates(): D4PublishResult {
   const catalog = loadD4UnifiedCatalog()
   const result: D4PublishResult = { published: [], renamed: [], skipped: [], failed: [] }
   for (const entry of catalog.templates) {
+    const templateId = derivedDemoTemplateId(entry.templateId)
     try {
-      const latest = getTemplate(entry.templateId)
-      const needsRename = Boolean(latest && !isCleanName(latest.name))
-      if (latest && !needsRename) {
-        result.skipped.push({ templateId: entry.templateId, version: latest.version, reason: '已发布且名称正常' })
+      const latest = getTemplate(templateId)
+      // TAR-11：只有「已发布 + 名称干净」才跳过；干净名称的 draft 仍需发布。
+      if (latest && latest.status === 'published' && isCleanName(latest.name)) {
+        result.skipped.push({ templateId, version: latest.version, reason: '已发布且名称正常' })
         continue
       }
+      const needsRename = Boolean(latest && !isCleanName(latest.name))
       const workspace = loadD4UnifiedWorkspace(entry)
       const base = demoTemplateFromD4(entry, workspace)
+      // 新命名空间从冻结版本号起算；已有派生版本则递增，绝不改写历史版本。
       const version = latest ? latest.version + 1 : entry.templateVersion
       const template = { ...base, version }
       saveDraft(template)
-      publishTemplate(entry.templateId, version)
+      publishTemplate(templateId, version)
       const record = {
-        templateId: entry.templateId,
+        templateId,
         version,
         sections: template.sections?.length ?? 0,
         criteria: (template.sections ?? []).reduce((sum, section) => sum + section.criteria.length, 0),
@@ -124,7 +152,7 @@ export function publishD4Templates(): D4PublishResult {
       else result.published.push(record)
     } catch (error) {
       result.failed.push({
-        templateId: entry.templateId,
+        templateId,
         version: entry.templateVersion,
         reason: error instanceof Error ? error.message : String(error),
       })

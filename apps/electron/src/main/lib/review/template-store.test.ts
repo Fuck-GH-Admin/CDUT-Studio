@@ -6,7 +6,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ALL_DEFAULT_TEMPLATES_V2, BUILTIN_TEMPLATES_V2, ensureBuiltinTemplateDrafts } from './builtin-templates'
-import { deprecateTemplate, getTemplate, isSafeTemplateId, listArchivedTemplates, listTemplateVersions, listTemplates, publishTemplate, removeTemplateFromLibrary, reorderTemplates, restoreTemplateToLibrary, saveDraft, validateTemplate } from './template-store'
+import { deprecateTemplate, getTemplate, isSafeTemplateId, isTemplateVersionRetired, listArchivedTemplates, listTemplateVersions, listTemplates, publishTemplate, removeTemplateFromLibrary, reorderTemplates, restoreTemplateToLibrary, saveDraft, validateTemplate } from './template-store'
 import { resolveEffectiveRules } from './effective-rules'
 import { emptyAggregate } from './case-store-v2'
 import { combineCoverage } from './coverage-ledger'
@@ -122,11 +122,18 @@ describe('审核模板目录（M1）', () => {
     expect(listTemplates().some((template) => template.templateId === target.templateId)).toBeTrue()
   })
 
-  test('Given 已发布版本 When 停用 Then 状态 deprecated 且历史可读', () => {
-    publishTemplate('document-checklist-v2', 1)
-    const deprecated = deprecateTemplate('document-checklist-v2', 1)
+  test('Given 已发布版本 When 停用 Then 只写停用元数据且正文不可覆写', () => {
+    const published = publishTemplate('document-checklist-v2', 1)
+    const deprecated = deprecateTemplate('document-checklist-v2', 1, '本地验证停用')
     expect(deprecated.status).toBe('deprecated')
-    expect(getTemplate('document-checklist-v2', 1)?.status).toBe('deprecated')
+    expect(isTemplateVersionRetired('document-checklist-v2', 1)).toBeTrue()
+    // 历史 templateId@version 的内容保持逐字节等价：正文仍是 published，hash 不变。
+    const stored = getTemplate('document-checklist-v2', 1)
+    expect(stored?.status).toBe('published')
+    expect(stored?.publishedAt).toBe(published.publishedAt)
+    expect(JSON.stringify(stored)).toBe(JSON.stringify(published))
+    // 停用后同版本不能被普通 saveDraft 覆写，必须提升版本号。
+    expect(() => saveDraft({ ...published, status: 'draft', name: '被篡改' })).toThrow()
   })
 })
 

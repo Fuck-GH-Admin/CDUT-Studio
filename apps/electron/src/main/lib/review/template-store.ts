@@ -102,6 +102,34 @@ function withTemplateVersionLock<T>(templateId: string, version: number, operati
   finally { closeSync(fd); unlinkSync(lock) }
 }
 
+/**
+ * 停用元数据与版本正文分离：历史 `templateId@version` 的内容哈希永久不可变，
+ * 停用只改变「是否可继续新建/选用」这一外部状态，不重写已发布 JSON。
+ */
+interface RetirementRecord {
+  schemaVersion: 1
+  templateId: string
+  version: number
+  retiredAt: string
+  reason?: string
+}
+function retirementPath(templateId: string, version: number): string {
+  return join(controlDir(templateId), version + '.retired.json')
+}
+export function readRetirement(templateId: string, version: number): RetirementRecord | undefined {
+  if (!isSafeTemplateId(templateId) || !Number.isSafeInteger(version) || version < 1) return undefined
+  const path = retirementPath(templateId, version)
+  if (!existsSync(path)) return undefined
+  try {
+    const record = JSON.parse(readFileSync(path, 'utf8')) as RetirementRecord
+    if (record.schemaVersion !== 1 || record.templateId !== templateId || record.version !== version) return undefined
+    return record
+  } catch { return undefined }
+}
+export function isTemplateVersionRetired(templateId: string, version: number): boolean {
+  return readRetirement(templateId, version) !== undefined
+}
+
 /** 读取模板；version 缺省取最大已存版本 */
 export function getTemplate(templateId: string, version?: number): TemplateVersion | undefined {
   if (!isSafeTemplateId(templateId)) return undefined
@@ -213,6 +241,10 @@ function saveDraftControlled(template: TemplateVersion, forceCandidate: boolean)
     if (existing && existing.status === 'published') {
       throw new Error(`版本 ${template.version} 已发布不可覆盖；请提升版本号`)
     }
+    // 停用只写元数据，正文仍是 published；旧案卷引用必须继续读到完全相同的内容。
+    if (isTemplateVersionRetired(template.templateId, template.version)) {
+      throw new Error(`版本 ${template.version} 已停用，历史内容不可覆写；请提升版本号`)
+    }
     // 先登记（如需则永久封存）服务端资格，再写可编辑的草稿正文。
     // 写入中途失败只可能导致旧草稿被拒绝发布，不会意外放行候选。
     registerPublicationControl(template, forceCandidate)
@@ -267,6 +299,18 @@ export function validateTemplate(template: TemplateVersion): TemplateValidationI
 
   if (new Set(sections.map((section) => section.id)).size !== sections.length) {
     issues.push({ level: 'error', message: '审核分项 ID 重复' })
+  }
+  // TAR-14：最终规则身份是 `section-<sectionId>-<criterionId>`，必须整体唯一，
+  // 否则 (a-b, c) 与 (a, b-c) 这类拼接会在运行期撞成同一 origin。
+  const compositeRuleIds = new Set<string>()
+  for (const section of sections) {
+    for (const criterion of Array.isArray(section.criteria) ? section.criteria : []) {
+      const ruleId = `section-${section.id}-${criterion.id}`
+      if (compositeRuleIds.has(ruleId)) {
+        issues.push({ level: 'error', message: `规则 ID 冲突：分项「${section.name}」的要求「${criterion.id}」与其他分项拼接后同为 ${ruleId}` })
+      }
+      compositeRuleIds.add(ruleId)
+    }
   }
   for (const section of sections) {
     if (!section.id.trim() || !section.name.trim()) issues.push({ level: 'error', message: '每个审核分项都必须有 ID 和名称' })
@@ -419,12 +463,23 @@ export function publishTemplate(templateId: string, version: number): TemplateVe
   })
 }
 
-/** 停用（仅已发布版本可停用；保留历史可读） */
-export function deprecateTemplate(templateId: string, version: number): TemplateVersion {
-  const template = getTemplate(templateId, version)
-  if (!template) throw new Error(`模板不存在: ${templateId}@${version}`)
-  if (template.status !== 'published') throw new Error('只有已发布版本可停用')
-  const deprecated = { ...template, status: 'deprecated' as const }
-  writeAtomic(versionPath(templateId, version), deprecated)
-  return deprecated
+/**
+ * 停用（仅已发布版本可停用；保留历史可读）。
+ * 只写独立停用元数据，绝不重写版本正文，保证 `templateId@version` 内容哈希不变。
+ */
+export function deprecateTemplate(templateId: string, version: number, reason?: string): TemplateVersion {
+  return withTemplateVersionLock(templateId, version, () => {
+    const template = getTemplate(templateId, version)
+    if (!template) throw new Error(`模板不存在: ${templateId}@${version}`)
+    if (template.status !== 'published') throw new Error('只有已发布版本可停用')
+    if (isTemplateVersionRetired(templateId, version)) return { ...template, status: 'deprecated' as const }
+    const record: RetirementRecord = {
+      schemaVersion: 1, templateId, version, retiredAt: new Date().toISOString(),
+      ...(reason?.trim() ? { reason: reason.trim() } : {}),
+    }
+    mkdirSync(controlDir(templateId), { recursive: true })
+    writeAtomic(retirementPath(templateId, version), record)
+    console.log(`[审核模板] 已停用: ${templateId}@${version}`)
+    return { ...template, status: 'deprecated' as const }
+  })
 }
