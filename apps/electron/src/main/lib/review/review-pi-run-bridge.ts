@@ -3,11 +3,11 @@ import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import type { ReviewBackgroundPiRunState, ReviewBackgroundPiStartRequest } from '@profer/shared'
 import { getChannelById } from '../channel-manager'
-import { getSettings } from '../settings-service'
 import { createReviewOwnedAgentSession, listAgentSessions, updateAgentSessionMeta } from '../agent-session-manager'
 import { isAgentSessionActive, runAgent, stopAgentAndWait } from '../agent-service'
 import { getCaseV2Aggregate } from './application-service'
 import { getReviewModuleSettings } from './module-settings-store'
+import { pickChannelModelId } from './review-model-identity'
 import { getBackgroundPiReviewState } from './review-background-state'
 import { admitPreparedPiReviewTurn } from './review-pi-admission'
 import { interruptedResumeGate } from './review-runtime-contract'
@@ -33,14 +33,17 @@ export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequ
   try {
     const aggregate = getCaseV2Aggregate(input.caseId)
     if (!aggregate) throw new Error('案卷不存在或尚未初始化')
+    // MHI-03：bridge 与网关使用同一解析顺序（审核模块显式选择 → 该渠道首个启用模型），
+    // 不再回退到全局 Agent 默认渠道/模型，避免「界面选 B、实际请求 A」。
     const selection = getReviewModuleSettings().agentModelSelection
-    const defaults = getSettings()
-    const channelId = selection?.channelId ?? defaults.agentChannelId
-    const modelId = selection?.modelId ?? defaults.agentModelId
-    const channel = channelId ? getChannelById(channelId) : undefined
-    if (!channel || channel.enabled !== true || !modelId
-      || !channel.models.some((model) => model.id === modelId && model.enabled !== false)) {
+    const channel = selection?.channelId ? getChannelById(selection.channelId) : undefined
+    const modelId = channel && channel.enabled === true
+      ? pickChannelModelId(channel, selection) : undefined
+    if (!channel || channel.enabled !== true || !modelId) {
       throw new Error('审核渠道或模型未配置、已停用或已删除，请在审核设置中选择有效模型')
+    }
+    if (selection && selection.channelId === channel.id && selection.modelId !== modelId) {
+      throw new Error('审核所选模型已停用或被删除，请在审核设置中重新选择后再运行')
     }
     const sessions = listAgentSessions(true).filter((session) => session.owner?.kind === 'review-case'
       && session.owner.caseId === input.caseId)
@@ -57,9 +60,9 @@ export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequ
     // 同案可能在 Pi 审核之后又执行 T04 模板规则 Run。不能让另一种运行
     // 占据列表首位，就错误放弃原 Pi 的有效续交检查点。
     const previous = listRunsV2(input.caseId).find((run) => run.id.startsWith('run-pi-'))
-    // RUN-43：正常未完成的 partially-completed 与「冷启动中断但仍保有检查点」
-    // 的运行都按同一 RunId 续交；后者先由 Main 恢复为 partially-completed 并
-    // 解除启动拒止，绝不新建第二个 run-pi ID 冒充同一轮。
+    // RUN-43：普通 partially-completed 运行仍按同一 RunId 续交；冷启动中断
+    // 的运行只有在用户显式确认后才由 Main 恢复为 partially-completed 并解除
+    // 启动拒止（绝不新建第二个 run-pi ID 冒充同一轮，也不自动重放未知请求）。
     const interruptedResumable = !!previous && isResumableInterruptedRunV2(previous)
     // RUN-43：未知 effect 必须失败关闭。自动续跑会开新回合重放中断前未确认的
     // 模型请求，因此只有用户显式确认后才允许按原 RunId 续交；显式续交也会
