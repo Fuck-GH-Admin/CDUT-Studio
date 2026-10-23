@@ -12,7 +12,9 @@ import { getBackgroundPiReviewState } from './review-background-state'
 import { admitPreparedPiReviewTurn } from './review-pi-admission'
 import { finishPiReviewRunV2, getPiReviewBindingForSession, preparePiReviewRunV2 } from './pi-case-review-service'
 import { listAssignments, revokeAssignment } from './review-agent-assignment'
-import { listRunsV2 } from './run-store-v2'
+import {
+  isResumableInterruptedRunV2, listRunsV2, reopenInterruptedRunForResume,
+} from './run-store-v2'
 import { assertSafeReviewStorageId } from './review-storage-id'
 import { isWorkspaceRunStaleV2 } from './workspace-business-service-v2'
 import { getCase } from './case-store'
@@ -53,12 +55,23 @@ export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequ
     // 同案可能在 Pi 审核之后又执行 T04 模板规则 Run。不能让另一种运行
     // 占据列表首位，就错误放弃原 Pi 的有效续交检查点。
     const previous = listRunsV2(input.caseId).find((run) => run.id.startsWith('run-pi-'))
-    const resumeRunId = reusable && previous?.status === 'partially-completed'
-      && previous.checks.some((check) => check.status === 'execution-failed')
+    // RUN-43：正常未完成的 partially-completed 与「冷启动中断但仍保有检查点」
+    // 的运行都按同一 RunId 续交；后者先由 Main 恢复为 partially-completed 并
+    // 解除启动拒止，绝不新建第二个 run-pi ID 冒充同一轮。
+    const interruptedResumable = !!previous && isResumableInterruptedRunV2(previous)
+    const resumeEligible = !!reusable && !!previous
+      && (previous.status === 'partially-completed' || interruptedResumable)
+      && (previous.checks.some((check) => check.status === 'execution-failed')
+        || previous.checks.length < (previous.coverage?.plannedChecks ?? Number.MAX_SAFE_INTEGER)
+        || previous.checkpoints.length > 0)
       && !isWorkspaceRunStaleV2(aggregate, previous.id)
       && listAssignments().some((assignment) => assignment.caseId === input.caseId
         && assignment.sessionId === session.id && assignment.activeRunId === previous.id)
-      ? previous.id : undefined
+    const resumeRunId = resumeEligible && previous
+      ? (interruptedResumable
+        ? reopenInterruptedRunForResume(input.caseId, previous.id)?.id
+        : previous.id)
+      : undefined
     const turnId = randomUUID()
     const prepared = preparePiReviewRunV2({ caseId: input.caseId, sessionId: session.id, turnId,
       ...(resumeRunId ? { resumeRunId } : {}), inheritReadReceipts: input.mode !== 'restart' })

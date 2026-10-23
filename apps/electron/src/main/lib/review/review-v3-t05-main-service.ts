@@ -22,6 +22,10 @@ import { getTemplate } from './template-store'
 import { listRunsV2 } from './run-store-v2'
 import { isWorkspaceRunStaleV2 } from './workspace-business-service-v2'
 import {
+  assessStagePassWithT03, isCurrentBusinessRun, resolveCurrentBusinessRun,
+  type RunAuthorityDecision,
+} from './review-runtime-contract'
+import {
   applyT05LocalStageProposal, planT05LocalStageAction,
   type T05LocalStageAction, type T05StageProposal, type T05VerifiedRun,
 } from './review-v3-t05-local-stage-plan'
@@ -145,16 +149,28 @@ export function isLocalBusinessCase(aggregate: CaseAggregateV2): boolean {
  * （真实字段是 `documentVersions`），导致选择结果不可信。
  */
 export function currentT05Run(aggregate: CaseAggregateV2): ReviewRunV2 | undefined {
-  const runs = listRunsV2(aggregate.caseV2.id)
-  for (let index = runs.length - 1; index >= 0; index -= 1) {
-    const run = runs[index]!
-    if (run.status !== 'completed' && run.status !== 'partially-completed') continue
-    if (run.caseId !== aggregate.caseV2.id) continue
-    if (run.templateId !== aggregate.caseV2.templateId) continue
-    if (isWorkspaceRunStaleV2(aggregate, run.id)) continue
-    return run
-  }
-  return undefined
+  return readT05RunAuthority(aggregate).run
+}
+
+/**
+ * 当前业务 Run 的权威判定（RUN-02/04/07/09/14/22）。
+ *
+ * 只从**最新业务 attempt** 开始选择：最新一次失败/执行中/取消的 Run 会明确
+ * 阻断，绝不回退到更早的成功 Run；`run-tpl-*`（模板阶段证据）与显式诊断
+ * Run 不得冒充当前审核。判定逻辑集中在 review-runtime-contract，此处仅提供
+ * Main 可信的 freshness 函数，不复制第二套账本。
+ */
+export function readT05RunAuthority(aggregate: CaseAggregateV2): RunAuthorityDecision {
+  return resolveCurrentBusinessRun({
+    aggregate,
+    runs: listRunsV2(aggregate.caseV2.id),
+    stale: (run) => isWorkspaceRunStaleV2(aggregate, run.id),
+  })
+}
+
+/** 诊断运行隔离：模板规则/高级诊断结果只能作为证据展示。 */
+export function isT05DiagnosticRun(run: Pick<ReviewRunV2, 'id'>): boolean {
+  return !isCurrentBusinessRun(run)
 }
 
 /** Run 是否因原件/补件变化而失效（供界面如实展示）。 */
@@ -286,18 +302,21 @@ export function t05ActionEligibility(
   const ready = blockers.length === 0
   const runUsable = !isWorkspaceRunStaleV2(aggregate, run.id) && Boolean(run.inputManifest?.hash)
   const runReasons = runUsable ? [] : ['审核运行已与当前原件不一致（需重新运行）']
+  // RUN-05：partially-completed 只能办理拒绝/退回，不能通过阶段。
+  const completed = run.status === 'completed'
+  const passReasons = completed ? (ready ? [] : blockers) : ['必须完整结束本次运行后才能通过阶段']
 
   return {
     readiness: ready ? 'ready' : 'blocked',
     blockers,
     allowed: {
-      'stage-pass': ready && runUsable,
+      'stage-pass': ready && runUsable && completed,
       'final-reject': runUsable,
       'return-for-supplement': true,
       'return-to-previous-stage': runUsable,
     },
     reasons: {
-      'stage-pass': ready ? [] : blockers,
+      'stage-pass': passReasons,
       'final-reject': runReasons,
       'return-for-supplement': [],
       'return-to-previous-stage': runReasons,
@@ -337,10 +356,15 @@ export function readT05StageCapability(caseId: string, claim?: T05RoleClaim): T0
     .filter((task) => task.status === 'open' && task.assigneeRole === actor.role
       && (!task.assigneeActorId || task.assigneeActorId === actor.actorId))
     .map((task) => task.id)
-  const run = currentT05Run(aggregate)
+  const authority = readT05RunAuthority(aggregate)
+  const run = authority.run
   const eligibility = t05ActionEligibility(aggregate, run)
+  const t03 = run
+    ? assessStagePassWithT03({ aggregate, run, stale: isWorkspaceRunStaleV2(aggregate, run.id) })
+    : undefined
   const allowedActions = mode === 'local-business'
-    ? (Object.keys(eligibility.allowed) as T05StageAction[]).filter((action) => eligibility.allowed[action])
+    ? (Object.keys(eligibility.allowed) as T05StageAction[]).filter((action) =>
+      action === 'stage-pass' ? eligibility.allowed[action] && Boolean(t03?.allowed) : eligibility.allowed[action])
     : []
   return {
     mode,
@@ -349,7 +373,10 @@ export function readT05StageCapability(caseId: string, claim?: T05RoleClaim): T0
     eligibleTaskIds: eligible,
     hasCurrentRun: Boolean(run),
     allowedActions,
-    blockers: mode === 'local-business' ? eligibility.blockers : ['技术预审案卷不具备正式业务决定权'],
+    blockers: mode === 'local-business'
+      ? [...eligibility.blockers, ...(run && t03 && !t03.allowed
+        ? t03.blockers.filter((item) => !eligibility.blockers.includes(item)) : [])]
+      : ['技术预审案卷不具备正式业务决定权'],
   }
 }
 
@@ -398,6 +425,17 @@ Promise<{ ok: true; revision: number; proposal: T05StageProposal; decisionId?: s
     if (!eligibility.allowed[payload.action]) {
       throw new CommandValidationError('INVALID_TRANSITION',
         eligibility.reasons[payload.action].join('；') || '当前状态不允许该动作')
+    }
+    // RUN-05：T03 严门禁接入真实写路径（completed、原件版本、冻结计划指纹、
+    // CheckId × target 完整绑定），不再只依赖条数/ruleId 的宽校验。
+    if (payload.action === 'stage-pass') {
+      const t03 = assessStagePassWithT03({
+        aggregate, run, stale: run ? isWorkspaceRunStaleV2(aggregate, run.id) : true,
+      })
+      if (!t03.allowed) {
+        throw new CommandValidationError('INVALID_TRANSITION',
+          t03.blockers.join('；') || '本次运行未通过 T03 阶段门禁')
+      }
     }
     const verifiedRun: T05VerifiedRun | undefined = run
       ? {

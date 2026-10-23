@@ -8,7 +8,8 @@ const configDir = mkdtempSync(join(tmpdir(), 't05m-'))
 process.env.PROFER_CONFIG_DIR = configDir
 afterAll(() => rmSync(configDir, { recursive: true, force: true }))
 
-const { deriveT05LocalActor, t05DecisionReadiness, isLocalBusinessCase } =
+const { deriveT05LocalActor, t05DecisionReadiness, isLocalBusinessCase,
+  t05ActionEligibility, isT05DiagnosticRun } =
   await import('./review-v3-t05-main-service')
 
 function aggregate(overrides: Record<string, unknown> = {}) {
@@ -89,5 +90,26 @@ describe('T05 可信阶段边界', () => {
       checks: [{ checkId: 'c1', status: 'compliant' }],
     }
     expect(t05DecisionReadiness(aggregate() as never, run as never).readiness).toBe('ready')
+  })
+
+  test('RUN-05：部分完成的 Run 不得通过阶段，只能拒绝或退回', () => {
+    const run = { id: 'run-1', status: 'partially-completed',
+      inputManifest: { hash: 'h' },
+      coverage: { plannedChecks: 1, completedChecks: 1, pendingChecks: 0, documents: [] },
+      checks: [{ checkId: 'c1', status: 'compliant' }],
+    }
+    const r = t05ActionEligibility(aggregate() as never, run as never)
+    expect(r.readiness).toBe('ready')
+    expect(r.allowed['stage-pass']).toBe(false)
+    expect(r.reasons['stage-pass'].join()).toContain('完整结束')
+    // 退回补件永远保留；不能因「不能通过」连带封死正当退回
+    expect(r.allowed['return-for-supplement']).toBe(true)
+  })
+
+  test('RUN-07/02：模板规则与诊断 Run 不冒充当前业务 Run', () => {
+    expect(isT05DiagnosticRun({ id: 'run-tpl-1' })).toBe(true)
+    expect(isT05DiagnosticRun({ id: 'run-diag-1' })).toBe(true)
+    expect(isT05DiagnosticRun({ id: 'run-pi-1' })).toBe(false)
+    expect(isT05DiagnosticRun({ id: 'run@rev3' })).toBe(true)
   })
 })
