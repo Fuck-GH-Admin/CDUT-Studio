@@ -13,6 +13,7 @@ import { MarkdownPreview, MARKDOWN_PREVIEW_LIGHT_COMPONENTS } from '@profer/ui'
 import { AlertTriangle } from 'lucide-react'
 import { UserAvatar } from '@/components/shared/UserAvatar'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
+import { useIsDarkTheme } from '@/hooks/use-is-dark-theme'
 import { channelsAtom } from '@/atoms/conversation-atoms'
 import { cn } from '@/lib/utils'
 import type { TabMinimapItem } from '@/atoms/tab-atoms'
@@ -28,13 +29,14 @@ interface TabPreviewPanelProps {
 
 function ItemIcon({ item }: { item: TabMinimapItem }): React.ReactElement {
   const channels = useAtomValue(channelsAtom)
+  const isDark = useIsDarkTheme()
   if (item.role === 'user' && item.avatar) {
     return <UserAvatar avatar={item.avatar} size={16} className="mt-0.5" />
   }
   if (item.role === 'assistant' && item.model) {
     return (
       <img
-        src={getModelLogo(item.model, resolveModelProvider(item.model, channels))}
+        src={getModelLogo(item.model, resolveModelProvider(item.model, channels), isDark)}
         alt=""
         className="size-4 shrink-0 mt-0.5 rounded-[20%] object-cover"
       />

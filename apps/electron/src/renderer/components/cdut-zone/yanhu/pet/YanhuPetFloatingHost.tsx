@@ -94,6 +94,8 @@ export function YanhuPetFloatingHost(): React.ReactElement {
   const [cardHeight, setCardHeight] = React.useState<number>(() => computeCardHeight('bubble'))
   /** 首帧几何是否已上报完成（在此之前维持交互捕获，杜绝启动瞬间鼠标穿透冻结） */
   const [ready, setReady] = React.useState(false)
+  /** 新手引导一次性填充请求（nonce 保证重复文本也触发） */
+  const [fillRequest, setFillRequest] = React.useState<{ text: string; nonce: number } | null>(null)
 
   const cardRef = React.useRef<HTMLDivElement>(null)
   const mountedAtRef = React.useRef(Date.now())
@@ -163,6 +165,12 @@ export function YanhuPetFloatingHost(): React.ReactElement {
       if (alive) setMessages([])
     })
 
+    const unsubTourFill = api.onPetTourFill((event) => {
+      if (!alive) return
+      setCardVisible(true)
+      setFillRequest({ text: event.text, nonce: Date.now() })
+    })
+
     const unsubStream = api.onPetStream((event) => {
       if (!alive) return
       if (event.type === 'delta' && event.delta) {
@@ -185,6 +193,7 @@ export function YanhuPetFloatingHost(): React.ReactElement {
       unsubState()
       unsubStream()
       unsubHistoryCleared()
+      unsubTourFill()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api])
@@ -526,6 +535,7 @@ export function YanhuPetFloatingHost(): React.ReactElement {
             direction={layout.direction}
             tailTop={tailTop}
             sleepy={sprite === 'yawning'}
+            fillRequest={fillRequest}
             onToggleHistory={handleToggleHistory}
             onHideCard={handleHideCard}
             onSend={handleSend}

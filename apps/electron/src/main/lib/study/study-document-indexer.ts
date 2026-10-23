@@ -1087,7 +1087,12 @@ export function buildStudyOutlineForPrompt(sessionId: string): string {
   const lines: string[] = []
   let used = 0
   for (const doc of outlines) {
-    const header = `### Material: ${doc.fileName} (documentId=${doc.documentId}, ${doc.totalSections} section(s) in total)`
+    // 直出全文落盘路径：索引未命中时模型可直接 Read / 单次 grep，杜绝 find/ls 盲搜。
+    const fullTextPath = join(getStudyDocumentDir(sessionId, doc.documentId), 'document.md').replace(/\\/g, '/')
+    const fullTextLine = existsSync(fullTextPath)
+      ? `- Direct Full-Text Path: ${fullTextPath} (read this file directly for full-text verification; no find/ls probe)`
+      : '- Direct Full-Text Path: (not materialized; use study_inspect_section per sectionId)'
+    const header = `### Material: ${doc.fileName} (documentId=${doc.documentId}, ${doc.totalSections} section(s) in total)\n${fullTextLine}`
     if (used + header.length > MAX_OUTLINE_PROMPT_CHARS) {
       lines.push(
         '…(The study material outline (学习资料大纲) is long and part of it has been folded. To retrieve details, exam points, or cross-file connections not listed in the outline, call the study_search_knowledge tool for full-domain hybrid retrieval; to read a specific known section, use study_inspect_section with its sectionId.)',

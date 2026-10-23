@@ -155,6 +155,19 @@ export function closeAllShareDatabases(): void {
   }
 }
 
+/** 只关闭指定实验室的共享盘数据库连接，避免误伤其它活跃实验室。 */
+export function closeShareDatabase(labIdInput: string): void {
+  const dbPath = getShareDbPath(labIdInput)
+  const database = connections.get(dbPath)
+  if (!database) return
+  try {
+    database.raw.close()
+  } catch {
+    // 可能已被其它路径关闭，忽略。
+  }
+  connections.delete(dbPath)
+}
+
 function parseInclude(raw: unknown): string[] {
   if (typeof raw !== 'string' || !raw.trim()) return []
   try {

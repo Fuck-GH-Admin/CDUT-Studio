@@ -172,3 +172,30 @@ export function isDangerousCommand(command: string): boolean {
   const trimmed = command.trim().toLowerCase()
   return DANGEROUS_COMMANDS.some((dc) => trimmed.startsWith(dc.toLowerCase()))
 }
+
+/**
+ * 潜在可执行/脚本文件后缀（CVE-2026-96951 Windows Shell MotW 绕过防御）
+ *
+ * 这些后缀被 `shell.openPath` 打开时会经 Windows Shell 解析器直接拉起代码执行，
+ * 在 MotW 绕过缺陷未修复的宿主上可被恶意文件静默触发。用于「打开文件」入口的
+ * 前置确认防线（见 apps/electron executable-open-guard）。
+ */
+export const DANGEROUS_EXECUTABLE_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.exe', '.bat', '.cmd', '.com', '.ps1', '.vbs', '.vbe',
+  '.js', '.jse', '.wsf', '.wsh', '.hta', '.scr', '.pif',
+  '.reg', '.msi', '.msp', '.cpl', '.jar',
+])
+
+/**
+ * 判断文件路径的扩展名是否为潜在可执行/脚本文件。
+ *
+ * 纯字符串实现（不依赖 node:path），主进程与渲染进程共用：
+ * 取最后一个点之后的部分做小写匹配，无扩展名或隐藏文件（如 `.bashrc`）返回 false。
+ */
+export function isPotentiallyExecutableFile(filePath: string): boolean {
+  if (typeof filePath !== 'string' || filePath.length === 0) return false
+  const base = filePath.slice(Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')) + 1)
+  const dot = base.lastIndexOf('.')
+  if (dot <= 0) return false
+  return DANGEROUS_EXECUTABLE_EXTENSIONS.has(base.slice(dot).toLowerCase())
+}

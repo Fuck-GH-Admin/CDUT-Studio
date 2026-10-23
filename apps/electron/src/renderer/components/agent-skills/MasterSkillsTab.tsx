@@ -1,4 +1,4 @@
-/** 全局 Skill 列表：复用安装版“我的 Skills / CDUT Studio 内置”分组结构。 */
+﻿/** 全局 Skill 列表：复用安装版“我的 Skills / CDUT Studio 内置”分组结构。 */
 import * as React from "react";
 import { toast } from "sonner";
 import { Blocks, RefreshCw, Plus, Upload } from "lucide-react";
@@ -198,7 +198,7 @@ export function MasterSkillsTab({
       )}
       {skills.length === 0 && (
         <div className="flex flex-col items-center gap-3 py-20 text-center">
-          <Blocks size={32} className="text-foreground/30" />
+          <Blocks size={32} className="text-foreground/50" />
           <div className="text-sm font-medium text-foreground/80">
             暂无{globalMode ? "全局 Skill" : "CDUT Studio 内置"}
           </div>

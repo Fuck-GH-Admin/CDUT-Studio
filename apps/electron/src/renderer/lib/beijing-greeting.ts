@@ -31,6 +31,56 @@ const BEIJING_TIME_FMT = new Intl.DateTimeFormat('zh-CN', {
 })
 
 /**
+ * 北京时间 HH:mm:ss 分解格式化器。
+ * 通过 formatToParts 取纯数字，既不依赖本地化后缀，也避免每秒重建实例。
+ */
+const BEIJING_HMS_PARTS_FMT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Shanghai',
+  hourCycle: 'h23',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+
+/** 北京时间时分秒数字 */
+export interface BeijingTimeNumbers {
+  /** 0-23 */
+  hour: number
+  /** 0-59 */
+  minute: number
+  /** 0-59 */
+  second: number
+}
+
+/** 北京时间表盘角度（0 <= angle < 360）与 HH:mm:ss 文本 */
+export interface BeijingClockAngles extends BeijingTimeNumbers {
+  /** 毫秒分量（0-999），用于锚点角度的毫秒级精度 */
+  millisecond: number
+  /** 时针角度：每小时 30°，每分钟 0.5°，每秒 1/120°，每毫秒 1/120000° */
+  hourAngle: number
+  /** 分针角度：每分钟 6°，每秒 0.1°，每毫秒 0.0001° */
+  minuteAngle: number
+  /** 秒针角度：每秒 6°（机械跳秒，不含毫秒） */
+  secondAngle: number
+  /** HH:mm:ss 文本 */
+  clockText: string
+}
+
+/** 两位补零 */
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+/** 从 formatToParts 结果中安全读取某一段的纯数字；缺失或非法时返回 null */
+function readNumericPart(
+  parts: Intl.DateTimeFormatPart[],
+  type: 'hour' | 'minute' | 'second',
+): number | null {
+  const parsed = Number(parts.find((part) => part.type === type)?.value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/**
  * 取得北京时间的纯数字小时（0-23）。
  *
  * 严禁使用 `Intl.DateTimeFormat('zh-CN', { hour: 'numeric' })` —— 该组合输出「17时」，
@@ -60,14 +110,105 @@ export function getBeijingGreetingParts(now: Date = new Date()): BeijingGreeting
   }
 }
 
+/**
+ * 取得北京时间的时分秒纯数字（与宿主系统时区无关）。
+ * 解析失败时兜底为 12:00:00，保证调用方永不拿到 NaN。
+ */
+export function getBeijingTimeNumbers(now: Date = new Date()): BeijingTimeNumbers {
+  const parts = BEIJING_HMS_PARTS_FMT.formatToParts(now)
+  const hour = readNumericPart(parts, 'hour')
+  return {
+    hour: hour === null ? 12 : ((hour % 24) + 24) % 24,
+    minute: readNumericPart(parts, 'minute') ?? 0,
+    second: readNumericPart(parts, 'second') ?? 0,
+  }
+}
+
 /** 北京时间 HH:mm:ss 时钟文本（抽屉右上角时钟药丸消费） */
 export function formatBeijingClock(now: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Shanghai',
-    hourCycle: 'h23',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(now)
-  return parts
+  const { hour, minute, second } = getBeijingTimeNumbers(now)
+  return `${pad2(hour)}:${pad2(minute)}:${pad2(second)}`
+}
+
+/**
+ * 北京时间表盘指针角度。
+ *
+ * 角度公式精确联动：时针随分、秒、毫秒连续微动，分针随秒、毫秒连续微动，
+ * 但秒针取整到 6° 的整数倍（1 秒 1 跳）。
+ */
+export function getBeijingClockAngles(now: Date = new Date()): BeijingClockAngles {
+  const { hour, minute, second } = getBeijingTimeNumbers(now)
+  const millisecond = now.getMilliseconds()
+  return {
+    hour,
+    minute,
+    second,
+    millisecond,
+    hourAngle: (hour % 12) * 30 + minute * 0.5 + second / 120 + millisecond / 120000,
+    minuteAngle: minute * 6 + second * 0.1 + millisecond * 0.0001,
+    secondAngle: second * 6,
+    clockText: `${pad2(hour)}:${pad2(minute)}:${pad2(second)}`,
+  }
+}
+
+/** 表盘时间锚点：挂载时刻与当时的周期角度 */
+export interface BeijingClockAnchor {
+  /** 锚点时刻（epoch 毫秒） */
+  atMs: number
+  /** 锚点时刻的周期角度 */
+  angles: BeijingClockAngles
+}
+
+/** 连续旋转角度（单位：度，单调向前，不回转） */
+export interface BeijingClockRotations {
+  hourRotation: number
+  minuteRotation: number
+  secondRotation: number
+}
+
+/** 以当前时刻建立表盘锚点 */
+export function createBeijingClockAnchor(now: Date = new Date()): BeijingClockAnchor {
+  return { atMs: now.getTime(), angles: getBeijingClockAngles(now) }
+}
+
+/**
+ * 从固定锚点纯推导连续旋转角度。
+ *
+ * 严禁改回「逐帧比较当前角度再做 360° 取模累加」：分/时针每秒仅移动 0.1°/0.0083°，
+ * 浮点误差会让 `target - current` 出现极小负值，取模后得到约 359.999°，指针被判为
+ * 「向前追一整圈」，叠加 CSS transition 便呈现整圈跳闪（历史 Bug）。
+ *
+ * 同一 `now` 多次调用结果完全一致，天然免疫 StrictMode 双调用与任意同帧重渲染。
+ */
+export function resolveBeijingClockRotations(
+  anchor: BeijingClockAnchor,
+  now: Date = new Date(),
+): BeijingClockRotations {
+  const elapsedMs = Math.max(0, now.getTime() - anchor.atMs)
+  const elapsedSeconds = elapsedMs / 1000
+  // 秒针按整秒跃迁，避免父级定时器的毫秒抖动污染机械跳秒
+  const elapsedWholeSeconds = Math.max(
+    0,
+    Math.floor(now.getTime() / 1000) - Math.floor(anchor.atMs / 1000),
+  )
+  return {
+    hourRotation: anchor.angles.hourAngle + elapsedSeconds * (360 / 43200),
+    minuteRotation: anchor.angles.minuteAngle + elapsedSeconds * 0.1,
+    secondRotation: anchor.angles.secondAngle + elapsedWholeSeconds * 6,
+  }
+}
+
+/**
+ * 是否需要重取表盘锚点。
+ *
+ * - 负向跳变：系统时间被 NTP/手动回拨，继续沿用旧锚点会让表盘假死；
+ * - 超过 maxGapMs：休眠唤醒或后台节流恢复，沿用旧锚点会产生数千圈的角度过渡。
+ */
+export function shouldRebaseClockAnchor(
+  lastTickMs: number,
+  now: Date = new Date(),
+  maxGapMs: number = 1500,
+): boolean {
+  const gapMs = now.getTime() - lastTickMs
+  return gapMs < 0 || gapMs > maxGapMs
 }

@@ -1,6 +1,6 @@
 {
   "name": "@profer/electron",
-  "version": "0.15.148",
+  "version": "0.15.157",
   "description": "CDUT Studio",
   "main": "dist/main.cjs",
   "author": "CDUT Studio Devs",
@@ -44,6 +44,7 @@
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
     "test": "bun test --isolate",
+    "test:dark-mode": "bun test scripts/dark-mode-guards.test.ts",
     "check:skin-token-sync": "node scripts/check-skin-token-sync.mjs",
     "check:skin-contract": "node scripts/check-skin-surface-contract.mjs",
     "test:memory-search": "node scripts/memory-search-verify.mjs",

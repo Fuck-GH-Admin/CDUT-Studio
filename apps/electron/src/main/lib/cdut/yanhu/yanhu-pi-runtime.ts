@@ -82,6 +82,28 @@ function toToolResult(call: ToolCall, invocation: YanhuPetToolInvocation): ToolR
   }
 }
 
+/**
+ * 用户中止时为未执行的 toolCall 补齐占位回执。
+ *
+ * 保证 assistant.toolCalls 与 tool.results 一一配对；缺少配对会让下一轮请求
+ * 被模型网关判为协议错误（tool_use_id without matching tool_result）。
+ */
+export function padAbortedToolResults(
+  calls: readonly ToolCall[],
+  results: ToolResult[],
+): ToolResult[] {
+  if (results.length >= calls.length) return results
+  const padded = [...results]
+  for (let index = padded.length; index < calls.length; index += 1) {
+    padded.push({
+      toolCallId: calls[index]!.id,
+      content: '（操作已由用户手动中止，未执行）',
+      isError: true,
+    })
+  }
+  return padded
+}
+
 /** CJK 字符与全角符号匹配（用于 Token 估算） */
 const CJK_CHAR_PATTERN = /[\u3000-\u9fff\uff00-\uffef]/g
 
@@ -356,6 +378,9 @@ export class YanhuPiRuntime {
             results.push(toToolResult(call, invocation))
           }
         }
+
+        // 中止命中：未执行的工具必须补齐占位回执，保持 toolCalls / results 严格配对
+        if (signal.aborted) results = padAbortedToolResults(calls, results)
 
         continuationMessages = [
           ...continuationMessages,

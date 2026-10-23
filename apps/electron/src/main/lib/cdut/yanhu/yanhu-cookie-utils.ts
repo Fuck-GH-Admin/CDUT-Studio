@@ -41,10 +41,35 @@ export async function stripStaleRuiShuCookies(
     let removed = 0
     for (const c of cookies) {
       // 瑞数成对签名特征：以 P 结尾的动态签名，且存在同前缀以 O 结尾的会话 Cookie
-      if (c.name.endsWith('P') && names.has(c.name.slice(0, -1) + 'O')) {
-        await ses.cookies.remove(`https://${domain}`, c.name).catch(() => {})
-        await ses.cookies.remove(`http://${domain}`, c.name).catch(() => {})
+      if (!c.name.endsWith('P') || !names.has(c.name.slice(0, -1) + 'O')) continue
+
+      // Chromium 依据 RFC 6265 按「域 + 路径」匹配删除，URL 隐式路径必须与 Cookie 作用域一致
+      const cookieDomain = c.domain?.replace(/^\./, '') || domain
+      const rawPath = c.path || '/'
+      const cookiePath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`
+      // 青果网关存在 /、/jsxsd、/jsxsd/ 三种作用域写法，逐一兜底并去重
+      const candidatePaths = new Set([cookiePath, '/jsxsd/', '/jsxsd'])
+
+      let removedThisCookie = false
+      for (const path of candidatePaths) {
+        for (const protocol of ['https', 'http'] as const) {
+          try {
+            await ses.cookies.remove(`${protocol}://${cookieDomain}${path}`, c.name)
+            removedThisCookie = true
+            break
+          } catch {
+            // 当前协议/路径不匹配，继续尝试下一组合
+          }
+        }
+        if (removedThisCookie) break
+      }
+
+      if (removedThisCookie) {
         removed += 1
+      } else {
+        console.warn(
+          `[瑞数Cookie清洗] 删除失败: domain=${cookieDomain} path=${cookiePath} name=${c.name}`,
+        )
       }
     }
     return removed

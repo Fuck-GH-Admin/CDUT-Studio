@@ -16,9 +16,11 @@ import { join } from 'node:path'
 import { VITE_DEV_SERVER_URL } from '../../config-paths'
 import type {
   YanhuPetBootstrap,
+  YanhuPetChatStatus,
   YanhuPetConfig,
   YanhuPetMessage,
   YanhuPetStateEvent,
+  YanhuPetTourFillEvent,
   YanhuPetViewport,
   YanhuPetWindowGeometry,
   YanhuPetStreamEvent,
@@ -89,6 +91,15 @@ export class YanhuPetWindowManager {
   } | null = null
   /** 配置修订号：仅显式 saveConfig 递增，供渲染层判定是否应用配置 */
   private configRevision = 0
+  /** 桌宠窗口是否已完成首次加载（新手引导轮询） */
+  private ready = false
+  /** 桌宠当前一轮对话运行态（新手引导轮询） */
+  private chatRunning = false
+  private chatStartedAt: number | null = null
+  private chatDoneAt: number | null = null
+  private chatError: string | null = null
+  /** 新手引导保活：原生浏览器视图因引导蒙层隐藏时，桌宠仍保持可见 */
+  private tourKeepAlive = false
 
   /** 绑定主窗口（主窗口重建时重新挂载生命周期监听） */
   public setOwnerWindow(window: BrowserWindow): void {
@@ -328,6 +339,68 @@ export class YanhuPetWindowManager {
     this.send(YANHU_EXPRESS_IPC_CHANNELS.PET_CHAT_STREAM_CHUNK, event)
   }
 
+  /** 标记一轮桌宠对话开始 */
+  public markChatStarted(): void {
+    this.chatRunning = true
+    this.chatStartedAt = Date.now()
+    this.chatError = null
+  }
+
+  /** 标记一轮桌宠对话结束（error 为 null 表示正常完成） */
+  public markChatFinished(error?: string): void {
+    this.chatRunning = false
+    this.chatDoneAt = Date.now()
+    this.chatError = error ?? null
+  }
+
+  /** 读取桌宠窗口就绪与对话运行态（新手引导轮询） */
+  public getChatStatus(): YanhuPetChatStatus {
+    return {
+      ready: this.ready && !!this.getPetWebContents(),
+      running: this.chatRunning,
+      lastStartedAt: this.chatStartedAt,
+      lastDoneAt: this.chatDoneAt,
+      lastError: this.chatError,
+    }
+  }
+
+  /**
+   * 新手引导：把演示指令填入桌宠输入框（不代发送）。
+   * 桌宠窗口未就绪时静默丢弃，由引导侧轮询 ready 后再调用。
+   */
+  public tourFill(text: string): void {
+    const payload: YanhuPetTourFillEvent = { text }
+    this.send(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_FILL, payload)
+  }
+
+  /**
+   * 新手引导：确保桌宠窗口在前台且伴随卡片展开。
+   * 主窗口聚光灯无法跨原生窗口绘制，这里负责把桌宠抬到操作系统最上层。
+   */
+  public ensureTourForeground(): YanhuPetChatStatus {
+    this.tourKeepAlive = true
+    this.setPresented(true)
+    this.saveConfig({ isCollapsed: false })
+    const win = this.petWindow
+    if (win && !win.isDestroyed()) {
+      this.applyBounds()
+      win.show()
+      win.moveTop()
+      this.raiseToTop()
+    }
+    return this.getChatStatus()
+  }
+
+  /** 结束新手引导保活：恢复「原生视图隐藏即桌宠隐藏」的常规裁决 */
+  public releaseTourForeground(): void {
+    this.tourKeepAlive = false
+  }
+
+  /** 新手引导保活是否生效（UPDATE_BOUNDS 的 visible=false 分支据此放行） */
+  public isTourKeepAlive(): boolean {
+    return this.tourKeepAlive
+  }
+
   /** 桌宠窗口是否就绪（用于回退转发） */
   public getPetWebContents(): WebContents | null {
     if (!this.petWindow || this.petWindow.isDestroyed()) return null
@@ -544,11 +617,13 @@ export class YanhuPetWindowManager {
     }
 
     win.webContents.once('did-finish-load', () => {
+      this.ready = true
       this.broadcastState()
       this.applyBounds()
     })
 
     win.on('closed', () => {
+      this.ready = false
       this.petWindow = null
     })
     // 子窗口自身失焦：覆盖「点击桌宠后随即切到外部应用」的场景，同样纳入 80ms 前台裁决

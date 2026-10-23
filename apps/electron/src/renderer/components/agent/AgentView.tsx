@@ -110,6 +110,7 @@ import {
   sessionPersistedPermissionModeAtom,
   agentSessionPathMapAtom,
   allPendingAskUserRequestsAtom,
+  askUserCollapsedAtom,
   allPendingExitPlanRequestsAtom,
   allPendingPermissionRequestsAtom,
   agentMessageQueueAtomFamily,
@@ -118,6 +119,7 @@ import {
   workspaceCapabilitiesVersionAtom,
   sessionMemoryDisabledMapAtom,
   sessionContextModeMapAtom,
+  studyTeachingModeAtomFamily,
 } from '@/atoms/agent-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import { generateSummary } from '@profer/project-core'
@@ -134,6 +136,9 @@ import { useEnterCdutAiClass } from '@/hooks/useEnterCdutAiClass'
 import { cdutAccountAtom } from '@/atoms/cdut-account-atoms'
 import { isAiClassWorkspace } from '@/lib/cdut-ai-class'
 import { CdutAiClassComposerLock, CdutAiClassContentGuard } from '@/components/cdut-zone/CdutAiClassGuards'
+import { AiClassTeachingModeBar } from '@/components/cdut-zone/AiClassTeachingModeBar'
+import { CsLabComposerLock } from '@/components/cdut-science/CsLabAgentGuards'
+import { cslabActiveLabIdAtom } from '@/atoms/cslab-atoms'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { ExplorationBranchBar } from './ExplorationBranchBar'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
@@ -477,16 +482,18 @@ function ToolbarGraphButton({ onClick, sessionId }: { onClick: () => void; sessi
 export interface AgentViewProps {
   sessionId: string
   /**
-   * 视图变体：'ai-class' 进入 AI 速课堂专属精简模式 ——
-   * 隐藏预设切换开关、禁用 / # & 唤起与补全、使用专属空状态与占位文本。
+   * 视图变体：
+   * - 'ai-class'：AI 速课堂专属精简模式 —— 隐藏预设切换开关、禁用 / # & 唤起与补全、使用专属空状态与占位文本；
+   * - 'cs-lab'：渲染于 CDUT Science 科学助理独立窗口 —— 仅作为表面标记，实验室会话在此保持可交互，不改变其他 UI 行为。
    */
-  variant?: 'default' | 'ai-class'
+  variant?: 'default' | 'ai-class' | 'cs-lab'
   /** 空状态自定义节点（速课堂专属问候）；缺省回退通用空状态 */
   emptyState?: React.ReactNode
 }
 
 export function AgentView({ sessionId, variant = 'default', emptyState }: AgentViewProps): React.ReactElement {
   const isAiClass = variant === 'ai-class'
+  const isCsLab = variant === 'cs-lab'
   const [pendingGoalReplacement, setPendingGoalReplacement] = useAtom(goalReplacementAtomFamily(sessionId))
   const [replacingGoal, setReplacingGoal] = React.useState(false)
   const setCurrentGoal = useSetAtom(agentGoalAtomFamily(sessionId))
@@ -959,6 +966,17 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
   // 已登录但从主侧边栏进入（非专区 ai-class 变体）：锁定输入框，引导回专区交互
   const aiClassLockedOutsideZone = isAiClassWorkspaceSession && cdutAccountActive && !isAiClass
   const enterCdutAiClass = useEnterCdutAiClass()
+
+  // ===== CDUT Science 实验室会话访问管控 =====
+  // 实验室绑定会话在科学助理窗口外打开：锁定输入区等一切交互，引导回科学工作台
+  const isCsLabLabSession = Boolean(sessionMeta?.cslabLabId)
+  const csLabLockedOutsideZone = isCsLabLabSession && !isCsLab
+  const setCslabActiveLabId = useSetAtom(cslabActiveLabIdAtom)
+  // 直达该会话所属实验室的工作台；未通过本机门禁时由专区密码门禁自然承接
+  const enterCsLabWorkspace = React.useCallback(() => {
+    if (sessionMeta?.cslabLabId) setCslabActiveLabId(sessionMeta.cslabLabId)
+    setActiveView('cdut-science')
+  }, [sessionMeta?.cslabLabId, setCslabActiveLabId, setActiveView])
   // 预设有效性由工作区预设 API 返回；优先按稳定作用域引用匹配，旧会话才回退裸 ID。
   const sessionPresetId = sessionMeta?.presetId
   const sessionPresetReference = sessionMeta?.presetReference
@@ -2456,6 +2474,10 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       permissionModeOverride: permissionMode,
       disableContextMemory: sessionMemoryDisabled,
       contextMode: effectiveContextMode,
+      // AI 速课堂：仅在本运行内用户显式切换过才消息级透传；未切换交由编排层读会话元数据兜底
+      ...(isAiClass && store.get(studyTeachingModeAtomFamily(sessionId)) && {
+        studyTeachingMode: store.get(studyTeachingModeAtomFamily(sessionId)),
+      }),
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
       ...(() => {
@@ -3101,9 +3123,13 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
   // 发送也会因缓存丢失而失败。删除/归档会话时由 LeftSidebar.cleanupMapAtoms 统一清理。
 
   const allAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom)
+  const askUserCollapsedIds = useAtomValue(askUserCollapsedAtom)
   const allExitPlanRequests = useAtomValue(allPendingExitPlanRequestsAtom)
+  // 折叠后的提问仅显示悬浮胶囊，不再遮挡输入框；AskUserBanner 展示队首请求，故按队首判定。
+  const firstAskUserRequest = (allAskUserRequests.get(sessionId) ?? [])[0]
+  const hasExpandedAskUser = firstAskUserRequest != null && !askUserCollapsedIds.has(firstAskUserRequest.requestId)
   const hasBannerOverlay =
-    (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
+    hasExpandedAskUser ||
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
   // ===== 预览快捷键（Tab 化：打开/聚焦当前文件的预览 Tab） =====
@@ -3376,12 +3402,12 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
           sessionPath={sessionPath}
           attachedDirs={allAttachedDirs}
           stoppedByUser={stoppedByUser}
-          onRetry={handleRetry}
-          onRetryInNewSession={handleRetryInNewSession}
-          onFork={canFork ? handleFork : undefined}
-          onExplore={canExplore ? handleExplore : undefined}
-          onRewind={handleRewindRequest}
-          onCompact={handleCompact}
+          onRetry={csLabLockedOutsideZone ? undefined : handleRetry}
+          onRetryInNewSession={csLabLockedOutsideZone ? undefined : handleRetryInNewSession}
+          onFork={csLabLockedOutsideZone ? undefined : (canFork ? handleFork : undefined)}
+          onExplore={csLabLockedOutsideZone ? undefined : (canExplore ? handleExplore : undefined)}
+          onRewind={csLabLockedOutsideZone ? undefined : handleRewindRequest}
+          onCompact={csLabLockedOutsideZone ? undefined : handleCompact}
           onLoadEarlierHistory={handleLoadEarlierHistory}
           historyMoreAvailable={historyHasMore}
           historyLoadingEarlier={historyLoading}
@@ -3390,7 +3416,8 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
         />
         )}
 
-        {/* 权限请求横幅 */}
+        {/* 权限请求横幅 — 实验室锁定态下不在此窗口响应，杜绝主界面交互穿透 */}
+        {!csLabLockedOutsideZone && (
         <div className="shrink-0">
           {sessionMeta?.cslabLabId && (
             <CsLabToolTrustBadge
@@ -3408,6 +3435,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
           {/* ExitPlanMode 计划审批横幅 */}
           <ExitPlanModeBanner sessionId={sessionId} onRequestStop={handleStop} />
         </div>
+        )}
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {/* 已登录但从主侧边栏进入课堂会话：锁定输入框，引导回 CDUT 专区交互 */}
@@ -3418,11 +3446,18 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
             />
           </div>
         )}
+        {/* 实验室绑定会话在主界面打开：锁定输入区，引导回 CDUT Science 交互 */}
+        {csLabLockedOutsideZone && (
+          <div className="shrink-0 px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
+            <CsLabComposerLock onEnter={enterCsLabWorkspace} />
+          </div>
+        )}
         {/* 未登录课堂会话由内容拦截承接，此处不渲染输入区 */}
-        {!hasBannerOverlay && !aiClassLockedOutsideZone && !aiClassBlockedNotLoggedIn && (
+        {!hasBannerOverlay && !aiClassLockedOutsideZone && !aiClassBlockedNotLoggedIn && !csLabLockedOutsideZone && (
         <div className="shrink-0 px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
           {/* 下方 composer 以完整顶部圆角叠在服务轨上；服务轨延伸至圆角背后。 */}
           <div className="composer-stack">
+            {isAiClass && <AiClassTeachingModeBar sessionId={sessionId} sessionMeta={sessionMeta} />}
             <BackgroundTaskControls sessionId={sessionId} />
             <RuntimeProcessPanel sessionId={sessionId} />
             <div

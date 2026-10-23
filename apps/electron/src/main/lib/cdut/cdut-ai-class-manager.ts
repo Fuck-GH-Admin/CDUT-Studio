@@ -15,6 +15,7 @@
 import { join, resolve } from 'node:path'
 import { existsSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { app } from 'electron'
 import type { ProviderType } from '@profer/shared'
 import {
   BUILTIN_PRESET_STANDARD,
@@ -42,10 +43,12 @@ import {
 import {
   createAgentSession,
   deleteAgentSession,
+  getAgentSessionMeta,
   listAgentSessions,
+  updateAgentSessionMeta,
 } from '../agent-session-manager'
 import { createAgentPreset, listAgentPresets } from '../agent-preset-manager'
-import { listStudyDocuments } from '../study/study-document-indexer'
+import { ingestStudyDocuments, listStudyDocuments } from '../study/study-document-indexer'
 import {
   assertStudyId,
   getStudyMaterialsRootDir,
@@ -202,6 +205,110 @@ export function createAiClassSession(courseName: string): AiClassSessionSummary 
     createdAt: session.createdAt,
     lastActiveAt: session.updatedAt,
     documentCount: 0,
+  }
+}
+
+/** 演示课堂名称（新手引导专用，按标题幂等复用） */
+const DEMO_AI_CLASS_NAME = '演示课堂 · 红楼梦精读'
+/** 演示资料 ASCII 文件名（避免 Windows/macOS 打包编码差异） */
+const DEMO_NOVEL_FILE_NAME = 'hongloumeng-quan-shu.txt'
+
+/** 演示资料搜索结果 */
+export interface EnsureDemoAiClassResult {
+  session: AiClassSessionSummary
+  created: boolean
+  documentIngested: boolean
+  novelPath: string | null
+}
+
+/**
+ * 解析演示《红楼梦》全文路径。
+ *
+ * 优先环境变量与开发态 resources，其次兼容仓库根目录原始中文文件；
+ * 全部缺失时返回 null，由调用方如实降级，绝不伪造导入成功。
+ */
+function resolveDemoNovelPath(): string | null {
+  const appPath = typeof app?.getAppPath === 'function' ? app.getAppPath() : process.cwd()
+  const candidates = [
+    process.env.CDUT_DEMO_NOVEL_PATH,
+    app?.isPackaged ? join(process.resourcesPath, 'demo', DEMO_NOVEL_FILE_NAME) : null,
+    join(appPath, 'resources', 'demo', DEMO_NOVEL_FILE_NAME),
+    join(appPath, '..', '..', '《红楼梦》全书.txt'),
+    join(process.cwd(), '《红楼梦》全书.txt'),
+  ].filter((candidate): candidate is string => Boolean(candidate))
+  return candidates.find((candidate) => existsSync(candidate)) ?? null
+}
+
+/**
+ * 确保「演示课堂 · 红楼梦精读」会话与《红楼梦》资料就绪。
+ *
+ * 幂等：会话优先按标题匹配；标题被首轮自动改名服务覆盖后，退化为按
+ * 「已挂载《红楼梦》资料的速课堂会话」匹配，命中即复用、绝不重建。
+ * 资料按文件名判重；ingestStudyDocuments 内部会 await 落盘 index.json 与
+ * document.md，返回前再做一次 listStudyDocuments 硬校验。
+ *
+ * 并发保护：in-flight Promise 复用，避免快速重播/双击触发重复建会话。
+ */
+export function ensureDemoAiClassSession(): Promise<EnsureDemoAiClassResult> {
+  ensureDemoInFlight ??= runEnsureDemoAiClassSession().finally(() => {
+    ensureDemoInFlight = null
+  })
+  return ensureDemoInFlight
+}
+
+let ensureDemoInFlight: Promise<EnsureDemoAiClassResult> | null = null
+
+async function runEnsureDemoAiClassSession(): Promise<EnsureDemoAiClassResult> {
+  const sessions = listAiClassSessions()
+  const existing =
+    sessions.find((session) => session.courseName === DEMO_AI_CLASS_NAME)
+    // 兜底：首轮回复触发自动改名后标题不再匹配，改按已挂载《红楼梦》资料定位演示课堂
+    ?? sessions.find((session) =>
+      listStudyDocuments(session.sessionId).some(
+        (document) => document.fileName === DEMO_NOVEL_FILE_NAME,
+      ),
+    )
+  const session = existing ?? createAiClassSession(DEMO_AI_CLASS_NAME)
+  const created = !existing
+  lockDemoSessionTitle(session.sessionId)
+
+  const novelPath = resolveDemoNovelPath()
+  if (!novelPath) {
+    console.warn('[AI速课堂] 未找到演示《红楼梦》全文，跳过资料挂载')
+    return { session, created, documentIngested: false, novelPath: null }
+  }
+
+  const hasNovel = listStudyDocuments(session.sessionId).some(
+    (document) => document.fileName === DEMO_NOVEL_FILE_NAME,
+  )
+  if (!hasNovel) {
+    await ingestStudyDocuments(session.sessionId, [novelPath])
+  }
+
+  // 刷盘硬校验：确认索引目录已可枚举到该资料
+  const ingested = listStudyDocuments(session.sessionId).some(
+    (document) => document.fileName === DEMO_NOVEL_FILE_NAME,
+  )
+  const refreshed = listAiClassSessions().find((item) => item.sessionId === session.sessionId)
+  return {
+    session: refreshed ?? session,
+    created,
+    documentIngested: ingested,
+    novelPath,
+  }
+}
+
+/**
+ * 锁定演示课堂标题：首轮回复后 orchestrator 的自动改名不得覆盖演示课堂名，
+ * 否则二次重播按标题幂等匹配会失败并重复建课堂。已锁定或会话缺失时静默跳过。
+ */
+function lockDemoSessionTitle(sessionId: string): void {
+  try {
+    const meta = getAgentSessionMeta(sessionId)
+    if (!meta || meta.titleLockedAt) return
+    updateAgentSessionMeta(sessionId, { titleLockedAt: Date.now() })
+  } catch (error) {
+    console.warn('[AI速课堂] 锁定演示课堂标题失败:', sessionId, error)
   }
 }
 

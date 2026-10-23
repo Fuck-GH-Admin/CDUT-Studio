@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, normalizePathForCompare, DEFAULT_PRESET_ID, type AgentThinkingLevel, type AgentEffort, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult, type OtherWorkspacePresetsGroup, type PresetReference, type PresetReferenceReport, type PresetScopeRebindResult } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, normalizePathForCompare, DEFAULT_PRESET_ID, type AgentThinkingLevel, type AgentEffort, type StudyTeachingMode, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult, type OtherWorkspacePresetsGroup, type PresetReference, type PresetReferenceReport, type PresetScopeRebindResult } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, SHORTCUT_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import { getBuildTarget } from './lib/build-target'
@@ -79,10 +79,6 @@ import type {
   ProferPermissionMode,
   AskUserResponse,
   ExitPlanModeResponse,
-  SystemPromptConfig,
-  SystemPrompt,
-  SystemPromptCreateInput,
-  SystemPromptUpdateInput,
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
@@ -145,6 +141,8 @@ import { isReadOnlyPreviewPathAllowed } from './lib/preview-path-policy'
 import { isReviewPrivateDesktopPath, isUnsafeAgentWorkspaceMutationPath, filterOrdinaryDesktopFileEntries, renameOrdinaryAgentFileEntry } from './lib/review-private-file-access'
 import { CHANGELOG_IPC_CHANNELS, type ChangelogEntry } from '@profer/shared'
 import { getChangelog } from './lib/changelog-service'
+import { BULLETIN_IPC_CHANNELS, type BulletinItem } from '@profer/shared'
+import { getBulletins } from './lib/bulletin-service'
 import { registerReviewIpc } from './lib/review/review-ipc'
 import { registerCsLabIpc } from './lib/cslab'
 import { grantCsLabToolTrust, revokeCsLabToolTrust } from './lib/cslab/cslab-tool-trust'
@@ -157,6 +155,7 @@ import { yanhuPiRuntime } from './lib/cdut/yanhu/yanhu-pi-runtime'
 import type {
   YanhuPetChatInput,
   YanhuPetConfig,
+  YanhuPetTourFillEvent,
   YanhuPetViewport,
   YanhuPetWindowGeometry,
 } from '@profer/shared'
@@ -165,6 +164,7 @@ import { resolveCdutMutationConfirm } from './lib/cdut/cdut-mutation-guard'
 import {
   createAiClassSession,
   deleteAiClassSession,
+  ensureDemoAiClassSession,
   estimateGraphGenerationCost,
   generateKnowledgeGraph,
   listAiClassSessions,
@@ -338,6 +338,7 @@ import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertTrustedAgentSender } from './lib/ipc-sender-guard'
 import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
+import { confirmExecutableFileOpen } from './lib/security/executable-open-guard'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath, getStudySessionDir, getCdutScheduleCachePath, getCdutGradesCachePath } from './lib/config-paths'
 import { writeJsonFileAtomic, readJsonFileSafe } from './lib/safe-file'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
@@ -428,14 +429,6 @@ import { searchMemoryArchiveRouted } from './lib/memory-search-router'
 import { cancelLarkLogin, detectLarkCli, installLarkCli, startLarkLogin, __setLarkLoginEventHandler } from './lib/lark-cli-service'
 import { cancelLarkMcpLogin, disableLarkMcpForWorkspace, enableLarkMcpForWorkspace, getLarkMcpStatus, saveLarkMcpCredentials, startLarkMcpLogin, testLarkMcpConnection, __setLarkMcpLoginEventHandler } from './lib/lark-mcp-service'
 import type { MemoryWikilinkTarget, MemoryBacklink } from '@profer/shared'
-import {
-  getSystemPromptConfig,
-  createSystemPrompt,
-  updateSystemPrompt,
-  deleteSystemPrompt,
-  updateAppendSetting,
-  setDefaultPrompt,
-} from './lib/system-prompt-manager'
 import {
   getLatestRelease,
   listReleases as listGitHubReleases,
@@ -1575,6 +1568,11 @@ export function registerIpcHandlers(): void {
           spawnSync('open', [absPath], { timeout: 5000 })
         }
       } else {
+        // CVE-2026-96951 防御：Windows 下打开可执行/脚本文件前弹安全确认框。
+        if (!(await confirmExecutableFileOpen(absPath))) {
+          console.warn('[IPC] shell:system-open-file 用户取消打开可执行文件:', absPath)
+          return
+        }
         const errMsg = await shell.openPath(absPath)
         if (errMsg) console.warn('[IPC] shell:system-open-file 打开失败:', errMsg)
       }
@@ -4137,6 +4135,21 @@ export function registerIpcHandlers(): void {
     },
   )
 
+  // AI 速课堂带教模式切换（fast/balanced/strict，跨会话持久化）。
+  // 与 effort 不同：模式是纯提示词装配参数，仅在每轮 buildSystemPrompt 时读取，
+  // 流式中切换不产生一致性问题，自然对下一轮生效，因此允许运行中切换。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_STUDY_TEACHING_MODE,
+    async (_, sessionId: string, mode: StudyTeachingMode): Promise<AgentSessionMeta> => {
+      const validModes: StudyTeachingMode[] = ['fast', 'balanced', 'strict']
+      if (!validModes.includes(mode)) {
+        throw new Error(`无效的带教模式: ${String(mode)}`)
+      }
+      if (!getAgentSessionMeta(sessionId)) throw new Error(`Agent 会话不存在: ${sessionId}`)
+      return updateAgentSessionUiMeta(sessionId, { studyTeachingMode: mode })
+    },
+  )
+
   // 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单动态展示）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY,
@@ -4849,6 +4862,12 @@ export function registerIpcHandlers(): void {
 
       const safePath = resolve(filePath)
       assertInsideAgentWorkspaces(safePath)
+
+      // CVE-2026-96951 防御：Windows 下打开可执行/脚本文件前弹安全确认框（Agent 同样受控）。
+      if (!(await confirmExecutableFileOpen(safePath))) {
+        console.warn('[IPC] agent:open-file 用户取消打开可执行文件:', safePath)
+        return
+      }
 
       const errMsg = await shell.openPath(safePath)
       if (errMsg) console.warn('[IPC] agent:open-file 打开失败:', errMsg)
@@ -5644,56 +5663,6 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // ===== 系统提示词管理 =====
-
-  // 获取系统提示词配置
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.GET_CONFIG,
-    async (): Promise<SystemPromptConfig> => {
-      return getSystemPromptConfig()
-    }
-  )
-
-  // 创建提示词
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.CREATE,
-    async (_, input: SystemPromptCreateInput): Promise<SystemPrompt> => {
-      return createSystemPrompt(input)
-    }
-  )
-
-  // 更新提示词
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.UPDATE,
-    async (_, id: string, input: SystemPromptUpdateInput): Promise<SystemPrompt> => {
-      return updateSystemPrompt(id, input)
-    }
-  )
-
-  // 删除提示词
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.DELETE,
-    async (_, id: string): Promise<void> => {
-      return deleteSystemPrompt(id)
-    }
-  )
-
-  // 更新追加日期时间和用户名开关
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.UPDATE_APPEND_SETTING,
-    async (_, enabled: boolean): Promise<void> => {
-      return updateAppendSetting(enabled)
-    }
-  )
-
-  // 设置默认提示词
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.SET_DEFAULT,
-    async (_, id: string | null): Promise<void> => {
-      return setDefaultPrompt(id)
-    }
-  )
-
   // ===== GitHub Release =====
 
   /** 商业版 releases.json 地址，可通过 PROFER_UPDATE_FEED_URL 环境变量覆盖；默认指向新机 HTTPS 域名，不再使用裸 IP 明文地址。 */
@@ -6241,6 +6210,11 @@ export function registerIpcHandlers(): void {
     return getChangelog()
   })
 
+  // 本地系统公告栏（内置本地 bulletin.json）
+  ipcMain.handle(BULLETIN_IPC_CHANNELS.GET, (): BulletinItem[] => {
+    return getBulletins()
+  })
+
   // 注册内容审核专区 IPC 处理器
   registerReviewIpc()
 
@@ -6345,6 +6319,7 @@ export function registerIpcHandlers(): void {
   })
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.HIDE_VIEW, () => {
     yanhuExpressManager.hideView()
+    yanhuPetWindowManager.releaseTourForeground()
     yanhuPetWindowManager.setPresented(false)
     return { success: true }
   })
@@ -6359,7 +6334,10 @@ export function registerIpcHandlers(): void {
         height: layout.pageBounds.height,
       })
     } else if (layout && !layout.visible) {
-      yanhuPetWindowManager.setPresented(false)
+      // 新手引导期间保活：蒙层隐藏原生浏览器视图时，桌宠仍需留在屏幕上供用户点击发送
+      if (!yanhuPetWindowManager.isTourKeepAlive()) {
+        yanhuPetWindowManager.setPresented(false)
+      }
     }
     return { success: true }
   })
@@ -6458,19 +6436,40 @@ export function registerIpcHandlers(): void {
     return { success: true }
   })
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.PET_CHAT_SEND, async (_event, input: YanhuPetChatInput) => {
+    yanhuPetWindowManager.markChatStarted()
     try {
       await yanhuPiRuntime.send(
         input ?? { text: '' },
         () => yanhuExpressManager.getActiveTabId(),
         (event) => yanhuPetWindowManager.emitStream(event),
       )
+      yanhuPetWindowManager.markChatFinished()
       return { success: true }
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
+      const message = error instanceof Error ? error.message : String(error)
+      yanhuPetWindowManager.markChatFinished(message)
+      return { success: false, error: message }
     }
   })
   ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.PET_CHAT_ABORT, () => {
     yanhuPiRuntime.abort()
+    return { success: true }
+  })
+  // 新手引导：查询桌宠窗口就绪 / 对话运行态
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.PET_GET_CHAT_STATUS, () =>
+    yanhuPetWindowManager.getChatStatus(),
+  )
+  // 新手引导：把演示指令填入桌宠输入框（不代发送）
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_FILL, (_event, payload: YanhuPetTourFillEvent) => {
+    yanhuPetWindowManager.tourFill(payload?.text ?? '')
+    return { success: true }
+  })
+  // 新手引导：前置桌宠窗口并展开伴随卡片
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_PRESENT, () =>
+    yanhuPetWindowManager.ensureTourForeground(),
+  )
+  ipcMain.handle(YANHU_EXPRESS_IPC_CHANNELS.PET_TOUR_RELEASE, () => {
+    yanhuPetWindowManager.releaseTourForeground()
     return { success: true }
   })
   // 桌宠鼠标穿透控制：透明区域允许底层网页接收鼠标事件
@@ -6588,6 +6587,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(CDUT_AI_CLASS_IPC_CHANNELS.CREATE_SESSION, (_event, courseName: string) => {
     return createAiClassSession(courseName)
+  })
+
+  ipcMain.handle(CDUT_AI_CLASS_IPC_CHANNELS.ENSURE_DEMO_SESSION, () => {
+    return ensureDemoAiClassSession()
   })
 
   ipcMain.handle(CDUT_AI_CLASS_IPC_CHANNELS.DELETE_SESSION, (_event, sessionId: string) => {

@@ -15,7 +15,25 @@ import type {
   AskUserRequest,
   AskUserQuestion,
   AskUserQuestionOption,
+  AskUserQuestionType,
 } from '@profer/shared'
+
+/**
+ * 归一化模型下发的题型：显式合法 type 优先；缺省时按选项数量与 multiSelect 优雅降级，
+ * 兼容历史会话与非速课堂场景的存量调用。
+ */
+export function normalizeAskUserQuestionType(
+  rawType: unknown,
+  optionCount: number,
+  multiSelect: boolean,
+): AskUserQuestionType {
+  if (rawType === 'fill-blank') return 'fill-blank'
+  // 选择题没有 options 时无法作答，统一降级为填空，避免下发畸形题。
+  if (optionCount === 0) return 'fill-blank'
+  if (rawType === 'single' || rawType === 'multiple') return rawType
+  return multiSelect ? 'multiple' : 'single'
+}
+
 /** canUseTool 返回的权限结果 */
 type PermissionResult = {
   behavior: 'allow'
@@ -54,6 +72,16 @@ export class AgentAskUserService {
     sendToRenderer: (request: AskUserRequest) => void,
   ): Promise<PermissionResult> {
     const questions = this.parseQuestions(input)
+
+    // 空题熔断：解析不出任何有效问题时立即结构化拒绝，严禁创建 pending 死等造成会话假死。
+    if (questions.length === 0) {
+      return Promise.resolve({
+        behavior: 'deny' as const,
+        message:
+          'AskUserQuestion 输入未包含任何有效问题。请修正参数后重试，标准格式为 '
+          + '{ questions: [{ question, header, options: [{ label, description }], multiSelect }] }。',
+      })
+    }
 
     const requestId = randomUUID()
     const rendererToolInput = { ...input }
@@ -126,30 +154,46 @@ export class AgentAskUserService {
   /**
    * 从工具输入中解析问题列表
    *
-   * SDK AskUserQuestion 工具输入格式：
-   * { questions: [{ question, header, options: [{ label, description, preview }], multiSelect }] }
+   * 标准格式：{ questions: [{ question, header, options: [{ label, description, preview }], multiSelect }] }
+   * 兼容容错：部分模型会平铺下发单题 { question, header, options, multiSelect }，同样接受。
    */
   private parseQuestions(input: Record<string, unknown>): AskUserQuestion[] {
-    const rawQuestions = input.questions
-    if (!Array.isArray(rawQuestions)) return []
+    let rawQuestions: unknown[]
+    if (Array.isArray(input.questions)) {
+      rawQuestions = input.questions
+    } else if (typeof input.question === 'string') {
+      // 平铺单题：将 input 自身视为题目对象，仅提取已知字段。
+      rawQuestions = [input]
+    } else {
+      return []
+    }
 
-    return rawQuestions.map((q: unknown): AskUserQuestion => {
-      const raw = q as Record<string, unknown>
-      const options = Array.isArray(raw.options)
-        ? (raw.options as Array<Record<string, unknown>>).map((o): AskUserQuestionOption => ({
+    return rawQuestions.map((q: unknown) => this.parseSingleQuestion(q))
+  }
+
+  /** 解析单个题目对象，字段全部做类型防御，非法值降级为空串/缺省。 */
+  private parseSingleQuestion(q: unknown): AskUserQuestion {
+    const raw = q as Record<string, unknown>
+    const options = Array.isArray(raw.options)
+      ? (raw.options as Array<Record<string, unknown>>)
+          .map((o): AskUserQuestionOption => ({
             label: typeof o.label === 'string' ? o.label : '',
             description: typeof o.description === 'string' ? o.description : undefined,
             preview: typeof o.preview === 'string' ? o.preview.slice(0, 10_000) : undefined,
           }))
-        : []
+          .filter((o) => o.label.length > 0)
+      : []
+    const multiSelect = raw.multiSelect === true
+    const type = normalizeAskUserQuestionType(raw.type, options.length, multiSelect)
 
-      return {
-        question: typeof raw.question === 'string' ? raw.question : '',
-        header: typeof raw.header === 'string' ? raw.header : undefined,
-        options,
-        multiSelect: raw.multiSelect === true,
-      }
-    })
+    return {
+      question: typeof raw.question === 'string' ? raw.question : '',
+      header: typeof raw.header === 'string' ? raw.header : undefined,
+      type,
+      placeholder: typeof raw.placeholder === 'string' ? raw.placeholder.slice(0, 500) : undefined,
+      options: type === 'fill-blank' ? [] : options,
+      multiSelect: type === 'multiple',
+    }
   }
 }
 

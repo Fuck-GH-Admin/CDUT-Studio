@@ -27,6 +27,32 @@ function resolveSize(plot: CsLabPlotDocument, options: CsLabPlotExportOptions): 
   }
 }
 
+/** 毫米 → 英寸；Electron printToPDF 的 pageSize 单位为英寸 */
+export function pdfPageSizeInches(
+  widthMm: number,
+  heightMm: number,
+): { width: number; height: number } {
+  return {
+    width: Number((widthMm / 25.4).toFixed(3)),
+    height: Number((heightMm / 25.4).toFixed(3)),
+  }
+}
+
+/**
+ * PDF 打印视口像素：打印引擎恒按 96 CSS px = 1 in 排版。
+ * 先取整英寸再换算并向下取整，保证内容永不比纸张多出亚像素而触发空白分页。
+ */
+export function pdfViewportPx(
+  widthMm: number,
+  heightMm: number,
+): { widthPx: number; heightPx: number } {
+  const page = pdfPageSizeInches(widthMm, heightMm)
+  return {
+    widthPx: Math.max(1, Math.floor(page.width * 96)),
+    heightPx: Math.max(1, Math.floor(page.height * 96)),
+  }
+}
+
 function pixelSize(widthMm: number, heightMm: number, dpi: number): { widthPx: number; heightPx: number } {
   const widthPx = Math.max(1, Math.round((widthMm / 25.4) * dpi))
   const heightPx = Math.max(1, Math.round((heightMm / 25.4) * dpi))
@@ -55,8 +81,8 @@ function htmlForSvg(svg: string, widthPx: number, heightPx: number, transparent:
   ].join('')
 }
 
-async function waitForWindowReady(win: BrowserWindow): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+function waitForWindowReady(win: BrowserWindow): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('离屏渲染窗口加载超时（15s）')), 15_000)
     win.webContents.once('did-finish-load', () => {
       clearTimeout(timer)
@@ -67,6 +93,9 @@ async function waitForWindowReady(win: BrowserWindow): Promise<void> {
       reject(new Error(`离屏渲染窗口加载失败：${code} ${description}`))
     })
   })
+}
+
+async function settleFontsAndPaint(win: BrowserWindow): Promise<void> {
   try {
     await win.webContents.executeJavaScript('document.fonts.ready.then(() => true)')
   } catch {
@@ -95,8 +124,12 @@ async function withOffscreenWindow<T>(
     },
   })
   try {
-    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-    await waitForWindowReady(win)
+    // 关键：先绑定 did-finish-load，再触发导航，避免事件早于监听。
+    const ready = waitForWindowReady(win)
+    // loadURL 的失败与 did-fail-load 重复；统一由 ready 收口超时与错误，避免双重 rejection 噪音。
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => undefined)
+    await ready
+    await settleFontsAndPaint(win)
     return await task(win)
   } finally {
     if (!win.isDestroyed()) win.destroy()
@@ -131,13 +164,16 @@ async function renderPdf(
   widthMm: number,
   heightMm: number,
 ): Promise<Buffer> {
-  const { widthPx, heightPx } = pixelSize(widthMm, heightMm, options.dpi)
+  // PDF 为矢量输出：视口按打印引擎的 96 CSS DPI 排版，绝不按导出 DPI 写死像素宽高，
+  // 否则 600 DPI 的 2008px 内容会被 321 CSS px 的纸张横向切成多页。
+  const page = pdfPageSizeInches(widthMm, heightMm)
+  const { widthPx, heightPx } = pdfViewportPx(widthMm, heightMm)
   const svg = svgForPlot(plot, widthMm, heightMm)
   const html = htmlForSvg(svg, widthPx, heightPx, options.transparentBackground)
   return withOffscreenWindow(html, widthPx, heightPx, options.transparentBackground, async (win) => {
     return win.webContents.printToPDF({
       printBackground: true,
-      pageSize: { width: Math.round(widthMm * 1000), height: Math.round(heightMm * 1000) },
+      pageSize: page,
       margins: { top: 0, bottom: 0, left: 0, right: 0 },
     })
   })

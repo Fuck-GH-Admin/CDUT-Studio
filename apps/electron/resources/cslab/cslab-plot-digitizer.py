@@ -3,10 +3,12 @@
 
 能力：
 - 颜色掩膜（HSV）分离目标曲线/散点；
-- Hough 轴线检测与倾斜仿射矫正；
 - 骨架化 + 交叉点剥离 + 连通域排序（折线）；
 - 轮廓矩质心（散点）；
 - 线性 / log10 标定拟合，自动选择 R² 更高者。
+
+坐标基准：完全由用户标定的刻度点锚定，不做任何自动旋转（rotationDeg 恒为 0），
+提取像素与前端底图严格 1:1 对齐。
 
 红线：依赖缺失或提取失败时输出 {ok:false,message,missing}，绝不伪造数据。
 仅通过 stdout 输出 JSON，日志一律写 stderr。
@@ -88,57 +90,6 @@ def build_color_mask(image, color, tolerance):
     lower = np.array([max(0, peak - tolerance), 70, 40], dtype=np.uint8)
     upper = np.array([min(179, peak + tolerance), 255, 255], dtype=np.uint8)
     return cv2.inRange(hsv, lower, upper)
-
-
-def detect_rotation(mask):
-    """Hough 检测主轴倾斜角；返回角度与调试信息。"""
-    import cv2
-
-    edges = cv2.Canny(mask, 50, 150)
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=40, minLineLength=40, maxLineGap=8)
-    if lines is None:
-        return 0.0
-    lines = np.asarray(lines)
-    if lines.ndim == 3:
-        lines = lines[:, 0, :]
-    candidates = []
-    for line in lines:
-        x1, y1, x2, y2 = [float(v) for v in line]
-        length = math.hypot(x2 - x1, y2 - y1)
-        if length < 30:
-            continue
-        angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-        candidates.append((length, angle))
-    if not candidates:
-        return 0.0
-    candidates.sort(reverse=True)
-    # 只矫正轻微倾斜，避免把图表内部斜线误判为页面旋转。
-    angle = candidates[0][1]
-    if abs(angle) > 45:
-        angle = angle - 90 if angle > 0 else angle + 90
-    if abs(angle) > 1.5 and abs(angle) < 15:
-        return -angle
-    return 0.0
-
-
-def rotate_image_and_points(image, mask, ticks, angle):
-    import cv2
-
-    if abs(angle) < 0.01:
-        return image, mask, ticks
-    height, width = image.shape[:2]
-    center = (width / 2.0, height / 2.0)
-    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-    rotated_image = cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_LINEAR)
-    rotated_mask = cv2.warpAffine(mask, matrix, (width, height), flags=cv2.INTER_NEAREST)
-    rotated_ticks = []
-    for tick in ticks:
-        vector = np.array([tick["px"], tick["py"], 1.0], dtype=np.float64)
-        mapped = matrix @ vector
-        rotated_ticks.append(
-            {"px": float(mapped[0]), "py": float(mapped[1]), "value": float(tick["value"])}
-        )
-    return rotated_image, rotated_mask, rotated_ticks
 
 
 def fit_axis(ticks, preferred, coordinate="px"):
@@ -326,18 +277,8 @@ def main():
         emit({"ok": False, "message": "未在框选区域检测到目标颜色曲线"})
         return
 
-    rotation = detect_rotation(mask)
-    image, mask, all_ticks = rotate_image_and_points(
-        image,
-        mask,
-        [*x_ticks, *y_ticks],
-        rotation,
-    )
-    rotated_x = all_ticks[: len(x_ticks)]
-    rotated_y = all_ticks[len(x_ticks):]
-
-    x_fit = fit_axis(rotated_x, x_pref, "px")
-    y_fit = fit_axis(rotated_y, y_pref, "py")
+    x_fit = fit_axis(x_ticks, x_pref, "px")
+    y_fit = fit_axis(y_ticks, y_pref, "py")
     if not x_fit or not y_fit:
         emit({"ok": False, "message": "标定刻度不足，至少需要 X/Y 各 2 个刻度"})
         return
@@ -377,7 +318,7 @@ def main():
             "ok": True,
             "width": int(image.shape[1]),
             "height": int(image.shape[0]),
-            "rotationDeg": float(rotation),
+            "rotationDeg": 0.0,
             "axisFit": {
                 "x": {"scale": x_fit["scale"], "r2": float(x_fit["r2"])},
                 "y": {"scale": y_fit["scale"], "r2": float(y_fit["r2"])},

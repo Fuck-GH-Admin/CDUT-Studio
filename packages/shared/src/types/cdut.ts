@@ -319,6 +319,8 @@ export const CDUT_AI_CLASS_IPC_CHANNELS = {
   ESTIMATE_GRAPH_COST: 'cdut-ai-class:estimate-graph-cost',
   /** 全域跨文档高精度混合检索（入参 StudySearchKnowledgeInput） */
   SEARCH_KNOWLEDGE: 'cdut-ai-class:search-knowledge',
+  /** 新手引导：确保「演示课堂 · 红楼梦精读」会话与演示资料就绪（幂等） */
+  ENSURE_DEMO_SESSION: 'cdut-ai-class:ensure-demo-session',
 } as const
 
 /** 图谱推演进度事件（主进程 -> 渲染进程，驱动资料树顶部进度胶囊） */
@@ -667,6 +669,22 @@ export interface YanhuPetStreamEvent {
   error?: string
 }
 
+/** 桌宠窗口就绪状态与对话运行态（新手引导轮询） */
+export interface YanhuPetChatStatus {
+  /** 桌宠子窗口已创建且完成首次加载 */
+  ready: boolean
+  /** 当前是否有一轮桌宠对话在运行 */
+  running: boolean
+  lastStartedAt: number | null
+  lastDoneAt: number | null
+  lastError: string | null
+}
+
+/** 新手引导：主进程 -> 桌宠子窗口，写入输入框 */
+export interface YanhuPetTourFillEvent {
+  text: string
+}
+
 /** 桌宠视口矩形（相对主窗口内容区左上角，CSS 像素） */
 export interface YanhuPetViewport {
   x: number
@@ -819,6 +837,14 @@ export const YANHU_EXPRESS_IPC_CHANNELS = {
   PET_CLEAR_HISTORY: 'yanhu-express:pet-clear-history',
   /** 主进程 -> 桌宠子窗口：记忆已被清空（原生菜单触发时同步 UI） */
   PET_HISTORY_CLEARED: 'yanhu-express:pet-history-cleared',
+  /** 新手引导：主进程 -> 桌宠子窗口，自动填入输入框（不代发送） */
+  PET_TOUR_FILL: 'yanhu-express:pet-tour-fill',
+  /** 新手引导：查询桌宠窗口就绪与对话运行态 */
+  PET_GET_CHAT_STATUS: 'yanhu-express:pet-get-chat-status',
+  /** 新手引导：前置桌宠窗口并展开伴随卡片 */
+  PET_TOUR_PRESENT: 'yanhu-express:pet-tour-present',
+  /** 新手引导：结束桌宠保活（恢复常规显隐裁决） */
+  PET_TOUR_RELEASE: 'yanhu-express:pet-tour-release',
   /** 桌宠透明区域鼠标穿透：避免遮挡底层网页交互 */
   PET_SET_IGNORE_MOUSE: 'yanhu-express:pet-set-ignore-mouse',
   /** 桌宠原生上下文菜单（主进程 Menu.popup，彻底根除紧凑子窗口边界裁切） */

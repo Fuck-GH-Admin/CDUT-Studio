@@ -44,6 +44,8 @@ export interface YanhuPetDialogProps {
   onDevCommand: () => void
   /** 输入活动回调（驱动 Blinking 态） */
   onInputActivity: () => void
+  /** 新手引导：外部一次性填入输入框（nonce 保证重复文本也能触发） */
+  fillRequest?: { text: string; nonce: number } | null
 }
 
 export function YanhuPetDialog({
@@ -63,11 +65,22 @@ export function YanhuPetDialog({
   onOpenSettings,
   onDevCommand,
   onInputActivity,
+  fillRequest,
 }: YanhuPetDialogProps): React.ReactElement {
   const [input, setInput] = React.useState('')
   const isComposingRef = React.useRef(false)
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+
+  // 新手引导：把演示指令填入输入框（只填入、不代发送）。
+  // 仅由 fillRequest（含 nonce）驱动，避免宿主重渲染时反复覆盖用户输入。
+  React.useEffect(() => {
+    if (!fillRequest) return
+    setInput(fillRequest.text)
+    onInputActivity()
+    window.requestAnimationFrame(() => textareaRef.current?.focus())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fillRequest])
 
   React.useEffect(() => {
     const el = scrollRef.current

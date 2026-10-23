@@ -11,6 +11,7 @@ import { existsSync } from 'fs'
 import { basename, join } from 'path'
 import type { DetachedPreviewWindowData, DetachedPreviewWindowInput } from '@profer/shared'
 import { VITE_DEV_SERVER_URL } from './config-paths'
+import { confirmExecutableFileOpen } from './security/executable-open-guard'
 
 const previewDataById = new Map<string, DetachedPreviewWindowData>()
 const previewWindowsById = new Map<string, BrowserWindow>()
@@ -161,7 +162,10 @@ export function openDetachedPreviewWindow(
       shell.openExternal(url)
     } else {
       const sysPath = toSystemPath(url)
-      if (sysPath) shell.openPath(sysPath)
+      // CVE-2026-96951 防御：Windows 下打开可执行/脚本文件前弹安全确认框。
+      if (sysPath) void confirmExecutableFileOpen(sysPath).then((allowed) => {
+        if (allowed) shell.openPath(sysPath)
+      })
     }
     return { action: 'deny' }
   })
@@ -173,7 +177,9 @@ export function openDetachedPreviewWindow(
       shell.openExternal(url)
     } else {
       const sysPath = toSystemPath(url)
-      if (sysPath) shell.openPath(sysPath)
+      if (sysPath) void confirmExecutableFileOpen(sysPath).then((allowed) => {
+        if (allowed) shell.openPath(sysPath)
+      })
     }
   })
 

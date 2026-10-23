@@ -1,4 +1,4 @@
-/**
+﻿/**
  * expanded-sidebar.tsx — 展开态完整侧边栏
  *
  * 从 LeftSidebar 抽离的展开态视图。通过 SidebarModel 读取状态与 handler。
@@ -10,7 +10,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { activeViewAtom } from '@/atoms/active-view'
 import { archivedUnreadAtom } from '@/atoms/sidebar-atoms'
-import cdutLogo from '@/assets/cdut-logo.svg'
+import { CdutMark } from '@/components/shared/CdutLogo'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { Popover, PopoverTrigger, PopoverContent } from '@profer/ui/primitives/popover'
 import { UserAvatar } from '@/components/shared/UserAvatar'
@@ -122,7 +122,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
       {/* 顶部 Header：最左上角 Logo 图标 + Welcome 字样，右侧协调收起按钮 */}
       <div className="titlebar-drag-region flex items-center justify-between px-3 pt-1.5 pb-1">
         <div className="flex items-center gap-2 min-w-0 select-none">
-          <img src={cdutLogo} alt="CDUT Logo" className="size-5 object-contain flex-shrink-0" />
+          <CdutMark className="size-5 shrink-0" alt="CDUT Logo" />
           <span className="text-[13px] font-semibold text-foreground/85 tracking-tight truncate">CDUT Studio | Welcome ~</span>
         </div>
         <Tooltip>
@@ -185,6 +185,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
 
         <button
           type="button"
+          data-tour="cdut-science-entry"
           data-profer-navigation-region="mode-switcher-cdut-science"
           onClick={() => {
             if (activeView !== 'cdut-science') {
@@ -357,7 +358,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
             <div className="mb-3">
               <div className="flex items-center justify-between px-2 pt-2 pb-1">
                 <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-foreground/40 select-none">会话</span>
-                <span className="text-[10px] tabular-nums text-foreground/30">{agentGlobalSessionTrees.length}</span>
+                <span className="text-[10px] tabular-nums text-foreground/50">{agentGlobalSessionTrees.length}</span>
               </div>
               {agentGlobalSessionTrees.length > 0 ? (
                 <div className="flex flex-col gap-0.5">
@@ -424,7 +425,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                   })}
                 </div>
               ) : (
-                <div className="px-2 py-1 text-[11px] text-foreground/30 italic select-none">
+                <div className="px-2 py-1 text-[11px] text-foreground/50 italic select-none">
                   暂无独立会话
                 </div>
               )}

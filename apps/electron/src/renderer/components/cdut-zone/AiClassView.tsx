@@ -282,7 +282,7 @@ export function AiClassView(): React.ReactElement {
             已上传资料列表改为固定上限高度 + 内部滚动，不再与资料树平分高度。 */}
         <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 px-3">
           {/* 已上传资料列表（弹性权重 1，最高 240px，超出内部滚动） */}
-          <div className="flex max-h-[240px] min-h-0 flex-[1] flex-col">
+          <div data-tour="ai-class-documents" className="flex max-h-[240px] min-h-0 flex-[1] flex-col">
             <div className="mb-1.5 flex shrink-0 items-center justify-center gap-2">
               <span className="inline-flex items-center rounded-full bg-muted/60 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 已上传资料
@@ -324,6 +324,7 @@ export function AiClassView(): React.ReactElement {
                       </button>
                       <button
                         type="button"
+                        data-document-name={doc.fileName}
                         onClick={() => {
                           setActiveDocumentId(doc.documentId)
                           // 点击课件同时在其右侧预览栏打开高保真只读预览

@@ -516,18 +516,34 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[], 
     }
 
     function applyHighlight(payload) {
-      if (!payload || !isRendered) {
+      if (!payload) return;
+      // 三态语义：① 未渲染完毕 → 入队 pendingHighlight，首次渲染后冲刷补偿并回执；
+      if (!isRendered) {
         pendingHighlight = payload;
         return;
       }
       const pageNum = Math.max(1, Number(payload.page) || 1);
       const wrapper = container.querySelector('.page-wrapper[data-page="' + pageNum + '"]');
-      if (!wrapper) return;
+      // ② 已渲染但页码越界（如模型幻觉输出 12 页文档的 p99）→ 立即失败回执，
+      //    交由父级即时释放高亮请求 Atom，杜绝 pendingHighlight 永不冲刷导致的宽限死等。
+      if (!wrapper) {
+        if (payload.requestId) {
+          window.parent.postMessage({ type: 'pdf-highlight-rendered', requestId: payload.requestId, ok: false, error: 'page-not-found' }, '*');
+        }
+        return;
+      }
+
+      const overlay = wrapper.querySelector('.overlay-layer');
+      if (!overlay) {
+        // 防御性分支：wrapper 与 overlay 在 renderPages 中同生共死，正常不会命中；
+        // 一旦命中按页码越界同语义立即失败回执。
+        if (payload.requestId) {
+          window.parent.postMessage({ type: 'pdf-highlight-rendered', requestId: payload.requestId, ok: false, error: 'page-not-found' }, '*');
+        }
+        return;
+      }
 
       clearSpotlights();
-      const overlay = wrapper.querySelector('.overlay-layer');
-      if (!overlay) return;
-
       const bbox = Array.isArray(payload.bbox) && payload.bbox.length >= 4 ? payload.bbox : null;
       const spotlight = document.createElement('div');
       spotlight.className = 'bbox-spotlight';
@@ -559,6 +575,12 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[], 
       }
 
       overlay.appendChild(spotlight);
+
+      // ③ 绘制成功回执：父级 DiffTabContent 收到匹配 requestId 的回执后即释放高亮请求 Atom，
+      //    替代旧的「180ms 盲目清空」竞态路径（首次/慢速加载时聚光灯不再丢失）。
+      if (payload.requestId) {
+        window.parent.postMessage({ type: 'pdf-highlight-rendered', requestId: payload.requestId, ok: true }, '*');
+      }
 
       requestAnimationFrame(() => {
         spotlight.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });

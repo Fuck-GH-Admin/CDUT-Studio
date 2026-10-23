@@ -760,22 +760,29 @@ function createCopyCheckpoint(params: {
  */
 export function isAgentWorkspaceSandbox(dir?: string): boolean {
   if (!dir || typeof dir !== 'string') return false
-  const norm = normalize(resolve(dir))
-  const home = normalize(resolve(homedir()))
+  const isWindows = process.platform === 'win32'
+  // Windows 盘符/路径大小写不敏感：统一降为小写再比较，
+  // 否则 c:\...\agent-workspaces 会被误判为非沙箱而拒绝合法还原。
+  const normalizeKey = (value: string): string => {
+    const normalized = normalize(resolve(value))
+    return isWindows ? normalized.toLowerCase() : normalized
+  }
+  const norm = normalizeKey(dir)
+  const home = normalizeKey(homedir())
   const root = normalize(resolve(parse(norm).root))
-  const appDir = normalize(resolve(process.cwd()))
+  const appDir = normalizeKey(process.cwd())
 
   // 1. 绝对拒止：用户主目录、系统盘符根目录、应用进程启动目录
   if (norm === home || norm === root || norm === appDir) return false
   if (norm.startsWith(appDir + sep)) return false // 禁止进入项目源码目录
 
   // 2. 正常运行时校验：必须严格位于 agent-workspaces 之下
-  const sandboxRoot = normalize(resolve(resolveConfigDir(), 'agent-workspaces'))
+  const sandboxRoot = normalizeKey(join(resolveConfigDir(), 'agent-workspaces'))
   if (norm === sandboxRoot || norm.startsWith(sandboxRoot + sep)) return true
 
   // 3. 测试环境容错：仅当测试执行且路径位于操作系统临时目录时允许
   if (process.env.NODE_ENV === 'test' || process.env.BUN_TEST === '1') {
-    const tmp = normalize(resolve(tmpdir()))
+    const tmp = normalizeKey(tmpdir())
     if (norm === tmp || norm.startsWith(tmp + sep)) return true
   }
 

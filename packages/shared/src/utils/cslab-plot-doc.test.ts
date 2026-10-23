@@ -85,6 +85,10 @@ describe('出版绘图数学', () => {
     const svg = renderPlotSvg(document, JOURNAL_PRESETS.nature)
     expect(svg).toContain('<svg')
     expect(svg).toContain('viewBox="0 0 89')
+    // nature preset 的 tickFontPt = 6 → 6 × 25.4 / 72 = 2.117mm（无单位数值）
+    expect(svg).toContain('font-size="2.117"')
+    expect(svg).not.toContain('font-size="6"')
+    expect(svg).not.toContain('pt"')
     expect(hasEditableText(svg)).toBe(true)
     expect(hasEmbeddedImage(svg)).toBe(false)
     expect(svg).toContain('tspan')

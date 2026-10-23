@@ -16,6 +16,7 @@ import { app, BrowserWindow, shell } from 'electron'
 
 import {
   INSTALLER_IPC_CHANNELS,
+  assertSafeUrlNoNul,
   type InstallerDownloadResult,
   type InstallerProgressPayload,
   type InstallerSource,
@@ -124,6 +125,8 @@ function downloadToFile(
     const doGet = (targetUrl: string, redirectsLeft: number) => {
       let parsed: URL
       try {
+        // NUL/控制字符前置校验（CVE-2026-105482 纵深防御）：初始源与重定向 Location 一并覆盖。
+        assertSafeUrlNoNul(targetUrl)
         parsed = new URL(targetUrl)
       } catch (e) {
         fileStream.close()

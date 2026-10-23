@@ -1,4 +1,4 @@
-/**
+﻿/**
  * WorkspaceSelector — Agent 项目切换器
  *
  * 垂直列表展示所有项目，支持新建、重命名、删除、切换和拖拽排序。
@@ -323,6 +323,7 @@ export function WorkspaceSelector(): React.ReactElement {
                 )}
               >
               {/* 拖拽手柄 */}
+              {/* dark-guard-ignore: 拖拽手柄默认 opacity-0，hover 才显现，弱可见是设计意图 */}
               <GripVertical size={12} className="flex-shrink-0 text-foreground/20 opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing" />
 
               <FolderOpen size={13} className="flex-shrink-0 text-foreground/40" />
@@ -354,7 +355,7 @@ export function WorkspaceSelector(): React.ReactElement {
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                     <button
                       onClick={(e) => handleStartRename(e, ws)}
-                      className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/30 hover:text-foreground/60 transition-colors"
+                      className="p-0.5 rounded hover:bg-foreground/[0.08] text-foreground/50 hover:text-foreground/60 transition-colors"
                       title="重命名"
                     >
                       <Pencil size={12} />
@@ -362,7 +363,7 @@ export function WorkspaceSelector(): React.ReactElement {
                     {canDelete(ws) && (
                       <button
                         onClick={(e) => handleStartDelete(e, ws.id)}
-                        className="p-0.5 rounded hover:bg-destructive/10 text-foreground/30 hover:text-destructive transition-colors"
+                        className="p-0.5 rounded hover:bg-destructive/10 text-foreground/50 hover:text-destructive transition-colors"
                         title="删除"
                       >
                         <Trash2 size={12} />

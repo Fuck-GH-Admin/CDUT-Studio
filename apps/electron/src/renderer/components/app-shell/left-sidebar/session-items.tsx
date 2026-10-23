@@ -1,4 +1,4 @@
-/**
+﻿/**
  * session-items.tsx — 侧边栏列表项子组件
  *
  * 从 LeftSidebar.tsx 整体平移的 React.memo 列表项组件，逻辑保持不变：
@@ -285,7 +285,7 @@ export function SessionItemActions({
               'p-0.5 rounded transition-colors',
               pinned
                 ? 'text-primary/60 hover:bg-foreground/[0.08] hover:text-primary'
-                : 'text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60',
+                : 'text-foreground/50 hover:bg-foreground/[0.08] hover:text-foreground/60',
             )}
             onClick={onTogglePin}
           >
@@ -303,7 +303,7 @@ export function SessionItemActions({
                 ? 'text-destructive bg-destructive/10'
                 : archived
                   ? 'text-foreground/60 hover:bg-foreground/[0.08]'
-                  : 'text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60',
+                  : 'text-foreground/50 hover:bg-foreground/[0.08] hover:text-foreground/60',
             )}
             onClick={handleArchiveClick}
           >
@@ -314,7 +314,7 @@ export function SessionItemActions({
           <DropdownMenuTrigger asChild>
             <button
               className={cn(
-                'p-0.5 rounded text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors',
+                'p-0.5 rounded text-foreground/50 hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors',
                 'data-[state=open]:bg-foreground/[0.08] data-[state=open]:text-foreground/60',
               )}
             >
@@ -1224,7 +1224,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
           draggable={!locked}
           onDragStart={(e) => { if (locked) return; onDragStart(e, group.workspace.id) }}
           title={locked ? '登录特区账户后可排序' : '拖拽排序'}
-          className="absolute -left-0.5 top-1/2 z-10 flex size-[18px] -translate-y-1/2 cursor-grab items-center justify-center text-foreground/20 opacity-0 transition-opacity group-hover/project:opacity-100 active:cursor-grabbing"
+          className="absolute -left-0.5 top-1/2 z-10 flex size-[18px] -translate-y-1/2 cursor-grab items-center justify-center text-foreground/50 opacity-0 transition-opacity group-hover/project:opacity-100 active:cursor-grabbing"
           aria-hidden="true"
         >
           <GripVertical size={12} />
@@ -1301,7 +1301,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               <span
                 data-project-collapse
                 title={collapsed ? '展开项目会话' : '收起项目会话'}
-                className="flex-shrink-0 text-foreground/30 transition-colors hover:text-foreground/70"
+                className="flex-shrink-0 text-foreground/50 transition-colors hover:text-foreground/70"
               >
                 <ChevronRight
                   size={12}
@@ -1321,7 +1321,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               type="button"
               aria-label={`在「${group.workspace.id}」中新建会话`}
               onClick={() => { void onNewSession(group.workspace.id) }}
-              className="absolute right-5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-colors hover:bg-foreground/[0.055] hover:text-foreground/65 group-hover/project:opacity-100 data-[state=open]:opacity-100 titlebar-no-drag"
+              className="absolute right-5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-foreground/50 opacity-0 transition-colors hover:bg-foreground/[0.055] hover:text-foreground/65 group-hover/project:opacity-100 data-[state=open]:opacity-100 titlebar-no-drag"
             >
               <Plus size={13} />
             </button>
@@ -1331,7 +1331,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 <button
                   type="button"
                   aria-label="项目菜单"
-                  className="absolute right-0 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-colors hover:bg-foreground/[0.055] hover:text-foreground/60 group-hover/project:opacity-100 data-[state=open]:opacity-100 titlebar-no-drag"
+                  className="absolute right-0 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-foreground/50 opacity-0 transition-colors hover:bg-foreground/[0.055] hover:text-foreground/60 group-hover/project:opacity-100 data-[state=open]:opacity-100 titlebar-no-drag"
                 >
                   <MoreHorizontal size={13} />
                 </button>
@@ -1465,7 +1465,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               )}
             </div>
           ) : (
-            <div className="px-1.5 py-0.5 text-[12px] text-foreground/22 select-none">
+            <div className="px-1.5 py-0.5 text-[12px] text-foreground/50 select-none">
               暂无会话
             </div>
           )

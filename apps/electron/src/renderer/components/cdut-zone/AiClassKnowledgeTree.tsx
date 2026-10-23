@@ -599,6 +599,7 @@ function GraphCanvas({ edges, layout, selectedId, onSelect, highlightQuery }: Gr
           >
             <button
               type="button"
+              data-document-name={node.docName}
               onClick={() => onSelect(node)}
               className={cn(
                 'flex h-full w-full flex-col justify-center gap-0.5 rounded-xl border bg-card px-3 py-2 text-left shadow-sm transition-[box-shadow,border-color]',
@@ -839,7 +840,7 @@ export function AiClassKnowledgeTree({ sessionId }: AiClassKnowledgeTreeProps): 
   }, [sessionId, setGraph, setUpdating, setProgress])
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div data-tour="ai-class-knowledge-tree" className="flex min-h-0 flex-1 flex-col">
       {/* 居中标题 + 操作区 */}
       <div className="mb-2 flex shrink-0 flex-col items-center gap-2">
         <div className="flex items-center gap-1.5 rounded-full bg-muted/60 px-3 py-1">

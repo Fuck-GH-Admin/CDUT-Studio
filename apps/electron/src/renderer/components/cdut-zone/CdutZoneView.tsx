@@ -39,7 +39,6 @@ import { cdutAccountAtom, cdutSidebarRestoreAtom, cdutSubViewAtom } from '@/atom
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import { useEnterCdutAiClass } from '@/hooks/useEnterCdutAiClass'
 import { AiClassSessionPickerModal } from './AiClassSessionPickerModal'
-import { MutationConfirmModal } from './MutationConfirmModal'
 import { CdutAnniversaryBanner } from './CdutAnniversaryBanner'
 import { CdutProfileFields } from './CdutProfileFields'
 import { CdutPrivatePhoto } from './CdutPrivatePhoto'
@@ -340,9 +339,6 @@ export function CdutZoneView(): React.ReactElement {
           onOpenChange={setSessionPickerOpen}
           onSelect={handlePickSession}
         />
-
-        {/* 写操作二次确认浮层（进入子页面后仍保持监听） */}
-        <MutationConfirmModal />
       </div>
     )
   }
@@ -615,9 +611,6 @@ export function CdutZoneView(): React.ReactElement {
         onOpenChange={setSessionPickerOpen}
         onSelect={handlePickSession}
       />
-
-      {/* 写操作二次确认浮层（常驻挂载，全局监听主进程派发） */}
-      <MutationConfirmModal />
 
       <ConfirmDialog
         open={logoutOpen}

@@ -21,6 +21,8 @@ import {
   Loader2,
   Lock,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Server,
   Sparkles,
@@ -39,6 +41,7 @@ import type {
   CsLabMolAsset,
   CsLabPlotUpdatedEvent,
   CsLabStructureFocusedEvent,
+  CsLabStructureSnapshotRequest,
   CsLabTablePayload,
 } from '@profer/shared'
 import { detectIsMac, detectIsWindows } from '@profer/ui'
@@ -49,6 +52,7 @@ import {
   cslabActiveLabIdAtom,
   cslabActivePaneIdAtom,
   cslabAssetDragAtom,
+  cslabAssetRailCollapsedAtom,
   cslabAssetsAtom,
   cslabDrawerAtom,
   cslabHpcMfaAtom,
@@ -76,6 +80,7 @@ import {
   type CsLabPdfSelection,
   type CsLabSplitLayout,
 } from '@/atoms/cslab-atoms'
+import { cslabTourAckAtom, cslabTourCommandAtom } from '@/atoms/cslab-tour-atoms'
 import { CsLabAssetRail } from './CsLabAssetRail'
 import { resolveAssetCapability } from './cslab-capability'
 import { CsLabSlideDrawer } from './CsLabSlideDrawer'
@@ -102,6 +107,7 @@ import {
   type CsLabAssetDragPayload,
 } from './cslab-dnd'
 import { useCsLabEvents } from './use-cslab-events'
+import { captureCsLabSnapshot } from '@/lib/cslab/cslab-snapshot-registry'
 
 interface CsLabWorkspaceViewProps {
   labId: string
@@ -215,6 +221,8 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const [paneTables, setPaneTables] = useAtom(cslabPaneTablesAtom)
   const [panePlots, setPanePlots] = useAtom(cslabPanePlotsAtom)
   const [plotList, setPlotList] = useAtom(cslabPlotListAtom)
+  const tourCommand = useAtomValue(cslabTourCommandAtom)
+  const setTourAck = useSetAtom(cslabTourAckAtom)
   const [paneManuscripts, setPaneManuscripts] = useAtom(cslabPaneManuscriptsAtom)
   const [paneLiterature, setPaneLiterature] = useAtom(cslabPaneLiteratureAtom)
   const [paneCanvases, setPaneCanvases] = useAtom(cslabPaneCanvasesAtom)
@@ -226,6 +234,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const [assetDrag, setAssetDrag] = useAtom(cslabAssetDragAtom)
   const [tileTarget, setTileTarget] = useAtom(cslabTileTargetAtom)
   const [drawer, setDrawer] = useAtom(cslabDrawerAtom)
+  const [railCollapsed, setRailCollapsed] = useAtom(cslabAssetRailCollapsedAtom)
   const [hpcMfa, setHpcMfa] = useAtom(cslabHpcMfaAtom)
   const [mfaValue, setMfaValue] = React.useState('')
   const [staleCapsules, setStaleCapsules] = useAtom(cslabStaleCapsulesAtom)
@@ -275,6 +284,15 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
     },
     [setToast],
   )
+
+  const toggleRailCollapsed = React.useCallback((): void => {
+    setRailCollapsed((previous) => !previous)
+  }, [setRailCollapsed])
+
+  // 资产栏折叠为会话级状态：每次进入实验室默认展开。
+  React.useEffect(() => {
+    setRailCollapsed(false)
+  }, [setRailCollapsed])
 
   React.useEffect(() => {
     if (!toast) return
@@ -760,6 +778,46 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
     return visible.find((id) => panes[id].viewType === 'empty') ?? activePaneId
   }, [layout, activePaneId, panes])
 
+  // ===== 新手引导指令：复用工作台内部打开逻辑，执行后回写 ack =====
+  const handledTourCommandRef = React.useRef<number | null>(null)
+  React.useEffect(() => {
+    if (!tourCommand || handledTourCommandRef.current === tourCommand.id) return
+    handledTourCommandRef.current = tourCommand.id
+    const run = async (): Promise<void> => {
+      try {
+        if (tourCommand.kind === 'open-table-at-index') {
+          const tables = assets.filter((asset) => asset.layerType === 'table')
+          const target = tables[tourCommand.index]
+          if (!target) {
+            // 资产尚未加载完成：释放占位，等 assets 更新后重试
+            handledTourCommandRef.current = null
+            return
+          }
+          await openAssetInPane(activePaneId, target)
+        } else if (tourCommand.kind === 'open-asset-by-title') {
+          const target = assets.find((asset) => asset.title === tourCommand.title)
+          if (!target) {
+            handledTourCommandRef.current = null
+            return
+          }
+          await openAssetInPane(activePaneId, target)
+        } else if (tourCommand.kind === 'refresh-assets') {
+          await refreshAssets()
+        } else {
+          await openPlotInPane(activePaneId, tourCommand.plotId)
+        }
+        setTourAck({ id: tourCommand.id, ok: true })
+      } catch (error) {
+        setTourAck({
+          id: tourCommand.id,
+          ok: false,
+          error: error instanceof Error ? error.message : '引导指令执行失败',
+        })
+      }
+    }
+    void run()
+  }, [tourCommand, assets, activePaneId, openAssetInPane, openPlotInPane, refreshAssets, setTourAck])
+
   // ===== 生命周期 =====
 
   React.useEffect(() => {
@@ -958,6 +1016,36 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
         }
       },
       [activePaneId, labId, openMolInPane, setAssets, showToast],
+    ),
+    onRequestStructureSnapshot: React.useCallback(
+      async (event: CsLabStructureSnapshotRequest) => {
+        const visible = visiblePaneIds(layout, activePaneId)
+        const target =
+          (visible.includes(activePaneId) && panes[activePaneId].viewType === 'mol'
+            ? activePaneId
+            : undefined) ?? visible.find((id) => panes[id].viewType === 'mol' && paneMol[id])
+        try {
+          if (!target || !paneMol[target]) {
+            throw new Error('当前没有可见的 3D 晶体视窗，请先打开结构')
+          }
+          const dataUrl = await captureCsLabSnapshot(target, event.scale)
+          await window.electronAPI.cslab.snapshotStructure({
+            labId,
+            dataUrl,
+            requestId: event.requestId,
+            scale: event.scale,
+          })
+          showToast('success', 'AI 助理已导出当前 3D 晶体快照')
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '3D 快照导出失败'
+          showToast('error', message)
+          // 必须把失败回传主进程，否则工具端会空等 20 秒超时
+          await window.electronAPI.cslab
+            .snapshotStructure({ labId, requestId: event.requestId, error: message })
+            .catch(() => undefined)
+        }
+      },
+      [activePaneId, labId, layout, paneMol, panes, showToast],
     ),
     onPlotUpdated: React.useCallback(
       (event: CsLabPlotUpdatedEvent) => {
@@ -1741,6 +1829,8 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
 
   return (
     <div
+      data-tour="cslab-workspace"
+      data-cslab-lab-id={labId}
       className="relative flex h-full min-h-0 flex-col overflow-hidden bg-cslab-bg font-sans text-cslab-text"
       onDragEnter={(event) => {
         if (!event.dataTransfer.types.includes('Files')) return
@@ -1775,6 +1865,16 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
         >
           <ArrowLeft size={13} />
           实验室
+        </button>
+
+        <button
+          type="button"
+          onClick={toggleRailCollapsed}
+          aria-label={railCollapsed ? '展开资产栏' : '收起资产栏'}
+          title={railCollapsed ? '展开资产栏' : '收起资产栏'}
+          className="titlebar-no-drag relative rounded-lg p-1.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+        >
+          {railCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
         </button>
 
         <div className="titlebar-no-drag relative min-w-0">
@@ -1968,6 +2068,8 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           onAppendCellToManuscript={(summary, cellRef) =>
             void handleAppendCellToManuscript(summary, cellRef)
           }
+          collapsed={railCollapsed}
+          onToggleCollapse={toggleRailCollapsed}
         />
 
         <main className="relative flex min-w-0 flex-1 flex-col">
@@ -2182,7 +2284,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           )}
           {drawer.mode === 'selection' && drawer.selection && (
             <div className="space-y-4">
-              <div className="overflow-hidden rounded-xl border border-cslab-border bg-white p-2 shadow-subtle">
+              <div className="overflow-hidden rounded-xl border border-cslab-border bg-cslab-elevated p-2 shadow-subtle">
                 <img
                   src={drawer.selection.cropDataUrl}
                   alt="框选区域"

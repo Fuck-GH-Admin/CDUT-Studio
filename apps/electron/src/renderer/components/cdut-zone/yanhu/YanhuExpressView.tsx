@@ -211,19 +211,29 @@ export function YanhuExpressView(): React.ReactElement {
       publish(true)
       schedulePoll()
     }
+    // 滚动只需单帧重算几何：不能让任意子容器滚动都触发 600ms 逐帧轮询风暴
+    let scrollRaf = 0
+    const onScroll = (): void => {
+      if (scrollRaf) return
+      scrollRaf = requestAnimationFrame(() => {
+        scrollRaf = 0
+        publish(true)
+      })
+    }
 
     const resizeObserver = new ResizeObserver(onChange)
     resizeObserver.observe(root)
     resizeObserver.observe(page)
     window.addEventListener('resize', onChange)
-    window.addEventListener('scroll', onChange, true)
+    window.addEventListener('scroll', onScroll, true)
     publish(true)
     schedulePoll()
 
     return () => {
       resizeObserver.disconnect()
       window.removeEventListener('resize', onChange)
-      window.removeEventListener('scroll', onChange, true)
+      window.removeEventListener('scroll', onScroll, true)
+      if (scrollRaf) cancelAnimationFrame(scrollRaf)
       if (raf) cancelAnimationFrame(raf)
       if (pollRaf) cancelAnimationFrame(pollRaf)
       // 卸载时立即撤走原生视图，避免其残留在窗口坐标上
@@ -269,6 +279,7 @@ export function YanhuExpressView(): React.ReactElement {
     <div
       ref={rootRef}
       data-yanhu-native-host
+      data-tour="yanhu-express-stage"
       className="flex min-h-0 flex-1 flex-col overflow-hidden bg-content-area"
     >
       <YanhuTabStrip

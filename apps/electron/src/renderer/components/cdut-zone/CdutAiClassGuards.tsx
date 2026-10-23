@@ -10,7 +10,7 @@ import * as React from 'react'
 import { useSetAtom } from 'jotai'
 import { Lock, ShieldCheck } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
-import cdutCeLogo from '@assets/CDUT/CDUT-CE.png'
+import { CdutLogo } from '@/components/shared/CdutLogo'
 import { activeViewAtom } from '@/atoms/active-view'
 
 /** 前往 CDUT 专区（返回该视图首页，供登录 / 重新进入速课堂） */
@@ -52,11 +52,7 @@ export function CdutAiClassContentGuard(): React.ReactElement {
   const goToCdutZone = useGoToCdutZone()
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center select-none">
-      <img
-        src={cdutCeLogo}
-        alt="成都理工大学校徽"
-        className="h-16 w-auto object-contain drop-shadow-sm dark:brightness-125"
-      />
+      <CdutLogo className="h-16 w-auto drop-shadow-sm" />
       <div className="flex items-center gap-1.5 text-primary">
         <Lock size={15} />
         <h3 className="text-base font-semibold tracking-tight text-foreground">需要登录特区账户查看本课堂</h3>

@@ -280,6 +280,8 @@ export interface AppSettings {
   agentMaxTurns?: number
   /** 已确认的受管浏览器风险告知版本；低于当前版本时首次使用会再次要求确认。 */
   browserRiskDisclaimerVersion?: number
+  /** Windows 可执行/脚本文件打开确认框勾选「不再提醒」后置 true；缺省视为仍需确认。 */
+  executableOpenWarningDismissed?: boolean
   /** 新标签页默认首页 URL；空串/未设置 = 显示自定义起始页。 */
   browserHomeUrl?: string
   /** 教程推荐横幅是否已关闭 */
@@ -346,6 +348,8 @@ export interface AppSettings {
   studyRetrievalEngine?: 'classic' | 'graphrag'
   /** 全局上下文索引开关：true 时所有会话强制使用索引模式（默认 false）。 */
   agentContextIndexGlobal?: boolean
+  /** 最近一次已读的系统公告 ID；与内置最新公告 ID 不一致时启动弹一次公告栏 */
+  lastReadBulletinId?: string
 }
 
 /** 主窗口大小、位置和最大化状态 */

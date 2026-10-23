@@ -387,4 +387,134 @@ describe('Pi 会话分叉', () => {
       details: { sourceAssistantUuid: 'assistant-interrupted' },
     }])
   })
+
+  test('Given 源会话没有 workspaceId When 分叉 Then 落到默认工作区沙箱并复制文件、重写路径', async () => {
+    writeAgentWorkspacesIndex([])
+    const sourceSessionId = 'pi-auto-workspace-source'
+    const sourceDir = join(tempHome, 'config', 'agent-workspaces', 'default', sourceSessionId)
+    mkdirSync(sourceDir, { recursive: true })
+    writeFileSync(join(sourceDir, 'note.txt'), '自动分配工作区文件')
+    mkdirSync(join(tempHome, 'config', 'agent-sessions'), { recursive: true })
+    writeFileSync(join(tempHome, 'config', 'agent-sessions', `${sourceSessionId}.jsonl`), [
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '第一轮提问' }] }, parent_tool_use_id: null }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-1', message: { content: [{ type: 'text', text: `工作目录 ${sourceDir}` }] }, parent_tool_use_id: null }),
+    ].join('\n') + '\n', 'utf-8')
+    // 历史会话元数据缺 workspaceId（早期版本或异常数据），分叉后必须自动落到默认沙箱。
+    writeFileSync(join(tempHome, 'config', 'agent-sessions.json'), JSON.stringify({
+      version: 1,
+      sessions: [{
+        id: sourceSessionId,
+        title: '无工作区 Pi 会话',
+        createdAt: 1,
+        updatedAt: 1,
+        agentRuntime: 'pi',
+        sdkSessionId: 'pi-session-id',
+        piSessionFile: join(tempHome, 'pi-auto-workspace.jsonl'),
+        piEntryBindings: { 'assistant-1': 'entry-keep' },
+      }],
+    }), 'utf-8')
+    writeFileSync(join(tempHome, 'pi-auto-workspace.jsonl'), '', 'utf-8')
+
+    const forked = await manager.forkAgentSession({ sessionId: sourceSessionId, upToMessageUuid: 'assistant-1' })
+
+    const workspacesIndex = JSON.parse(readFileSync(join(tempHome, 'config', 'agent-workspaces.json'), 'utf-8')) as {
+      workspaces: Array<{ id: string; slug: string }>
+    }
+    const defaultWorkspace = workspacesIndex.workspaces.find((workspace) => workspace.slug === 'default')
+    expect(defaultWorkspace).toBeTruthy()
+    expect(forked.workspaceId).toBe(defaultWorkspace!.id)
+
+    const destDir = join(tempHome, 'config', 'agent-workspaces', 'default', forked.id)
+    expect(readFileSync(join(destDir, 'note.txt'), 'utf-8')).toBe('自动分配工作区文件')
+
+    // 历史消息里的源绝对路径必须迁移到分叉会话自己的目录（JSON 中反斜杠会被转义）。
+    const destMessages = readFileSync(join(tempHome, 'config', 'agent-sessions', `${forked.id}.jsonl`), 'utf-8')
+    const normalized = destMessages.split('\\\\').join('\\')
+    expect(normalized).toContain(destDir)
+    expect(normalized).not.toContain(sourceDir)
+  })
+
+  test('Given 分叉点后面还有一轮且文件被改过 When 分叉 Then 工作区恢复到分叉点完成态', async () => {
+    writeAgentWorkspacesIndex([
+      { id: 'workspace-a', name: '工作区 A', slug: 'workspace-a', createdAt: 1, updatedAt: 1 },
+    ])
+    const sourceSessionId = 'pi-fork-baseline-source'
+    const sourceDir = join(tempHome, 'config', 'agent-workspaces', 'workspace-a', sourceSessionId)
+    mkdirSync(sourceDir, { recursive: true })
+    writeFileSync(join(sourceDir, 'file.txt'), '分叉点完成态')
+    // 每轮快照在提问发出前创建：这份基线代表第 2 轮开始前，也就是第 1 轮结束态。
+    const baseline = createPiFileCheckpoint(sourceSessionId, sourceDir, getPiCheckpointsDir())
+    writeFileSync(join(sourceDir, 'file.txt'), '后续轮次改动')
+    writeFileSync(join(sourceDir, 'later.txt'), '后续轮次新增')
+
+    mkdirSync(join(tempHome, 'config', 'agent-sessions'), { recursive: true })
+    writeFileSync(join(tempHome, 'config', 'agent-sessions', `${sourceSessionId}.jsonl`), [
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '第一轮' }] }, parent_tool_use_id: null }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-1', message: { content: [{ type: 'text', text: '第一轮回复' }] }, parent_tool_use_id: null }),
+      JSON.stringify({ type: 'user', uuid: 'user-2', message: { content: [{ type: 'text', text: '第二轮' }] }, parent_tool_use_id: null }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-2', message: { content: [{ type: 'text', text: '第二轮回复' }] }, parent_tool_use_id: null }),
+    ].join('\n') + '\n', 'utf-8')
+    writeAgentSessionsIndex([{
+      id: sourceSessionId,
+      title: 'Pi 多轮源会话',
+      workspaceId: 'workspace-a',
+      createdAt: 1,
+      updatedAt: 1,
+      agentRuntime: 'pi',
+      sdkSessionId: 'pi-session-id',
+      piSessionFile: join(tempHome, 'pi-fork-baseline.jsonl'),
+      piEntryBindings: { 'assistant-1': 'entry-keep', 'assistant-2': 'entry-later' },
+      piFileCheckpoints: { 'entry-later': baseline.path },
+    }])
+    writeFileSync(join(tempHome, 'pi-fork-baseline.jsonl'), '', 'utf-8')
+
+    // 从第 1 轮分叉：目标工作区应回到第 1 轮结束态，而不是当前（第 2 轮结束后）状态。
+    const forkedAtFirstTurn = await manager.forkAgentSession({ sessionId: sourceSessionId, upToMessageUuid: 'assistant-1' })
+    const firstTurnDir = join(tempHome, 'config', 'agent-workspaces', 'workspace-a', forkedAtFirstTurn.id)
+    expect(readFileSync(join(firstTurnDir, 'file.txt'), 'utf-8')).toBe('分叉点完成态')
+    expect(existsSync(join(firstTurnDir, 'later.txt'))).toBe(false)
+
+    // 从最后一轮分叉：当前磁盘就是完成态，不应回退。
+    const forkedAtLastTurn = await manager.forkAgentSession({ sessionId: sourceSessionId, upToMessageUuid: 'assistant-2' })
+    const lastTurnDir = join(tempHome, 'config', 'agent-workspaces', 'workspace-a', forkedAtLastTurn.id)
+    expect(readFileSync(join(lastTurnDir, 'file.txt'), 'utf-8')).toBe('后续轮次改动')
+    expect(readFileSync(join(lastTurnDir, 'later.txt'), 'utf-8')).toBe('后续轮次新增')
+  })
+
+  test('Given 分叉点之后的下一轮被取消未产生 entry When 分叉 Then 保留当前副本而不误还原', async () => {
+    writeAgentWorkspacesIndex([
+      { id: 'workspace-a', name: '工作区 A', slug: 'workspace-a', createdAt: 1, updatedAt: 1 },
+    ])
+    const sourceSessionId = 'pi-fork-cancelled-next-turn'
+    const sourceDir = join(tempHome, 'config', 'agent-workspaces', 'workspace-a', sourceSessionId)
+    mkdirSync(sourceDir, { recursive: true })
+    writeFileSync(join(sourceDir, 'file.txt'), '旧基线')
+    const staleCheckpoint = createPiFileCheckpoint(sourceSessionId, sourceDir, getPiCheckpointsDir())
+    writeFileSync(join(sourceDir, 'file.txt'), '当前现场')
+
+    mkdirSync(join(tempHome, 'config', 'agent-sessions'), { recursive: true })
+    writeFileSync(join(tempHome, 'config', 'agent-sessions', `${sourceSessionId}.jsonl`), [
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '第一轮' }] }, parent_tool_use_id: null }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-1', message: { content: [{ type: 'text', text: '第一轮回复' }] }, parent_tool_use_id: null }),
+      JSON.stringify({ type: 'user', uuid: 'user-2', message: { content: [{ type: 'text', text: '第二轮取消' }] }, parent_tool_use_id: null }),
+    ].join('\n') + '\n', 'utf-8')
+    writeAgentSessionsIndex([{
+      id: sourceSessionId,
+      title: 'Pi 取消下一轮会话',
+      workspaceId: 'workspace-a',
+      createdAt: 1,
+      updatedAt: 1,
+      agentRuntime: 'pi',
+      sdkSessionId: 'pi-session-id',
+      piSessionFile: join(tempHome, 'pi-fork-cancelled.jsonl'),
+      piEntryBindings: { 'assistant-1': 'entry-keep' },
+      piFileCheckpoints: { 'entry-keep': staleCheckpoint.path },
+    }])
+    writeFileSync(join(tempHome, 'pi-fork-cancelled.jsonl'), '', 'utf-8')
+
+    const forked = await manager.forkAgentSession({ sessionId: sourceSessionId, upToMessageUuid: 'assistant-1' })
+    const destDir = join(tempHome, 'config', 'agent-workspaces', 'workspace-a', forked.id)
+    // 下一轮没有 entry 绑定，无法定位分叉点基线，保留当前副本而不是错误回退。
+    expect(readFileSync(join(destDir, 'file.txt'), 'utf-8')).toBe('当前现场')
+  })
 })

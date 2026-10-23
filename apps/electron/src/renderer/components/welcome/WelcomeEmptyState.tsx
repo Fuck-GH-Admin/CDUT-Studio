@@ -2,7 +2,7 @@
  * WelcomeEmptyState — Agent 空状态引导（现代立体卡片化全景）
  *
  * 自上而下四段式结构：
- *   1. 动态北京时间问候区：分时段问候 + 实时时钟徽章 + 在线状态呼吸灯；
+ *   1. 立体拟物北京时间钟表 + 分时段问候 + 实时时钟药丸（在线状态呼吸灯）；
  *   2. 4 大核心场景快速启动卡片：AI速课堂 / 代码全栈开发 / 内容合规审查 / CDUT 校园特区；
  *   3. 灵感启发气泡：一键填入聊天输入框，降低交互门槛；
  *   4. 活跃度贡献热力图：GitHub 风格学习与编码历程（沿用 UsageHeatmap）。
@@ -29,7 +29,8 @@ import {
   agentWorkspacesAtom,
 } from '@/atoms/agent-atoms'
 import { getRandomTip, getPlatform, type Tip } from '@/lib/tips'
-import { getBeijingGreetingParts } from '@/lib/beijing-greeting'
+import { getBeijingClockAngles, getBeijingGreetingParts } from '@/lib/beijing-greeting'
+import { BeijingAnalogClock } from './BeijingAnalogClock'
 import { UsageHeatmap } from './UsageHeatmap'
 
 /** 核心场景卡片定义 */
@@ -82,13 +83,20 @@ export function WelcomeEmptyState(): React.ReactElement {
   const [tip] = React.useState<Tip>(() => getRandomTip(getPlatform()))
   const displayName = userProfile.userName || '用户'
 
-  // 实时北京时间时钟（秒级跳动，卸载时清理定时器）
+  // 实时北京时间时钟：对齐真实秒边界的自校正递归定时器，卸载时清理
   const [now, setNow] = React.useState(() => new Date())
   React.useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000)
-    return () => window.clearInterval(timer)
+    let timer = 0
+    const tick = (): void => {
+      setNow(new Date())
+      // 每次重新计算距下一整秒的延迟：不累积漂移，也不漏秒/重秒
+      timer = window.setTimeout(tick, 1000 - (Date.now() % 1000) + 20)
+    }
+    timer = window.setTimeout(tick, 1000 - (Date.now() % 1000) + 20)
+    return () => window.clearTimeout(timer)
   }, [])
-  const { greeting, timeText } = getBeijingGreetingParts(now)
+  const { greeting } = getBeijingGreetingParts(now)
+  const { clockText } = getBeijingClockAngles(now)
 
   /** 场景卡片点击：切换主视图；进入 CDUT 专区时强制落回专区主页（子视图置空） */
   const handleScenarioClick = (card: ScenarioCard): void => {
@@ -108,8 +116,11 @@ export function WelcomeEmptyState(): React.ReactElement {
 
   return (
     <div className="welcome-empty-state relative flex h-full translate-y-[60px] flex-col items-center justify-center gap-5 overflow-hidden px-4 [@media(max-height:820px)]:translate-y-0 [@media(max-height:700px)]:gap-3.5">
-      {/* ===== 动态北京时间问候区 ===== */}
-      <div className="z-10 flex flex-col items-center gap-2">
+      {/* ===== 立体拟物北京时间钟表 + 问候区 ===== */}
+      <div className="z-10 flex flex-col items-center gap-2 [@media(max-height:700px)]:gap-1.5">
+        <div className="mb-0.5 [@media(max-height:700px)]:mb-0">
+          <BeijingAnalogClock now={now} />
+        </div>
         <h1 className="text-[26px] font-semibold tracking-tight text-foreground">
           {displayName}，{greeting.split('，')[0]}
         </h1>
@@ -120,7 +131,7 @@ export function WelcomeEmptyState(): React.ReactElement {
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
             <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
           </span>
-          <span className="font-mono tabular-nums">北京时间 {timeText}</span>
+          <span className="font-mono tabular-nums">北京时间 {clockText}</span>
         </div>
       </div>
 

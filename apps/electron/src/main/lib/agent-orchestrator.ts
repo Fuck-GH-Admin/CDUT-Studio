@@ -130,7 +130,8 @@ import type { CommandExecutionResult } from './command-execution'
 import { createCommandExecutionLedger } from './pi-execution-ledger'
 import { getSettings } from './settings-service'
 import { getCsLabPromptLabInfo } from './cslab/cslab-science'
-import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
+import { buildSystemPrompt, buildDynamicContext, appendSystemPromptSections } from './agent-prompt-builder'
+import { buildAgentContextEnvelope } from './agent-message-envelope'
 import { buildPiTaskPrompt } from './pi-task-prompt'
 import { ensurePresetSystemReady, getAgentPresetByReference, presetReferenceForId } from './agent-preset-manager'
 import { permissionService } from './agent-permission-service'
@@ -1439,10 +1440,11 @@ export class AgentOrchestrator {
       })
 
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅引用当前预设实际可用的能力。
-      let enrichedMessage = runtimeUserMessage
+      // 所有系统注入块统一收进 <SYSTEM_CONTEXT>，绝不进入 <USER_REQUEST>。
+      const systemContextBlocks: string[] = []
       const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, effectiveWorkspaceId)
       if (referencedSessionsBlock) {
-        enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
+        systemContextBlocks.push(referencedSessionsBlock)
         console.log(`[Agent 编排] 注入 referenced_sessions: ${mentionedSessionIds?.length ?? 0} sessions`)
       }
       const allowedMentionedMcpServers = mentionedMcpServers?.filter((name) =>
@@ -1453,7 +1455,7 @@ export class AgentOrchestrator {
         toolLines.push(`- MCP server: ${name} (please use this MCP server's tools to complete the task)`)
       }
       if (toolLines.length > 0) {
-        enrichedMessage = `<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedMessage}`
+        systemContextBlocks.push(`<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>`)
         console.log(`[Agent 编排] 注入 mentioned_tools: ${toolLines.length} 条（原始 ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP）`)
       }
 
@@ -1472,7 +1474,7 @@ export class AgentOrchestrator {
         },
       })
       if (attachedDocumentsBlock) {
-        enrichedMessage = `${attachedDocumentsBlock}\n\n${enrichedMessage}`
+        systemContextBlocks.push(attachedDocumentsBlock)
         console.log(`[内核摄入] 已前置注入附件文档上下文（${attachedDocumentsBlock.length} 字符）`)
       }
 
@@ -1482,7 +1484,7 @@ export class AgentOrchestrator {
         try {
           const evidenceBlock = buildDocumentEvidenceForMessage(agentCwd, runtimeUserMessage)
           if (evidenceBlock) {
-            enrichedMessage = `${evidenceBlock}\n\n${enrichedMessage}`
+            systemContextBlocks.push(evidenceBlock)
             console.log(`[工作区 RAG] 已前置注入文档证据切片（${evidenceBlock.length} 字符）`)
           }
         } catch (error) {
@@ -1492,7 +1494,8 @@ export class AgentOrchestrator {
 
       // Context Sandwich 动态环境与用户请求封包：
       // 动态环境块（时间戳、当前工作区、MCP、浏览器视口）通过 <ADDITIONAL_METADATA> 封装；
-      // 用户问题通过 <USER_REQUEST> 封包，契合 Antigravity 架构规范并确保回退时精准无损解包。
+      // 系统注入内容（引用会话、工具提示、附件文档、RAG 证据）通过 <SYSTEM_CONTEXT> 封装；
+      // 用户问题通过 <USER_REQUEST> 封包，确保回退时精准无损解包且请求边界不被材料覆盖。
       const nowIso = new Date().toISOString()
       const metadataItems = [
         `The current time is ${nowIso}.`,
@@ -1502,9 +1505,11 @@ export class AgentOrchestrator {
         ? `<ADDITIONAL_METADATA>\n${metadataItems.join('\n\n')}\n</ADDITIONAL_METADATA>`
         : ''
 
-      let contextualMessage = metadataBlock
-        ? `${metadataBlock}\n\n<USER_REQUEST>\n${enrichedMessage}\n</USER_REQUEST>`
-        : `<USER_REQUEST>\n${enrichedMessage}\n</USER_REQUEST>`
+      let contextualMessage = buildAgentContextEnvelope({
+        userMessage: runtimeUserMessage,
+        metadata: metadataBlock,
+        contextBlocks: systemContextBlocks,
+      })
 
       const isCompactCommand = runtimeUserMessage.trim() === '/compact'
       const isSingleTurnFocus = input.disableContextMemory === true
@@ -1960,8 +1965,12 @@ export class AgentOrchestrator {
       }
       console.log('[Skill 路由]', JSON.stringify({ sessionId, allowed: skillRouting.snapshot.allowedSlugs, blocked: skillRouting.snapshot.skills.filter(skill => skill.blocked).map(skill => ({ slug: skill.slug, code: skill.blocked })), selected: routedSkills.selected, diagnostics: routedSkills.diagnostics }))
       const skillRuntimeOptions = buildSkillRuntimeOptions(skillRouting)
-      const projectCandidates = detectAttachedDirectoryProjects(allAdditionalDirectories)
-      const attachedDirectoriesPrompt = buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
+      // 速课堂只消费 Study Materials Store：提示词侧不列内部工作区/附加目录，避免模型去扫
+      // workspace-files/.context；SDK 的 additionalDirectories 授权保持不变。
+      const projectCandidates = isStudyClass ? [] : detectAttachedDirectoryProjects(allAdditionalDirectories)
+      const attachedDirectoriesPrompt = isStudyClass
+        ? ''
+        : buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
       const runtimeStatus = getRuntimeStatus()
       const shellPreference = getSettings().agentShellPreference
       const piShellSnapshot = await getOrCreateShellSnapshot({
@@ -2013,6 +2022,12 @@ export class AgentOrchestrator {
         agentCwd,
         projectCandidates,
         isStudyClass,
+        // 速课堂三档带教强度：消息级透传 > 会话元数据 > 默认 balanced（仅速课堂消费）
+        studyTeachingMode: isStudyClass
+          ? (input.studyTeachingMode
+            ?? getAgentSessionMeta(sessionId)?.studyTeachingMode
+            ?? 'balanced')
+          : undefined,
         // 速课堂专用：真实注入资料大纲向导与学生认知档案（仅速课堂会话）
         studyOutline: isStudyClass ? buildStudyOutlineForPrompt(sessionId) : undefined,
         studyCognition: isStudyClass ? describeCognitionForPrompt(readStudentCognition(sessionId)) : undefined,
@@ -2030,10 +2045,11 @@ export class AgentOrchestrator {
             forceAutomation: input.triggeredBy === 'automation',
             pptCapabilityActive,
           })
-      const systemPromptAppend = compressedSystemPrompt +
-        attachedDirectoriesPrompt +
-        (presetPolicy.preset.promptSections?.length ? `\n\n${presetPolicy.preset.promptSections.join('\n\n')}` : '') +
-        (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
+      const systemPromptAppend = appendSystemPromptSections(compressedSystemPrompt, [
+        attachedDirectoriesPrompt,
+        presetPolicy.preset.promptSections?.length ? presetPolicy.preset.promptSections.join('\n\n') : '',
+        automationContext ? `## 定时任务执行上下文\n\n${automationContext}` : '',
+      ])
       const piSystemPrompt = systemPromptAppend
       // Pi 没有 Claude 的 file-history-snapshot；在每轮开始前保存工作区基线。
       // 编排层在该轮落盘后把基线绑定到 assistant entry，回退时由 session manager 恢复。
@@ -2094,6 +2110,8 @@ export class AgentOrchestrator {
             },
           }),
           permissionMode: initialPermissionMode,
+          // 统一权限拦截入口：AskUserQuestion 等交互式工具全靠它路由，遗漏会导致秒返空 answers。
+          canUseTool,
           piAgentDir: getSdkConfigDir(),
           // Keep Pi JSONL session files below the SDK-isolated config directory, never in another workspace.
           piSessionDir: join(getSdkConfigDir(), 'sessions', 'pi'),
@@ -3848,13 +3866,13 @@ export class AgentOrchestrator {
     }
     const activePolicy = this.activePresetPolicies.get(sessionId)
     const userBrowserContext = browserController.getUserContext(sessionId)
-    let enrichedText = text
+    const queueContextBlocks: string[] = []
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
     if (referencedSessionsBlock) {
-      enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
+      queueContextBlocks.push(referencedSessionsBlock)
     }
     const routedSkills = routeSkillsForTask(skillSnapshot, { userMessage: rawText ?? text, mentionedSkills })
-    if (routedSkills.prompt) enrichedText = `${routedSkills.prompt}\n\n${enrichedText}`
+    if (routedSkills.prompt) queueContextBlocks.push(routedSkills.prompt)
     console.log('[Skill 路由 队列]', JSON.stringify({ sessionId, selected: routedSkills.selected, diagnostics: routedSkills.diagnostics }))
     const allowedMentionedMcpServers = mentionedMcpServers?.filter((name) =>
       activePolicy?.loadedMcpServerNames?.includes(name) === true,
@@ -3864,7 +3882,7 @@ export class AgentOrchestrator {
       toolLines.push(`- MCP server: ${name} (please use this MCP server's tools to complete the task)`)
     }
     if (toolLines.length > 0) {
-      enrichedText = `<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
+      queueContextBlocks.push(`<mentioned_tools>\nThe user explicitly referenced the following tools available under the current preset; proactively call them in this reply:\n${toolLines.join('\n')}\n</mentioned_tools>`)
     }
 
     const nowIso = new Date().toISOString()
@@ -3884,9 +3902,11 @@ export class AgentOrchestrator {
       ? `<ADDITIONAL_METADATA>\n${queueMetadataItems.join('\n\n')}\n</ADDITIONAL_METADATA>`
       : ''
 
-    const packagedText = queueMetadataBlock
-      ? `${queueMetadataBlock}\n\n<USER_REQUEST>\n${enrichedText}\n</USER_REQUEST>`
-      : `<USER_REQUEST>\n${enrichedText}\n</USER_REQUEST>`
+    const packagedText = buildAgentContextEnvelope({
+      userMessage: text,
+      metadata: queueMetadataBlock,
+      contextBlocks: queueContextBlocks,
+    })
 
     // 构造 SDKUserMessage 并注入（'next' 优先级 = 等当前 turn 完成再处理）
     const sdkMessage = {

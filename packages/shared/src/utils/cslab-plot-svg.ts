@@ -43,6 +43,11 @@ function tspanFor(token: CsLabScientificToken): string {
   return escaped
 }
 
+/** 磅值 → viewBox 用户单位（mm）；输出无单位数值以兼容所有 SVG 渲染器。 */
+function ptToMm(pt: number): string {
+  return ((pt * 25.4) / 72).toFixed(3)
+}
+
 function scientificText(
   raw: string,
   x: number,
@@ -59,7 +64,7 @@ function scientificText(
   const parsed = parseScientificText(raw)
   const body = parsed.tokens.map(tspanFor).join('')
   const transform = options.rotate ? ` transform="rotate(${options.rotate} ${x} ${y})"` : ''
-  return `<text x="${x.toFixed(3)}" y="${y.toFixed(3)}" font-family="${escapeXml(options.fontFamily)}" font-size="${options.fontSize}" fill="${options.fill}" text-anchor="${options.anchor ?? 'start'}" font-weight="${options.fontWeight ?? 400}"${transform}>${body}</text>`
+  return `<text x="${x.toFixed(3)}" y="${y.toFixed(3)}" font-family="${escapeXml(options.fontFamily)}" font-size="${ptToMm(options.fontSize)}" fill="${options.fill}" text-anchor="${options.anchor ?? 'start'}" font-weight="${options.fontWeight ?? 400}"${transform}>${body}</text>`
 }
 
 function visibleSeries(layer: CsLabPlotLayer): CsLabPlotSeries[] {

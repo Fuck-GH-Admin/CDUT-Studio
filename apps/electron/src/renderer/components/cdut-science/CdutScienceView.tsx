@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CdutScienceView — CDUT Science 专区全屏独立视图
  *
  * 模块代号：CSLab
@@ -44,13 +44,13 @@ export function CdutScienceView(): React.ReactElement {
   }, [setAuth])
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-claude-bg font-sans text-claude-text">
-      {/* 羊皮纸质感背景：极淡的暖色径向渐变，不抢内容层级 */}
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-cslab-bg font-sans text-cslab-text">
+      {/* 暖色径向渐变：颜色全部走 CSLab 语义变量，深色下自动切换为暖石墨 */}
       <div
         className="pointer-events-none absolute inset-0 z-0"
         style={{
           backgroundImage:
-            'radial-gradient(120% 90% at 50% -10%, #FFFDF8 0%, #FAF9F5 46%, #F3EFE6 100%)',
+            'radial-gradient(120% 90% at 50% -10%, hsl(var(--cslab-highlight)) 0%, hsl(var(--cslab-bg)) 46%, hsl(var(--cslab-surface)) 100%)',
         }}
         aria-hidden="true"
       />
@@ -65,7 +65,7 @@ export function CdutScienceView(): React.ReactElement {
 
       {!auth.hydrated ? (
         <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center">
-          <p className="text-xs tracking-[0.18em] text-claude-muted">正在读取本机门禁状态…</p>
+          <p className="text-xs tracking-[0.18em] text-cslab-muted">正在读取本机门禁状态…</p>
         </div>
       ) : auth.isVerified ? (
         <div className="relative z-10 flex min-h-0 flex-1 flex-col">
@@ -76,13 +76,13 @@ export function CdutScienceView(): React.ReactElement {
         <div className="relative z-10 flex min-h-0 flex-1 justify-center overflow-y-auto px-6 pb-16 pt-20 sm:pt-24">
           <div className="w-full max-w-3xl">
             <div className="mx-auto max-w-xl animate-in fade-in slide-in-from-bottom-1 text-center duration-500">
-              <p className="text-[10px] font-medium uppercase tracking-[0.32em] text-claude-accent">
+              <p className="text-[10px] font-medium uppercase tracking-[0.32em] text-cslab-accent">
                 CSLab · Research Workspace
               </p>
-              <h1 className="mt-4 font-serif text-5xl font-medium tracking-tight text-claude-text sm:text-6xl">
+              <h1 className="mt-4 font-serif text-5xl font-medium tracking-tight text-cslab-text sm:text-6xl">
                 CDUT Science
               </h1>
-              <p className="mt-3 font-serif text-lg text-claude-muted sm:text-xl">
+              <p className="mt-3 font-serif text-lg text-cslab-muted sm:text-xl">
                 成都理工大学 · 科研智能工作台
               </p>
             </div>

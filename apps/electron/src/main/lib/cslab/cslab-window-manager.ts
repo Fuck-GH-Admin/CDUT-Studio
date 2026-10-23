@@ -304,6 +304,17 @@ export function getCsLabAgentWindowContext(windowId: string): CsLabAgentContext 
   return contextByWindowId.get(windowId) ?? null
 }
 
+/** 实验室被彻底删除后关闭其助理窗口，避免孤立窗口继续请求不存在的沙箱。 */
+export function closeCsLabAgentWindowForLab(labId: string): void {
+  if (!agentWindow || agentWindow.isDestroyed() || agentWindowLabId !== labId) return
+  persistWindowState(agentWindow)
+  agentWindow.destroy()
+  agentWindow = null
+  agentWindowId = null
+  agentWindowLabId = null
+  contextByWindowId.clear()
+}
+
 /** 应用退出或主窗口关闭时联动销毁。 */
 export function destroyCsLabAgentWindow(): void {
   if (!agentWindow || agentWindow.isDestroyed()) {

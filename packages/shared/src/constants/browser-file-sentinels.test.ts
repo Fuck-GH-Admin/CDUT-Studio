@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  BROWSER_CERT_INTERSTITIAL_ALLOW_URL,
+  BROWSER_CERT_INTERSTITIAL_BACK_URL,
+  BROWSER_CERT_INTERSTITIAL_HOST,
   BROWSER_LOCAL_FILE_OPEN_DEFAULT_URL,
   BROWSER_LOCAL_FILE_SELECTION_MAX_CHARS,
   BROWSER_LOCAL_FILE_SELECTION_URL_PREFIX,
   encodeBrowserLocalFileSelection,
   parseBrowserLocalFileSelection,
+  parseCertInterstitialSentinel,
 } from './browser-file-sentinels'
 
 describe('browser-file-sentinels', () => {
@@ -46,5 +50,20 @@ describe('browser-file-sentinels', () => {
     expect(parseBrowserLocalFileSelection('https://example.com/%00')).toBeNull()
     expect(parseBrowserLocalFileSelection('file:///etc/passwd')).toBeNull()
     expect(parseBrowserLocalFileSelection('profer-selection:/typo')).toBeNull()
+  })
+
+  test('证书插页哨兵为标准 HTTPS 伪域名形式', () => {
+    expect(BROWSER_CERT_INTERSTITIAL_HOST).toBe('profer-security.local')
+    expect(BROWSER_CERT_INTERSTITIAL_ALLOW_URL).toBe('https://profer-security.local/cert-allow')
+    expect(BROWSER_CERT_INTERSTITIAL_BACK_URL).toBe('https://profer-security.local/cert-back')
+  })
+
+  test('证书插页哨兵解析：allow / back / 非哨兵', () => {
+    expect(parseCertInterstitialSentinel('https://profer-security.local/cert-allow')).toBe('allow')
+    expect(parseCertInterstitialSentinel('https://profer-security.local/cert-allow?x=1')).toBe('allow')
+    expect(parseCertInterstitialSentinel('https://profer-security.local/cert-back')).toBe('back')
+    expect(parseCertInterstitialSentinel('https://example.com/cert-allow')).toBeNull()
+    expect(parseCertInterstitialSentinel('profer-action://open-in-default-app')).toBeNull()
+    expect(parseCertInterstitialSentinel('https://profer-security.local/other')).toBeNull()
   })
 })

@@ -28,6 +28,7 @@ import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
 import { useSmoothStream } from '@profer/ui'
 import { formatMessageTime } from '@/lib/format-time'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
+import { useIsDarkTheme } from '@/hooks/use-is-dark-theme'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/conversation-atoms'
@@ -127,7 +128,8 @@ interface AgentMessagesProps {
   onFork?: (upToMessageUuid: string) => void
   /** 探索分支回调（Pi `/tree`）；仅 Pi 会话可用 */
   onExplore?: (upToMessageUuid: string) => void
-  onRewind?: (assistantMessageUuid: string) => void
+  /** 撤销本轮及之后对话（目标消息 uuid；由用户提问卡片消费） */
+  onRewind?: (targetMessageUuid: string) => void
   onCompact?: () => void
   /** Desktop-only durable image generation timeline cards. */
   imageGenerations?: AgentImageGenerationCard[]
@@ -242,10 +244,11 @@ function StreamScrollFollow({ sessionId, streaming }: { sessionId: string; strea
 
 function AssistantLogo({ model }: { model?: string }): React.ReactElement {
   const channels = useAtomValue(channelsAtom)
+  const isDark = useIsDarkTheme()
   if (model) {
     return (
       <img
-        src={getModelLogo(model, resolveModelProvider(model, channels))}
+        src={getModelLogo(model, resolveModelProvider(model, channels), isDark)}
         alt={model}
         className="size-[35px] rounded-[25%] object-cover"
       />

@@ -44,6 +44,12 @@ const JW_HOME_URL = 'https://jw.cdut.edu.cn/jsxsd/framework/xsMainV.htmlx'
 /** 特区账户专属隔离分区，与通用账户、其它业务会话物理隔离 */
 export const CDUT_AUTH_PARTITION = 'persist:cdut-auth-zone'
 
+/**
+ * 证书安全策略的会话登记标识（与 CDUT_AUTH_PARTITION 一一对应）。
+ * 必须与安装 verifyProc 时的 sessionId 完全一致，否则阻断登记的写入端与读取端会错位。
+ */
+export const CDUT_AUTH_CERT_SESSION_ID = 'cdut-auth-zone'
+
 /** 获取学生证件照离线二进制缓存路径（~/.cdutai/cache/avatars/{studentId}.jpg） */
 function getAvatarCachePath(studentId: string): string {
   return join(resolveConfigDir(), 'cache', 'avatars', `${studentId}.jpg`)
@@ -119,7 +125,22 @@ function isMainHomeUrl(url: string): boolean {
   try {
     const u = new URL(url)
     if (u.hostname !== 'jw.cdut.edu.cn') return false
-    return u.pathname.includes('/jsxsd/framework/xsMainV') || u.pathname.startsWith('/jsxsd/')
+    return u.pathname.includes('/jsxsd/framework/xsMainV')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 判定是否为 CAS 统一身份认证登录页。
+ *
+ * 必须严格校验 hostname，杜绝重定向参数中携带 `/cas/login` 子串造成的误判。
+ */
+function isCasLoginUrl(url: string): boolean {
+  if (!url) return false
+  try {
+    const u = new URL(url)
+    return u.hostname === 'cas.paas.cdut.edu.cn' && u.pathname.includes('/cas/login')
   } catch {
     return false
   }
@@ -787,6 +808,8 @@ export class CdutAuthManager {
       }
       try {
         const authSession = session.fromPartition(CDUT_AUTH_PARTITION)
+        // 探活前先剔除陈旧瑞数 *P 签名，避免携带失效签名触发网关 HTTP 400
+        await stripStaleRuiShuCookies(authSession)
         const res = await authSession.fetch(JW_HOME_URL, {
           method: 'GET',
           redirect: 'manual',
@@ -799,9 +822,15 @@ export class CdutAuthManager {
           this.profile.status = 'expired'
           this.onStatusChangeCallback?.(this.getProfile())
           this.stopKeepAlive()
-        } else {
+        } else if (res.status === 200) {
+          // 仅 HTTP 200 才代表会话真实可用，如实刷新活跃时间
           this.profile.lastActiveAt = Date.now()
           this.onStatusChangeCallback?.(this.getProfile())
+        } else {
+          // 400/500/502 等异常不得伪造成保活成功
+          console.warn(
+            `[CdutAuthManager] 静默保活探测返回异常状态: HTTP ${res.status}，本次不刷新活跃时间`,
+          )
         }
       } catch (err) {
         console.warn('[CdutAuthManager] 静默保活请求异常:', err)
@@ -1073,9 +1102,22 @@ export class CdutAuthManager {
             hasAvatar: !!finalProfile.avatar,
           })
 
+          // 登录可能已被硬超时结算或认证窗口被销毁：禁止迟到的画像落盘
+          if (resolved) return
+          if (authWindow.isDestroyed()) {
+            finish({ success: false, error: '认证窗口已关闭' })
+            return
+          }
+
           this.persistAccount({ ...finalProfile, password: rememberPassword ? password : '' })
           finish({ success: true, profile: finalProfile })
         } catch (extractErr) {
+          // 已结算（如 25s 硬超时）时严禁把 dummy 画像写成 active；窗口已销毁则结算失败并清理引用
+          if (resolved) return
+          if (authWindow.isDestroyed()) {
+            finish({ success: false, error: '认证窗口已关闭' })
+            return
+          }
           console.error('[CdutAuthManager] 画像提取异常，进入兜底模式:', extractErr)
           const now = Date.now()
           const fallbackProfile: CdutAccountProfile = {
@@ -1105,7 +1147,7 @@ export class CdutAuthManager {
         }
 
         // B) CAS 登录页：注入凭证并提交表单（提交仅一次）
-        if (!submitted && currentUrl.includes('/cas/login')) {
+        if (!submitted && isCasLoginUrl(currentUrl)) {
           try {
             const injectRes = (await webContents.executeJavaScript(
               buildVantInjectScript(username, password)
@@ -1131,7 +1173,7 @@ export class CdutAuthManager {
 
         // C) 已提交后仍停留在 CAS 登录页：读取页面真实错误文案，如实报错。
         //    未捕获到错误则不结算，继续等待主框架导航（可能仍在 WAF 握手）。
-        if (submitted && currentUrl.includes('/cas/login')) {
+        if (submitted && isCasLoginUrl(currentUrl)) {
           const errorMsg = (await webContents
             .executeJavaScript(EXTRACT_ERROR_SCRIPT)
             .catch(() => '')) as string
@@ -1145,7 +1187,9 @@ export class CdutAuthManager {
       webContents.on(
         'did-fail-load',
         (_event, errorCode, errorDescription, _url, isMainFrame) => {
-          if (!isMainFrame || errorCode === -3) return
+          // 认证已成功并进入画像抓取后，辅助页面（学籍卡片 / xjxxgl.do）的偶发失败
+          // 由抓取自身 try/catch 兜底，绝不能反向否决已经成功的整体登录。
+          if (!isMainFrame || errorCode === -3 || harvesting) return
           finish({ success: false, error: '无法打开内网认证页: ' + errorDescription })
         }
       )

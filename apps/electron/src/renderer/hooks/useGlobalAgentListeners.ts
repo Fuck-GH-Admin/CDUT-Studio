@@ -22,6 +22,7 @@ import {
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
   askUserAnswersAtom,
+  askUserCollapsedAtom,
   allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
   backgroundTasksAtomFamily,
@@ -1249,6 +1250,13 @@ export function useGlobalAgentListeners(options: UseGlobalAgentListenersOptions 
               const map = new Map(prev)
               map.delete(event.requestId)
               return map
+            })
+            // 同步清理折叠状态，避免下一题被误折叠
+            store.set(askUserCollapsedAtom, (prev) => {
+              if (!prev.has(event.requestId)) return prev
+              const next = new Set(prev)
+              next.delete(event.requestId)
+              return next
             })
           } else if (event.type === 'permission_resolved') {
             // 权限已解决：清理队列（与 ask_user_resolved 同理，防止跨端残留）

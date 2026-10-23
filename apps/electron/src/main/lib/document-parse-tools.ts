@@ -204,6 +204,9 @@ function truncate(text: string): { text: string; truncated: boolean } {
   }
 }
 
+/** 块 ID 后缀片段（b/tbl/r/c 形态），供锚点注释提取与命名空间替换共用；页码捕获组由各使用方显式补齐 */
+const BLOCK_SUFFIX_SRC = String.raw`(?:b\d+|tbl\d+|r\d+|c[a-zA-Z]+\d+(?::[a-zA-Z]+\d+)?)`
+
 /**
  * 从带拓扑锚点的 Markdown 中提取所有块的 BBox 坐标，并将锚点统一冠以 `fileId:` 命名空间前缀。
  */
@@ -212,8 +215,12 @@ export function extractAndNamespaceAnchors(
   fileId: string,
 ): { namespacedMarkdown: string; blocks: Record<string, DocumentAnchorBlockMeta> } {
   const blocks: Record<string, DocumentAnchorBlockMeta> = {}
-  const anchorCommentRe =
-    /<!--\s*anchor:\s*(?:([a-zA-Z]+\d+):)?(p(\d+)-b\d+)\s*\[([^\]]+)\]([^>]*)-->/g
+  // 扩展锚点形态：除 pX-bY 外同时吸收 PDF 引擎发射的表格块 pX-tblY（见 native-segmenter）及 r/c 扩展块，
+  // 捕获组：1 = fileId、2 = 完整块 ID、3 = 页码、4 = BBox 坐标串、5 = 属性尾
+  const anchorCommentRe = new RegExp(
+    String.raw`<!--\s*anchor:\s*(?:([a-zA-Z]+\d+):)?(p(\d+)-${BLOCK_SUFFIX_SRC})\s*\[([^\]]+)\]([^>]*)-->`,
+    'g',
+  )
 
   let match: RegExpExecArray | null
   while ((match = anchorCommentRe.exec(markdown)) !== null) {
@@ -248,11 +255,11 @@ export function extractAndNamespaceAnchors(
 
   const namespacedMarkdown = markdown
     .replace(
-      /<span id="(?:[a-zA-Z]+\d+:)?(p\d+-b\d+)"([^>]*)><\/span>/g,
+      new RegExp(String.raw`<span id="(?:[a-zA-Z]+\d+:)?(p\d+-${BLOCK_SUFFIX_SRC})"([^>]*)></span>`, 'g'),
       `<span id="${fileId}:$1"$2></span>`,
     )
     .replace(
-      /<!--\s*anchor:\s*(?:[a-zA-Z]+\d+:)?(p\d+-b\d+)\s*\[([^\]]+)\]([^>]*)-->/g,
+      new RegExp(String.raw`<!--\s*anchor:\s*(?:[a-zA-Z]+\d+:)?(p\d+-${BLOCK_SUFFIX_SRC})\s*\[([^\]]+)\]([^>]*)-->`, 'g'),
       `<!-- anchor: ${fileId}:$1 [$2]$3-->`,
     )
 
@@ -1219,6 +1226,34 @@ function extractLabelKeywords(label: string | undefined, sheetName?: string): st
     .filter((s) => s.length >= 2 && s !== '正文' && s !== '表格' && s !== '插图' && s !== '公式')
 }
 
+/** label 版面类型提示表：label 强烈指明某版面类型时用于互斥校正（见 correctMutuallyExclusiveBlockType） */
+const LABEL_TYPE_HINTS: ReadonlyArray<{ re: RegExp; kind: string }> = [
+  { re: /表格|表\s*\d+|Sheet|工作表/, kind: '表格' },
+  { re: /插图|图\s*\d+|Figure/i, kind: '插图' },
+  { re: /公式|Equation/i, kind: '公式' },
+]
+
+/**
+ * 窄口径互斥版面类型校正：仅当 label 强烈指明类型 T（表格/插图/公式）、
+ * 当前块的 loc 为完全互斥类型（如「第2页·插图」vs label 写明「表格」）、
+ * 且同页存在 T 类型块时，才校正到该同页类型块；其余情况严格保留显式物理块。
+ */
+function correctMutuallyExclusiveBlockType(
+  blockMeta: DocumentAnchorBlockMeta,
+  label: string | undefined,
+  pageBlocks: readonly DocumentAnchorBlockMeta[],
+): DocumentAnchorBlockMeta {
+  if (!label) return blockMeta
+  const currentKind = /·(插图|表格|公式)$/.exec(blockMeta.loc)?.[1]
+  if (!currentKind) return blockMeta
+  const hinted = LABEL_TYPE_HINTS.find((h) => h.re.test(label))
+  if (!hinted || hinted.kind === currentKind) return blockMeta
+  const samePageTyped = pageBlocks.find(
+    (b) => b.blockId !== blockMeta.blockId && b.loc.endsWith(`·${hinted.kind}`),
+  )
+  return samePageTyped ?? blockMeta
+}
+
 /**
  * 解析形如 `#f1:p1-b11`、`#f1-p1-b11`、`#f3:p3-cB10`、`#f3:p3-r10` 或 `#p1-b11` 的双平行拓扑定位锚点，
  * 反查目标 PDF/Office 文档的绝对路径、页码、单元格以及块级归一化 BBox 坐标 `[x0, y0, x1, y1]`。
@@ -1232,18 +1267,27 @@ export function resolveDocumentAnchor(
   },
 ): ResolvedDocumentAnchor | null {
   const cleaned = anchorInput.trim().replace(/^#/, '')
+  // 捕获组：1 = fileId、2 = 页码+块后缀、3 = 页码数字、4 = b 块号、5 = tbl 块号、6 = r 行号、7 = c 单元格/范围、8 = 无 c 前缀范围
   const match =
-    /^(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-(?:b(\d+)|tbl(\d+)|r(\d+)|c([a-zA-Z]+\d+(?::[a-zA-Z]+\d+)?)))?)$/i.exec(
+    /^(?:([a-zA-Z]+\d+)[:\-])?(p(\d+)(?:-(?:b(\d+)|tbl(\d+)|r(\d+)|c([a-zA-Z]+\d+(?::[a-zA-Z]+\d+)?)|([a-zA-Z]+\d+:[a-zA-Z]+\d+))))?$/i.exec(
       cleaned,
     )
   if (!match) return null
 
   const requestedFileId = match[1]?.toLowerCase()
   const pageNumber = Math.max(1, parseInt(match[3]!, 10) || 1)
-  const explicitBlockNum = match[4] ?? match[5]
+  const explicitTblNum = match[5]
+  const explicitBlockNum = match[4] ?? explicitTblNum
   const explicitRowNum = match[6] ? parseInt(match[6], 10) : undefined
-  const explicitCellRef = match[7]?.toUpperCase()
-  const rawBlockId = explicitBlockNum ? `p${pageNumber}-b${parseInt(explicitBlockNum, 10)}` : `p${pageNumber}`
+  const explicitCellRef = (match[7] ?? match[8])?.toUpperCase()
+  // tbl 形态保留原始块 ID（pX-tblY），不再坍缩为 pX-bY——PDF 引擎以 pX-tblY 落盘表格块，
+  // 坍缩会反查到错误的段落块；无 c 前缀的单格（如 p1-B4）与块号 b4 天然歧义，维持按块解释。
+  const rawBlockId =
+    explicitTblNum !== undefined
+      ? `p${pageNumber}-tbl${parseInt(explicitTblNum, 10)}`
+      : explicitBlockNum !== undefined
+        ? `p${pageNumber}-b${parseInt(explicitBlockNum, 10)}`
+        : `p${pageNumber}`
   const label = options.label?.trim()
 
   const indices: MaterializedDocumentIndex[] = []
@@ -1260,6 +1304,25 @@ export function resolveDocumentAnchor(
     } catch {
       continue
     }
+    // 确定性排序兜底：即便最终退回下标分配，也不再受 readdirSync 遍历顺序影响
+    files.sort()
+
+    // registry.json / manifest.json 记录了 materializeToWorkspace 落盘时的确定性 fileId 分配；
+    // 旧版索引缺失 fileId 时优先据此反查，杜绝遍历顺序不确定导致 f1/f2 随机对调。
+    let registry: Record<string, SessionDocumentRegistryEntry> = {}
+    let manifest: Record<string, { fileId?: string; sourcePath: string; revision: string; cleanPath: string }> = {}
+    try {
+      const registryPath = join(artifactsDir, 'registry.json')
+      if (existsSync(registryPath)) registry = JSON.parse(readFileSync(registryPath, 'utf-8'))
+    } catch {
+      // ignore malformed registry
+    }
+    try {
+      const manifestPath = join(artifactsDir, 'manifest.json')
+      if (existsSync(manifestPath)) manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
+    } catch {
+      // ignore malformed manifest
+    }
 
     for (let idxPos = 0; idxPos < files.length; idxPos++) {
       const f = files[idxPos]!
@@ -1270,7 +1333,25 @@ export function resolveDocumentAnchor(
       try {
         let idx = JSON.parse(readFileSync(fullIndexPath, 'utf-8')) as MaterializedDocumentIndex
         if (!idx.fileId) {
-          idx.fileId = `f${idxPos + 1}`
+          const stem = basename(f, '.index.json')
+          const isValidFileId = (v: string | undefined): v is string => !!v && /^f\d+$/i.test(v)
+          // ① registry（会话级注册表）：按索引落盘路径 / 工件名 / 源路径三重确定性匹配
+          const registryHit = Object.values(registry).find(
+            (entry) =>
+              (entry.indexJsonPath && entry.indexJsonPath === fullIndexPath) ||
+              (entry.artifactId && entry.artifactId === stem) ||
+              (entry.sourcePath && idx.sourcePath && entry.sourcePath === idx.sourcePath),
+          )
+          // ② manifest（stem 索引）：按 stem 或源路径匹配
+          const manifestHit =
+            manifest[stem]?.fileId ??
+            Object.values(manifest).find(
+              (entry) => entry.sourcePath && idx.sourcePath && entry.sourcePath === idx.sourcePath,
+            )?.fileId
+          idx.fileId =
+            (isValidFileId(registryHit?.fileId) ? registryHit.fileId : undefined) ??
+            (isValidFileId(manifestHit) ? manifestHit.toLowerCase() : undefined) ??
+            `f${idxPos + 1}`
         }
         idx = upgradeStaleOfficeIndexIfNeeded(idx, fullIndexPath)
         // 向下兼容旧版 .index.json：若尚未持久化 blocks 字典，从同目录 .anchored.md 即时提取 BBox
@@ -1325,15 +1406,15 @@ export function resolveDocumentAnchor(
     const pageBlocks = allBlocks.filter((b) => b.pageNumber === pageNumber)
     const keywords = extractLabelKeywords(label, pageBlocks[0]?.sheetName)
 
-    // 智能匹配具体段落/形状块：
-    // 1) 当 rawBlockId 未命中（例如模型输出了 #f1:p2、或旧版页码 #f1:p24-b1 超出重建后的总页数）
-    // 2) 或当模型套用了页面首个块 #f1:p1-b1，但胶囊文本 label 实际指向同页的其它段落/形状块
-    const labelMatchesCurrentBlock =
-      blockMeta &&
-      keywords.length > 0 &&
-      keywords.some((kw) => blockMeta!.loc.includes(kw))
-
-    if ((!blockMeta || (keywords.length > 0 && !labelMatchesCurrentBlock)) && allBlocks.length > 0) {
+    // 智能匹配具体段落/形状块的分工边界（B1 评审决议）：
+    // 引擎产出的 loc 纯属版面几何（如「第2页·左栏」「第3页·表格」），永不包含业务关键词，
+    // 若据 loc.includes(kw) 判定失配再降级模糊扫描，必然把已精确命中的块（如 p2-b3）
+    // 劫持为同页恰含该关键词的其他块。因此仅两种情况允许关键词模糊探测：
+    // 1) 显式块号未命中有效块（越界/索引重建后缺失，如 #f1:p24-b1）；
+    // 2) 纯页面锚点（#f1:p2，未显式指定块号），需据 label 猜测同页具体段落。
+    // 显式块号命中有效块时严格信任物理块 ID，仅允许窄口径互斥类型校正。
+    const hasExplicitBlock = explicitBlockNum !== undefined
+    if ((!blockMeta || !hasExplicitBlock) && allBlocks.length > 0) {
       const candidatePool = pageBlocks.length > 0 ? pageBlocks : allBlocks
       let matchedByLabel: DocumentAnchorBlockMeta | undefined
 
@@ -1350,7 +1431,7 @@ export function resolveDocumentAnchor(
             const segments = (p.anchoredText ?? '').split(/(?=<!--\s*anchor:\s*)/g)
             for (const seg of segments) {
               if (keywords.some((kw) => seg.includes(kw))) {
-                const m = /<!--\s*anchor:\s*(?:[a-zA-Z]+\d+:)?(p\d+-b\d+)/.exec(seg)
+                const m = /<!--\s*anchor:\s*(?:[a-zA-Z]+\d+:)?(p\d+-(?:b|tbl)\d+)/.exec(seg)
                 if (m && selectedIndex.blocks?.[m[1]!]) {
                   matchedByLabel = selectedIndex.blocks[m[1]!]
                   break
@@ -1372,6 +1453,9 @@ export function resolveDocumentAnchor(
           blockMeta = allBlocks[Math.min(allBlocks.length - 1, pageNumber)] ?? allBlocks[0]
         }
       }
+    } else if (blockMeta) {
+      // 显式块号 + 有效块元数据：严格遵循显式物理块，仅做互斥版面类型窄校正
+      blockMeta = correctMutuallyExclusiveBlockType(blockMeta, label, pageBlocks)
     }
 
     // 针对 XLSX 表格：将整表范围（如 A1:B22）收敛到具体的目标行/单元格（如 A10:B10 或 B10）
@@ -1391,12 +1475,9 @@ export function resolveDocumentAnchor(
           /(?<![A-Za-z0-9-])([A-Za-z]{1,2}\d{1,4}(?::[A-Za-z]{1,2}\d{1,4})?)(?![A-Za-z0-9-])/.exec(label)
         const rowInLabel = /第\s*(\d+)\s*行|行\s*(\d+)/.exec(label)
         if (cellInLabel) {
-          const rawCell = cellInLabel[1]!.toUpperCase()
-          // 若仅写了单单元格（如 B10），保留单单元格或扩展为整行？若模型写 B10，高亮 A10:B10 整行更醒目直观
-          const singleCellRow = /^([A-Z]+)(\d+)$/.exec(rawCell)
-          resolvedCellRef = singleCellRow
-            ? `${minCol}${singleCellRow[2]}:${maxCol}${singleCellRow[2]}`
-            : rawCell
+          // 显式单元格引用（单格 B10 或范围 B4:E10）原样保留，绝不拉伸为整行：
+          // 强扩整行会剥夺「精准定位单格」的聚光灯语义（B4 评审决议）
+          resolvedCellRef = cellInLabel[1]!.toUpperCase()
         } else if (rowInLabel) {
           const rNum = parseInt(rowInLabel[1] ?? rowInLabel[2]!, 10)
           if (rNum >= 1) {

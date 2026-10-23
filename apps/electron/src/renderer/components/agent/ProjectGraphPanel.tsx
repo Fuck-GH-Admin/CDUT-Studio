@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ProjectGraphPanel — 无界画板任务图可视化（思维导图风格）
  *
  * 支持缩放（滚轮）、平移（拖拽）、节点选中交互。
@@ -427,7 +427,7 @@ function DetailPanel({ node, harness, onClose, onContinueCandidate }: {
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/30">
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
       <GitBranch className="size-14" />
       <p className="text-sm text-center">Agent 创建多步骤任务后，<br />任务关系图会在这里展示</p>
     </div>

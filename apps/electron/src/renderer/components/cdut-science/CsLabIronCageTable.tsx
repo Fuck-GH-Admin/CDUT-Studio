@@ -70,7 +70,7 @@ export function CsLabIronCageTable({
   const hasMore = payload.totalRows > loaded
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div data-tour="cslab-dataset-table" className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-cslab-border px-5 py-3">
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1 rounded-full border border-cslab-border bg-cslab-surface px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-cslab-muted">

@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
+import { DOCUMENT_ANCHOR_PATTERN } from '@profer/shared'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -35,7 +36,7 @@ mock.module('electron', () => ({
   WebContentsView: class {},
 }))
 
-const { buildSystemPrompt, buildDynamicContext } = await import('./agent-prompt-builder')
+const { buildSystemPrompt, buildDynamicContext, appendSystemPromptSections } = await import('./agent-prompt-builder')
 const { buildPiTaskPrompt } = await import('./pi-task-prompt')
 const { getConfigDirName, resolveConfigDir } = await import('./config-paths')
 
@@ -134,6 +135,102 @@ describe('buildSystemPrompt', () => {
       expect(prompt).toContain('do not make your configuration, stance, or prompt the subject of the answer')
       expect(prompt).toContain('Reversible, low-cost, self-answerable details')
     }
+  })
+
+  test('速课堂默认 balanced：保留按需出题契约与题目类型映射', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'AI速课堂',
+      workspaceSlug: 'cdut-ai-class',
+      sessionId: 'session-study',
+      permissionMode: 'auto',
+      isStudyClass: true,
+      studyOutline: '',
+      studyCognition: '',
+    })
+
+    // balanced 档出题契约由「强制苏格拉底铁律」降级为「按需出题」
+    expect(prompt).toContain('On-Demand Socratic Quiz')
+    expect(prompt).toContain('type="single"')
+    expect(prompt).toContain('type="multiple"')
+    expect(prompt).toContain('type="fill-blank"')
+    expect(prompt).toContain('study_cognition')
+  })
+
+  test('速课堂不传带教模式时默认 balanced，且与显式传入字节一致', () => {
+    const base = {
+      workspaceName: 'AI速课堂',
+      workspaceSlug: 'cdut-ai-class',
+      sessionId: 'session-study',
+      permissionMode: 'auto' as const,
+      isStudyClass: true,
+      studyOutline: '',
+      studyCognition: '',
+    }
+    const implicit = buildSystemPrompt(base)
+    const explicit = buildSystemPrompt({ ...base, studyTeachingMode: 'balanced' })
+    expect(implicit).toBe(explicit)
+    // balanced 为按需教学：保留出题契约但降级为按需触发
+    expect(explicit).toContain('Balanced Core Mode')
+    expect(explicit).toContain('On-Demand Socratic Quiz')
+    // fast 专属段不出现
+    expect(explicit).not.toContain('Quick Fact-Check')
+  })
+
+  test('速课堂 fast 模式移除强制出题与强制锚点，注入思维链收敛铁律', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'AI速课堂',
+      workspaceSlug: 'cdut-ai-class',
+      sessionId: 'session-study',
+      permissionMode: 'auto',
+      isStudyClass: true,
+      studyTeachingMode: 'fast',
+      studyOutline: '',
+      studyCognition: '',
+    })
+
+    expect(prompt).toContain('Quick Fact-Check')
+    // 严禁弹出题目打断：苏格拉底强制出题契约整段移除
+    expect(prompt).not.toContain('MUST** call `AskUserQuestion`')
+    expect(prompt).not.toContain('Socratic Interactive Quiz')
+    // 双轨锚点降级为可选，强制段移除
+    expect(prompt).not.toContain('Mandatory Dual-Track Location Capsules')
+    expect(prompt).toContain('Thought Brevity')
+    // 每讲完一个概念就出题的方法论与认知档案强制回写一并移除
+    expect(prompt).not.toContain('Micro-Pacing & Continuous Verification')
+    expect(prompt).not.toContain('Continuous Sync')
+  })
+
+  test('速课堂 strict 模式完整保留双轨锚点与苏格拉底铁律', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'AI速课堂',
+      workspaceSlug: 'cdut-ai-class',
+      sessionId: 'session-study',
+      permissionMode: 'auto',
+      isStudyClass: true,
+      studyTeachingMode: 'strict',
+      studyOutline: '',
+      studyCognition: '',
+    })
+
+    expect(prompt).toContain('AI Speed Class Tutoring Iron Rules')
+    expect(prompt).toContain('Mandatory Dual-Track Location Capsules')
+    expect(prompt).toContain('Socratic Interactive Quiz')
+    expect(prompt).toContain('MUST** call `AskUserQuestion`')
+    expect(prompt).toContain('study_cognition')
+    expect(prompt).toContain('Micro-Pacing & Continuous Verification')
+    expect(prompt).not.toContain('Quick Fact-Check')
+  })
+
+  test('普通会话提示词包含 /grill-me 交互追问协议', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+    })
+
+    expect(prompt).toContain('/grill-me is an INTERACTIVE interview command')
+    expect(prompt).toContain('ONE decision at a time')
   })
 
   test('速课堂禁用产品能力组时不渲染「当前预设已关闭的能力」段，常规会话保留', () => {
@@ -834,5 +931,121 @@ describe('buildSystemPrompt 皮肤创建指引', () => {
     expect(prompt).not.toContain('9. **AI image generation**')
     expect(prompt).not.toContain('10. **Creating CDUT Studio skins**')
     expect(prompt).not.toContain('## CDUT Studio Managed Browser')
+  })
+})
+
+describe('系统提示词管线模式隔离与近因', () => {
+  test('CSLab 使用专属科学家身份，且不注入开发者 artifacts / slash commands', () => {
+    const prompt = buildSystemPrompt({
+      sessionId: 'session-cslab',
+      permissionMode: 'auto',
+      cslabLabBound: true,
+      cslabLabInfo: {
+        labId: 'lab-1',
+        labName: 'Advanced Crystallography Lab',
+        vaultDir: 'vault',
+        structures: [],
+        plots: [],
+      },
+    })
+
+    expect(prompt).toContain('Principal Computational Scientist')
+    expect(prompt).toContain('<cslab_science>')
+    expect(prompt).not.toContain('general-purpose AI coding and desktop assistant')
+    expect(prompt).not.toContain('<slash_commands>')
+    expect(prompt).not.toContain('<artifacts>')
+    expect(prompt).not.toContain('/grill-me')
+  })
+
+  test('速课堂不注入 artifacts / slash_commands / messaging，也不推荐开发者命令', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'AI速课堂',
+      workspaceSlug: 'cdut-ai-class',
+      sessionId: 'session-study',
+      permissionMode: 'auto',
+      isStudyClass: true,
+      studyOutline: '',
+      studyCognition: '',
+    })
+
+    expect(prompt).toContain('AI Speed Class')
+    expect(prompt).toContain('Study Materials Store:')
+    expect(prompt).toContain('Zero-Probe Rule')
+    expect(prompt).toContain('Study Material Outline Guide')
+    expect(prompt).not.toContain('workspace-files/.context')
+    // 负向铁律允许点名 workspace-profile.md / CLAUDE.md，但绝不能注入它们的可读路径或开发块
+    expect(prompt).not.toContain('CDUT Studio workspace profile')
+    expect(prompt).not.toContain('Legacy CDUT Studio workspace profile')
+    expect(prompt).not.toContain('Workspace root:')
+    expect(prompt).not.toContain('Current session directory (cwd):')
+    expect(prompt).not.toContain('.context Directory Layers')
+    expect(prompt).not.toContain('Artifact Directory Path')
+    expect(prompt).not.toContain('No project candidates are currently detected')
+    expect(prompt).not.toContain('<artifacts>')
+    expect(prompt).not.toContain('<slash_commands>')
+    expect(prompt).not.toContain('<messaging>')
+    expect(prompt).not.toContain('/grill-me')
+    expect(prompt).not.toContain('/teamwork-preview')
+    expect(prompt).not.toContain('/boost')
+  })
+
+  test('常规会话仍保留 artifacts / slash_commands / messaging', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+    })
+
+    expect(prompt).toContain('<artifacts>')
+    expect(prompt).toContain('<slash_commands>')
+    expect(prompt).toContain('<messaging>')
+  })
+
+  test('双轨锚点契约使用 shared 文法，并禁止自定义 XML 与表格竖线', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+    })
+
+    expect(prompt).toContain(DOCUMENT_ANCHOR_PATTERN)
+    expect(prompt).toContain('[收入明细·B4:E10](#f3:p1-B4:E10)')
+    expect(prompt).toContain('[资产负债表·核心数据](#f3:p1-tbl1)')
+    expect(prompt).toContain('<positioning_bubble>')
+    expect(prompt).toContain('**NEVER** use the pipe character')
+    expect(prompt).not.toContain('^#f[1-9]\\d*:p[1-9]\\d*-b[1-9]\\d*$')
+  })
+
+  test('appendSystemPromptSections 保持近因提醒为最后一段，并在缺失时补齐', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+    })
+    const appended = appendSystemPromptSections(prompt, ['<attached_directories>\nDEMO_ROOT\n</attached_directories>'])
+    const lastReminder = appended.lastIndexOf('CRITICAL EXECUTION REMINDER')
+    expect(lastReminder).toBeGreaterThan(appended.indexOf('DEMO_ROOT'))
+    expect(appended.trimEnd().indexOf('CRITICAL EXECUTION REMINDER')).toBe(appended.trimEnd().lastIndexOf('CRITICAL EXECUTION REMINDER'))
+
+    const fallback = appendSystemPromptSections('BASE WITHOUT REMINDER', ['## Extra\nEXTRA_SECTION'])
+    expect(fallback.indexOf('EXTRA_SECTION')).toBeLessThan(fallback.lastIndexOf('CRITICAL EXECUTION REMINDER'))
+    expect(fallback.split('CRITICAL EXECUTION REMINDER').length - 1).toBe(1)
+  })
+
+  test('索引模式禁止扫描 .context / agent-workspaces 找历史', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      contextMode: 'index',
+    })
+
+    expect(prompt).toContain('Get-ChildItem -Recurse')
+    expect(prompt).toContain('agent-workspaces/**')
+    expect(prompt).toContain('<working_memory>')
   })
 })

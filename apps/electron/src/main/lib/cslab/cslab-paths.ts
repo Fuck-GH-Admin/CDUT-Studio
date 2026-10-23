@@ -132,7 +132,13 @@ function normalizeForCompare(target: string): string {
  */
 export function assertSafeLabRootPath(targetPath: string): string {
   const resolved = normalize(resolve(targetPath))
-  const forbidden = [homedir(), parse(resolve(homedir())).root, process.cwd()]
+  const forbidden = [
+    homedir(),
+    parse(resolve(homedir())).root,
+    // 目标自身的盘符 / 文件系统根：覆盖 Windows 多盘符（D:\、E:\）与 POSIX 根
+    parse(resolved).root,
+    process.cwd(),
+  ]
   for (const key of ['SystemRoot', 'ProgramFiles', 'ProgramFiles(x86)'] as const) {
     const value = process.env[key]
     if (value) forbidden.push(value)
@@ -165,6 +171,11 @@ export function readLabManifest(labDir: string): CsLabLab | null {
   try {
     const parsed = JSON.parse(readFileSync(manifestPath, 'utf-8')) as Partial<CsLabLab>
     if (!parsed.id || !parsed.name) return null
+    const status: CsLabLab['status'] =
+      parsed.status === '调试中' || parsed.status === '筹建中' || parsed.status === '已归档'
+        ? parsed.status
+        : '运行中'
+    const archived = parsed.archived === true || status === '已归档'
     return {
       id: String(parsed.id),
       code: String(parsed.code ?? parsed.id.toUpperCase()),
@@ -172,10 +183,20 @@ export function readLabManifest(labDir: string): CsLabLab | null {
       description: String(parsed.description ?? ''),
       tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : [],
       members: Number(parsed.members ?? 1),
-      status: parsed.status === '调试中' || parsed.status === '筹建中' ? parsed.status : '运行中',
+      status,
       rootPath: String(parsed.rootPath ?? labDir),
       createdAt: Number(parsed.createdAt ?? Date.now()),
       updatedAt: Number(parsed.updatedAt ?? Date.now()),
+      pinned: parsed.pinned === true,
+      pinnedAt: typeof parsed.pinnedAt === 'number' ? parsed.pinnedAt : undefined,
+      archived,
+      archivedAt: typeof parsed.archivedAt === 'number' ? parsed.archivedAt : undefined,
+      statusBeforeArchive:
+        parsed.statusBeforeArchive === '运行中' ||
+        parsed.statusBeforeArchive === '调试中' ||
+        parsed.statusBeforeArchive === '筹建中'
+          ? parsed.statusBeforeArchive
+          : undefined,
     }
   } catch {
     console.warn(`[CSLab] 实验室清单损坏，已跳过: ${manifestPath}`)
@@ -188,6 +209,23 @@ export function writeLabManifest(labDir: string, manifest: CsLabLab): void {
   const tmpPath = `${manifestPath}.tmp`
   writeFileSync(tmpPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8')
   renameSync(tmpPath, manifestPath)
+}
+
+/** 读取清单并原子合并补丁；强制保留原 id，避免补丁篡改沙箱标识。 */
+export function updateLabManifest(labId: string, patch: Partial<CsLabLab>): CsLabLab {
+  const labDir = resolveLabDir(labId)
+  const current = readLabManifest(labDir)
+  if (!current) throw new Error('实验室不存在或清单损坏')
+  const next: CsLabLab = { ...current, ...patch, id: current.id }
+  writeLabManifest(labDir, next)
+  return next
+}
+
+/** 物理删除实验室沙箱目录并注销索引（调用方必须先释放数据库与文件监听）。 */
+export function deleteLabFiles(labId: string): void {
+  const root = assertSafeLabRootPath(resolveLabDir(labId))
+  rmSync(root, { recursive: true, force: true })
+  unregisterLabRoot(labId)
 }
 
 /** 列出索引中所有可读实验室（跳过损坏清单）。 */
@@ -216,7 +254,13 @@ export function listLabManifests(): CsLabLab[] {
     }
   }
 
-  return labs.sort((a, b) => b.updatedAt - a.updatedAt)
+  // 置顶优先（最近置顶在前），其余按最近更新时间倒序。
+  return labs.sort((a, b) => {
+    const pinnedDelta = Number(!!b.pinned) - Number(!!a.pinned)
+    if (pinnedDelta !== 0) return pinnedDelta
+    if (a.pinned && b.pinned) return (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0)
+    return b.updatedAt - a.updatedAt
+  })
 }
 
 export function removeLabRegistration(labId: string): void {

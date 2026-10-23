@@ -20,6 +20,7 @@ import type {
 } from '@profer/shared'
 import { CSLAB_XRAY_WAVELENGTHS, buildMillerPlane, formatMetric } from '@profer/shared'
 import { cn } from '@/lib/utils'
+import type { CsLabPaneId } from '@/atoms/cslab-atoms'
 import { cslabWorkers } from '@/lib/cslab/cslab-worker-client'
 import { useCsLabIsosurface } from '@/lib/webgpu/use-cslab-isosurface'
 import { CsLabMolstarViewer } from '../CsLabMolstarViewer'
@@ -27,8 +28,10 @@ import { CsLabSpectrumStrip } from '../CsLabSpectrumStrip'
 
 interface CsLabVestaCrystalPaneProps {
   labId: string
+  /** 所属舞台窗格，用于 3D 快照按窗格寻址。 */
+  paneId: CsLabPaneId
   asset: CsLabMolAsset
-  onToast: (kind: 'info' | 'success' | 'error', text: string) => void
+  onToast: (kind: 'info' | 'success' | 'error', text: string, action?: { label: string; path: string }) => void
 }
 
 const WAVELENGTH_OPTIONS = [
@@ -62,6 +65,7 @@ function toTableSeries(pattern: CsLabPxrdPattern): CsLabTableSeries {
 
 export function CsLabVestaCrystalPane({
   labId,
+  paneId,
   asset,
   onToast,
 }: CsLabVestaCrystalPaneProps): React.ReactElement {
@@ -235,7 +239,7 @@ export function CsLabVestaCrystalPane({
   }))
 
   return (
-    <div className="flex h-full min-h-0">
+    <div data-tour="cslab-crystal" className="flex h-full min-h-0">
       <aside className="w-[236px] shrink-0 space-y-2 overflow-y-auto border-r border-cslab-border bg-cslab-surface/60 p-2 text-[11px]">
         <section className="rounded-lg border border-cslab-border bg-cslab-surface p-2 shadow-sm">
           <h4 className="mb-1 flex items-center gap-1 font-medium">
@@ -459,9 +463,10 @@ export function CsLabVestaCrystalPane({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1">
+        <div data-tour="cslab-3d-viewport" className="min-h-0 flex-1">
           <CsLabMolstarViewer
             labId={labId}
+            paneId={paneId}
             asset={asset}
             onToast={onToast}
             polyhedra={polyhedra}

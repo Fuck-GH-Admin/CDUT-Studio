@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CsLabSpectrumStrip — 多通道 1D 谱图（XRD / 拉曼 / 红外 / MAT 多列曲线）
  *
  * 只负责画线与命中：不做任何峰识别或拟合；
@@ -448,8 +448,7 @@ export function CsLabSpectrumStrip({
             y={PADDING.top}
             width={VIEW_WIDTH - PADDING.left - PADDING.right}
             height={viewHeight - PADDING.top - PADDING.bottom}
-            fill="#FAF9F5"
-            stroke="#E8E5DF"
+            className="fill-cslab-bg stroke-cslab-border"
             strokeWidth={1}
             vectorEffect="non-scaling-stroke"
           />
@@ -486,7 +485,7 @@ export function CsLabSpectrumStrip({
                   y={PADDING.top}
                   width={Math.max(1, x2 - x1)}
                   height={viewHeight - PADDING.top - PADDING.bottom}
-                  fill="#D97757"
+                  className="fill-cslab-accent"
                   opacity={0.16}
                 />
               )
@@ -554,7 +553,7 @@ export function CsLabSpectrumStrip({
                 x2={model.toX(selectedX!)}
                 y1={PADDING.top}
                 y2={viewHeight - PADDING.bottom}
-                stroke="#D97757"
+                className="stroke-cslab-accent"
                 strokeWidth={1}
                 strokeDasharray="3 3"
                 vectorEffect="non-scaling-stroke"
@@ -563,7 +562,7 @@ export function CsLabSpectrumStrip({
                 cx={model.toX(selectedX!)}
                 cy={PADDING.top + 4}
                 r={2.5}
-                fill="#D97757"
+                className="fill-cslab-accent"
               />
             </>
           )}
@@ -574,7 +573,7 @@ export function CsLabSpectrumStrip({
               x2={model.toX(hover.x)}
               y1={PADDING.top}
               y2={viewHeight - PADDING.bottom}
-              stroke="#242220"
+              className="stroke-cslab-text"
               strokeWidth={0.8}
               strokeDasharray="2 2"
               opacity={0.45}
@@ -588,7 +587,7 @@ export function CsLabSpectrumStrip({
                 x={PADDING.left}
                 y={viewHeight - 6}
                 fontSize={9}
-                fill="#7A7672"
+                className="fill-cslab-muted"
                 textAnchor="start"
               >
                 {formatTick(model.minX)}
@@ -597,22 +596,22 @@ export function CsLabSpectrumStrip({
                 x={VIEW_WIDTH - PADDING.right}
                 y={viewHeight - 6}
                 fontSize={9}
-                fill="#7A7672"
+                className="fill-cslab-muted"
                 textAnchor="end"
               >
                 {formatTick(model.maxX)}
               </text>
-              <text x={4} y={PADDING.top + 8} fontSize={8} fill="#7A7672">
+              <text x={4} y={PADDING.top + 8} fontSize={8} className="fill-cslab-muted">
                 {scaleMode === 'normalized' ? '100%' : formatTick(
                   scaleMode === 'log' ? 10 ** model.yMax : model.yMax,
                 )}
               </text>
-              <text x={4} y={viewHeight - PADDING.bottom} fontSize={8} fill="#7A7672">
+              <text x={4} y={viewHeight - PADDING.bottom} fontSize={8} className="fill-cslab-muted">
                 {scaleMode === 'normalized' ? '0%' : formatTick(
                   scaleMode === 'log' ? 10 ** model.yMin : model.yMin,
                 )}
               </text>
-              <text x={4} y={viewHeight - 6} fontSize={8} fill="#7A7672">
+              <text x={4} y={viewHeight - 6} fontSize={8} className="fill-cslab-muted">
                 {yAxisLabel}
               </text>
             </>
@@ -623,7 +622,7 @@ export function CsLabSpectrumStrip({
               x={VIEW_WIDTH / 2}
               y={viewHeight / 2}
               fontSize={11}
-              fill="#7A7672"
+              className="fill-cslab-muted"
               textAnchor="middle"
             >
               {emptyHint}

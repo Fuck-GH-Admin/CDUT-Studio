@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AgentSkillsView — 「Agent 技能」全屏视图
  *
  * 由侧边栏「Agent 技能」入口触发，全屏占据中间内容区（隐藏 TabBar 与右侧文件面板）。
@@ -323,7 +323,7 @@ export function AgentSkillsView(): React.ReactElement {
           className="absolute right-2 top-[3px] z-20"
         />
         <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
-          <Blocks className="size-8 text-foreground/30" />
+          <Blocks className="size-8 text-foreground/50" />
         </div>
         <div className="text-[15px] font-medium text-foreground/80">
           未选择工作区
@@ -561,7 +561,7 @@ export function AgentSkillsView(): React.ReactElement {
               </div>
             ) : filteredMarket.length === 0 ? (
               <div className="py-20 text-center text-sm text-muted-foreground">
-                <Store size={32} className="mx-auto mb-3 text-foreground/30" />
+                <Store size={32} className="mx-auto mb-3 text-foreground/50" />
                 团队市场暂无技能
               </div>
             ) : (
@@ -914,7 +914,7 @@ function SkillsTab({
   if (total === 0) {
     return (
       <EmptyState
-        icon={<Blocks className="size-8 text-foreground/30" />}
+        icon={<Blocks className="size-8 text-foreground/50" />}
         title="暂无 Skill"
         hint="可以在 Agent 模式下让 CDUT Studio 帮你联网查找并安装 Skill，或从其他工作区导入。"
       />
@@ -927,7 +927,7 @@ function SkillsTab({
   ) {
     return (
       <EmptyState
-        icon={<Search className="size-8 text-foreground/30" />}
+        icon={<Search className="size-8 text-foreground/50" />}
         title="没有匹配的 Skill"
         hint="试试更换搜索关键词。"
       />
@@ -1083,7 +1083,7 @@ function McpTab({
   if (total === 0) {
     return (
       <EmptyState
-        icon={<Plus className="size-8 text-foreground/30" />}
+        icon={<Plus className="size-8 text-foreground/50" />}
         title="还没有 MCP 服务器"
         hint="点击右上角「添加服务器」开始，或在 Agent 模式下让 CDUT Studio 帮你查找并配置。"
         action={
@@ -1102,7 +1102,7 @@ function McpTab({
   if (entries.length === 0) {
     return (
       <EmptyState
-        icon={<Search className="size-8 text-foreground/30" />}
+        icon={<Search className="size-8 text-foreground/50" />}
         title="没有匹配的 MCP 服务器"
         hint="试试更换搜索关键词。"
       />

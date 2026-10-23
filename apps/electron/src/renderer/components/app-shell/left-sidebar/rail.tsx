@@ -182,6 +182,7 @@ export function SidebarRail({ s }: { s: SidebarModel }): React.ReactElement {
               <button
                 type="button"
                 aria-label="CDUT Science"
+                data-tour="cdut-science-entry"
                 data-profer-navigation-item="cdut-science"
                 onClick={() => {
                   if (activeView !== 'cdut-science') {

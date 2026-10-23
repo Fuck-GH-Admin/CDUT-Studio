@@ -27,6 +27,9 @@ export type YanhuEventKind =
   | 'tab-close'
   | 'blocked'
   | 'restore-fallback'
+  | 'cert-blocked'
+  | 'cert-allow'
+  | 'cert-back'
 
 /** 单条事件的附加字段（值一律转为字符串，避免对象序列化噪音） */
 export type YanhuEventDetail = Record<string, string | number | boolean | null | undefined>

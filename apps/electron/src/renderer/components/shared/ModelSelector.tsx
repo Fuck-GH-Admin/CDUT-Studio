@@ -29,6 +29,7 @@ import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
 import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
+import { useIsDarkTheme } from '@/hooks/use-is-dark-theme'
 import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
@@ -155,6 +156,7 @@ export function ModelSelector({
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
+  const isDark = useIsDarkTheme()
 
   // 外部请求打开（ErrorMessage 的 select_model 恢复操作）：seq 变化时打开 Dialog。
   // 组件挂载时先记录当前 seq（不弹窗），后续新请求（seq+1）才会触发。
@@ -361,7 +363,7 @@ export function ModelSelector({
             )}
           >
             {displayModelInfo ? (
-              <img src={getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)} alt={displayModelInfo.modelName} className="size-5 rounded object-cover" />
+              <img src={getModelLogo(displayModelInfo.modelId, displayModelInfo.provider, isDark)} alt={displayModelInfo.modelName} className="size-5 rounded object-cover" />
             ) : <Cpu className="size-5" />}
             {!compact && <><span className="max-w-[200px] truncate">{displayModelInfo ? (showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName) : '选择模型'}</span><ChevronDown className="size-3" /></>}
           </button>
@@ -380,7 +382,7 @@ export function ModelSelector({
       >
         {displayModelInfo ? (
           <img
-            src={getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)}
+            src={getModelLogo(displayModelInfo.modelId, displayModelInfo.provider, isDark)}
             alt={displayModelInfo.modelName}
             className="size-4 rounded object-cover"
           />
@@ -440,7 +442,7 @@ export function ModelSelector({
                       <img
                         src={(() => {
                           const ch = channels.find((c) => c.id === channelId)
-                          return ch ? getChannelLogo(ch) : DefaultLogo
+                          return ch ? getChannelLogo(ch, isDark) : DefaultLogo
                         })()}
                         alt={first.channelName}
                         className="size-5 rounded object-cover"
@@ -483,7 +485,7 @@ export function ModelSelector({
                           )}
                         >
                           <img
-                            src={getModelLogo(option.modelId, option.provider)}
+                            src={getModelLogo(option.modelId, option.provider, isDark)}
                             alt={option.modelName}
                             className="size-5 rounded object-cover flex-shrink-0"
                           />

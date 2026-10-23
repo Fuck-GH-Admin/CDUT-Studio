@@ -968,7 +968,7 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
 
           {phase === 'qrcode' && qrcode && (
             <>
-              <div className="bg-white rounded-lg p-3 shadow-sm">
+              <div className="bg-white rounded-lg p-3 shadow-sm ring-1 ring-border/60 dark:ring-border">
                 {qrcode.dataUrl ? (
                   <img
                     src={qrcode.dataUrl}

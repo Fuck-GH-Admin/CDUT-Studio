@@ -3,6 +3,7 @@ import {
   SAFE_TOOLS,
   hasDangerousPowerShellStructure,
   isCsLabExecutionTool,
+  isPotentiallyExecutableFile,
   isSafePowerShellCommand,
 } from './permission-rules'
 
@@ -44,5 +45,35 @@ describe('CSLab 科学工具权限分级', () => {
     expect(isCsLabExecutionTool('cslab_export_figure')).toBe(true)
     expect(SAFE_TOOLS).not.toContain('cslab_render_plot')
     expect(SAFE_TOOLS).not.toContain('cslab_export_figure')
+  })
+})
+
+describe('潜在可执行文件后缀判定（CVE-2026-96951 防御）', () => {
+  test('Given Windows 可执行与脚本后缀 When 判定 Then 一律命中', () => {
+    expect(isPotentiallyExecutableFile('C:\\Users\\x\\Downloads\\setup.exe')).toBe(true)
+    expect(isPotentiallyExecutableFile('/tmp/run.bat')).toBe(true)
+    expect(isPotentiallyExecutableFile('D:\\scripts\\deploy.ps1')).toBe(true)
+    expect(isPotentiallyExecutableFile('~/evil.vbs')).toBe(true)
+    expect(isPotentiallyExecutableFile('package.msi')).toBe(true)
+    expect(isPotentiallyExecutableFile('macro.hta')).toBe(true)
+  })
+
+  test('Given 大小写混合后缀 When 判定 Then 不区分大小写命中', () => {
+    expect(isPotentiallyExecutableFile('VIRUS.EXE')).toBe(true)
+    expect(isPotentiallyExecutableFile('run.Cmd')).toBe(true)
+  })
+
+  test('Given 普通文档与目录路径 When 判定 Then 不命中', () => {
+    expect(isPotentiallyExecutableFile('C:\\work\\report.docx')).toBe(false)
+    expect(isPotentiallyExecutableFile('/home/u/notes.txt')).toBe(false)
+    expect(isPotentiallyExecutableFile('C:\\work\\data.json')).toBe(false)
+    expect(isPotentiallyExecutableFile('C:\\Users\\u\\Documents')).toBe(false)
+    expect(isPotentiallyExecutableFile('')).toBe(false)
+  })
+
+  test('Given 无扩展名或点开头的隐藏文件 When 判定 Then 不命中', () => {
+    expect(isPotentiallyExecutableFile('.exe')).toBe(false)
+    expect(isPotentiallyExecutableFile('.bashrc')).toBe(false)
+    expect(isPotentiallyExecutableFile('README')).toBe(false)
   })
 })

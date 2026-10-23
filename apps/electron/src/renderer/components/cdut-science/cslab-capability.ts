@@ -40,6 +40,20 @@ export function isImageAsset(asset: CsLabAssetSummary): boolean {
   return IMAGE_EXTENSIONS.has(extensionOf(asset))
 }
 
+/**
+ * 可在 Mol* 3D 视图中直接渲染的结构格式。
+ *
+ * 体数据（cube/chgcar/locpot）只作为结构窗格内的等值面叠加层，
+ * 单独打开时 getMolAsset 无法返回结构文本，因此不计入 3D 视图资产。
+ */
+const MOL_3D_FORMATS = new Set(['cif', 'pdb', 'poscar', 'xyz'])
+
+export function supportsMol3dView(asset: CsLabAssetSummary): boolean {
+  if (asset.layerType !== 'mol') return false
+  const format = String(asset.format ?? '').toLowerCase()
+  return MOL_3D_FORMATS.has(format || extensionOf(asset))
+}
+
 export function resolveAssetCapability(asset: CsLabAssetSummary): CsLabFileCapability {
   if (isImageAsset(asset)) {
     return { kind: 'figure', defaultView: 'figure', actions: FIGURE_ACTIONS }

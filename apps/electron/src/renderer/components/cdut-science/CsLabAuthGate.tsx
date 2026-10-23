@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CsLabAuthGate — CDUT Science 本机访问密码门禁
  *
  * 双态渲染：
@@ -44,26 +44,33 @@ function PasswordField({
     <div className="space-y-2">
       <label
         htmlFor={id}
-        className="block text-[10px] font-medium uppercase tracking-[0.22em] text-claude-muted"
+        className="block text-[10px] font-medium uppercase tracking-[0.22em] text-cslab-muted"
       >
         {label}
       </label>
-      <div className="flex items-center gap-2.5 rounded-xl border border-claude-border bg-white/80 px-4 py-2.5 transition-all focus-within:border-claude-accent/50 focus-within:ring-2 focus-within:ring-claude-accent/10">
-        <KeyRound size={15} className="shrink-0 text-claude-muted" />
+      <div className="flex items-center gap-2.5 rounded-xl border border-cslab-border bg-cslab-elevated/80 px-4 py-2.5 transition-all focus-within:border-cslab-accent/50 focus-within:ring-2 focus-within:ring-cslab-accent/10">
+        <KeyRound size={15} className="shrink-0 text-cslab-muted" />
         <input
           id={id}
+          data-tour={
+            id === 'cslab-access-password'
+              ? 'cslab-auth-password'
+              : id === 'cslab-access-password-confirm'
+                ? 'cslab-auth-password-confirm'
+                : undefined
+          }
           type={show ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           disabled={disabled}
           autoComplete={autoComplete}
-          className="w-full bg-transparent text-sm text-claude-text placeholder:text-claude-muted/70 focus:outline-none"
+          className="w-full bg-transparent text-sm text-cslab-text placeholder:text-cslab-muted/70 focus:outline-none"
         />
         <button
           type="button"
           onClick={onToggleShow}
-          className="ml-1 shrink-0 text-claude-muted transition-colors hover:text-claude-text"
+          className="ml-1 shrink-0 text-cslab-muted transition-colors hover:text-cslab-text"
           title={show ? '隐藏密码' : '显示密码'}
           aria-label={show ? '隐藏密码' : '显示密码'}
         >
@@ -144,18 +151,21 @@ export function CsLabAuthGate(): React.ReactElement {
 
   return (
     <div className="w-full max-w-md font-sans">
-      <div className="rounded-2xl border border-claude-border bg-white/70 p-8 shadow-subtle backdrop-blur-sm">
-        <div className="flex items-center gap-2 text-claude-accent">
+      <div
+        data-tour="cslab-auth-gate"
+        className="rounded-2xl border border-cslab-border bg-cslab-elevated/70 p-8 shadow-subtle backdrop-blur-sm"
+      >
+        <div className="flex items-center gap-2 text-cslab-accent">
           <KeyRound size={14} />
           <span className="text-[10px] font-medium uppercase tracking-[0.24em]">
             CSLab · Local Access
           </span>
         </div>
 
-        <h2 className="mt-4 font-serif text-2xl font-medium tracking-tight text-claude-text">
+        <h2 className="mt-4 font-serif text-2xl font-medium tracking-tight text-cslab-text">
           {title}
         </h2>
-        <p className="mt-2 text-sm leading-relaxed text-claude-muted">{subtitle}</p>
+        <p className="mt-2 text-sm leading-relaxed text-cslab-muted">{subtitle}</p>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
           <PasswordField
@@ -193,12 +203,13 @@ export function CsLabAuthGate(): React.ReactElement {
 
           <button
             type="submit"
+            data-tour="cslab-auth-submit"
             disabled={!canSubmit}
             className={cn(
               'flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium tracking-wide transition-colors duration-200',
               canSubmit
-                ? 'cursor-pointer bg-claude-accent text-white hover:bg-claude-accentHover'
-                : 'cursor-not-allowed border border-claude-border bg-claude-surface text-claude-muted',
+                ? 'cursor-pointer bg-cslab-accent text-white hover:bg-cslab-accentHover'
+                : 'cursor-not-allowed border border-cslab-border bg-cslab-surface text-cslab-muted',
             )}
           >
             <ShieldCheck size={15} />
@@ -206,7 +217,7 @@ export function CsLabAuthGate(): React.ReactElement {
           </button>
         </form>
 
-        <p className="mt-5 border-t border-claude-border/70 pt-4 text-[11px] leading-relaxed text-claude-muted">
+        <p className="mt-5 border-t border-cslab-border/70 pt-4 text-[11px] leading-relaxed text-cslab-muted">
           访问密码仅保存在本机，由操作系统安全存储或本地 AES-256-GCM 加密，绝不明文写入磁盘。
         </p>
       </div>

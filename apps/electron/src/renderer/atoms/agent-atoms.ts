@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, SDKBackgroundTaskSummary, UnstagedChangesResult, AgentImageGenerationCard, AgentContextMode } from '@profer/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, SDKBackgroundTaskSummary, UnstagedChangesResult, AgentImageGenerationCard, AgentContextMode, StudyTeachingMode } from '@profer/shared'
 import { PROFER_DEFAULT_PERMISSION_MODE } from '@profer/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
@@ -503,6 +503,14 @@ export const agentThinkingAtom = atom<ThinkingConfig | undefined>(undefined)
 /** Agent 推理深度 */
 export const agentEffortAtom = atom<AgentEffort | undefined>(undefined)
 
+/**
+ * AI 速课堂带教模式的「本次运行内用户显式覆盖」缓存。
+ * undefined = 本运行内未主动切换（有效值派生自 AgentSessionMeta.studyTeachingMode ?? 'balanced'）。
+ * 只存显式覆盖、不做 meta→atom 回填 effect，从根上消除快速切换会话时的竞态覆盖问题。
+ */
+export const studyTeachingModeAtomFamily = atomFamily((_sessionId: string) =>
+  atom<StudyTeachingMode | undefined>(undefined))
+
 /** Agent 最大预算（美元/次） */
 export const agentMaxBudgetUsdAtom = atom<number | undefined>(undefined)
 
@@ -575,6 +583,12 @@ export interface AskUserQuestionAnswer {
  * 不归属会话内容，与 agentSessionDraftsAtom 相互独立，互不污染。
  */
 export const askUserAnswersAtom = atom<Map<string, Map<number, AskUserQuestionAnswer>>>(new Map())
+
+/**
+ * AskUser 提问卡片的折叠状态 — 以 requestId 为键。
+ * 折叠仅收起卡片，不取消主进程等待；新请求默认展开，回答/关闭/解决后清理。
+ */
+export const askUserCollapsedAtom = atom<Set<string>>(new Set<string>())
 
 /** 待处理的 ExitPlanMode 请求 Map — 以 sessionId 为 key */
 export const allPendingExitPlanRequestsAtom = atom<Map<string, readonly ExitPlanModeRequest[]>>(new Map())
