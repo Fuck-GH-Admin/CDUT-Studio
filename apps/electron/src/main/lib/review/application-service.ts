@@ -39,7 +39,17 @@ function fieldValueOf(spec: TemplateVersion['fields'][number], raw: unknown): Fi
   }
 }
 
-function validateSectionSubjects(template: TemplateVersion, payload: CreateCasePayload): void {
+/**
+ * 批量物理分案（T06）等“先入库、后补录”的入口需要先建案：
+ * - 仍拒绝未知字段、类型错误与不存在的分项（不能把错录入当合法）；
+ * - 只允许暂缺“必填案卷字段/必需分项”，并由 submitCaseV2 在提交审核前统一阻断。
+ * 缺省 false，普通建案保持原有的完整校验。
+ */
+export interface CreateCaseOptions {
+  allowIncompleteIntake?: boolean
+}
+
+function validateSectionSubjects(template: TemplateVersion, payload: CreateCasePayload, allowMissingRequiredSections = false): void {
   const sections = template.sections ?? []
   const sectionById = new Map(sections.map((section) => [section.id, section]))
   const counts = new Map(sections.map((section) => [section.id, 0]))
@@ -82,7 +92,7 @@ function validateSectionSubjects(template: TemplateVersion, payload: CreateCaseP
   }
 
   const missingSections = sections.filter((section) => section.required && (counts.get(section.id) ?? 0) === 0)
-  if (missingSections.length > 0) {
+  if (!allowMissingRequiredSections && missingSections.length > 0) {
     throw new CommandValidationError('VALIDATION_FAILED', `案卷缺少必需分项：${missingSections.map((section) => section.name).join('、')}`)
   }
 }
@@ -94,6 +104,7 @@ export async function createCaseFromTemplate(
   payload: CreateCasePayload,
   actor: Actor,
   caseId: string,
+  options: CreateCaseOptions = {},
 ): Promise<ReviewCommandResult<ReviewCaseV2>> {
   assertSafeReviewStorageId(caseId, 'caseId')
   const template = getTemplate(templateId, version)
@@ -103,7 +114,8 @@ export async function createCaseFromTemplate(
     const check = validatePolicyRef(ref)
     if (!check.ok) throw new CommandValidationError('DEPENDENCY_UNRESOLVED', check.reason ?? '政策依赖不完整')
   }
-  validateSectionSubjects(template, payload)
+  const allowIncomplete = options.allowIncompleteIntake === true
+  validateSectionSubjects(template, payload, allowIncomplete)
   const caseSpecs = template.fields.filter((field) => (field.scope ?? 'subject') === 'case')
   const caseFieldKeys = new Set(caseSpecs.map((field) => field.key))
   const unexpectedCaseKeys = Object.keys(payload.fieldValues).filter((key) => !caseFieldKeys.has(key))
@@ -116,7 +128,8 @@ export async function createCaseFromTemplate(
   for (const spec of template.fields) {
     if ((spec.scope ?? 'subject') !== 'case') continue
     if (payload.fieldValues[spec.key] === undefined || payload.fieldValues[spec.key] === null || payload.fieldValues[spec.key] === '' || (typeof payload.fieldValues[spec.key] === 'string' && !(payload.fieldValues[spec.key] as string).trim())) {
-      if (spec.required) throw new CommandValidationError('VALIDATION_FAILED', `缺少必填案卷字段: ${spec.label}（${spec.key}）`)
+      // 批量入库允许先建“待补”案卷；提交审核前由 submitCaseV2 统一阻断。
+      if (spec.required && !allowIncomplete) throw new CommandValidationError('VALIDATION_FAILED', `缺少必填案卷字段: ${spec.label}（${spec.key}）`)
       continue
     }
     caseFields[spec.key] = fieldValueOf(spec, payload.fieldValues[spec.key])
@@ -156,6 +169,56 @@ export async function createCaseFromTemplate(
 }
 
 // ===== G03：字段类型与作用域校验（模板 schema 驱动） =====
+
+/**
+ * 判断已落库的 FieldValue 是否仍是“空”。
+ * 0 与 false 是有效业务值，不能按 truthiness 误判为缺失。
+ */
+export function isFieldValueEmpty(value: FieldValue | undefined): boolean {
+  if (!value) return true
+  switch (value.kind) {
+    case 'text':
+    case 'date':
+    case 'enum': return !String(value.value ?? '').trim()
+    case 'number': return typeof value.value !== 'number' || !Number.isFinite(value.value)
+    case 'boolean': return typeof value.value !== 'boolean'
+    case 'multi':
+    case 'rows': return !Array.isArray(value.value) || value.value.length === 0
+    case 'object': return !value.value || Object.keys(value.value).length === 0
+    case 'attachment': return !value.documentVersionId
+    default: return false
+  }
+}
+
+/**
+ * 案卷当前仍缺哪些“提交审核前必须补齐”的模板输入。
+ *
+ * 批量物理分案允许先建案再补录，但“已入库”不等于“可提交审核”。
+ * 这里与建案校验共用同一模板定义，避免门禁各自解释必填性。
+ */
+export function collectMissingIntakeInputs(
+  template: TemplateVersion,
+  caseV2: Pick<ReviewCaseV2, 'caseFields' | 'subjects'>,
+): string[] {
+  const missing: string[] = []
+  for (const field of template.fields) {
+    if ((field.scope ?? 'subject') !== 'case' || !field.required) continue
+    if (isFieldValueEmpty(caseV2.caseFields[field.key])) missing.push(`案卷字段「${field.label}」`)
+  }
+  const sections = template.sections ?? []
+  for (const section of sections) {
+    if (!section.required) continue
+    if (!caseV2.subjects.some((subject) => subject.sectionId === section.id)) missing.push(`必需分项「${section.name}」`)
+  }
+  for (const subject of caseV2.subjects) {
+    for (const field of template.fields) {
+      if ((field.scope ?? 'subject') !== 'subject' || !field.required) continue
+      if (field.sectionId && field.sectionId !== subject.sectionId) continue
+      if (isFieldValueEmpty(subject.fields[field.key])) missing.push(`事项「${subject.title}」字段「${field.label}」`)
+    }
+  }
+  return missing
+}
 
 export interface FieldValidationIssue {
   key: string

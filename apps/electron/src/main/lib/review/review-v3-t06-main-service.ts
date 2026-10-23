@@ -18,9 +18,9 @@ import { closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, un
 import { tmpdir } from 'node:os'
 import { basename, join, relative, sep } from 'node:path'
 import { BrowserWindow, dialog } from 'electron'
-import type { Actor } from '@profer/shared'
+import type { Actor, TemplateVersion } from '@profer/shared'
 import { CommandValidationError, readAggregate } from './case-store-v2'
-import { createCaseFromTemplate } from './application-service'
+import { collectMissingIntakeInputs, createCaseFromTemplate } from './application-service'
 import { getTemplate } from './template-store'
 import { createBatchV2 } from './batch-store'
 import { isNativeWorkspaceCaseV3, registerNativeWorkspaceMaterialV3 } from './native-workspace-case-v3'
@@ -41,12 +41,36 @@ export interface T06PhysicalEntry {
   byteLength: number
 }
 
+export interface T06PhysicalExcludedEntry {
+  relativePath: string
+  reason: string
+}
 export interface T06PhysicalSelection {
   selectionId: string
   previewFingerprint: string
   sourceKind: T06SourceKind
   entries: T06PhysicalEntry[]
   warnings?: string[]
+  /** 逐文件未入库清单：跳过/拒绝/截断的条目与原因，供用户审计，不是静默成功。 */
+  excluded?: T06PhysicalExcludedEntry[]
+}
+
+export type T06MaterialRole = 'application' | 'evidence' | 'rule' | 'attachment'
+
+/** 逐原件的业务身份：角色与模板材料槽。未显式给出时保持旧的 evidence/无槽语义。 */
+export interface T06EntryAssignment {
+  entryId: string
+  role?: T06MaterialRole
+  materialSlotId?: string
+}
+
+/** 批量分案时的申报事项输入；id 缺省由 Main 按序号生成（内部稳定 ID）。 */
+export interface T06CommitSubject {
+  id?: string
+  title: string
+  type?: 'item' | 'clause' | 'project' | 'budget-line' | 'custom'
+  sectionId?: string
+  fieldValues?: Record<string, unknown>
 }
 
 export interface T06CommitGroup {
@@ -59,6 +83,12 @@ export interface T06CommitGroup {
   /** 每个案卷可独立选择已发布模板；未传时兼容旧单模板批次。 */
   templateId?: string
   templateVersion?: number
+  /** 案卷级字段输入（key 必须在模板 case 作用域内）。 */
+  fieldValues?: Record<string, unknown>
+  /** 申报事项/分项输入；缺省时不伪造事项，由提交门禁要求补齐。 */
+  subjects?: T06CommitSubject[]
+  /** 逐条原件的角色/槽位映射；未列出者按 evidence、无槽登记。 */
+  entryAssignments?: T06EntryAssignment[]
 }
 
 export interface T06PhysicalCommitRequest {
@@ -72,13 +102,20 @@ export interface T06PhysicalCommitRequest {
   groups: T06CommitGroup[]
 }
 
-export interface T06ItemReceipt { entryId: string; documentVersionId: string }
+export interface T06ItemReceipt {
+  entryId: string
+  documentVersionId: string
+  role?: T06MaterialRole
+  materialSlotId?: string
+}
 export interface T06CaseReceipt {
   groupId: string
   caseId?: string
   documents: T06ItemReceipt[]
   status: 'done' | 'failed'
   error?: string
+  /** 已入库但尚未满足提交条件的事项（必填字段/必需分项/必交槽）；不阻断材料保留。 */
+  warnings?: string[]
 }
 export interface T06CommitReceipt {
   requestId: string
@@ -109,6 +146,7 @@ interface StoredSelection {
   selectionId: string
   fingerprint: string
   sourceKind: T06SourceKind
+  excluded: T06PhysicalExcludedEntry[]
   /** ZIP 只读取一次并常驻内存，避免提交时重读磁盘导致与预览不一致 */
   zipBytes?: Uint8Array
   /** 同一提交中的 ZIP 只解压一次；大量文件不能逐条重复解压整个 ZIP。 */
@@ -175,18 +213,26 @@ function hashFile(path: string): string {
 }
 
 /** 递归枚举目录下的原件；跳过隐藏文件与符号链接，避免越界。 */
-function walkDirectory(root: string): Array<{ absolutePath: string; relativePath: string; byteLength: number }> {
+function walkDirectory(
+  root: string,
+  excluded: T06PhysicalExcludedEntry[],
+): Array<{ absolutePath: string; relativePath: string; byteLength: number }> {
   const results: Array<{ absolutePath: string; relativePath: string; byteLength: number }> = []
   const visit = (current: string): void => {
-    if (results.length >= MAX_ENTRIES) return
     for (const name of readdirSync(current)) {
-      if (name.startsWith('.')) continue
       const full = join(current, name)
+      const shown = relative(root, full).split(sep).join('/')
+      if (results.length >= MAX_ENTRIES) {
+        excluded.push({ relativePath: shown, reason: `超过单次 ${MAX_ENTRIES} 条上限，未纳入本次预览` })
+        continue
+      }
+      if (name.startsWith('.')) { excluded.push({ relativePath: shown, reason: '隐藏文件/目录，默认跳过' }); continue }
       const stats = lstatSync(full)
-      if (stats.isSymbolicLink()) continue
+      if (stats.isSymbolicLink()) { excluded.push({ relativePath: shown, reason: '符号链接，避免越界，默认跳过' }); continue }
       if (stats.isDirectory()) { visit(full); continue }
-      if (!stats.isFile() || stats.size > MAX_ENTRY_BYTES) continue
-      results.push({ absolutePath: full, relativePath: relative(root, full).split(sep).join('/'), byteLength: stats.size })
+      if (!stats.isFile()) { excluded.push({ relativePath: shown, reason: '不是普通文件' }); continue }
+      if (stats.size > MAX_ENTRY_BYTES) { excluded.push({ relativePath: shown, reason: `超过单文件 ${Math.round(MAX_ENTRY_BYTES / 1024 / 1024)}MB 上限` }); continue }
+      results.push({ absolutePath: full, relativePath: shown, byteLength: stats.size })
     }
   }
   visit(root)
@@ -203,11 +249,12 @@ export function buildT06SelectionFromPath(target: string, sourceKind: T06SourceK
   if (sourceKind !== 'folder' && sourceKind !== 'zip') throw new CommandValidationError('VALIDATION_FAILED', '来源类型非法')
 
   const warnings: string[] = []
+  const excluded: T06PhysicalExcludedEntry[] = []
   const entries: StoredEntry[] = []
   let zipBytes: Uint8Array | undefined
 
   if (sourceKind === 'folder') {
-    const listed = walkDirectory(target)
+    const listed = walkDirectory(target, excluded)
     if (listed.length >= MAX_ENTRIES) warnings.push(`来源条目超过 ${MAX_ENTRIES} 条，仅处理前 ${MAX_ENTRIES} 条`)
     for (const item of listed) {
       const contentSha256 = hashFile(item.absolutePath)
@@ -218,10 +265,17 @@ export function buildT06SelectionFromPath(target: string, sourceKind: T06SourceK
     zipBytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
     const decoded = decodeReviewB2Zip(zipBytes)
     for (const receipt of decoded.receipts) {
-      if (receipt.status === 'rejected') warnings.push(`${receipt.entryName}：${receipt.reason ?? '被拒绝'}`)
+      if (receipt.status === 'rejected') {
+        warnings.push(`${receipt.entryName}：${receipt.reason ?? '被拒绝'}`)
+        excluded.push({ relativePath: receipt.entryName, reason: receipt.reason ?? 'ZIP 解包拒绝' })
+      }
     }
     for (const accepted of decoded.accepted) {
-      if (entries.length >= MAX_ENTRIES) { warnings.push(`ZIP 条目超过 ${MAX_ENTRIES} 条，已截断`); break }
+      if (entries.length >= MAX_ENTRIES) {
+        warnings.push(`ZIP 条目超过 ${MAX_ENTRIES} 条，已截断`)
+        excluded.push({ relativePath: accepted.entryName, reason: `超过单次 ${MAX_ENTRIES} 条上限，未纳入本次预览` })
+        continue
+      }
       const relativePath = accepted.entryName.split('/').filter(Boolean).join('/')
       const contentSha256 = sha256(accepted.bytes)
       entries.push({
@@ -236,7 +290,7 @@ export function buildT06SelectionFromPath(target: string, sourceKind: T06SourceK
   }
   const selection: StoredSelection = {
     selectionId: `sel-${randomUUID()}`,
-    fingerprint: fingerprintOf(entries), sourceKind, entries, warnings, createdAt: Date.now(),
+    fingerprint: fingerprintOf(entries), sourceKind, entries, warnings, excluded, createdAt: Date.now(),
     ...(zipBytes ? { zipBytes } : {}),
   }
   selections.set(selection.selectionId, selection)
@@ -248,6 +302,7 @@ export function buildT06SelectionFromPath(target: string, sourceKind: T06SourceK
       entryId: entry.entryId, relativePath: entry.relativePath, byteLength: entry.byteLength,
     })),
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(excluded.length > 0 ? { excluded } : {}),
   }
 }
 
@@ -285,20 +340,48 @@ function bytesOf(selection: StoredSelection, entry: StoredEntry): Uint8Array {
 }
 
 /** 把单个条目落成真实 DocumentVersion（走既有原生材料登记）。 */
-async function registerEntry(selection: StoredSelection, entry: StoredEntry, caseId: string): Promise<string> {
-  const identity = `${selection.selectionId}\u0000${caseId}\u0000${entry.entryId}`
+async function registerEntry(
+  selection: StoredSelection,
+  entry: StoredEntry,
+  caseId: string,
+  assignment: { role: T06MaterialRole; materialSlotId?: string },
+): Promise<T06ItemReceipt> {
+  const identity = `${selection.selectionId}\u0000${caseId}\u0000${entry.entryId}\u0000${assignment.role}\u0000${assignment.materialSlotId ?? ''}`
   const cached = registered.get(identity)
-  if (cached) return cached
+  if (cached) {
+    return { entryId: entry.entryId, documentVersionId: cached, role: assignment.role,
+      ...(assignment.materialSlotId ? { materialSlotId: assignment.materialSlotId } : {}) }
+  }
   const bytes = bytesOf(selection, entry)
-  const tempPath = join(tmpdir(), `t06-${sha256(identity).slice(0, 24)}-${basename(entry.relativePath) || 'entry.bin'}`)
+  const displayName = basename(entry.relativePath) || 'entry.bin'
+  const aggregate = readAggregate(caseId)
+  if (!aggregate) throw new CommandValidationError('NOT_FOUND', '案卷不存在')
+  // 重启/重试恢复：同一案卷内同名、同内容、同角色与槽位的有效版本就是本条目
+  // 上次已登记的结果，必须复用，不能因为进程内缓存丢失再复制一份原件。
+  const existing = aggregate.caseV2.documents.find((document) => document.active !== false
+    && document.fileName === displayName
+    && document.role === assignment.role
+    && document.materialSlotId === assignment.materialSlotId
+    && (document.byteHash ?? document.contentHash) === entry.contentSha256)
+  if (existing) {
+    registered.set(identity, existing.versionId)
+    return { entryId: entry.entryId, documentVersionId: existing.versionId, role: assignment.role,
+      ...(assignment.materialSlotId ? { materialSlotId: assignment.materialSlotId } : {}) }
+  }
+  const tempPath = join(tmpdir(), `t06-${sha256(identity).slice(0, 24)}-${displayName}`)
   writeFileSync(tempPath, bytes)
   try {
-    const aggregate = readAggregate(caseId)
-    if (!aggregate) throw new CommandValidationError('NOT_FOUND', '案卷不存在')
     // 案卷类型决定写入通道：原生 V3 案卷走原生登记，模板创建的 V2 案卷走 V2 材料服务
-    const versionId = isNativeWorkspaceCaseV3(aggregate)
+    // 原生兼容投影不展示 attachment 角色，附件仍走同一 C-owned V2 材料事务，
+    // 不为了投影去改写用户选择的业务角色。
+    const nativeRole: 'application' | 'evidence' | 'rule' =
+      assignment.role === 'attachment' ? 'evidence' : assignment.role
+    const versionId = isNativeWorkspaceCaseV3(aggregate) && assignment.role !== 'attachment'
       ? await (async () => {
-        const document = await registerNativeWorkspaceMaterialV3(caseId, tempPath, 'evidence', MAIN_ACTOR)
+        const document = await registerNativeWorkspaceMaterialV3(
+          caseId, tempPath, nativeRole, MAIN_ACTOR, undefined, assignment.materialSlotId,
+          { fileName: displayName },
+        )
         const after = readAggregate(caseId)
         const found = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
         if (!found) throw new CommandValidationError('INVALID_TRANSITION', '原件已登记但找不到版本记录')
@@ -309,17 +392,60 @@ async function registerEntry(selection: StoredSelection, entry: StoredEntry, cas
           requestId: `t06-register-${sha256(identity).slice(0, 28)}`,
           actor: MAIN_ACTOR,
           expectedRevision: aggregate.caseV2.revision,
-          payload: { sourcePath: tempPath, role: 'evidence' } as never,
+          payload: {
+            sourcePath: tempPath,
+            role: assignment.role,
+            ...(assignment.materialSlotId ? { materialSlotId: assignment.materialSlotId } : {}),
+            fileName: displayName,
+          } as never,
         })
         if (!written.ok) throw new CommandValidationError(written.code, written.message)
         if (!written.entity) throw new CommandValidationError('INVALID_TRANSITION', '原件已登记但未返回版本记录')
         return written.entity.versionId
       })()
     registered.set(identity, versionId)
-    return versionId
+    return { entryId: entry.entryId, documentVersionId: versionId, role: assignment.role,
+      ...(assignment.materialSlotId ? { materialSlotId: assignment.materialSlotId } : {}) }
   } finally {
     try { unlinkSync(tempPath) } catch { /* 无法清理时不掩盖原有写入失败 */ }
   }
+}
+
+/** 组内逐条原件的业务身份；未声明时保持 evidence / 无槽。 */
+function resolveEntryAssignments(
+  group: T06CommitGroup,
+  template: { materialSlots: Array<{ id: string }> },
+): Map<string, { role: T06MaterialRole; materialSlotId?: string }> {
+  const allowedRoles: T06MaterialRole[] = ['application', 'evidence', 'rule', 'attachment']
+  const result = new Map<string, { role: T06MaterialRole; materialSlotId?: string }>()
+  for (const assignment of group.entryAssignments ?? []) {
+    if (!assignment || typeof assignment.entryId !== 'string' || !group.entryIds.includes(assignment.entryId)) {
+      throw new CommandValidationError('VALIDATION_FAILED', `材料归属引用了本组之外的原件：${assignment?.entryId ?? '(空)'}`)
+    }
+    if (result.has(assignment.entryId)) throw new CommandValidationError('VALIDATION_FAILED', `同一原件重复声明归属：${assignment.entryId}`)
+    const role = assignment.role ?? 'evidence'
+    if (!allowedRoles.includes(role)) throw new CommandValidationError('VALIDATION_FAILED', `材料角色不合法：${role}`)
+    if (assignment.materialSlotId && !template.materialSlots.some((slot) => slot.id === assignment.materialSlotId)) {
+      throw new CommandValidationError('VALIDATION_FAILED', `材料槽不在所选模板中：${assignment.materialSlotId}`)
+    }
+    result.set(assignment.entryId, { role, ...(assignment.materialSlotId ? { materialSlotId: assignment.materialSlotId } : {}) })
+  }
+  return result
+}
+
+/** 入库后仍未满足的提交条件：只作为可操作 warning 返回，不伪造“已就绪”。 */
+function intakeWarnings(caseId: string, template: TemplateVersion): string[] {
+  const aggregate = readAggregate(caseId)
+  if (!aggregate) return []
+  const warnings: string[] = []
+  for (const slot of template.materialSlots) {
+    if ((slot.requiredAt ?? 'submission') !== 'submission' || slot.minCount <= 0 || slot.requiredWhen) continue
+    const active = aggregate.caseV2.documents.filter((document) => document.materialSlotId === slot.id && document.active !== false).length
+    if (active < slot.minCount) warnings.push(`必交材料槽「${slot.name}」未满足（需 ${slot.minCount}，现有 ${active}）；请在案卷页补绑定`)
+  }
+  const missing = collectMissingIntakeInputs(template, aggregate.caseV2)
+  if (missing.length > 0) warnings.push(`提交审核前需补齐：${missing.join('；')}`)
+  return warnings
 }
 
 /**
@@ -376,14 +502,38 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
       if (!template || template.status !== 'published') {
         throw new CommandValidationError('DEPENDENCY_UNRESOLVED', `案卷“${group.groupId}”尚未匹配可用的已发布模板`)
       }
+      const assignments = resolveEntryAssignments(group, template)
       if (group.action === 'create') {
         caseId = `case-${sha256(request.requestId + '\u0000' + group.groupId).slice(0, 24)}`
-        const created = await createCaseFromTemplate(templateId!, templateVersion!, {
-          title: group.title?.trim() || group.groupId,
-          fieldValues: { applicant: group.applicant ?? '' },
-          subjects: [],
-        } as never, MAIN_ACTOR, caseId)
-        if (!created.ok) throw new CommandValidationError(created.code, created.message)
+        // 模板适配：只提交模板真实声明的 case 字段；applicant 不是全局字段，
+        // 旧实现无条件塞 applicant 会让没有该字段的模板整组失败（RUN-38）。
+        const caseFieldKeys = new Set(template.fields.filter((field) => (field.scope ?? 'subject') === 'case').map((field) => field.key))
+        const fieldValues: Record<string, unknown> = {}
+        if (group.applicant?.trim() && caseFieldKeys.has('applicant')) fieldValues.applicant = group.applicant.trim()
+        for (const [key, value] of Object.entries(group.fieldValues ?? {})) {
+          if (value !== undefined) fieldValues[key] = value
+        }
+        const subjects = (group.subjects ?? []).map((subject, index) => ({
+          id: subject.id?.trim() || `subject-${index + 1}`,
+          title: subject.title,
+          type: subject.type ?? 'item',
+          ...(subject.sectionId ? { sectionId: subject.sectionId } : {}),
+          fieldValues: subject.fieldValues ?? {},
+        }))
+        const existingAggregate = readAggregate(caseId)
+        if (existingAggregate) {
+          // 重启/重试恢复：确定性 caseId 已建案时视为本请求已完成建案，继续补登记。
+          if (existingAggregate.caseV2.templateId !== templateId || existingAggregate.caseV2.templateVersion !== templateVersion) {
+            throw new CommandValidationError('INVALID_TRANSITION', '该请求号已存在不同模板的案卷，请更换请求号或核对来源')
+          }
+        } else {
+          const created = await createCaseFromTemplate(templateId!, templateVersion!, {
+            title: group.title?.trim() || group.groupId,
+            fieldValues,
+            subjects,
+          }, MAIN_ACTOR, caseId, { allowIncompleteIntake: true })
+          if (!created.ok) throw new CommandValidationError(created.code, created.message)
+        }
       } else if (!caseId) {
         throw new CommandValidationError('VALIDATION_FAILED', '绑定既有案卷缺少 caseId')
       }
@@ -393,22 +543,26 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
           throw new CommandValidationError('VALIDATION_FAILED', '已有案卷的模板版本与本组选择不一致')
         }
       }
-      const documents: Array<{ entryId: string; documentVersionId: string }> = []
+      const documents: T06ItemReceipt[] = []
       const failures: string[] = []
       for (const entryId of group.entryIds) {
         const entry = byEntry.get(entryId)
         if (!entry) { failures.push(`${entryId}：不在本次来源中`); continue }
+        const assignment = assignments.get(entryId) ?? { role: 'evidence' as const }
         try {
-          documents.push({ entryId, documentVersionId: await registerEntry(selection, entry, caseId!) })
+          documents.push(await registerEntry(selection, entry, caseId!, assignment))
         } catch (cause) {
           failures.push(`${entry.relativePath}：${cause instanceof Error ? cause.message : String(cause)}`)
         }
       }
+      const warnings = intakeWarnings(caseId!, template)
       if (failures.length > 0) {
         // 部分失败：案卷与已入库原件保留，但不作为批次成功成员
-        cases.push({ groupId: group.groupId, caseId, documents, status: 'failed', error: failures.join('；') })
+        cases.push({ groupId: group.groupId, caseId, documents,
+          ...(warnings.length ? { warnings } : {}), status: 'failed', error: failures.join('；') })
       } else {
-        cases.push({ groupId: group.groupId, caseId, documents, status: 'done' })
+        cases.push({ groupId: group.groupId, caseId, documents,
+          ...(warnings.length ? { warnings } : {}), status: 'done' })
         const key = `${templateId!}@${templateVersion!}`
         const item = succeededByTemplate.get(key) ?? { templateId: templateId!, templateVersion: templateVersion!, caseIds: [] }
         item.caseIds.push(caseId!)

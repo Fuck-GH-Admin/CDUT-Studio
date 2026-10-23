@@ -5,12 +5,15 @@ export interface T06PhysicalEntry {
   relativePath: string
   byteLength: number
 }
+export interface T06PhysicalExcludedEntry { relativePath: string; reason: string }
 export interface T06PhysicalSelection {
   selectionId: string
   previewFingerprint: string
   sourceKind: T06SourceKind
   entries: T06PhysicalEntry[]
   warnings?: string[] // Main-owned inventory skips/rejects, never silent successes
+  /** 逐文件未入库审计清单（跳过/拒绝/截断），由 Main 生成，不是渲染层猜测。 */
+  excluded?: T06PhysicalExcludedEntry[]
 }
 export interface T06PhysicalGroup {
   groupId: string
@@ -74,9 +77,18 @@ export function previewT06PhysicalImport(source: T06PhysicalSelection, options: 
   }
   return { source, groups: [...groups.values()], errors, unassignedCount }
 }
+export type T06MaterialRole = 'application' | 'evidence' | 'rule' | 'attachment'
+export interface T06EntryAssignment { entryId: string; role?: T06MaterialRole; materialSlotId?: string }
+export interface T06CommitSubject {
+  id?: string; title: string
+  type?: 'item' | 'clause' | 'project' | 'budget-line' | 'custom'
+  sectionId?: string; fieldValues?: Record<string, unknown>
+}
 export type T06GroupChoice =
-  | { action: 'create'; title: string; applicant: string; templateId?: string; templateVersion?: number }
-  | { action: 'existing'; caseId: string; templateId?: string; templateVersion?: number }
+  | { action: 'create'; title: string; applicant: string; templateId?: string; templateVersion?: number
+      fieldValues?: Record<string, unknown>; subjects?: T06CommitSubject[]; entryAssignments?: T06EntryAssignment[] }
+  | { action: 'existing'; caseId: string; templateId?: string; templateVersion?: number
+      entryAssignments?: T06EntryAssignment[] }
   | { action: 'exclude' }
 export interface T06CommitGroup {
   groupId: string
@@ -87,6 +99,9 @@ export interface T06CommitGroup {
   caseId?: string
   templateId?: string
   templateVersion?: number
+  fieldValues?: Record<string, unknown>
+  subjects?: T06CommitSubject[]
+  entryAssignments?: T06EntryAssignment[]
 }
 export interface T06PhysicalCommitRequest {
   requestId: string
@@ -121,9 +136,13 @@ export function planT06PhysicalImport(
       errors.push('尚未为案卷确认业务模板：' + group.name); continue
     }
     if (decision.action === 'create') {
-      if (!decision.title.trim() || !decision.applicant.trim()) { errors.push('新案卷缺标题或申请人：' + group.name); continue }
+      // 申请人只是模板可选的案卷字段之一；缺它不应阻断“先入库后补录”。
+      if (!decision.title.trim()) { errors.push('新案卷缺标题：' + group.name); continue }
       groups.push({ groupId: group.groupId, entryIds: group.entries.map(e => e.entryId),
-        action: 'create', title: decision.title.trim(), applicant: decision.applicant.trim(), templateId, templateVersion })
+        action: 'create', title: decision.title.trim(), applicant: decision.applicant.trim(), templateId, templateVersion,
+        ...(decision.fieldValues ? { fieldValues: decision.fieldValues } : {}),
+        ...(decision.subjects ? { subjects: decision.subjects } : {}),
+        ...(decision.entryAssignments ? { entryAssignments: decision.entryAssignments } : {}) })
     } else {
       if (!known.has(decision.caseId) || assigned.has(decision.caseId)) {
         errors.push('案卷不存在、模板版本不一致或重复绑定：' + group.name); continue
@@ -134,7 +153,8 @@ export function planT06PhysicalImport(
       }
       assigned.add(decision.caseId)
       groups.push({ groupId: group.groupId, entryIds: group.entries.map(e => e.entryId),
-        action: 'existing', caseId: decision.caseId, templateId, templateVersion })
+        action: 'existing', caseId: decision.caseId, templateId, templateVersion,
+        ...(decision.entryAssignments ? { entryAssignments: decision.entryAssignments } : {}) })
     }
   }
   if (!groups.length) errors.push('没有确认纳入的案卷')
@@ -144,13 +164,17 @@ export function planT06PhysicalImport(
     templateVersion: input.templateVersion, batchName: input.batchName.trim(), groups,
   } }
 }
-export interface T06ItemReceipt { entryId: string; documentVersionId: string }
+export interface T06ItemReceipt {
+  entryId: string; documentVersionId: string
+  role?: T06MaterialRole; materialSlotId?: string
+}
 export interface T06CaseReceipt {
   groupId: string
   caseId?: string
   documents: T06ItemReceipt[]
   status: 'done' | 'failed'
   error?: string
+  warnings?: string[]
 }
 export interface T06CommitReceipt {
   requestId: string

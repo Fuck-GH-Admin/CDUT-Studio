@@ -1,9 +1,36 @@
 import type { T06PhysicalGroup } from './review-v3-t06-physical-intake'
 
+export interface T06TemplateFieldOption {
+  key: string
+  label: string
+  kind: string
+  required: boolean
+  scope?: 'case' | 'subject'
+  options?: Array<{ value: string; label?: string }>
+}
+export interface T06TemplateSlotOption {
+  id: string
+  name: string
+  minCount: number
+  requiredAt?: 'submission' | 'decision'
+}
 export interface T06PublishedTemplateOption {
   templateId: string
   version: number
   name: string
+  /** 只读模板元数据，用于在分案确认页填写必填案卷字段与绑定材料槽。 */
+  fields?: T06TemplateFieldOption[]
+  materialSlots?: T06TemplateSlotOption[]
+}
+
+/** 选中模板后需要用户确认的案卷级必填字段。 */
+export function t06RequiredCaseFields(template: T06PublishedTemplateOption | undefined): T06TemplateFieldOption[] {
+  return (template?.fields ?? []).filter((field) => (field.scope ?? 'subject') === 'case' && field.required)
+}
+
+/** 选中模板后必交的材料槽（只用于提示，不自动猜测文件归属）。 */
+export function t06RequiredSubmissionSlots(template: T06PublishedTemplateOption | undefined): T06TemplateSlotOption[] {
+  return (template?.materialSlots ?? []).filter((slot) => slot.minCount > 0 && (slot.requiredAt ?? 'submission') === 'submission')
 }
 
 /** 只提取文件夹明确写出的申请人字段；普通文件夹名不能当作真实申请人。 */

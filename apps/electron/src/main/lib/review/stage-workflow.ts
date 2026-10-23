@@ -351,6 +351,14 @@ export async function submitCaseV2(caseId: string, actor?: Actor, source?: Comma
   const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
   if (!template) throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '模板不存在或已删除')
   if (aggregate.caseV2.documents.length === 0) throw new CommandValidationError('VALIDATION_FAILED', '尚未登记任何材料，不能提交')
+  // RUN-38：批量入库允许先建案后补录，但“材料已入库”不等于“可提交审核”。
+  // 必填案卷字段/必需分项/事项必填字段与建案校验共用同一模板定义，缺一项都明确阻断。
+  const { collectMissingIntakeInputs } = await import('./application-service')
+  const missingIntake = collectMissingIntakeInputs(template, aggregate.caseV2)
+  if (missingIntake.length > 0) {
+    throw new CommandValidationError('VALIDATION_FAILED',
+      `案卷尚未补齐必填输入：${missingIntake.join('；')}。请在案卷页补全后再提交审核`)
+  }
   // 必需材料槽门控（复查 §5.9：不能只判非空——按模板 minCount 逐槽核对 active 材料）
   const missingSlots: string[] = []
   for (const slot of template.materialSlots ?? []) {

@@ -42,6 +42,27 @@ function seedSelection(files: Array<{ name: string; content?: string }> = [{ nam
   return selection
 }
 
+// RUN-38/39：含必填案卷字段、必需分项与必交材料槽的真实模板。
+const requiredTemplateId = 't06-required-inputs'
+saveDraft({
+  templateId: requiredTemplateId, version: 1, schemaVersion: 2, name: '含必填与必交槽模板',
+  objectType: 'person', displayName: { template: 'x' }, status: 'draft', createdAt: '',
+  fields: [{ key: 'amount', label: '申报金额', kind: 'number', required: true, visibility: 'public', scope: 'case' }],
+  sections: [{
+    id: 'decl', name: '申报事项', order: 0, required: true,
+    criteria: [{ id: 'c1', title: '金额与材料一致', requirement: '核对申报金额与证明一致', execution: 'semantic', targetScope: 'case' }],
+  }],
+  materialSlots: [{
+    id: 'application-form', name: '申请书', purpose: '学生申请书', acceptedKinds: ['text', 'pdf'],
+    minCount: 1, maxCount: 1, requiredElements: [], allowReuseAcrossSubjects: false,
+  }],
+  policyVersionIds: [], policyRefs: [], outputs: [],
+  stages: [{ id: 'end', name: '结束', kind: 'finalize', executorRole: 'reviewer' }],
+} as never)
+publishTemplate(requiredTemplateId, 1)
+
+const { submitCaseV2 } = await import('./stage-workflow')
+
 describe('T06 物理入库桥接', () => {
   test('来源指纹不符时拒绝提交', async () => {
     const selection = seedSelection([{ name: 'a.txt' }, { name: 'b.txt' }])
@@ -138,6 +159,71 @@ describe('T06 物理入库桥接', () => {
     expect(a.cases[0]?.status).toBe('done')
     expect(b.cases[0]?.status).toBe('done')
     expect(a.cases[0]?.documents[0]?.documentVersionId).not.toBe(b.cases[0]?.documents[0]?.documentVersionId)
+  })
+
+  test('RUN-38/39：必填字段模板可建案但不伪装可提交，补齐字段与必交槽后才允许提交', async () => {
+    const selection = seedSelection([{ name: '申请书.txt', content: '申请书正文' }])
+    const result = await service.commitT06PhysicalImport({
+      requestId: 'r-required-inputs', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, batchName: '必填模板批次',
+      groups: [{
+        groupId: 'g1', action: 'create', entryIds: [selection.entries[0]!.entryId],
+        title: '待补录案卷', applicant: '甲', templateId: requiredTemplateId, templateVersion: 1,
+      }],
+    })
+    const receipt = result.cases[0]!
+    expect(receipt.status).toBe('done')
+    expect(receipt.warnings?.join('；')).toContain('必交材料槽')
+    expect(receipt.warnings?.join('；')).toContain('申报金额')
+    const caseId = receipt.caseId!
+    const aggregate = (await import('./case-store-v2')).readAggregate(caseId)!
+    // 旧实现会因 applicant 不在模板中直接整组失败；现在按模板真实字段建案。
+    expect(aggregate.caseV2.templateId).toBe(requiredTemplateId)
+    expect(aggregate.caseV2.caseFields.amount).toBeUndefined()
+    await expect(submitCaseV2(caseId)).rejects.toThrow('尚未补齐必填输入')
+  })
+
+  test('RUN-38/39：显式字段、事项、角色与必交槽一次入库后文件名保留且可提交', async () => {
+    const selection = seedSelection([{ name: '申请书.txt', content: '正式申请书' }])
+    const result = await service.commitT06PhysicalImport({
+      requestId: 'r-required-complete', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, batchName: '完整必填批次',
+      groups: [{
+        groupId: 'g1', action: 'create', entryIds: [selection.entries[0]!.entryId],
+        title: '完整案卷', templateId: requiredTemplateId, templateVersion: 1,
+        fieldValues: { amount: '5000' },
+        subjects: [{ title: '项目一', sectionId: 'decl' }],
+        entryAssignments: [{ entryId: selection.entries[0]!.entryId, role: 'application', materialSlotId: 'application-form' }],
+      }],
+    })
+    const receipt = result.cases[0]!
+    expect(receipt.status).toBe('done')
+    expect(receipt.warnings ?? []).toEqual([])
+    expect(receipt.documents[0]?.role).toBe('application')
+    expect(receipt.documents[0]?.materialSlotId).toBe('application-form')
+    const aggregate = (await import('./case-store-v2')).readAggregate(receipt.caseId!)!
+    const document = aggregate.caseV2.documents[0]!
+    expect(document.fileName).toBe('申请书.txt')
+    expect(document.role).toBe('application')
+    expect(document.materialSlotId).toBe('application-form')
+    const submitted = await submitCaseV2(receipt.caseId!)
+    expect(submitted.ok).toBe(true)
+    expect((await import('./case-store-v2')).readAggregate(receipt.caseId!)!.caseV2.stage).toBe('submitted')
+  })
+
+  test('材料槽不在所选模板中时拒绝该组，不写伪材料身份', async () => {
+    const selection = seedSelection([{ name: 'proof.txt', content: '证明' }])
+    const result = await service.commitT06PhysicalImport({
+      requestId: 'r-bad-slot', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, batchName: '非法槽位',
+      groups: [{
+        groupId: 'g1', action: 'create', entryIds: [selection.entries[0]!.entryId],
+        title: '非法槽位案卷', templateId, templateVersion: 1,
+        entryAssignments: [{ entryId: selection.entries[0]!.entryId, materialSlotId: 'not-in-template' }],
+      }],
+    })
+    expect(result.cases[0]?.status).toBe('failed')
+    expect(result.cases[0]?.error).toContain('材料槽不在所选模板中')
   })
 
   test('预览后即使字节长度未变，更换原件也必须拒绝入库', async () => {
