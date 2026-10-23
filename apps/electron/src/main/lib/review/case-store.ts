@@ -139,16 +139,24 @@ export function listCases(): ReviewCaseSummary[] {
     // Old three-column selector remains a READ-ONLY projection for genuine
     // native-first Cases, never a stale V1 shadow nor a second business writer.
     let reviewCase: ReviewCase | undefined
+    let nativeAggregate: ReturnType<typeof readAggregate>
     try {
       if (isLegacyProjectionAllowed(name)) {
         const caseFile = join(root, name, 'case.json')
         if (!existsSync(caseFile)) continue
         reviewCase = readJsonFile<ReviewCase>(caseFile)
       } else {
-        reviewCase = nativeWorkspaceProjectionV3(readAggregate(name))
+        nativeAggregate = readAggregate(name)
+        reviewCase = nativeWorkspaceProjectionV3(nativeAggregate)
       }
     } catch { continue }
     if (!reviewCase || reviewCase.id !== name) continue
+
+    // ASSET-06：三栏兼容投影会刻意隐藏 attachment 等角色；管理列表不能拿
+    // “当前可显示数”冒充案卷真实有效材料数。原生案卷直接数聚合。
+    const activeDocumentCount = nativeAggregate
+      ? nativeAggregate.caseV2.documents.filter((document) => document.active !== false).length
+      : (reviewCase.documents?.length ?? 0)
 
     summaries.push({
       id: reviewCase.id,
@@ -158,7 +166,7 @@ export function listCases(): ReviewCaseSummary[] {
       academicYear: reviewCase.academicYear,
       updatedAt: reviewCase.updatedAt,
       isDemo: reviewCase.isDemo,
-      documentCount: reviewCase.documents?.length ?? 0,
+      documentCount: activeDocumentCount,
       lastRunStatus: readLastRunStatus(reviewCase.id),
       // 列表展示领域标签（未标注的历史案卷由 UI 回落缺省包名）
       domainPackId: reviewCase.domainPackId,

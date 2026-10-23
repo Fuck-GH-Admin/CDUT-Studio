@@ -387,6 +387,16 @@ export async function updateNativeWorkspaceSettingsV3(
   return projected
 }
 
+export interface NativeMaterialRegistrationOptions {
+  /**
+   * 用户可见的原文件名。批量入库/离线回件先用临时文件中转，
+   * 若不显式传入，材料身份会被临时文件名（UUID 前缀）污染。
+   */
+  fileName?: string
+  /** 显式替换目标（按版本号验证），与 V2 拖拽登记保持同一契约。 */
+  replacesVersionIds?: string[]
+}
+
 /** Native material intake uses the existing C-owned physical-byte V2 service. */
 export async function registerNativeWorkspaceMaterialV3(
   caseId: string, sourcePath: string, role: SourceDocument['role'], actor: Actor = MAIN_ACTOR,
@@ -399,6 +409,7 @@ export async function registerNativeWorkspaceMaterialV3(
    * （提交时按槽位核对 active 材料数，槽位恒为 0）。这里补上透传。
    */
   materialSlotId?: string,
+  options: NativeMaterialRegistrationOptions = {},
 ): Promise<SourceDocument> {
   const current = readAggregate(caseId)
   if (!isNativeWorkspaceCaseV3(current) || !current || current.caseV2.stage === 'archived')
@@ -407,7 +418,12 @@ export async function registerNativeWorkspaceMaterialV3(
   const result = await registerMaterial(caseId, {
     requestId: `native-register-${randomUUID().replace(/-/g, '')}`,
     actor, expectedRevision: current.caseV2.revision,
-    payload: { sourcePath, role, ...(materialSlotId ? { materialSlotId } : {}) },
+    payload: {
+      sourcePath, role,
+      ...(materialSlotId ? { materialSlotId } : {}),
+      ...(options.fileName ? { fileName: options.fileName } : {}),
+      ...(options.replacesVersionIds?.length ? { replacesVersionIds: options.replacesVersionIds } : {}),
+    },
   }, authorizeAtCommit)
   if (!result.ok) throw new CommandValidationError(result.code, result.message)
   const doc = result.entity

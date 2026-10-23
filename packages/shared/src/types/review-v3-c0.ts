@@ -25,6 +25,7 @@ export type C0RejectionCode =
 
 export type C0CaseAction =
   | 'CREATE_CASE_V2' | 'UPDATE_FIELDS_V2'
+  | 'UPSERT_CASE_SUBJECT_V2'
   | 'CORRECT_OBSERVATION_V2' | 'SET_EVIDENCE_LINK_V2'
 
 export interface Principal {

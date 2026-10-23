@@ -713,6 +713,11 @@ export function registerReviewIpc(): void {
     const aggregate = getCaseV2Aggregate(input.caseId)
     return !aggregate || isWorkspaceRunStaleV2(aggregate, input.runId)
   })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.UPSERT_CASE_SUBJECT_V2, (event, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
+    const command = bindC0LocalCaseCommand(event, input?.caseId, 'UPSERT_CASE_SUBJECT_V2', input?.command)
+    const { upsertCaseSubjectC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')
+    return upsertCaseSubjectC0(command as Parameters<typeof upsertCaseSubjectC0>[0])
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.CORRECT_OBSERVATION_V2, (event, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
     const command = bindC0LocalCaseCommand(event, input?.caseId, 'CORRECT_OBSERVATION_V2', input?.command)
     const { correctObservationC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')
@@ -886,37 +891,22 @@ export function registerReviewIpc(): void {
         },
       })
     }
-    const { registerNativeWorkspaceMaterialV3 } = require('./native-workspace-case-v3') as typeof import('./native-workspace-case-v3')
     const { respondSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
-    const { importT09Package, t09AssetTempRoot } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
-    const { writeFileSync } = require('node:fs') as typeof import('node:fs')
-    const { join } = require('node:path') as typeof import('node:path')
-    const { randomUUID } = require('node:crypto') as typeof import('node:crypto')
+    const { importT09Package } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
+    const { registerT09StudentAsset } = require('./review-v3-t09-asset-registration') as typeof import('./review-v3-t09-asset-registration')
     const result = await importT09Package({
       caseId: input.caseId, packageJson: input.packageJson,
       deps: {
         readAggregate: (caseId) => getCaseV2Aggregate(caseId),
-        registerAsset: async (caseId, name, _mimeType, bytes) => {
-          // 附件必须成为真实原件：先落临时文件，再走原生材料登记。
-          // 临时文件只是中转；权威原件在材料存储，finally 内即时删除。
-          const safeName = String(name).replace(/[^A-Za-z0-9._-]/g, '_').slice(-120) || 'offline-asset.bin'
-          const path = join(t09AssetTempRoot(), `${randomUUID()}-${safeName}`)
-          writeFileSync(path, bytes)
-          try {
-            const document = await registerNativeWorkspaceMaterialV3(caseId, path, 'evidence', undefined,
-              () => assertC0ReviewMainSender(event))
-            // SourceDocument 只给 documentId；真实版本号与登记后的 revision 以案卷聚合为准。
-            const after = getCaseV2Aggregate(caseId)
-            const version = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
-            if (!after || !version) throw new Error('附件已登记但找不到对应原件版本')
-            return { versionId: version.versionId, revision: after.caseV2.revision }
-          } finally {
-            const { unlinkSync } = require('node:fs') as typeof import('node:fs')
-            try { unlinkSync(path) } catch (error) {
-              if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') console.warn('[T09] 临时附件清理失败:', error)
-            }
-          }
-        },
+        // OFF-05：保留离线包原文件名，并按补件请求的材料槽归属真实登记；
+        // 原生/模板两种案卷走同一 helper，临时文件在里面即时清理。
+        registerAsset: async (caseId, name, _mimeType, bytes, meta) => registerT09StudentAsset({
+          caseId,
+          displayName: meta?.displayName || name,
+          bytes,
+          ...(meta?.materialSlotId ? { materialSlotId: meta.materialSlotId } : {}),
+          authorizeAtCommit: () => assertC0ReviewMainSender(event),
+        }),
         respondSupplement: async (caseId, supplementId, note, documentVersionIds, expectedRevision, meta) => {
           const aggregate = getCaseV2Aggregate(caseId)
           if (!aggregate) return { ok: false, message: '案卷不存在' }
@@ -989,6 +979,11 @@ export function registerReviewIpc(): void {
     if (typeof input?.system !== 'string' || typeof input?.user !== 'string') throw new Error('参数非法')
     const { requestT01ModelDraft } = require('./review-v3-t01-model-draft-service') as typeof import('./review-v3-t01-model-draft-service')
     return requestT01ModelDraft({ system: input.system, user: input.user })
+  })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.LIST_CASE_STORAGE_ISSUES_V3, (event) => {
+    assertC0ReviewMainSender(event)
+    const { listCaseStorageIssues } = require('./case-store-v2') as typeof import('./case-store-v2')
+    return listCaseStorageIssues()
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T06_PICK_PHYSICAL_SOURCE, async (event, input: { sourceKind?: string }) => {
     assertC0ReviewMainSender(event)
@@ -1200,8 +1195,9 @@ export function registerReviewIpc(): void {
 
   // ===== N5b：批次管理（薄委托 batch-store） =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.CREATE_BATCH_V2, (_e, input: { batch: import('@profer/shared').ReviewBatch }) => {
-    const { createBatchV2 } = require('./batch-store') as typeof import('./batch-store')
-    return createBatchV2(input.batch)
+    const { createBatchV2Validated } = require('./batch-store') as typeof import('./batch-store')
+    // BATCH-09：Main 逐案核模板版本与政策锁，不信任渲染层筛选结果。
+    return createBatchV2Validated(input.batch)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.GET_BATCH_V2, (_e, batchId: string) => {
     const { readBatchStateV2 } = require('./batch-store') as typeof import('./batch-store')
@@ -1289,6 +1285,12 @@ export function registerReviewIpc(): void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, async (_e, input: { caseId: string; sourcePath: string; role: 'application' | 'evidence' | 'rule' | 'attachment'; materialSlotId?: string; fileName?: string; replacesVersionIds?: string[] }) => {
     assertC0ReviewMainSender(_e)
     if (!input || typeof input.sourcePath !== 'string' || !input.sourcePath) throw new Error('参数 sourcePath 非法')
+    // ASSET-05：展示名与显式替换意图在两种案卷上必须同一契约；先校验再分流。
+    if (input.fileName !== undefined) {
+      const { basename } = require('node:path') as typeof import('node:path')
+      if (typeof input.fileName !== 'string' || !input.fileName || basename(input.fileName) !== input.fileName) throw new Error('参数 fileName 非法')
+    }
+    if (input.replacesVersionIds !== undefined && (!Array.isArray(input.replacesVersionIds) || input.replacesVersionIds.some((value) => typeof value !== 'string'))) throw new Error('参数 replacesVersionIds 非法')
     // Electron's existing webUtils.getPathForFile resolves the dropped OS
     // file in Preload. Route native V3 cases through the SAME C-owned physical
     // material importer as the system file picker (no second Case or storage).
@@ -1299,14 +1301,17 @@ export function registerReviewIpc(): void {
         input.caseId, input.sourcePath, input.role, undefined,
         () => assertC0ReviewMainSender(_e),
         input.materialSlotId,
+        {
+          ...(input.fileName ? { fileName: input.fileName } : {}),
+          ...(input.replacesVersionIds ? { replacesVersionIds: input.replacesVersionIds } : {}),
+        },
       )
-      return document.id
+      // 两个分支统一返回 DocumentVersion.versionId；documentId 不是调用方可用的版本号。
+      const after = readAggregate(input.caseId)
+      const version = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
+      if (!version) throw new Error('原生材料已登记但找不到对应原件版本')
+      return version.versionId
     }
-    if (input.fileName !== undefined) {
-      const { basename } = require('node:path') as typeof import('node:path')
-      if (typeof input.fileName !== 'string' || !input.fileName || basename(input.fileName) !== input.fileName) throw new Error('参数 fileName 非法')
-    }
-    if (input.replacesVersionIds !== undefined && (!Array.isArray(input.replacesVersionIds) || input.replacesVersionIds.some((value) => typeof value !== 'string'))) throw new Error('参数 replacesVersionIds 非法')
     const { registerMaterial } = require('./material-service') as typeof import('./material-service')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
     const fresh = getCaseV2Aggregate(input.caseId)

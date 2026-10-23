@@ -6,7 +6,11 @@ import {
   previewT06PhysicalImport, planT06PhysicalImport,
   type T06PhysicalSelection, type T06GroupChoice, type T06PhysicalCommitRequest, type T06CommitReceipt,
 } from './review-v3-t06-physical-intake'
-import { suggestT06ApplicantFromFolder, suggestT06GroupTemplate, type T06PublishedTemplateOption } from './review-v3-t06-template-route'
+import {
+  suggestT06ApplicantFromFolder, suggestT06GroupTemplate,
+  t06RequiredCaseFields, t06RequiredSubmissionSlots,
+  type T06PublishedTemplateOption,
+} from './review-v3-t06-template-route'
 
 /** To be bound by L to the native picker + trusted Main case/material/batch writer. */
 export interface T06PhysicalMainApi {
@@ -124,6 +128,22 @@ export function ReviewV3T06PhysicalImport({
       setRunNotice(`已执行 ${results.length - failures.length} / ${results.length} 个模板批次。${failures.length ? `失败：${failures.join('；')}` : '请到批次工作台查看逐案结果。'}`)
     } finally { setPending(false) }
   }
+  function assignmentOf(choice: T06GroupChoice, entryId: string) {
+    if (choice.action === 'exclude') return { entryId, role: 'evidence' as const }
+    return choice.entryAssignments?.find(item => item.entryId === entryId) ?? { entryId, role: 'evidence' as const }
+  }
+  function updateAssignment(choice: T06GroupChoice, entryId: string, patch: { role?: string; materialSlotId?: string }): T06GroupChoice {
+    if (choice.action === 'exclude') return choice
+    const current = assignmentOf(choice, entryId)
+    const next = { ...current, ...patch, entryId }
+    if (!next.materialSlotId) delete (next as { materialSlotId?: string }).materialSlotId
+    const rest = (choice.entryAssignments ?? []).filter(item => item.entryId !== entryId)
+    return { ...choice, entryAssignments: [...rest, next] } as T06GroupChoice
+  }
+  function updateCaseField(choice: T06GroupChoice, key: string, value: string): T06GroupChoice {
+    if (choice.action !== 'create') return choice
+    return { ...choice, fieldValues: { ...(choice.fieldValues ?? {}), [key]: value } } as T06GroupChoice
+  }
   return <section className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div>
@@ -152,6 +172,12 @@ export function ReviewV3T06PhysicalImport({
       <p className="text-xs">{preview.source.entries.length} 份原件 · {preview.groups.length} 组 · 未归属 {preview.unassignedCount}</p>
       {preview.errors.map((e, i) => <p key={i} role="alert" className="text-xs text-destructive">{e}</p>)}
       {preview.source.warnings?.map((e, i) => <p key={'skip-' + i} role="status" className="text-xs text-amber-700 dark:text-amber-300">未导入原件：{e}</p>)}
+      {!!preview.source.excluded?.length && <details className="text-[11px] text-muted-foreground">
+        <summary>逐文件未入库清单（{preview.source.excluded.length}）</summary>
+        <ul className="mt-1 max-h-32 overflow-y-auto">
+          {preview.source.excluded.map((item, i) => <li key={i}>{item.relativePath}：{item.reason}</li>)}
+        </ul>
+      </details>}
       <div className="max-h-72 space-y-2 overflow-y-auto">
         {preview.groups.map(group => {
           const choice: T06GroupChoice = selected[group.groupId] ?? { action: 'create', title: group.name, applicant: '' }
@@ -159,6 +185,11 @@ export function ReviewV3T06PhysicalImport({
           const choiceTemplateId = choice.action === 'exclude' ? undefined : choice.templateId
           const choiceTemplateVersion = choice.action === 'exclude' ? undefined : choice.templateVersion
           const caseTemplate = templates.find(t => t.templateId === choiceTemplateId && t.version === choiceTemplateVersion)
+          const requiredFields = t06RequiredCaseFields(caseTemplate)
+          const requiredSlots = t06RequiredSubmissionSlots(caseTemplate)
+          const mappedSlots = new Set((choice.action === 'exclude' ? [] : choice.entryAssignments ?? [])
+            .map(item => item.materialSlotId).filter((value): value is string => !!value))
+          const missingRequiredSlots = requiredSlots.filter(slot => !mappedSlots.has(slot.id))
           const suggestion = proposed[group.groupId]
           return <div className="space-y-2 rounded border bg-background p-2" key={group.groupId}>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -198,6 +229,49 @@ export function ReviewV3T06PhysicalImport({
               <input className="rounded border bg-background p-1.5 text-xs" aria-label={group.name + ' 申请人'}
                 value={choice.applicant} disabled={!!receipt} placeholder="申请人/组织（必须确认）" onChange={e => choose(group.groupId, { ...choice, applicant: e.target.value })}/>
             </div>}
+            {choice.action === 'create' && requiredFields.length > 0 && <div className="space-y-1">
+              <p className="text-[11px] font-medium">模板必填案卷字段（可先入库，提交审核前必须补齐）</p>
+              {requiredFields.map(field => <label key={field.key} className="block text-[11px]">{field.label}
+                {field.kind === 'enum' && field.options?.length
+                  ? <select className="mt-1 w-full rounded border bg-background p-1" value={String(choice.fieldValues?.[field.key] ?? '')}
+                      onChange={event => choose(group.groupId, updateCaseField(choice, field.key, event.target.value))}>
+                      <option value="">未填写</option>
+                      {field.options.map(option => <option key={option.value} value={option.value}>{option.label ?? option.value}</option>)}
+                    </select>
+                  : <input className="mt-1 w-full rounded border bg-background p-1"
+                      type={field.kind === 'number' ? 'number' : field.kind === 'date' ? 'date' : 'text'}
+                      value={String(choice.fieldValues?.[field.key] ?? '')}
+                      onChange={event => choose(group.groupId, updateCaseField(choice, field.key, event.target.value))} />}
+              </label>)}
+            </div>}
+            {choice.action !== 'exclude' && (caseTemplate?.materialSlots?.length ?? 0) > 0 && <div className="space-y-1">
+              <p className="text-[11px] font-medium">原件归属（申请书/必交材料请选择角色与材料槽）</p>
+              {missingRequiredSlots.length > 0 && <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                必交槽尚未绑定：{missingRequiredSlots.map(slot => slot.name).join('、')}；这批案卷可以保存，但提交审核会被明确阻断。
+              </p>}
+              <div className="max-h-40 space-y-1 overflow-y-auto">
+                {group.entries.map(entry => {
+                  const assignment = assignmentOf(choice, entry.entryId)
+                  return <div className="flex flex-wrap items-center gap-1 text-[11px]" key={entry.entryId}>
+                    <span className="min-w-0 flex-1 truncate" title={entry.relativePath}>{entry.relativePath}</span>
+                    <select aria-label={entry.relativePath + ' 材料角色'} className="rounded border bg-background p-0.5"
+                      value={assignment.role ?? 'evidence'} disabled={!!receipt}
+                      onChange={event => choose(group.groupId, updateAssignment(choice, entry.entryId, { role: event.target.value }))}>
+                      <option value="application">申请书</option>
+                      <option value="evidence">证明材料</option>
+                      <option value="rule">规则材料</option>
+                      <option value="attachment">附件</option>
+                    </select>
+                    <select aria-label={entry.relativePath + ' 材料槽'} className="rounded border bg-background p-0.5"
+                      value={assignment.materialSlotId ?? ''} disabled={!!receipt}
+                      onChange={event => choose(group.groupId, updateAssignment(choice, entry.entryId, { materialSlotId: event.target.value || undefined }))}>
+                      <option value="">不绑定材料槽</option>
+                      {(caseTemplate?.materialSlots ?? []).map(slot => <option key={slot.id} value={slot.id}>{slot.name}</option>)}
+                    </select>
+                  </div>
+                })}
+              </div>
+            </div>}
             {choice.action === 'existing' && <select className="w-full rounded border bg-background p-1.5 text-xs"
               value={choice.caseId} disabled={!!receipt} onChange={e => choose(group.groupId, { ...choice, caseId: e.target.value })}>
               <option value="">选择本模板版本的已有案卷</option>
@@ -217,6 +291,9 @@ export function ReviewV3T06PhysicalImport({
     {receipt && <div role="status" className="space-y-1 text-xs">
       <p>完成 {receipt.cases.filter(x => x.status === 'done').length} 案；
         失败 {receipt.cases.filter(x => x.status === 'failed').length} 案。</p>
+      {!!receipt.inventory?.excluded.length && <p className="text-muted-foreground">
+        本次来源另有 {receipt.inventory.excluded.length} 个条目未入库（可在上方“逐文件未入库清单”核对）。
+      </p>}
       {(receipt.batches?.length ?? 0) > 0
         ? receipt.batches!.map(batch => <p key={batch.batchId}>已创建 {batch.caseIds.length} 案批次：{batch.batchId}（{templates.find(item => item.templateId === batch.templateId && item.version === batch.templateVersion)?.name ?? batch.templateId}）</p>)
         : receipt.batchId ? <p>已创建批次：{receipt.batchId}</p> : <p>批次未创建：{receipt.batchError ?? '没有完整导入的案卷'}</p>}
@@ -226,6 +303,11 @@ export function ReviewV3T06PhysicalImport({
       {receipt.cases.some(x => x.status === 'failed') && <p className="text-amber-700 dark:text-amber-300">部分案卷可能已写入材料；请查看现存案卷再重新选取原件，避免把同一批次当作全新导入。</p>}
       {receipt.cases.filter(x => x.status === 'failed').map(x => <p key={x.groupId} className="text-destructive">
         {x.groupId}：{x.error}（已登记 {x.documents.length} 份，后续可恢复）</p>)}
+      {receipt.cases.filter(x => x.warnings?.length).map(x => <div key={'warn-' + x.groupId} className="rounded border border-amber-300/60 bg-amber-50/40 p-2 text-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
+        <p className="font-medium">案卷 {x.caseId ?? x.groupId} 已入库，但提交审核前还需补齐：</p>
+        <ul className="mt-1 list-disc pl-4">{x.warnings!.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
+        <p className="mt-1 text-muted-foreground">到“案卷办理”打开该案卷，在“申报事项与分项”和案卷字段中补齐后再提交；材料不会丢失，也不会重复建案。</p>
+      </div>)}
     </div>}
     {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
   </section>

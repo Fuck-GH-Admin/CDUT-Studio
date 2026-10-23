@@ -29,6 +29,7 @@ function harness(initialRevision = 3) {
     documents: [] as HarnessDocument[],
     receipts: [] as HarnessReceipt[],
     registerCalls: [] as string[],
+    registerMetas: [] as Array<{ displayName: string; materialSlotId?: string }>,
     respondCalls: [] as Array<{ expectedRevision: number; versionIds: string[] }>,
     failNextRespond: undefined as undefined | 'throw' | 'conflict',
     failRegisterAt: undefined as number | undefined,
@@ -41,7 +42,7 @@ function harness(initialRevision = 3) {
       stage: 'awaiting-supplement',
     },
     supplements: [{ id: 'sup-1', status: state.supplementStatus, reason: '缺材料',
-      requiredElements: ['补充证明'], responsibleRole: 'student', responses: [] }],
+      materialSlotId: 'proof-slot', requiredElements: ['补充证明'], responsibleRole: 'student', responses: [] }],
     decisions: [], observations: [], evidenceLinks: [], tasks: [],
     receiptLog: state.receipts.map((receipt) => ({ ...receipt })),
   } as unknown as CaseAggregateV2)
@@ -49,13 +50,15 @@ function harness(initialRevision = 3) {
   const deps = {
     readAggregate: (id: string) => (id === caseId ? snapshot() : undefined),
     registerAsset: async (_caseId: string, name: string, _mime: string, _bytes: Uint8Array,
-      meta?: { actionId: string; index: number; displayName: string }) => {
+      meta?: { actionId: string; index: number; displayName: string; materialSlotId?: string }) => {
       state.registerAttempts += 1
       if (state.failRegisterAt === state.registerAttempts) {
         state.failRegisterAt = undefined
         throw new Error('材料登记失败（模拟）')
       }
       state.registerCalls.push(name)
+      state.registerMetas.push({ displayName: meta?.displayName ?? name,
+        ...(meta?.materialSlotId ? { materialSlotId: meta.materialSlotId } : {}) })
       state.revision += 1
       const document: HarnessDocument = { versionId: `ver-${state.revision}`, documentId: `doc-${state.revision}`,
         active: true, role: 'evidence' }
@@ -116,6 +119,11 @@ describe('T09 离线包桥接', () => {
     expect(result.status).toBe('accepted')
     // 预览版本 3 → 登记两份附件后为 5：答复必须用 5，而不是旧预览版本 3。
     expect(h.state.registerCalls).toEqual(['a.txt', 'b.txt'])
+    // OFF-05：Main 把补件请求的槽位与离线包原名传给真实登记端口。
+    expect(h.state.registerMetas).toEqual([
+      { displayName: 'a.txt', materialSlotId: 'proof-slot' },
+      { displayName: 'b.txt', materialSlotId: 'proof-slot' },
+    ])
     expect(h.state.respondCalls).toHaveLength(1)
     expect(h.state.respondCalls[0]!.expectedRevision).toBe(5)
     expect(h.state.respondCalls[0]!.versionIds).toEqual(['ver-4', 'ver-5'])

@@ -297,6 +297,13 @@ export interface TemplateVersion {
   /** 默认能力开关：辅助审核 / 限定条件自动通过 */
   autoPassPolicy?: { enabled: boolean; conditions?: ConditionAST }
   status: 'draft' | 'published' | 'deprecated'
+  /**
+   * Main 发布时派生的执行范围（不接受作者自填）：
+   * - rules：至少一条 authored 审核标准，可据此生成规则/检查；
+   * - material-manual-only：没有任何审核标准，只能核对材料与人工办理。
+   * 发布门禁据此区分“业务规则模板”和“仅材料完整性模板”。
+   */
+  executionScope?: 'rules' | 'material-manual-only'
   /** 兼容 V1 领域包词汇（展示标签/提示沿用） */
   domainPackId?: ReviewDomainPackId
   createdAt: string

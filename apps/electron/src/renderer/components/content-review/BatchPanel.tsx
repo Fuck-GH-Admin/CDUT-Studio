@@ -853,7 +853,18 @@ function CreateBatchDialog({
           </div>
           <ReviewV3T06PhysicalImport key="physical-batch-intake"
             api={physicalApi} templateId={selectedTemplate?.templateId} templateVersion={selectedTemplate?.version}
-            batchName={batchName} templates={templates.map(item => ({ templateId: item.templateId, version: item.version, name: item.name }))}
+            batchName={batchName} templates={templates.map(item => ({
+              templateId: item.templateId, version: item.version, name: item.name,
+              fields: (item.fields ?? []).map(field => ({
+                key: field.key, label: field.label, kind: field.kind, required: field.required,
+                scope: field.scope ?? 'subject',
+                ...(field.options ? { options: field.options.map(option => ({ value: option.value, label: option.label })) } : {}),
+              })),
+              materialSlots: (item.materialSlots ?? []).map(slot => ({
+                id: slot.id, name: slot.name, minCount: slot.minCount,
+                ...(slot.requiredAt ? { requiredAt: slot.requiredAt } : {}),
+              })),
+            }))}
             existingCases={allCases.map(item => ({
               caseId: item.caseId, title: item.title, templateId: item.templateId, templateVersion: item.templateVersion,
             }))}

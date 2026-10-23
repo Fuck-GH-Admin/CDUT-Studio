@@ -8,8 +8,8 @@ import {
 import { payloadHash, readAggregate, CommandValidationError } from './case-store-v2'
 import { getTemplate } from './template-store'
 import {
-  createCaseFromTemplate, updateFields, correctObservation, setEvidenceLink,
-  type CreateCasePayload, type UpdateFieldsPayload,
+  createCaseFromTemplate, updateFields, upsertCaseSubject, correctObservation, setEvidenceLink,
+  type CreateCasePayload, type UpdateFieldsPayload, type UpsertCaseSubjectPayload,
   type CorrectObservationPayload, type SetEvidenceLinkPayload,
 } from './application-service'
 
@@ -84,6 +84,20 @@ export function updateFieldsC0(command: AuthorizedCaseCommand<UpdateFieldsPayloa
     payload: command.payload, actor: actorOf(command.principal),
   }, template)
 }
+export function upsertCaseSubjectC0(command: AuthorizedCaseCommand<UpsertCaseSubjectPayload>) {
+  assertC0CaseAuthorization(command, 'UPSERT_CASE_SUBJECT_V2')
+  const aggregate = readAggregate(command.caseId)
+  if (!aggregate) throw new CommandValidationError('NOT_FOUND', '案卷聚合不存在')
+  const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+  if (!template || template.status !== 'published') {
+    throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '案卷绑定的模板不存在或未发布，不能写入申报事项')
+  }
+  return upsertCaseSubject(command.caseId, {
+    requestId: command.requestId, expectedRevision: command.expectedRevision,
+    payload: command.payload, actor: actorOf(command.principal),
+  }, template)
+}
+
 export function correctObservationC0(command: AuthorizedCaseCommand<CorrectObservationPayload>) {
   assertC0CaseAuthorization(command, 'CORRECT_OBSERVATION_V2')
   return correctObservation(command.caseId, {

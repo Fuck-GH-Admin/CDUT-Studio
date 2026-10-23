@@ -12,6 +12,7 @@ import { assertSafeReviewStorageId } from './review-storage-id'
 const COMMAND_TYPE: Record<C0CaseAction, string> = {
   CREATE_CASE_V2: 'CreateCaseFromTemplate',
   UPDATE_FIELDS_V2: 'UpdateFields',
+  UPSERT_CASE_SUBJECT_V2: 'UpsertCaseSubject',
   CORRECT_OBSERVATION_V2: 'CorrectObservation',
   SET_EVIDENCE_LINK_V2: 'SetEvidenceLink',
 }

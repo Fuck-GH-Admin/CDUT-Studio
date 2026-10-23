@@ -7,7 +7,7 @@
 
 import { atom, useAtomValue, useStore, useSetAtom } from 'jotai'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Actor, CaseAggregateV2, FieldSpec, ReviewCommandResult, ReviewRunV2, TemplateVersion } from '@profer/shared'
+import type { Actor, CaseAggregateV2, FieldSpec, FieldValue, ReviewCommandResult, ReviewRunV2, TemplateVersion } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { toast } from 'sonner'
 import { RunResultPanel } from './RunResultPanel'
@@ -64,6 +64,144 @@ function renderTemplateFieldInput(
     return <select className="flex-1 rounded border bg-background px-2 py-1 text-xs" value={value} onChange={(event) => onChange(event.target.value)}><option value="">请选择</option>{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
   }
   return <input className="flex-1 rounded border bg-background px-2 py-1 text-xs" type={field.kind === 'number' ? 'number' : field.kind === 'date' ? 'date' : 'text'} value={value} onChange={(event) => onChange(event.target.value)} />
+}
+
+function fieldValueToInput(value: FieldValue | undefined): string {
+  if (!value) return ''
+  switch (value.kind) {
+    case 'multi': return value.value.join('，')
+    case 'boolean': return value.value ? 'true' : 'false'
+    case 'text':
+    case 'date':
+    case 'enum': return String(value.value ?? '')
+    case 'number': return Number.isFinite(value.value) ? String(value.value) : ''
+    default: return ''
+  }
+}
+
+function rawValueForSpec(field: FieldSpec, text: string): unknown {
+  if (field.kind === 'number') return Number(text)
+  if (field.kind === 'boolean') return text === 'true'
+  if (field.kind === 'multi') return text.split(/[,，;；]/).map((item) => item.trim()).filter(Boolean)
+  return text
+}
+
+/**
+ * 导入草稿补齐必需分项的唯一产品入口。
+ *
+ * T06 允许先入库后补录；这里让普通用户在当前案卷直接新增/编辑申报事项，
+ * Main 用同一份已发布模板校验并在 V2 聚合里 CAS 落盘。补齐后同一案卷即可提交。
+ */
+function CaseSubjectEditor({ aggregate, template, onResult }: {
+  aggregate: CaseAggregateV2
+  template: TemplateVersion
+  onResult: (result: ReviewCommandResult | undefined) => void
+}): JSX.Element {
+  const subjects = aggregate.caseV2.subjects
+  const sections = template.sections ?? []
+  const missingSections = sections.filter((section) => section.required && !subjects.some((subject) => subject.sectionId === section.id))
+  const [drafts, setDrafts] = useState<Record<string, { title: string; fieldValues: Record<string, string> }>>({})
+  const [newRows, setNewRows] = useState<Array<{ key: string; sectionId: string; title: string; fieldValues: Record<string, string> }>>([])
+  const [busy, setBusy] = useState(false)
+  const draftOf = (subjectId: string, subject: CaseAggregateV2['caseV2']['subjects'][number]) => drafts[subjectId] ?? {
+    title: subject.title,
+    fieldValues: Object.fromEntries(subjects.find((item) => item.id === subjectId)?.fields
+      ? Object.entries(subject.fields).map(([key, value]) => [key, fieldValueToInput(value)])
+      : []),
+  }
+  const specsFor = (sectionId?: string) => template.fields.filter((field) =>
+    (field.scope ?? 'subject') === 'subject' && (!field.sectionId || field.sectionId === sectionId))
+  async function save(subjectId: string | undefined, title: string, sectionId: string | undefined, values: Record<string, string>, specs: FieldSpec[]): Promise<void> {
+    if (!title.trim() || busy) return
+    setBusy(true)
+    try {
+      const fieldValues = Object.fromEntries(Object.entries(values)
+        .filter(([key, value]) => value !== '' && value !== undefined && value !== null)
+        .map(([key, value]) => {
+          const spec = specs.find((item) => item.key === key)
+          return [key, spec ? rawValueForSpec(spec, value) : value]
+        }))
+      const result = await window.reviewAPI.upsertCaseSubjectV2({
+        caseId: aggregate.caseV2.id,
+        command: {
+          requestId: `subject-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          expectedRevision: aggregate.caseV2.revision,
+          payload: { ...(subjectId ? { subjectId } : {}), title: title.trim(), ...(sectionId ? { sectionId } : {}), fieldValues },
+        },
+      }) as ReviewCommandResult | undefined
+      if (result?.ok) {
+        setNewRows((rows) => rows.filter((row) => row.title !== title || row.sectionId !== sectionId))
+        setDrafts((current) => { const next = { ...current }; if (subjectId) delete next[subjectId]; return next })
+      }
+      onResult(result)
+    } finally { setBusy(false) }
+  }
+  return <details className="rounded-md border border-amber-300/60 bg-amber-50/40 px-3 py-2 text-xs dark:bg-amber-950/20" open={missingSections.length > 0}>
+    <summary className="cursor-pointer font-medium">申报事项与分项（补齐后即可提交）{missingSections.length > 0 ? ` · 还缺 ${missingSections.length} 个必需分项` : ''}</summary>
+    <div className="mt-2 space-y-2">
+      {missingSections.map((section) => {
+        const specs = specsFor(section.id)
+        const rowKey = `missing-${section.id}`
+        return <div key={section.id} className="rounded bg-background p-2">
+          <p className="font-medium text-amber-700 dark:text-amber-300">必需分项「{section.name}」还没有事项</p>
+          <input className="mt-1 w-full rounded border px-2 py-1" placeholder="申报事项名称" value={newRows.find((row) => row.key === rowKey)?.title ?? ''}
+            onChange={(event) => setNewRows((rows) => {
+              const existing = rows.find((row) => row.key === rowKey)
+              return existing
+                ? rows.map((row) => row.key === rowKey ? { ...row, title: event.target.value } : row)
+                : [...rows, { key: rowKey, sectionId: section.id, title: event.target.value, fieldValues: {} }]
+            })} />
+          {specs.map((field) => <label key={field.key} className="mt-1 flex items-center gap-2 text-[11px]">
+            <span className="w-28 shrink-0">{field.label}{field.required ? ' *' : ''}</span>
+            {renderTemplateFieldInput(field, newRows.find((row) => row.key === rowKey)?.fieldValues[field.key] ?? '',
+              (value) => setNewRows((rows) => rows.map((row) => row.key === rowKey
+                ? { ...row, fieldValues: { ...row.fieldValues, [field.key]: value } } : row)))}
+          </label>)}
+          <Button size="sm" variant="outline" className="mt-1" disabled={busy}
+            onClick={() => {
+              const row = newRows.find((item) => item.key === rowKey)
+              void save(undefined, row?.title ?? '', section.id, row?.fieldValues ?? {}, specs)
+            }}>补齐该分项</Button>
+        </div>
+      })}
+      {subjects.map((subject) => {
+        const draft = draftOf(subject.id, subject)
+        const sectionName = sections.find((section) => section.id === subject.sectionId)?.name
+        const specs = specsFor(subject.sectionId)
+        return <div key={subject.id} className="rounded bg-background p-2">
+          <p className="font-medium">{sectionName ? `${sectionName} · ` : ''}{subject.title}</p>
+          <input className="mt-1 w-full rounded border px-2 py-1" value={draft.title}
+            onChange={(event) => setDrafts((current) => ({ ...current, [subject.id]: { ...draft, title: event.target.value } }))} />
+          {specs.map((field) => <label key={field.key} className="mt-1 flex items-center gap-2 text-[11px]">
+            <span className="w-28 shrink-0">{field.label}{field.required ? ' *' : ''}</span>
+            {renderTemplateFieldInput(field, draft.fieldValues[field.key] ?? '',
+              (value) => setDrafts((current) => ({ ...current, [subject.id]: { ...draft, fieldValues: { ...draft.fieldValues, [field.key]: value } } })))}
+          </label>)}
+          <Button size="sm" variant="outline" className="mt-1" disabled={busy}
+            onClick={() => void save(subject.id, draft.title, subject.sectionId, draft.fieldValues, specs)}>保存事项</Button>
+        </div>
+      })}
+      {sections.length === 0 && <div className="rounded bg-background p-2">
+        <p className="font-medium">新增申报事项</p>
+        <input className="mt-1 w-full rounded border px-2 py-1" placeholder="申报事项名称"
+          value={newRows.find((row) => row.key === 'free')?.title ?? ''}
+          onChange={(event) => setNewRows((rows) => rows.some((row) => row.key === 'free')
+            ? rows.map((row) => row.key === 'free' ? { ...row, title: event.target.value } : row)
+            : [...rows, { key: 'free', sectionId: '', title: event.target.value, fieldValues: {} }])} />
+        {specsFor(undefined).map((field) => <label key={field.key} className="mt-1 flex items-center gap-2 text-[11px]">
+          <span className="w-28 shrink-0">{field.label}{field.required ? ' *' : ''}</span>
+          {renderTemplateFieldInput(field, newRows.find((row) => row.key === 'free')?.fieldValues[field.key] ?? '',
+            (value) => setNewRows((rows) => rows.map((row) => row.key === 'free'
+              ? { ...row, fieldValues: { ...row.fieldValues, [field.key]: value } } : row)))}
+        </label>)}
+        <Button size="sm" variant="outline" className="mt-1" disabled={busy}
+          onClick={() => {
+            const row = newRows.find((item) => item.key === 'free')
+            void save(undefined, row?.title ?? '', undefined, row?.fieldValues ?? {}, specsFor(undefined))
+          }}>添加事项</Button>
+      </div>}
+    </div>
+  </details>
 }
 
 /** 案卷面板：选择模板 → 创建案卷 → 登记材料 → 开始审核 */
@@ -518,6 +656,9 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
             <ReviewAssignmentCard caseId={current.caseV2.id} />
             <CaseTimelinePanel caseId={current.caseV2.id} refreshNonce={runNonce} />
             <p className="font-medium">{current.caseV2.title}</p>
+            {current.caseV2.stage === 'draft' && currentTemplate && (
+              <CaseSubjectEditor aggregate={current} template={currentTemplate} onResult={applyResult} />
+            )}
             {current.caseV2.subjects.length > 0 && (
               <div className="rounded-md bg-muted/30 p-2">
                 <p className="mb-1 font-medium">本案卷申报事项（{current.caseV2.subjects.length}）</p>

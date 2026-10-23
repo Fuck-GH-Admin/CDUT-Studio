@@ -1,35 +1,27 @@
 /**
- * T01 author-side contract for typed template checks, independent of Main/IPC.
+ * T01 author-side contract for typed template checks.
  *
- * The shared TemplateCriterionSpec currently has no typed numeric clause.
- * The optional deterministicConstraint property is retained by TemplateVersion JSON
- * storage and portability. Local-L owns the eventual shared DTO and trusted
- * publication/installation validation; T04 consumes these descriptors to build
- * RuleSpec/PlanBinding and to evaluate actual facts.
+ * 校验实现位于 @profer/shared/review/t01-typed-criteria：Main 发布事务必须调用
+ * 同一份函数（TAR-08），这里只保留编辑器交互辅助与重导出。
+ * T04 消费这些描述符构建 RuleSpec/PlanBinding 并对真实事实求值。
  */
-import type { ConditionAST, FieldSpec, TemplateCriterionSpec, TemplateVersion } from '@profer/shared'
+import type { FieldSpec, TemplateCriterionSpec, TemplateVersion } from '@profer/shared'
+import {
+  readT01NumberLimit,
+  stripT01OwnerStatement,
+  validateT01TypedCriteria,
+  type T01CriterionWithConstraint,
+  type T01NumberLimit,
+  type T01OwnerStatement,
+} from '@profer/shared'
 
-export interface T01OwnerStatement {
-  kind: 'owner-statement'
-  text: string
-  enteredBy: string
-  enteredAt: string
-}
-
-/** A check on a *confirmed* numeric case field; NOT an input-form max. */
-export interface T01NumberLimit {
-  schemaVersion: 1
-  kind: 'field-number-limit'
-  fieldKey: string
-  fieldScope: 'case'
-  operator: 'lte' | 'gte'
-  threshold: number
-  unit?: string
-  ownerStatement?: T01OwnerStatement
-}
-
-export type T01CriterionWithConstraint = TemplateCriterionSpec & {
-  deterministicConstraint?: T01NumberLimit
+// TAR-08：校验逻辑属于 @profer/shared 单一源，Main 发布事务与编辑器共用。
+export {
+  readT01NumberLimit,
+  validateT01TypedCriteria,
+  type T01CriterionWithConstraint,
+  type T01NumberLimit,
+  type T01OwnerStatement,
 }
 
 export interface T01PublishedNumericCheck {
@@ -53,12 +45,7 @@ export interface T01PublishedMaterialRequirement {
   sectionId?: string
   minCount: number
   requiredAt: 'submission' | 'decision'
-  requiredWhen?: ConditionAST
-}
-
-export function readT01NumberLimit(criterion: TemplateCriterionSpec): T01NumberLimit | undefined {
-  const raw = (criterion as T01CriterionWithConstraint).deterministicConstraint
-  return raw?.kind === 'field-number-limit' ? raw : undefined
+  requiredWhen?: import('@profer/shared').ConditionAST
 }
 
 export function setT01NumberLimit(
@@ -83,45 +70,6 @@ export function confirmT01NumberLimit(
     throw new Error('T01_OWNER_STATEMENT_REQUIRED')
   }
   return { ...criterion, deterministicConstraint: { ...constraint, ownerStatement: source } } as T01CriterionWithConstraint
-}
-
-export function validateT01TypedCriteria(template: TemplateVersion): string[] {
-  const errors: string[] = []
-  for (const section of template.sections ?? []) {
-    for (const criterion of section.criteria) {
-      const location = `分项「${section.name}」标准「${criterion.title}」`
-      const raw = (criterion as T01CriterionWithConstraint).deterministicConstraint
-      if (raw === undefined) {
-        if (criterion.execution === 'deterministic' && !criterion.dataCheck) {
-          errors.push(`${location} 尚未配置可执行的确定性规则`)
-        }
-        continue
-      }
-      if (!raw || raw.schemaVersion !== 1 || raw.kind !== 'field-number-limit') {
-        errors.push(`${location} 的确定性条件格式无法识别`)
-        continue
-      }
-      const field: FieldSpec | undefined = template.fields.find(item =>
-        item.key === raw.fieldKey && item.kind === 'number' && (item.scope ?? 'subject') === raw.fieldScope,
-      )
-      if (!field || raw.fieldScope !== 'case' || criterion.targetScope !== 'case') {
-        errors.push(`${location} 必须引用有效的案卷级数字字段`)
-      }
-      if (criterion.execution !== 'deterministic' || criterion.dataCheck) {
-        errors.push(`${location} 的数值条件不能同时声明其他执行方式或工作簿检查`)
-      }
-      if (!['lte', 'gte'].includes(raw.operator) || typeof raw.threshold !== 'number' ||
-          !Number.isFinite(raw.threshold)) {
-        errors.push(`${location} 的比较符或阈值无效`)
-      }
-      const owner = raw.ownerStatement
-      if (!owner || owner.kind !== 'owner-statement' || !owner.text?.trim() ||
-          !owner.enteredBy?.trim() || !Number.isFinite(Date.parse(owner.enteredAt))) {
-        errors.push(`${location} 需要负责人确认依据与署名，才能作为确定性规则发布`)
-      }
-    }
-  }
-  return errors
 }
 
 /**
@@ -171,18 +119,7 @@ export function collectT01RequiredMaterials(template: TemplateVersion): T01Publi
  * local template owner to inspect and confirm it before publication.
  */
 export function resetT01ImportedConfirmations(template: TemplateVersion): TemplateVersion {
-  return {
-    ...template,
-    sections: template.sections?.map(section => ({
-      ...section,
-      criteria: section.criteria.map(criterion => {
-        const { deterministicConstraint, ...rest } = criterion as T01CriterionWithConstraint
-        return deterministicConstraint
-          ? { ...rest, deterministicConstraint: { ...deterministicConstraint, ownerStatement: undefined } }
-          : rest
-      }),
-    })),
-  }
+  return stripT01OwnerStatement(template)
 }
 
 /**
