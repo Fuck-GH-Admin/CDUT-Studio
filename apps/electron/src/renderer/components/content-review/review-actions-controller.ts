@@ -452,10 +452,10 @@ export function createReviewActionsController(
     },
     async initialize(): Promise<void> {
       const cases = await refreshCaseList()
-      // 页面重开后 selectedCaseIdAtom 是空的；恢复上次案卷（或首个案卷），
-      // 否则上下文栏里的材料入口会一直处于 disabled 状态。
+      // 页面重开后只恢复用户上次明确选择过的案卷；没有恢复目标时保持未选，
+      // 由首页/案卷列表显式选择，绝不把列表首案自动当成当前工作对象（UI-09）。
       const selectedId = store.get(selectedCaseIdAtom) ?? readLastSelectedCaseId()
-      const target = cases.find((item) => item.id === selectedId) ?? cases[0]
+      const target = selectedId ? cases.find((item) => item.id === selectedId) ?? null : null
       const cached = target ? store.get(reviewCasesByIdAtom)[target.id] : null
       if (target && (!cached || selectedId !== target.id)) await selectCaseInternal(target.id)
       else if (!target && selectedId) {

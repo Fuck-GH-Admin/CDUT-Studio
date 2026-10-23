@@ -221,14 +221,28 @@ describe('review-actions-controller（M0/H05 并发与按案写入）', () => {
     })
   })
 
-  test('重新打开工作台时恢复已有案卷，材料入口有可用的当前任务', async () => {
+  test('重新打开工作台时恢复用户上次明确选择过的案卷', async () => {
     const { api } = makeApi()
-    api.listCases = async () => [{ id: 'case-restore', title: '恢复案卷', type: '综合测评', applicant: '张三', academicYear: '2026', updatedAt: '2026-10-07T00:00:00.000Z', isDemo: false, documentCount: 0 }]
+    api.listCases = async () => [
+      { id: 'case-first', title: '首案', type: '综合测评', applicant: '张三', academicYear: '2026', updatedAt: '2026-10-07T00:00:00.000Z', isDemo: false, documentCount: 0 },
+      { id: 'case-restore', title: '恢复案卷', type: '综合测评', applicant: '张三', academicYear: '2026', updatedAt: '2026-10-07T00:00:00.000Z', isDemo: false, documentCount: 0 },
+    ]
     const store = createStore()
+    store.set(selectedCaseIdAtom, 'case-restore')
     const actions = createReviewActionsController(store, api)
     await actions.initialize()
     expect(store.get(selectedCaseIdAtom)).toBe('case-restore')
     expect(store.get(reviewCasesByIdAtom)['case-restore']?.title).toBe('案卷-case-restore')
+  })
+
+  test('UI-09 没有恢复目标时不把列表首案自动设为当前案卷', async () => {
+    const { api } = makeApi()
+    api.listCases = async () => [{ id: 'case-first', title: '首案', type: '综合测评', applicant: '张三', academicYear: '2026', updatedAt: '2026-10-07T00:00:00.000Z', isDemo: false, documentCount: 0 }]
+    const store = createStore()
+    const actions = createReviewActionsController(store, api)
+    await actions.initialize()
+    expect(store.get(selectedCaseIdAtom)).toBeNull()
+    expect(store.get(reviewCasesByIdAtom)['case-first']).toBeUndefined()
   })
 
   test('Given 两份依据 When 生成大纲 Then 两包分别请求并保留各自结果', async () => {

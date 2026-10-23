@@ -39,9 +39,6 @@ import {
   reviewCaseAtom,
   reviewErrorAtom,
   reviewGatewayStatusAtom,
-  reviewRunAtom,
-  reviewRunStaleAtom,
-  reviewRunningAtom,
   reviewWorkspaceSectionAtom,
   type ReviewWorkspaceSection,
 } from '@/atoms/review-atoms'
@@ -71,9 +68,6 @@ export function ContentReviewView(): React.ReactElement {
   const reviewCase = useAtomValue(reviewCaseAtom)
   const gatewayStatus = useAtomValue(reviewGatewayStatusAtom)
   const errorMessage = useAtomValue(reviewErrorAtom)
-  const run = useAtomValue(reviewRunAtom)
-  const runStale = useAtomValue(reviewRunStaleAtom)
-  const running = useAtomValue(reviewRunningAtom)
   const section = useAtomValue(reviewWorkspaceSectionAtom)
   const setSection = useSetAtom(reviewWorkspaceSectionAtom)
   const setV2Aggregate = useSetAtom(reviewV2AggregateAtom)
@@ -85,11 +79,12 @@ export function ContentReviewView(): React.ReactElement {
 
   const actions = useReviewActions()
 
-  const [narrow, setNarrow] = React.useState(
-    () => typeof window !== 'undefined' && window.innerWidth < NARROW_BREAKPOINT_PX,
-  )
-  const [exporting, setExporting] = React.useState(false)
+  const rootRef = React.useRef<HTMLDivElement | null>(null)
+  const [narrow, setNarrow] = React.useState(false)
   const [quickCaseId, setQuickCaseId] = React.useState<string | null>(null)
+  const [errorExpanded, setErrorExpanded] = React.useState(false)
+  const [errorDismissed, setErrorDismissed] = React.useState<string | null>(null)
+  const visibleError = errorMessage && errorMessage !== errorDismissed ? errorMessage : null
   const quickStart = React.useCallback((caseId: string): void => {
     setQuickCaseId(caseId)
     setV2Aggregate(null)
@@ -98,24 +93,27 @@ export function ContentReviewView(): React.ReactElement {
 
   // 与独立的 V2 办理模块共用同一份真实案卷；只读取现有 Main 聚合。
   const openBusinessCase = React.useCallback(async (): Promise<void> => {
-    if (businessAggregate) {
-      setSection('case-v2')
-      return
-    }
-    if (!reviewCase) {
+    // 目标案卷只来自用户明确选中的案卷；已有聚合只有在同案时才可直接复用。
+    // 绝不允许旧单例把当前办理对象反选回上一案（UI-01）。
+    const targetId = reviewCase?.id ?? businessAggregate?.caseV2.id ?? null
+    if (!targetId) {
       setV2Aggregate(null)
       setSection('case-v2')
       return
     }
+    if (businessAggregate?.caseV2.id === targetId) {
+      setSection('case-v2')
+      return
+    }
     setV2Aggregate(null)
+    setSection('case-v2')
     try {
-      const aggregate = await window.reviewAPI.openAggregateV2(reviewCase.id)
-      if (aggregate) setV2Aggregate(aggregate)
+      const aggregate = await window.reviewAPI.openAggregateV2(targetId)
+      if (aggregate?.caseV2.id === targetId) setV2Aggregate(aggregate)
       else toast.error('当前案卷的业务记录暂不可读取')
     } catch (error) {
       toast.error(`读取案卷办理记录失败：${error instanceof Error ? error.message : String(error)}`)
     }
-    setSection('case-v2')
   }, [businessAggregate, reviewCase, setSection, setV2Aggregate])
 
   const openPane = React.useCallback((pane: Pane): void => {
@@ -123,32 +121,22 @@ export function ContentReviewView(): React.ReactElement {
     setSection('workbench')
   }, [setActivePane, setSection])
 
-  const handleExport = async (): Promise<void> => {
-    setExporting(true)
-    try {
-      const result = await actions.exportReport()
-      if (result) toast.success('预审报告已导出', { description: result.markdownPath })
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  // 旧业务面板里的开案、补件、决定仍使用原有事务；
-  // 只在该面板激活时把最新聚合反映到同一案卷的审核工作台，不复制造库逻辑。
-  React.useEffect(() => {
-    if (section !== 'case-v2' || !businessAggregate) return
-    void actions.selectCase(businessAggregate.caseV2.id)
-  }, [section, businessAggregate?.caseV2.id, businessAggregate?.caseV2.revision, actions])
-
   // 设置面板覆盖工作台而不卸载它；渠道变化时也需刷新出口徽标。
   React.useEffect(() => { void actions.initialize() }, [actions, channels])
 
-  // 监听窗口宽度，窄屏切换为单栏。
+  // 以审核工作区实际可用宽度判断单栏，而不是整窗宽度（UI-18）。
   React.useEffect(() => {
-    const handleResize = (): void => setNarrow(window.innerWidth < NARROW_BREAKPOINT_PX)
-    handleResize()
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
+    const node = rootRef.current
+    if (!node) return
+    const measure = (): void => setNarrow(node.clientWidth < NARROW_BREAKPOINT_PX)
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => window.removeEventListener('resize', measure)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
   }, [])
 
   // Ctrl+Shift+A / Cmd+Shift+A：仅本视图挂载期间生效，切换助手抽屉
@@ -199,6 +187,7 @@ export function ContentReviewView(): React.ReactElement {
 
   return (
     <div
+      ref={rootRef}
       className="relative flex h-full min-h-0 flex-col overflow-hidden bg-content-area outline-none"
       data-profer-navigation-region="content-review"
       tabIndex={-1}
@@ -233,9 +222,10 @@ export function ContentReviewView(): React.ReactElement {
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <nav aria-label="审核工作页" className="flex shrink-0 flex-wrap items-center gap-1">
             {([
-              ['workbench', '导入材料'],
-              ['local-candidates', '当前审核'],
-              ['case-v2', '结果与办理'],
+              ['home', '审核首页'],
+              ['workbench', '材料与审核'],
+              ['case-v2', '案卷办理'],
+              ['local-candidates', '方案试跑'],
               ['templates', '审核模板'],
               ['batches', '批次管理'],
             ] as Array<[ReviewWorkspaceSection, string]>).map(([id, label]) => (
@@ -279,11 +269,11 @@ export function ContentReviewView(): React.ReactElement {
             variant="outline"
             size="sm"
             className="h-7 gap-1.5 px-2.5 text-xs"
-            disabled={exporting || running || (!businessAggregate && (!run || run.status !== 'completed' || runStale))}
-            onClick={() => businessAggregate ? void openBusinessCase() : void handleExport()}
+            disabled={!reviewCase && !businessAggregate}
+            onClick={() => void openBusinessCase()}
           >
             <Download size={12} />
-            <span>{businessAggregate ? '查看与导出报告' : '导出报告'}</span>
+            <span>报告与交付</span>
           </Button>
           <Button
             type="button"
@@ -299,13 +289,13 @@ export function ContentReviewView(): React.ReactElement {
         </div>
       </header>
 
-      <ReviewV3T10WorkspaceOverview
+      {section !== 'home' && <ReviewV3T10WorkspaceOverview
         onOpenReview={() => openPane('left')}
         onOpenMaterials={() => openPane('center')}
         onOpenTasks={() => openPane('right')}
         onOpenTemplates={() => setSection('templates')}
         onOpenBusiness={() => void openBusinessCase()}
-      />
+      />}
 
       {(section === 'templates' || section === 'local-candidates') && (
         <nav aria-label="模板工作区" className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card/40 px-4 py-1.5 titlebar-no-drag">
@@ -332,6 +322,39 @@ export function ContentReviewView(): React.ReactElement {
           <PaneTab label="AI 审核员" icon={<Gavel size={13} />} active={activePane === 'right'} onClick={() => setActivePane('right')} />
         </nav>
       )}
+
+      {/* ===== 审核首页：显式选择入口，不默认占用某个案卷 ===== */}
+      <section aria-label="审核首页" className={cn('relative min-h-0 flex-1 overflow-auto px-4 py-6 titlebar-no-drag', section !== 'home' && 'hidden')}>
+        <div className="mx-auto max-w-3xl space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold">材料审核</h2>
+            <p className="mt-1 text-sm text-muted-foreground">从材料开始，或继续当前案卷。模板配置与批次管理在下方独立入口。</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button type="button" onClick={() => setSection('workbench')}
+              className="rounded-xl border border-primary/30 bg-primary/[0.03] p-4 text-left hover:border-primary/60">
+              <p className="text-sm font-semibold">从材料开始审核</p>
+              <p className="mt-1 text-xs text-muted-foreground">新建案卷或打开已有案卷，导入真实原件后匹配审核方案。</p>
+            </button>
+            <button type="button" disabled={!reviewCase && !businessAggregate} onClick={() => void openBusinessCase()}
+              className="rounded-xl border p-4 text-left hover:border-primary/60 disabled:opacity-50">
+              <p className="text-sm font-semibold">继续当前案卷</p>
+              <p className="mt-1 truncate text-xs text-muted-foreground">{reviewCase ? `${reviewCase.title}${reviewCase.applicant ? ` · ${reviewCase.applicant}` : ''}` : businessAggregate ? businessAggregate.caseV2.title : '尚未选择案卷'}</p>
+            </button>
+            <button type="button" onClick={() => openPane('right')}
+              className="rounded-xl border p-4 text-left hover:border-primary/60">
+              <p className="text-sm font-semibold">查看当前案卷待办</p>
+              <p className="mt-1 text-xs text-muted-foreground">检查、补件与人工决定都回到同一案卷的对应对象。</p>
+            </button>
+            <button type="button" onClick={() => setSection('batches')}
+              className="rounded-xl border p-4 text-left hover:border-primary/60">
+              <p className="text-sm font-semibold">批次管理</p>
+              <p className="mt-1 text-xs text-muted-foreground">批量导入、评分与批次进度。</p>
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">没有上次选择的案卷时，本页不会自动把列表首案设为当前案卷。</p>
+        </div>
+      </section>
 
       {/* ===== 三栏主体 ===== */}
       <main className={cn('relative flex min-h-0 flex-1 titlebar-no-drag', section !== 'workbench' && 'hidden')}>
@@ -365,13 +388,15 @@ export function ContentReviewView(): React.ReactElement {
       </main>
 
       <section aria-label="当前案卷业务办理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'case-v2' && 'hidden')}>
-        <V2CasePanel />
+        {section === 'case-v2' && (
+          <V2CasePanel onCaseOpened={(caseId) => { void actions.selectCase(caseId) }} />
+        )}
       </section>
       <section aria-label="审核模板编排" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'templates' && 'hidden')}>
         <TemplateWizardPanel />
       </section>
       <section aria-label="本地候选模板作者工作台" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'local-candidates' && 'hidden')}>
-        <ReviewV3LocalCandidateWorkbench initialCaseId={quickCaseId ?? undefined} />
+        {section === 'local-candidates' && <ReviewV3LocalCandidateWorkbench initialCaseId={quickCaseId ?? undefined} />}
       </section>
       <section aria-label="审核批次管理" className={cn('relative min-h-0 flex-1 overflow-auto py-3 titlebar-no-drag', section !== 'batches' && 'hidden')}>
         <BatchPanel
@@ -388,24 +413,31 @@ export function ContentReviewView(): React.ReactElement {
             return opened
           }}
         />
-        {/* T07 独立评委评分：挂在批次区下方，评分轮次以批次为单位 */}
-        <div className="mt-4 border-t border-border/60 pt-3">
-          <ReviewV3T07Workbench />
-        </div>
+        {/* T07 独立评委评分：挂在批次区下方；仅在批次页激活时挂载，避免隐藏页后台读取（UI-16） */}
+        {section === 'batches' && (
+          <div className="mt-4 border-t border-border/60 pt-3">
+            <ReviewV3T07Workbench />
+          </div>
+        )}
       </section>
 
       {/* ===== 助手抽屉（fixed 到本视图根） ===== */}
       <AssistantDrawer actions={actions} />
 
       {/* ===== 底部错误条 ===== */}
-      {errorMessage && (
+      {visibleError && (
         <div
           role="alert"
-          className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 bg-red-500/10 px-4 py-2 text-xs text-red-700 dark:text-red-400"
+          className="absolute inset-x-0 bottom-0 z-30 flex items-start gap-2 bg-red-500/10 px-4 py-2 text-xs text-red-700 dark:text-red-400"
         >
-          <span className="min-w-0 flex-1 truncate" title={errorMessage}>
-            {errorMessage}
+          <span className={cn('min-w-0 flex-1', errorExpanded ? 'whitespace-pre-wrap break-all' : 'truncate')} title={visibleError}>
+            {visibleError}
           </span>
+          <button type="button" className="shrink-0 underline" onClick={() => setErrorExpanded((value) => !value)}>
+            {errorExpanded ? '收起' : '展开'}
+          </button>
+          <button type="button" className="shrink-0 underline" onClick={() => void navigator.clipboard?.writeText(visibleError)}>复制</button>
+          <button type="button" className="shrink-0 underline" onClick={() => setErrorDismissed(visibleError)}>关闭</button>
         </div>
       )}
     </div>

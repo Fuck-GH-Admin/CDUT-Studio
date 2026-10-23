@@ -39,6 +39,10 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
   const [d4Error,setD4Error]=React.useState('')
   const [materialsEpoch,setMaterialsEpoch]=React.useState(0)
   const [product,setProduct]=React.useState<C11MainLocalProductRead|null>(null)
+  // 异步读取必须绑定发起时的案卷；旧案响应不得渲染进新案（UI-03）。
+  const localCaseIdRef=React.useRef(localCaseId)
+  localCaseIdRef.current=localCaseId
+  const productSeq=React.useRef(0)
   const [activePlan,setActivePlan]=React.useState<{
     templateId:string;templateVersion:number;checks:number;fingerprint:string
   }|null>(null)
@@ -58,12 +62,16 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
     }
   },[product])
   const readProduct=React.useCallback(async()=>{
-    if(!localCaseId)throw new Error('请先创建或选择本机案卷')
-    const data=await window.reviewAPI.readLocalNativeProductV3(localCaseId)
+    const target=localCaseId
+    if(!target)throw new Error('请先创建或选择本机案卷')
+    const seq=++productSeq.current
+    const data=await window.reviewAPI.readLocalNativeProductV3(target)
+    if(seq!==productSeq.current||localCaseIdRef.current!==target)return data.read
     setProduct(data);setProductError('')
     return data.read
   },[localCaseId])
   React.useEffect(()=>{
+    productSeq.current+=1
     setProduct(null);setActivePlan(null);setProductError('')
     setNativeAggregate(null)
     if(!localCaseId)return
@@ -383,8 +391,10 @@ export function ReviewV3LocalCandidateWorkbench({initialCaseId}:{initialCaseId?:
           setProduct(data)
         }}
         onManualChoice={async choice=>{
+          const target=localCaseId
           const ack=await window.reviewAPI.chooseLocalNativeProductTemplateV3({
-            caseId:localCaseId,templateId:choice.templateId,templateVersion:choice.templateVersion})
+            caseId:target,templateId:choice.templateId,templateVersion:choice.templateVersion})
+          if(localCaseIdRef.current!==target)return ack
           if(ack.requiresPlanSetup){
             setRoutedD4TemplateId(choice.templateId)
             setD4Notice('已从材料路由选中 '+choice.templateId+'，请在上方 D4 编辑器核对实际对象、场景后固定审核任务。')

@@ -33,12 +33,19 @@ export function ReviewV3UnifiedRun({ caseId, stage, documentCount, technicalPlan
   const [piState, setPiState] = React.useState<ReviewBackgroundPiRunState | null>(null)
   const [piRun, setPiRun] = React.useState<ReviewRunV2 | null>(null)
   const running = !!piState?.runId && ['queued', 'running', 'awaiting-input', 'awaiting-decision'].includes(piState.runStatus ?? '')
+  // 旧案的异步回读不得写进新案的卡片；以代次 + 目标 caseId 双重核对（UI-13）。
+  const requestSeq = React.useRef(0)
+  const caseIdRef = React.useRef(caseId)
+  caseIdRef.current = caseId
 
   const refresh = React.useCallback(async (): Promise<void> => {
-    const state = await window.reviewAPI.getBackgroundPiReviewStateV2(caseId)
-    if (state.caseId !== caseId) throw new Error('审核状态与当前案卷不一致')
-    const run = state.runId ? await window.reviewAPI.getRunV2(caseId, state.runId) : undefined
-    if (run && run.caseId !== caseId) throw new Error('审核结果与当前案卷不一致')
+    const target = caseId
+    const seq = ++requestSeq.current
+    const state = await window.reviewAPI.getBackgroundPiReviewStateV2(target)
+    if (state.caseId !== target) throw new Error('审核状态与当前案卷不一致')
+    const run = state.runId ? await window.reviewAPI.getRunV2(target, state.runId) : undefined
+    if (run && run.caseId !== target) throw new Error('审核结果与当前案卷不一致')
+    if (seq !== requestSeq.current || caseIdRef.current !== target) return
     setPiState(state)
     setPiRun(run ?? null)
     if (run && terminalStatuses.has(run.status)) {
@@ -48,6 +55,7 @@ export function ReviewV3UnifiedRun({ caseId, stage, documentCount, technicalPlan
   }, [caseId, onUpdated])
 
   React.useEffect(() => {
+    requestSeq.current += 1
     setRule(null); setRuleError(''); setSubmissionNotice(''); setPiError(''); setPiState(null); setPiRun(null); setMessage('')
     void refresh().catch(() => { /* 尚未运行 Pi 时没有状态，不阻止第一次审核 */ })
   }, [caseId])

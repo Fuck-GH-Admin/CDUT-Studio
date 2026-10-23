@@ -6,7 +6,7 @@
  */
 
 import { atom, useAtomValue, useStore, useSetAtom } from 'jotai'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Actor, CaseAggregateV2, FieldSpec, ReviewCommandResult, ReviewRunV2, TemplateVersion } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { toast } from 'sonner'
@@ -70,6 +70,7 @@ function renderTemplateFieldInput(
 export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) => void } = {}): JSX.Element {
   const store = useStore()
   const aggregate = useAtomValue(reviewV2AggregateAtom)
+  const busy = useAtomValue(reviewV2BusyAtom)
   const setNotice = useSetAtom(reviewV2NoticeAtom)
 
   const [caseList, setCaseList] = useState<CaseListEntry[]>([])
@@ -124,13 +125,19 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
     }
   }, [store, setNotice, toast])
 
-  const openCase = useCallback((caseId: string) => run(async () => {
-    const loaded = await window.reviewAPI.openAggregateV2(caseId)
-    if (!loaded) { toast.error(`案卷不存在: ${caseId}`); return }
-    store.set(reviewV2AggregateAtom, loaded)
-    onCaseOpened?.(caseId)
-    toast.success(`已打开案卷：${loaded.caseV2.title}`)
-  }), [run, store, onCaseOpened])
+  // 快速连续打开 A、B 时，只允许最后一次显式选择落地；旧响应直接丢弃（UI-02）。
+  const openCaseGeneration = useRef(0)
+  const openCase = useCallback((caseId: string) => {
+    const generation = ++openCaseGeneration.current
+    return run(async () => {
+      const loaded = await window.reviewAPI.openAggregateV2(caseId)
+      if (generation !== openCaseGeneration.current) return
+      if (!loaded || loaded.caseV2.id !== caseId) { toast.error(`案卷不存在: ${caseId}`); return }
+      store.set(reviewV2AggregateAtom, loaded)
+      onCaseOpened?.(caseId)
+      toast.success(`已打开案卷：${loaded.caseV2.title}`)
+    })
+  }, [run, store, onCaseOpened])
 
   const loadTemplates = useCallback(async (): Promise<void> => {
     try {
@@ -282,12 +289,20 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
     setRunNonce((nonce) => nonce + 1)
   }, [current?.caseV2.id, store])
   const currentTemplate = templates.find((template) => template.templateId === current?.caseV2.templateId && template.version === current?.caseV2.templateVersion)
-  // 模板只有一个材料槽时自动选中：普通用户不该先学会「选槽位」才能上传材料
+  // 模板只有一个材料槽时自动选中：普通用户不该先学会「选槽位」才能上传材料。
+  // 案卷或模板版本变化时必须重算，不能把上一案的 slotId 带到新案（UI-12）。
+  const slotScopeKey = current ? `${current.caseV2.id}@${current.caseV2.templateId}@${current.caseV2.templateVersion}` : ''
+  const slotScopeRef = useRef(slotScopeKey)
   useEffect(() => {
     const slots = currentTemplate?.materialSlots ?? []
+    if (slotScopeRef.current !== slotScopeKey) {
+      slotScopeRef.current = slotScopeKey
+      setSlotId(slots.length === 1 ? slots[0]!.id : '')
+      return
+    }
     if (slots.length === 1 && !slotId) setSlotId(slots[0]!.id)
     if (slots.length > 1 && slotId && !slots.some((slot) => slot.id === slotId)) setSlotId('')
-  }, [currentTemplate?.materialSlots, slotId])
+  }, [slotScopeKey, currentTemplate?.materialSlots, slotId])
 
   const selectTemplate = (templateKey: string): void => {
     const [templateId, versionText] = templateKey.split('@')
@@ -417,7 +432,7 @@ export function V2CasePanel({ onCaseOpened }: { onCaseOpened?: (caseId: string) 
           {caseList.map((entry: CaseListEntry) => (
             <div key={entry.caseId} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1">
               <span className="truncate text-xs">{entry.title} · {entry.stage}</span>
-              <Button size="sm" variant="outline" onClick={() => void openCase(entry.caseId)}>打开</Button>
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => void openCase(entry.caseId)}>打开</Button>
             </div>
           ))}
         </div>

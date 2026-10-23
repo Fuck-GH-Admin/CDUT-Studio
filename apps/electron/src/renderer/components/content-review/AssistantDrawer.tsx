@@ -37,6 +37,7 @@ import {
   reviewWorkspaceTemplateAtom,
   reviewSourceFocusAtom,
   reviewActivePaneAtom,
+  reviewWorkspaceSectionAtom,
 } from '@/atoms/review-atoms'
 import { cn } from '@/lib/utils'
 import type { ReviewActions } from './use-review-actions'
@@ -65,6 +66,7 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
   const workspaceTemplate = useAtomValue(reviewWorkspaceTemplateAtom)
   const setSourceFocus = useSetAtom(reviewSourceFocusAtom)
   const setActivePane = useSetAtom(reviewActivePaneAtom)
+  const setSection = useSetAtom(reviewWorkspaceSectionAtom)
   const [tab, setTab] = React.useState<'chat' | 'sources' | 'reports'>('chat')
   const [inspected, setInspected] = React.useState<T08ResolvedSource | null>(null)
   const [preview, setPreview] = React.useState<{ path: string; fileName: string } | null>(null)
@@ -98,6 +100,10 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
     }
     const purpose = resolved.document.role === 'rule' ? 'rule'
       : resolved.document.role === 'application' ? 'application' : 'evidence'
+    // 来源命令必须同时切到能看见三栏工作区的 section，并保证当前案卷就是该来源所属案卷；
+    // 否则在模板/批次页点来源只会改到隐藏工作台（UI-17）。
+    setSection('workbench')
+    if (selectedCaseId !== aggregate.caseV2.id) void actions.selectCase(aggregate.caseV2.id)
     setSourceFocus({ ref, purpose, nonce: Date.now() })
     setActivePane(purpose === 'rule' ? 'left' : 'center')
   }
@@ -141,9 +147,10 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
     if (v3Source) { void openSource(v3Source); return }
     if (!legacyCaseActive) return
     const finding = legacyRun?.findings.find((item) => item.id === id)
-    if (finding) { actions.focusFinding(finding); setActivePane('center'); return }
+    if (finding) { setSection('workbench'); actions.focusFinding(finding); setActivePane('center'); return }
     const item = reviewCase?.items.find((candidate) => candidate.id === id)
     if (item) {
+      setSection('workbench')
       setLegacyFocus({ findingId: id, subjectAnchor: item.anchor, severity: 'yellow', nonce: Date.now() })
       setActivePane('center')
       return
@@ -152,11 +159,12 @@ export function AssistantDrawer({ actions }: AssistantDrawerProps): React.ReactE
     if (pack) {
       const anchors = pack.id === id ? pack.outline.flatMap((rule) => rule.anchors)
         : pack.outline.find((rule) => rule.id === id)?.anchors ?? []
-      if (anchors.length > 0) { actions.locateRuleAnchor(anchors); setActivePane('left') }
+      if (anchors.length > 0) { setSection('workbench'); actions.locateRuleAnchor(anchors); setActivePane('left') }
       return
     }
     const doc = reviewCase?.documents.find((document) => document.id === id)
     if (doc?.blocks.length) {
+      setSection('workbench')
       setLegacyFocus({
         findingId: id, subjectAnchor: { documentId: doc.id, precision: 'document' },
         severity: 'yellow', nonce: Date.now(),

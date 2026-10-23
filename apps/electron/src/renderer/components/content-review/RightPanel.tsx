@@ -83,7 +83,7 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
     ?? view?.pendingActions.find((item) => item.kind === 'check' || item.kind === 'supplement')
     ?? view?.pendingActions.find((item) => item.kind === 'adjudication')
 
-  const perform = async (key: string, action: () => Promise<void>, successMessage = '操作已保存，待办列表已更新。', revealResolved = false): Promise<void> => {
+  const perform = async (key: string, action: () => Promise<void>, successMessage = '操作已保存，待办列表已更新。', revealResolved = false, rethrowOnError = false): Promise<void> => {
     const scopedOperation = ++feedbackOperationRef.current
     const issuedScope = activeFeedbackScopeRef.current
     const stillCurrent = (): boolean => scopedOperation === feedbackOperationRef.current
@@ -101,6 +101,8 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
       if (revealResolved) setShowResolved(true)
     } catch (error) {
       if (stillCurrent()) setNotice(error instanceof Error ? error.message : String(error))
+      // 对话框场景把真实失败传回 ReviewActionDialog：只有成功回执才关窗，理由与对象保留（UI-06）。
+      if (rethrowOnError) throw error
     } finally {
       if (stillCurrent()) setBusyKey(null)
     }
@@ -120,6 +122,7 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
           : disposition === 'false-positive' ? '已将该项标记为 AI 误报，并移到“已处理”。'
             : '已记录暂不处理，并移到“已处理”。',
         true,
+        true,
       ),
     })
   }
@@ -131,7 +134,7 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
         { key: 'required', label: '需要补充', defaultValue: check.reason, placeholder: '例如：完整获奖证书', multiline: true },
         { key: 'reason', label: '补件原因', defaultValue: check.reason, placeholder: '说明当前材料还无法确认的内容', multiline: true },
       ],
-      submit: async ({ required, reason }) => perform(`supplement:${check.checkId}`, () => workspaceActions.openSupplement({ findingKey: check.checkId, requiredElements: required!.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean), reason: reason!.trim() }), '补件要求已保存，该问题已转入补件流程。', true),
+      submit: async ({ required, reason }) => perform(`supplement:${check.checkId}`, () => workspaceActions.openSupplement({ findingKey: check.checkId, requiredElements: required!.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean), reason: reason!.trim() }), '补件要求已保存，该问题已转入补件流程。', true, true),
     })
   }
 
@@ -157,7 +160,7 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
       }), result === 'reject'
         ? '已记录整案驳回，案卷已结束；其余待办已随案卷结案，没有被逐条标记为“确认问题”。'
         : result === 'return' ? '已记录退回补件，案卷进入补件流程。'
-          : '最终决定已保存，待办列表已更新。', true),
+          : '最终决定已保存，待办列表已更新。', true, true),
     })
   }
 
@@ -326,12 +329,12 @@ export function RightPanel({ actions }: RightPanelProps): React.ReactElement {
                           <button disabled={busyKey !== null} onClick={() => setDialog({ title: '要求补件', fields: [
                             { key: 'required', label: '需要补充', defaultValue: item.title.replace(/^缺少证明材料：/, ''), multiline: true },
                             { key: 'reason', label: '补件原因', placeholder: '说明缺少这份材料的原因', multiline: true },
-                          ], submit: async ({ required, reason }) => perform(`supplement:${item.key}`, () => workspaceActions.openSupplement({ findingKey: item.key, requiredElements: required!.split(/[，,、\n]/).map((value) => value.trim()).filter(Boolean), reason: reason!.trim() })) })} className="rounded border px-2 py-1.5 text-xs disabled:opacity-50">要求补件</button>
+                          ], submit: async ({ required, reason }) => perform(`supplement:${item.key}`, () => workspaceActions.openSupplement({ findingKey: item.key, requiredElements: required!.split(/[，,、\n]/).map((value) => value.trim()).filter(Boolean), reason: reason!.trim() }), undefined, false, true) })} className="rounded border px-2 py-1.5 text-xs disabled:opacity-50">要求补件</button>
                         </div>
                       )}
                       {item.kind === 'fact' && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">在中栏打开来源：识别正确就确认，错误就更正。保存后请更新审核结果，让规则按确认后的事实重新判断。</p>}
                       {item.kind === 'evidence' && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">请在中栏将这份证明关联到对应申报事项；关联确认只说明材料对应关系，不代表该事项已通过。</p>}
-                      {item.kind === 'material' && item.sourceDocumentVersionIds?.[0] && <MaterialActions documentVersionId={item.sourceDocumentVersionIds[0]} busy={busyKey !== null} onAcknowledge={(action) => setDialog({ title: action === 'read' ? '确认材料已核对' : '忽略这份材料', fields: [{ key: 'reason', label: action === 'read' ? '核对说明' : '忽略原因', defaultValue: action === 'read' ? '已人工打开并检查材料内容' : '', placeholder: '请简要说明', multiline: true }], submit: async ({ reason }) => perform(`material:${item.sourceDocumentVersionIds![0]}`, () => workspaceActions.acknowledgeMaterial({ documentVersionId: item.sourceDocumentVersionIds![0]!, action, reason: reason!.trim() })) })} />}
+                      {item.kind === 'material' && item.sourceDocumentVersionIds?.[0] && <MaterialActions documentVersionId={item.sourceDocumentVersionIds[0]} busy={busyKey !== null} onAcknowledge={(action) => setDialog({ title: action === 'read' ? '确认材料已核对' : '忽略这份材料', fields: [{ key: 'reason', label: action === 'read' ? '核对说明' : '忽略原因', defaultValue: action === 'read' ? '已人工打开并检查材料内容' : '', placeholder: '请简要说明', multiline: true }], submit: async ({ reason }) => perform(`material:${item.sourceDocumentVersionIds![0]}`, () => workspaceActions.acknowledgeMaterial({ documentVersionId: item.sourceDocumentVersionIds![0]!, action, reason: reason!.trim() }), undefined, false, true) })} />}
                       {item.kind === 'supplement' && !item.checkId && <SupplementActions supplement={aggregate?.supplements.find((candidate) => item.key === `supplement:${candidate.id}`)} busy={busyKey !== null} perform={perform} actions={workspaceActions} onAddEvidence={goToEvidenceUpload} />}
                       {activeSupplement && <SupplementActions supplement={activeSupplement} busy={busyKey !== null} perform={perform} actions={workspaceActions} onAddEvidence={goToEvidenceUpload} />}
                     </article>
