@@ -53,3 +53,35 @@ describe('AUTH-06 legacy write sender boundary', () => {
     }
   })
 })
+
+describe('T07 评分权威：批次案卷拒绝旧 CAST_RATING', () => {
+  test('已进入批次的案卷不能再用旧 CAST_RATING 平行记分', () => {
+    handlers.clear()
+    setMainWindow({ isDestroyed: () => false, webContents: sender } as never)
+    registerReviewIpc()
+    const { createBatchV2 } = require('./batch-store') as typeof import('./batch-store')
+    createBatchV2({
+      id: 'batch-cast-guard', name: '批次评分', templateId: 't', templateVersion: 1,
+      policyVersionLock: [], caseIds: ['batched-cast-case'], createdAt: new Date().toISOString(),
+    })
+    const handler = handlers.get(REVIEW_IPC_CHANNELS.CAST_RATING_V2)
+    expect(handler).toBeDefined()
+    expect(() => handler!(trusted, {
+      caseId: 'batched-cast-case',
+      command: { requestId: 'r1', actor: { actorId: 'local', actorSource: 'local', role: 'judge' },
+        expectedRevision: 0, payload: {} },
+    })).toThrow('评分必须走 T07 评分通道')
+  })
+})
+
+describe('RUN-43 续交确认走真实 IPC 入参校验', () => {
+  test('非法 resumeInterrupted 在启动任何执行前被拒绝', async () => {
+    handlers.clear()
+    setMainWindow({ isDestroyed: () => false, webContents: sender } as never)
+    registerReviewIpc()
+    const handler = handlers.get(REVIEW_IPC_CHANNELS.START_BACKGROUND_PI_REVIEW_V2)
+    expect(handler).toBeDefined()
+    await expect(Promise.resolve(handler!(trusted, { caseId: 'resume-flag-case', resumeInterrupted: 'yes' })))
+      .rejects.toThrow('审核续交确认参数非法')
+  })
+})

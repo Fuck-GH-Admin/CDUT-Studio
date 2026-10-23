@@ -210,3 +210,23 @@ export function decisionRunRelation(input: {
   if (currentRun && isSameAttempt(decisionRun, currentRun)) return 'same-attempt-history'
   return 'superseded'
 }
+
+/**
+ * RUN-43 中断续跑闸门：冷启动中断回合的模型/Provider 请求结果未知，且当前
+ * 没有耐久 effect journal 能证明它们是否已生效，自动按原 RunId 续跑可能把
+ * 未知 effect 重放一遍。默认失败关闭；只有用户显式确认「继续上次检查点
+ * （新回合）」或明确选择「重新审核全部」才放行。
+ */
+export function interruptedResumeGate(input: {
+  interruptedResumable: boolean
+  resumeInterrupted?: boolean
+  mode?: 'update' | 'restart'
+}): { allowed: boolean; message?: string } {
+  if (!input.interruptedResumable) return { allowed: true }
+  if (input.resumeInterrupted === true) return { allowed: true }
+  if (input.mode === 'restart') return { allowed: true }
+  return {
+    allowed: false,
+    message: '上次审核因应用重启中断（检查点与已接受结果已保留）。自动续跑可能重复发起上次未确认的模型请求，已拒绝；请确认“继续上次检查点（新回合）”或选择“重新审核全部”。',
+  }
+}

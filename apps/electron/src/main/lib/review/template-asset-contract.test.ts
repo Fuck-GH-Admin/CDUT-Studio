@@ -58,7 +58,9 @@ describe('TAR-14 联合 rule ID 唯一性', () => {
 describe('TAR-18 政策 ID 路径边界', () => {
   test('路径穿越/点号 ID 不得创建或读取政策', () => {
     const content = '第一条 测试'
-    const base = { version: 1, title: 't', contentHash: canonicalContentHash(content), content, confirmations: [], status: 'draft' as const, createdAt: new Date().toISOString(), compiledRules: [] }
+    const base = { version: 1, title: 't', contentHash: canonicalContentHash(content), content,
+      origin: { kind: 'owner-statement' as const, text: '本地测试录入', enteredBy: 'local-user', enteredAt: new Date().toISOString() },
+      confirmations: [], status: 'draft' as const, createdAt: new Date().toISOString(), compiledRules: [] }
     for (const policyId of ['../outside', 'a/b', 'has.dot', '']) {
       expect(() => savePolicyDraft({ ...base, policyId })).toThrow()
       expect(getPolicy(policyId)).toBeUndefined()

@@ -14,6 +14,7 @@ import { getConfigDir } from '../config-paths'
 import { createPiReviewModelClient } from './pi-review-agent-client'
 import { join } from 'node:path'
 import type { ReviewImageInspector } from './v2-executor-factory'
+import { pickChannelModelId } from './review-model-identity'
 
 /** 异步运行登记表项：进程内保留后台 promise 与取消控制器 */
 interface ActiveRun {
@@ -33,8 +34,16 @@ async function assembleReviewClient(caseId: string): Promise<{ client: import('.
 
   const resolved = resolveReviewGatewayChannel()
   if (!resolved) throw new Error('未配置可用模型渠道，无法执行真实审核（请在设置中配置渠道）')
-  const model = resolved.channel.models?.find((candidate) => candidate.enabled !== false)?.id ?? resolved.channel.models?.[0]?.id
+  // MHI-01：与网关/T01 回执共用唯一解析口径（显式选择优先），不再自写 find(enabled)。
+  // 解析一次后冻结；文本 client 与 imageInspector 必须提交同一个 modelId。
+  const { getReviewModuleSettings } = require('./module-settings-store') as typeof import('./module-settings-store')
+  const selection = getReviewModuleSettings().agentModelSelection
+  const model = pickChannelModelId(resolved.channel, selection)
   if (!model) throw new Error(`审核渠道「${resolved.channel.name}」没有已配置模型`)
+  // 显式选择已失效时不得静默改选其他模型（否则请求与记录会再次错位）。
+  if (selection && selection.channelId === resolved.channel.id && selection.modelId !== model) {
+    throw new Error('审核所选模型已停用或被删除，请在审核设置中重新选择后再运行')
+  }
   const { PiAgentAdapter } = require('../adapters/pi-agent-adapter') as typeof import('../adapters/pi-agent-adapter')
   const { getSdkConfigDir } = require('../config-paths') as typeof import('../config-paths')
   const { SystemTesseractOcrPort } = require('./system-tesseract-ocr-adapter') as typeof import('./system-tesseract-ocr-adapter')

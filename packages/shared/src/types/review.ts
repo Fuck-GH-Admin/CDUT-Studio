@@ -689,6 +689,12 @@ export interface ReviewBackgroundPiRunState {
 export interface ReviewBackgroundPiStartRequest {
   caseId: string
   mode?: 'update' | 'restart'
+  /**
+   * 用户显式确认「继续上次检查点（新回合）」。
+   * 冷启动中断的回合没有耐久 effect journal；未显式确认时 Main 必须失败关闭，
+   * 不得自动按原 RunId 重放未知的模型/Provider 请求。
+   */
+  resumeInterrupted?: boolean
 }
 
 // ===== IPC 请求/响应载荷 =====

@@ -27,7 +27,7 @@ describe('案卷时间线跨模块投影（RUN-32）', () => {
     expect(rating?.runId).toBe('run-1')
     expect(rating?.operatorLabel).toBe('judge-1')
     // 倒序：报告交接（16:00）在最前
-    expect(entries[0].source).toBe('report-handoff')
+    expect(entries[0]?.source).toBe('report-handoff')
   })
 
   test('未提供的外部账本不被伪造，覆盖摘要明确缺口', () => {
