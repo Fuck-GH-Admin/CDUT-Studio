@@ -1427,7 +1427,7 @@ export interface GradeRecord {
   courseName: string
   /** 综合成绩原始文本（可能为 "71"、"优"、"良" 等） */
   score: string
-  /** 可数值化时的成绩（优/优秀→95、良/良好→85、中/中等→75、及格/合格→65、不及格/不合格→50） */
+  /** 可数值化时的成绩（优/优秀→95、良/良好→85、中/中等→75、及格/合格/通过→65、不及格/不合格/不通过→50） */
   scoreNumber?: number
   scoreLabel: string
   credit: number
@@ -1454,8 +1454,22 @@ const GRADE_WORD_SCORE: Readonly<Record<string, number>> = {
   中等: 75,
   及格: 65,
   合格: 65,
+  通过: 65,
   不及格: 50,
   不合格: 50,
+  不通过: 50,
+}
+
+/** 成绩文本与绩点文本统一换算：数值分优先，文本等级走 GRADE_WORD_SCORE，绩点缺失由分数推导。 */
+function normalizeGradeScore(
+  scoreText: string,
+  gpText: string,
+): { scoreNumber?: number; gp?: number } {
+  const scoreNumber = parseNumber(scoreText) ?? GRADE_WORD_SCORE[scoreText]
+  return {
+    scoreNumber,
+    gp: parseNumber(gpText) ?? (scoreNumber !== undefined ? scoreToGp(scoreNumber) : undefined),
+  }
 }
 
 /** 解析历年成绩 #dataList 表为结构化记录数组（表头含重复列时按列序消歧） */
@@ -1484,11 +1498,8 @@ export function parseGradeRecords(html: string): GradeRecord[] {
     const name = cellText(col('课程名称'))
     if (!name) return
     const scoreText = cellText(col('成绩'))
-    const wordScore = GRADE_WORD_SCORE[scoreText]
-    const numericScore = parseNumber(scoreText)
     const gpText = cellText(col('绩点'))
-    const scoreNumber = numericScore ?? wordScore
-    const gp = parseNumber(gpText) ?? (scoreNumber !== undefined ? scoreToGp(scoreNumber) : undefined)
+    const { scoreNumber, gp } = normalizeGradeScore(scoreText, gpText)
     records.push({
       semester: cellText(col('开课学期')),
       courseCode: cellText(col('课程编号')),
@@ -1578,7 +1589,7 @@ export function buildGpaTracks(records: GradeRecord[]): { latest: GpaTrackSummar
     const isFailedScore = (r: GradeRecord): boolean =>
       (r.scoreNumber !== undefined && r.scoreNumber < 60)
       || (r.gp !== undefined && r.gp === 0)
-      || /不及格|不合格|缺考|零分/.test(r.score)
+      || /不及格|不合格|不通过|缺考|零分/.test(r.score)
     for (const r of picked) {
       if (r.credit > 0 && r.scoreNumber !== undefined) {
         creditSum += r.credit
@@ -1693,24 +1704,25 @@ export async function executeGradesDomain(
           })
           if (fallback.expired) return expiredResult()
           if (fallback.ok) {
-            const legacy = parseGradeCourses(fallback.html).map(
-              (c): GradeRecord => ({
+            const legacy = parseGradeCourses(fallback.html).map((c): GradeRecord => {
+              const { scoreNumber, gp } = normalizeGradeScore(c.score, c.gp)
+              return {
                 semester: params.semester ?? '',
                 courseCode: '',
                 courseName: c.name,
                 score: c.score,
-                scoreNumber: parseNumber(c.score),
+                scoreNumber,
                 scoreLabel: '',
                 credit: c.credit,
-                gp: parseNumber(c.gp),
+                gp,
                 makeupSemester: '',
                 assessMode: '',
                 examNature: '',
                 courseAttr: c.category,
                 courseNature: '',
                 electiveCategory: '',
-              }),
-            )
+              }
+            })
             if (legacy.length > 0) records = legacy
           }
         }

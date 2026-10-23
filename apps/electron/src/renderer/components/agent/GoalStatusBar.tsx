@@ -89,12 +89,14 @@ export function GoalHistoryDetails({ goals }: { goals: AgentGoalState[] }): Reac
   </div>
 }
 
-function GoalEditor({ sessionId }: Props): React.ReactElement {
+function GoalEditor({ sessionId }: Props): React.ReactElement | null {
   const [snapshot, setSnapshot] = useAtom(goalEditorAtomFamily(sessionId))
   const [pending, setPending] = useAtom(goalActionPendingAtomFamily(sessionId))
   const setGoal = useSetAtom(agentGoalAtomFamily(sessionId))
   const [error, setError] = React.useState<string | null>(null)
   React.useEffect(() => { setError(null) }, [snapshot])
+  // 弹窗未激活时完全不挂载 Radix Dialog 树，避免无意义 DOM 与无头测试环境的调度器异常。
+  if (!snapshot) return null
   const budgetRequired = snapshot ? getGoalActions(snapshot).budgetEditRequired : false
 
   const save = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {

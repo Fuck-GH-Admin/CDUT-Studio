@@ -523,7 +523,7 @@ describe('防硬编码审查（BDD-JW-GUARD-01）', () => {
 // ===== 五级制/两级制评级兜底（合成数据，不依赖 fixture） =====
 
 describe('五级制/两级制评级与最高轨同分取最新（BDD-JW-GRADE-02）', () => {
-  it('Given 优秀/良好/中等/合格/不合格 When 解析并统计 Then 映射正确且不合格计入挂科', () => {
+  it('Given 优秀/良好/中等/合格/不合格/通过/不通过 When 解析并统计 Then 映射正确且未通过计入挂科', () => {
     const html = `<table id="dataList">
       <tr><th>开课学期</th><th>课程编号</th><th>课程名称</th><th>成绩</th><th>学分</th><th>绩点</th><th>补重学期</th><th>课程属性</th></tr>
       <tr><td>2025-2026-1</td><td>C1</td><td>实践课甲</td><td>优秀</td><td>2</td><td></td><td></td><td>必修</td></tr>
@@ -531,10 +531,15 @@ describe('五级制/两级制评级与最高轨同分取最新（BDD-JW-GRADE-02
       <tr><td>2025-2026-1</td><td>C3</td><td>实践课丙</td><td>中等</td><td>2</td><td></td><td></td><td>必修</td></tr>
       <tr><td>2025-2026-1</td><td>C4</td><td>实践课丁</td><td>合格</td><td>1</td><td></td><td></td><td>选修</td></tr>
       <tr><td>2025-2026-1</td><td>C5</td><td>实践课戊</td><td>不合格</td><td>1</td><td></td><td></td><td>必修</td></tr>
+      <tr><td>2025-2026-1</td><td>C6</td><td>实践课己</td><td>通过</td><td>1</td><td></td><td></td><td>必修</td></tr>
+      <tr><td>2025-2026-1</td><td>C7</td><td>实践课庚</td><td>不通过</td><td>1</td><td></td><td></td><td>必修</td></tr>
     </table>`
     const parsed = parseGradeRecords(html)
-    expect(parsed.map((r) => r.scoreNumber)).toEqual([95, 85, 75, 65, 50])
-    expect(buildGpaTracks(parsed).latest.failed.map((f) => f.courseName)).toContain('实践课戊')
+    expect(parsed.map((r) => r.scoreNumber)).toEqual([95, 85, 75, 65, 50, 65, 50])
+    const tracks = buildGpaTracks(parsed)
+    expect(tracks.latest.failed.map((f) => f.courseName)).toContain('实践课庚')
+    // 必修学分 = C1/C2/C3(各 2) + C5/C6/C7(各 1) = 9，证明「通过」不再被漏算
+    expect(tracks.latest.requiredCredits).toBe(9)
   })
 
   it('Given 绩点与原始分相同但学期不同 When 最高成绩轨 Then 取最新学期', () => {

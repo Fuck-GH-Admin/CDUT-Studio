@@ -23,7 +23,7 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { cdutSubViewAtom } from '@/atoms/cdut-account-atoms'
 import {
-  agentSessionDraftsAtom,
+  agentComposerInjectionAtom,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
@@ -73,7 +73,7 @@ export function WelcomeEmptyState(): React.ReactElement {
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setCdutSubView = useSetAtom(cdutSubViewAtom)
-  const setSessionDrafts = useSetAtom(agentSessionDraftsAtom)
+  const setComposerInjection = useSetAtom(agentComposerInjectionAtom)
 
   const currentWorkspace = React.useMemo(
     () => workspaces.find((workspace) => workspace.id === currentWorkspaceId) ?? null,
@@ -104,14 +104,11 @@ export function WelcomeEmptyState(): React.ReactElement {
     setActiveView(card.target.view)
   }
 
-  /** 灵感气泡点击：一键填入当前会话输入框草稿 */
+  /** 灵感气泡点击：复用全局 Composer 注入原子，同步清空旧 HTML 草稿并聚焦输入框 */
   const handlePromptClick = (text: string): void => {
+    // 欢迎页始终渲染在具体会话的 AgentView 内；无会话时不注入，避免写入幽灵草稿。
     if (!currentSessionId) return
-    setSessionDrafts((prev) => {
-      const next = new Map(prev)
-      next.set(currentSessionId, text)
-      return next
-    })
+    setComposerInjection({ sessionId: currentSessionId, text, nonce: Date.now() })
   }
 
   return (

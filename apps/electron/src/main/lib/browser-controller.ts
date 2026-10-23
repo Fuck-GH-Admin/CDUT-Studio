@@ -607,6 +607,9 @@ export class BrowserController {
       return
     }
     const wc = tab.view.webContents
+    // 标签页可能在插页回投的同一瞬间被关闭；已销毁的 WebContents 调用 loadURL 会同步抛错，
+    // .catch() 无法捕获，必须提前守卫。
+    if (wc.isDestroyed()) return
     const canReturn = !!tab.lastCommittedUrl
       && tab.lastCommittedUrl !== tab.lastRequestedUrl
       && /^https?:/i.test(tab.lastCommittedUrl)

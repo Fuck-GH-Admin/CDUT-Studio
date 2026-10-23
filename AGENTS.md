@@ -168,6 +168,7 @@ cmd.exe /c ".\apps\electron\out\win-unpacked\CDUT Studio.exe --enable-logging"
 | `browser-controller.ts` / `browser-*.ts` | 内嵌浏览器控制、策略、截图与会话 |
 | `feishu-bridge.ts` / `feishu/` | 飞书集成：消息同步、任务通知、卡片渲染、OAuth 认证 |
 | `cdut/cdut-auth-manager.ts` | CDUT 专区「特区账户」认证：隐藏窗口 headless 统一身份认证（CAS）、办事大厅画像抓取（学院/专业/班级/头像）、10 分钟静默保活、OS 级加密凭据持久化 |
+| `cslab/` | CDUT Science Lab 科学实验室服务矩阵：Vault 资源管理、HPC 调度持久化 (`cslab-hpc-db.ts`)、网络共享、加密与路由 |
 | `review/` | 内容审核专区服务矩阵（案卷存储、文档切块、白名单网关、双路径预审、报告导出） |
 | `runtime-init.ts` / `git-detector.ts` / `shell-env.ts` | 运行时初始化：Shell 环境注入、Bun/Git/Node 检测与自适应配置 |
 | `config-paths.ts` | 配置路径管理：`~/.cdutai/` 目录结构与默认 Skills 播种 |
@@ -244,6 +245,28 @@ CDUT 内网青果教务系统部署有瑞数（RuiShu）动态安全反爬 WAF�
 
 ---
 
+### 3.7 CDUT Science Lab (CSLab) 科学计算与科研工作区架构
+
+CDUT Science Lab 是面向成理特色优势学科（地质、材料、核技术、化学化工等）打造的端侧科学计算与学术写作工作台，严格遵循「100% 本地优先」与「沙盒隔离」设计：
+
+1. **工业级 3D 晶体与分子渲染（Mol* 核心）**：
+   - 深度内嵌 Mol* 渲染管线，原生支持 `.cif`（晶胞矢量、空间群对称操作展开）、`.pdb`、VASP `CHGCAR` / `LOCPOT` 电子密度与静电势 3D 等值面切片渲染；
+   - 科学参数精确计算：支持空间点群判定、晶胞体积、微观原子距离与键角精确测量。
+2. **实验图谱与数据数字化仪（Plot Digitizer & Origin 画板）**：
+   - 交互式曲线定标：支持载入文献扫描件或仪器图片，手动设置原点、X/Y 轴范围与刻度类型（线性/对数），特征峰与点云数据毫秒级提取并导出标准 CSV；
+   - Origin 风格交互图版：提供分段缩放、寻峰标记、基线扣除与多轨道谱图带（Spectrum Strip）同屏比对。
+3. **HPC 高性能计算调度与持久化**：
+   - 实验室集群状态直连，集成 Slurm/PBS 作业模板直投与排队队列轮询；
+   - 专属本地数据库（`cslab-hpc-db.ts`）持久化作业配置、任务状态与产物输出日志，保障科研进程可溯源。
+4. **学术论文写作、修订痕迹与审校流水线**：
+   - 富文本学术编辑器（基于 TipTap + KaTeX），支持原生 LaTeX 科学公式与符号面板；
+   - 原生支持类似 Word/Overleaf 的修订痕迹模式（Track Changes：插入高亮、删除划线、作者署名）及交互边注（Marginalia），实现审稿意见一键采纳/驳回。
+5. **Zotero 本地文献大脑与 DAG 科学工作流**：
+   - 零上传直读本地 Zotero 数据库，文献元数据与引用一键挂载至 Agent 上下文；
+   - 支持节点式拓扑 DAG 科学工作流编排，前置依赖自动核验，保证科研实验管线全生命周期可复现。
+
+---
+
 ## 4. 渲染进程架构与 Jotai 状态管理
 
 状态管理全量采用 **Jotai**（`apps/electron/src/renderer/atoms/`）：
@@ -252,7 +275,8 @@ CDUT 内网青果教务系统部署有瑞数（RuiShu）动态安全反爬 WAF�
 |-----------|----------|
 | `agent-atoms.ts` | 会话列表、当前激活会话、流式状态 (`AgentStreamState`)、渠道/工作区映射、权限与问答请求队列 |
 | `review-atoms.ts` | 内容审核专区状态：当前案卷、规则大纲、问题卡选中态、三栏联动焦点 (`reviewFocusAtom`) |
-| `active-view.ts` | 主面板视图路由（`conversations` / `planning` / `agent-skills` / `content-review`） |
+| `active-view.ts` | 主面板视图路由（`conversations` / `planning` / `agent-skills` / `content-review` / `cslab`） |
+| `cslab-atoms.ts` | CDUT Science Lab 科学实验室状态：当前选定实验室、Stage 布局、Vault 资源树、Mol* 渲染状态、HPC 作业与 Zotero 引用缓存 |
 | `settings-tab.ts` | 设置面板标签页路由（18 个：general / usage / account / channels / appearance / about / agent / prompts / tools / bots / tutorial / shortcuts / team / openapi / data-management / developer / proxy / devices） |
 | `theme.ts` | 界面主题模式（`light` / `dark` / `system`） |
 | `conversation-atoms.ts` / `draft-session-atoms.ts` | 会话数据与草稿会话 |

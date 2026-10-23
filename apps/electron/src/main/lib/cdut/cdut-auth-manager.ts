@@ -93,8 +93,11 @@ function loadAvatarFromCache(studentId: string): string | undefined {
 /** 心跳保活周期：10 分钟 */
 const KEEP_ALIVE_INTERVAL_MS = 10 * 60 * 1000
 
-/** 整段登录流程硬超时 */
+/** CAS 登录阶段硬超时 */
 const LOGIN_TIMEOUT_MS = 25_000
+
+/** 认证成功后画像抓取的宽限时间（不含 CAS 登录阶段） */
+const PROFILE_HARVEST_TIMEOUT_MS = 45_000
 
 /** 本地持久化结构（密码字段为密文） */
 interface StoredCdutAccount {
@@ -874,10 +877,12 @@ export class CdutAuthManager {
       let submitted = false
       let harvesting = false
 
+      let timer: ReturnType<typeof setTimeout> | null = null
+
       const finish = (result: CdutLoginResult) => {
         if (resolved) return
         resolved = true
-        clearTimeout(timer)
+        if (timer) clearTimeout(timer)
         if (this.authWindow && !this.authWindow.isDestroyed()) {
           this.authWindow.destroy()
         }
@@ -890,7 +895,7 @@ export class CdutAuthManager {
         resolve(result)
       }
 
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         finish({ success: false, error: '登录超时，请检查网络是否能访问成都理工大学内网' })
       }, LOGIN_TIMEOUT_MS)
 
@@ -907,10 +912,24 @@ export class CdutAuthManager {
       this.authWindow = authWindow
       const webContents = authWindow.webContents
 
-      // 登录成功落地青果教务系统后，直取学籍画像并完成结算（harvesting 守卫防重入）
+      /** 认证已成功但画像不可得时，以学工号保底结算并落盘，绝不返回登录失败。 */
+      const settleWithFallbackProfile = (): void => {
+        const now = Date.now()
+        const fallbackProfile: CdutAccountProfile = {
+          studentId: username,
+          studentName: username,
+          status: 'active',
+          rememberPassword,
+          lastLoginAt: now,
+          lastActiveAt: now,
+        }
+        this.persistAccount({ ...fallbackProfile, password: rememberPassword ? password : '' })
+        finish({ success: true, profile: fallbackProfile })
+      }
+
+      // 登录成功落地青果教务系统后，直取学籍画像并完成结算（重入由调用点的 harvesting 同步置位守卫）
       const harvestProfileAndFinish = async () => {
-        if (resolved || harvesting) return
-        harvesting = true
+        if (resolved) return
 
         try {
           console.log('[CdutAuthManager] 已落地教务主框架，开始双轨抓取学生画像…')
@@ -1112,24 +1131,14 @@ export class CdutAuthManager {
           this.persistAccount({ ...finalProfile, password: rememberPassword ? password : '' })
           finish({ success: true, profile: finalProfile })
         } catch (extractErr) {
-          // 已结算（如 25s 硬超时）时严禁把 dummy 画像写成 active；窗口已销毁则结算失败并清理引用
+          // 已结算（如登录硬超时）时严禁把 dummy 画像写成 active；窗口已销毁则结算失败并清理引用
           if (resolved) return
           if (authWindow.isDestroyed()) {
             finish({ success: false, error: '认证窗口已关闭' })
             return
           }
           console.error('[CdutAuthManager] 画像提取异常，进入兜底模式:', extractErr)
-          const now = Date.now()
-          const fallbackProfile: CdutAccountProfile = {
-            studentId: username,
-            studentName: username,
-            status: 'active',
-            rememberPassword,
-            lastLoginAt: now,
-            lastActiveAt: now,
-          }
-          this.persistAccount({ ...fallbackProfile, password: rememberPassword ? password : '' })
-          finish({ success: true, profile: fallbackProfile })
+          settleWithFallbackProfile()
         }
       }
 
@@ -1142,7 +1151,19 @@ export class CdutAuthManager {
 
         // A) 落点已收敛至教务主框架：认证真正成功，启动双轨画像提取
         if (isMainHomeUrl(currentUrl)) {
-          void harvestProfileAndFinish()
+          // 认证已真正成功：25s 登录硬超时立即失效，改用独立的画像抓取宽限计时器。
+          // 宽限到点也必须以成功结算，绝不能反向否决已完成的 CAS 认证。
+          if (!harvesting) {
+            // 先同步置位再启动异步流程：同一微任务阶段的重复 did-finish-load 不会重入。
+            harvesting = true
+            if (timer) clearTimeout(timer)
+            timer = setTimeout(() => {
+              if (resolved) return
+              console.warn('[CdutAuthManager] 画像抓取超出宽限时限，使用学工号保底画像结算')
+              settleWithFallbackProfile()
+            }, PROFILE_HARVEST_TIMEOUT_MS)
+            void harvestProfileAndFinish()
+          }
           return
         }
 
