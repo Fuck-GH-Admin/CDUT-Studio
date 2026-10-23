@@ -47,30 +47,26 @@ function handStyle(angle: number, transition: string | undefined): React.CSSProp
 export function BeijingAnalogClock({ now }: BeijingAnalogClockProps): React.ReactElement {
   const { clockText } = getBeijingClockAngles(now)
   const [anchor, setAnchor] = React.useState(() => createBeijingClockAnchor(now))
-  const [snap, setSnap] = React.useState(false)
   const lastNowMsRef = React.useRef(now.getTime())
 
-  // 休眠唤醒（跨度超阈值）或系统时间回拨：本帧直接重取锚点并瞬时归位
+  // 休眠唤醒（跨度超阈值）或系统时间回拨：本帧先用临时新锚点计算角度，
+  // 锚点状态写入收敛到提交后的 effect，严禁在渲染期间派发 setState。
   const needsRebase = shouldRebaseClockAnchor(lastNowMsRef.current, now, REBASE_GAP_MS)
-  if (needsRebase) {
-    lastNowMsRef.current = now.getTime()
-    if (!snap) setSnap(true)
-    setAnchor(createBeijingClockAnchor(now))
-  }
+  const effectiveAnchor = needsRebase ? createBeijingClockAnchor(now) : anchor
+  const { hourRotation, minuteRotation, secondRotation } = resolveBeijingClockRotations(effectiveAnchor, now)
 
-  const { hourRotation, minuteRotation, secondRotation } = resolveBeijingClockRotations(anchor, now)
-
-  // 提交后清除归位标记；下一次渲染恢复过渡时角度数值未变，不会二次动画
   React.useEffect(() => {
     lastNowMsRef.current = now.getTime()
-    if (snap) setSnap(false)
-  }, [now, snap])
+    // 复用渲染期已构建的 effectiveAnchor 引用，避免 effect 内再次取时产生微秒偏差
+    if (needsRebase) setAnchor(effectiveAnchor)
+  }, [now, needsRebase, effectiveAnchor])
 
-  // 秒针：150ms 机械跳动（无过冲，避免回弹被判成跳闪）；分/时针：300ms 顺滑跟随
-  const secondTransition = snap
+  // 秒针：150ms 机械跳动（无过冲，避免回弹被判成跳闪）；分/时针：300ms 顺滑跟随。
+  // 重锚帧禁用过渡，直接以新锚点瞬时归位；下一帧角度数值未变，不会二次动画。
+  const secondTransition = needsRebase
     ? undefined
     : 'transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1)'
-  const slowTransition = snap
+  const slowTransition = needsRebase
     ? undefined
     : 'transform 300ms cubic-bezier(0.22, 1, 0.36, 1)'
 
