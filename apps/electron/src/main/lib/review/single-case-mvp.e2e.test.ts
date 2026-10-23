@@ -199,7 +199,11 @@ describe('单案审核 MVP 全链路（真实存储与执行器，模型调用�
       { subjectId: 'subject-c', value: '0', basisRunId: finalRun.id },
     ])
 
-    const report = exportCaseReport(caseId)
+    // 内部视图（含人工豁免）必须由 Main 可信操作者显式请求；默认导出为学生版（RUN-31）。
+    const report = exportCaseReport(caseId, {
+      audience: 'organizer',
+      actor: { actorSource: 'local', actorId: 'e2e-reviewer', role: 'organizer' },
+    })
     const reportText = readFileSync(report.file, 'utf8')
     expect(reportText).toContain('事项最终认定')
     expect(reportText).toContain('最终分值 4')

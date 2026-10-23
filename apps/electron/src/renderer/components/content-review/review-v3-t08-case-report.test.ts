@@ -96,3 +96,52 @@ test('F16 historical report omits mutable current subjects and rejects a mismatc
   expect(t08ReportWorkbookSheets(report).map((sheet) => sheet.name)).not.toContain('事项字段')
   expect(() => makeT08CaseReport({ aggregate, run: { ...run, caseId: 'b' }, audience: 'student', stale: true })).toThrow('不属于当前案卷')
 })
+
+test('T08 报告：未取得同一 T07 冻结快照时明确声明不含评分矩阵（JDG-12）', () => {
+  const aggregate = {
+    caseV2: { id: 'case-score', documents: [], subjects: [] },
+    decisions: [], dispositions: [], supplements: [],
+  } as unknown as CaseAggregateV2
+  const run = {
+    id: 'run-score', caseId: 'case-score', templateId: 'tpl-score', templateVersion: 1,
+    inputManifest: { hash: 'hash-score', documentVersions: [] },
+    status: 'completed',
+    coverage: { effectiveVerdicts: 1, plannedChecks: 1, pendingChecks: 0 },
+    checks: [], opinions: [],
+  } as unknown as ReviewRunV2
+  const withoutSnapshot = makeT08CaseReport({ aggregate, run, audience: 'organizer', stale: false })
+  expect(withoutSnapshot.markdown).toContain('未从同一 T07 冻结轮次取得评分快照')
+  const frozen = makeT08CaseReport({
+    aggregate, run, audience: 'organizer', stale: false,
+    ratingSnapshot: {
+      status: 'frozen', batchId: 'batch-1', roundId: 'round-2', revision: 7,
+      frozenAt: '2026-10-02T00:00:00Z',
+      rows: [{ caseId: 'case-score', total: 91.25, rank: 1, selected: true, blockers: [] }],
+    },
+  })
+  expect(frozen.markdown).toContain('批次 batch-1 / 轮次 round-2 / revision 7')
+  expect(frozen.markdown).toContain('总分 91.25；名次 1')
+  expect(frozen.json).toContain('"roundId": "round-2"')
+})
+
+test('T08 报告：恢复代次与恢复前决定被标注为历史，受众未授权如实提示（ASSET-10/RUN-31）', () => {
+  const aggregate = {
+    caseV2: { id: 'case-restore', documents: [], subjects: [] },
+    caseArchive: { previousStage: 'reviewing', archivedAt: '2026-09-01T00:00:00Z', restoredAt: '2026-09-10T00:00:00Z', archivedBy: 'local', reason: '归档' },
+    caseArchiveHistory: [],
+    decisions: [{ id: 'd-old', result: 'passed', reason: '恢复前决定', at: '2026-09-05T00:00:00Z', basedOnRunId: 'run-restore' }],
+    dispositions: [], supplements: [],
+  } as unknown as CaseAggregateV2
+  const run = {
+    id: 'run-restore', caseId: 'case-restore', templateId: 'tpl', templateVersion: 1,
+    inputManifest: { hash: 'hash-restore', documentVersions: [] },
+    status: 'completed', coverage: { effectiveVerdicts: 1, plannedChecks: 1, pendingChecks: 0 },
+    checks: [], opinions: [],
+  } as unknown as ReviewRunV2
+  const report = makeT08CaseReport({ aggregate, run, audience: 'organizer', stale: false })
+  expect(report.archiveCycle.archiveCycle).toBe(1)
+  expect(report.markdown).toContain('最近恢复于 2026-09-10T00:00:00Z')
+  expect(report.markdown).toContain('恢复前决定，仅作历史展示')
+  expect(report.audienceGranted).toBe(false)
+  expect(report.markdown).toContain('未经 Main 授权')
+})

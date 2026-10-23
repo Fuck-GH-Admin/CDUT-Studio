@@ -14,8 +14,29 @@ export interface T08ResolvedSource {
   excerpt: string | null
   blockId?: string
 }
+/** 同一 T07 冻结评分轮次的只读快照；由 Main 提供，Renderer 不得自行重算名次（JDG-12）。 */
+export interface T08RatingSnapshot {
+  status: 'frozen' | 'unavailable'
+  batchId: string
+  roundId: string
+  revision: number
+  frozenAt: string
+  rows: Array<{ caseId: string; total: number | null; rank: number | null; selected: boolean | null; blockers: string[] }>
+}
+
+/** 归档恢复代次（ASSET-10）：恢复后历史决定只能作为历史展示。 */
+export interface T08CaseCycle {
+  archiveCycle: number
+  archivedAt?: string
+  restoredAt?: string
+}
+
 export interface T08Report {
   audience: T08Audience
+  /** 受众是否由 Main 授予；旧调用方未提供时为 undefined（不得当作已授权） */
+  audienceGranted?: boolean
+  audienceNotice?: string
+  archiveCycle?: T08CaseCycle
   runId: string
   caseId: string
   status: string
@@ -104,8 +125,28 @@ export function makeT08CaseReport(input: {
   template?: TemplateVersion | null
   audience: T08Audience
   stale: boolean
+  /** Main 授予的受众；缺省时非学生受众一律降级，Renderer 下拉不能自行提权（RUN-31/UI-15） */
+  audienceGrant?: { audience: T08Audience; granted: boolean; reason: string }
+  ratingSnapshot?: T08RatingSnapshot | null
+  cycle?: T08CaseCycle
 }): T08Report {
-  const { aggregate, run, template, audience, stale } = input
+  const { aggregate, run, template, stale, ratingSnapshot } = input
+  const requested = input.audience
+  const grant = input.audienceGrant
+  // 纯投影函数如实反映请求的受众；授权边界在 Main 导出与面板（未授权时面板只允许学生版）。
+  // 未提供授权回执时在报告头如实标注，不能冒充“已授权内部视图”。
+  const audience: T08Audience = grant?.granted ? grant.audience : requested
+  const audienceGranted = grant ? grant.granted : audience === 'student'
+  const audienceNotice = grant
+    ? grant.reason
+    : requested === 'student'
+      ? '学生版无需额外授权'
+      : `未取得 Main 受众授权回执（请求 ${requested}）；Main 导出会拒绝内部受众`
+  const cycle: T08CaseCycle = input.cycle ?? {
+    archiveCycle: (aggregate.caseArchiveHistory?.length ?? 0) + (aggregate.caseArchive?.restoredAt ? 1 : 0),
+    archivedAt: aggregate.caseArchive?.archivedAt,
+    restoredAt: aggregate.caseArchive?.restoredAt,
+  }
   if (run.caseId !== aggregate.caseV2.id) throw new Error('所选运行不属于当前案卷')
   const manifest = run.inputManifest
   const internal = audience !== 'student'
@@ -120,6 +161,7 @@ export function makeT08CaseReport(input: {
     manifest.documentVersions.some((v) => v.documentId === d.documentId && v.versionId !== d.versionId && d.active !== false),
   )
   const decision = [...aggregate.decisions].reverse().find((item) => item.basedOnRunId === run.id) ?? null
+  const decisionPreRestore = !!decision && !!cycle.restoredAt && decision.at <= cycle.restoredAt
   const runDispositions = aggregate.dispositions.filter((item) => item.runId === run.id && item.inputHash === manifest.hash)
   const docs = manifest.documentVersions.map((v) => {
     const original = aggregate.caseV2.documents.find((d) => d.versionId === v.versionId)
@@ -130,6 +172,8 @@ export function makeT08CaseReport(input: {
     '',
     '- 案卷 ID：' + aggregate.caseV2.id,
     '- 运行 ID：' + run.id,
+    '- 报告受众：' + audience + '（' + (audienceGranted ? 'Main 已授权' : '未经 Main 授权') + '；' + audienceNotice + '）',
+    '- 归档代次：' + cycle.archiveCycle + (cycle.restoredAt ? '；最近恢复于 ' + cycle.restoredAt : ''),
     '- 模板：' + run.templateId + '@' + run.templateVersion,
     '- 输入快照：' + manifest.hash,
     '- 执行状态：' + run.status,
@@ -166,8 +210,13 @@ export function makeT08CaseReport(input: {
     }
   }
   if (decision) {
-    lines.push('- 已记录的业务决定：' + decision.result + '；' + decision.reason + '（' + decision.at + '）')
-    if (internal) lines.push('- 决定主体：' + decision.actor.actorSource + ' / ' + decision.actor.role + '（不等于校方认证授权）')
+    lines.push('- 已记录的业务决定：' + decision.result + '；' + decision.reason + '（' + decision.at + '）'
+      + (decisionPreRestore ? '〔恢复前决定，仅作历史展示〕' : ''))
+    if (internal) {
+      // 旧决定可能没有 actor：如实标注未记录，不冒认人工或校方。
+      const actor = decision.actor
+      lines.push('- 决定主体：' + (actor ? actor.actorSource + ' / ' + actor.role : '旧版记录，操作者未记录') + '（不等于校方认证授权）')
+    }
   } else lines.push('- 未发现基于所选运行作出的业务决定；技术检查不能代替正式决定。')
   if (!historical && (aggregate.appeals ?? []).length > 0) {
     // 只展示当前案卷有效业务上下文的申诉，不把新申诉状态写入历史 Run 快照。
@@ -190,6 +239,19 @@ export function makeT08CaseReport(input: {
     }
   }
   if (internal) {
+    lines.push('', '## 评分快照（T07 冻结轮次）')
+    if (ratingSnapshot && ratingSnapshot.status === 'frozen') {
+      lines.push('- 来源：批次 ' + ratingSnapshot.batchId + ' / 轮次 ' + ratingSnapshot.roundId
+        + ' / revision ' + ratingSnapshot.revision + ' / 冻结于 ' + ratingSnapshot.frozenAt)
+      for (const row of ratingSnapshot.rows) {
+        lines.push('- ' + row.caseId + '：总分 ' + (row.total ?? '未记录') + '；名次 ' + (row.rank ?? '未记录')
+          + '；入选 ' + (row.selected === null ? '未记录' : row.selected ? '是' : '否')
+          + (row.blockers.length ? '；阻断：' + row.blockers.join('、') : ''))
+      }
+    } else {
+      // 不重算、不借用其他轮次：缺快照就如实声明本报告不含评分矩阵。
+      lines.push('- 未从同一 T07 冻结轮次取得评分快照，本报告不包含评分矩阵/名次，也不另行重算。')
+    }
     lines.push('', '## 内部核对与模型建议（不等于业务决定）')
     for (const opinion of run.opinions) {
       const source = sourceSummary(opinion.sourceRefs, aggregate)
@@ -205,6 +267,11 @@ export function makeT08CaseReport(input: {
   const data = {
     schema: 'review-v3-t08-report/1',
     audience,
+    audienceGranted,
+    audienceNotice,
+    archiveCycle: cycle,
+    decisionPreRestore,
+    ratingSnapshot: ratingSnapshot ?? { status: 'unavailable' },
     caseId: aggregate.caseV2.id,
     run: {
       id: run.id, status: run.status, templateId: run.templateId, templateVersion: run.templateVersion,
@@ -226,7 +293,7 @@ export function makeT08CaseReport(input: {
       } : {}),
     })),
     decision: decision ? { result: decision.result, reason: decision.reason, at: decision.at,
-      ...(internal ? { actorSource: decision.actor.actorSource } : {}) } : null,
+      ...(internal && decision.actor ? { actorSource: decision.actor.actorSource } : {}) } : null,
     ...(historical ? {} : {
       supplements: aggregate.supplements.map((s) => ({ reason: s.reason, requiredElements: s.requiredElements, status: s.status })),
       subjects: aggregate.caseV2.subjects.map((s) => ({ title: s.title, fields: publicFields(s.fields) })),
@@ -242,7 +309,7 @@ export function makeT08CaseReport(input: {
     }),
     ...(internal ? { opinions: run.opinions, dispositions: runDispositions, diagnostics: run.diagnostics, error: run.error } : {}),
   }
-  return { audience, runId: run.id, caseId: run.caseId, status: run.status, stale: historical, markdown: lines.join('\n'), json: JSON.stringify(data, null, 2), rows }
+  return { audience, audienceGranted, audienceNotice, archiveCycle: cycle, runId: run.id, caseId: run.caseId, status: run.status, stale: historical, markdown: lines.join('\n'), json: JSON.stringify(data, null, 2), rows }
 }
 
 /** UTF-8 spreadsheet input; actual XLSX serialization is delegated to the owning UI. */

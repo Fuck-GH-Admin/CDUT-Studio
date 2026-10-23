@@ -12,6 +12,9 @@ export interface F16DeliveryManifest {
   caseId: string
   runId: string
   audience: T08Report['audience']
+  /** 受众是否由 Main 授予；未授权的内部受众不得被清单伪装成已授权交付 */
+  audienceAuthorized: boolean
+  archiveCycle: number
   inputHash: string
   template: string
   runStatus: string
@@ -54,7 +57,7 @@ export async function makeF16DeliveryManifest(
 ): Promise<F16DeliveryManifest> {
   if (!files.length) throw new Error('交接包没有可导出的报告文件')
   // 元数据来自报告内不可变的所选 Run 投影，防止清单与文件各讲一个版本。
-  let projection: { caseId: string; audience: string; historical: boolean; run: {
+  let projection: { caseId: string; audience: string; audienceGranted?: boolean; archiveCycle?: { archiveCycle?: number }; historical: boolean; run: {
     id: string; inputHash: string; templateId: string; templateVersion: number; status: string
   } }
   try { projection = JSON.parse(report.json) as typeof projection }
@@ -83,6 +86,8 @@ export async function makeF16DeliveryManifest(
     caseId: report.caseId,
     runId: report.runId,
     audience: report.audience,
+    audienceAuthorized: report.audienceGranted === true,
+    archiveCycle: report.archiveCycle?.archiveCycle ?? 0,
     inputHash: projection.run.inputHash,
     template: projection.run.templateId + '@' + projection.run.templateVersion,
     runStatus: report.status,

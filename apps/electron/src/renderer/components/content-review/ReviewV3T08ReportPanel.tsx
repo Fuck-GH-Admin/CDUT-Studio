@@ -1,7 +1,7 @@
 /** T08 report workbench: no Main write, no actor spoofing, and no mixed historical runs. */
 import * as React from 'react'
 import type { CaseAggregateV2, ReviewRunV2, TemplateVersion } from '@profer/shared'
-import { makeT08CaseReport, type T08Audience, type T08Report } from './review-v3-t08-case-report'
+import { makeT08CaseReport, type T08Audience, type T08CaseCycle, type T08RatingSnapshot, type T08Report } from './review-v3-t08-case-report'
 import { renderT08ReportPdf } from './review-v3-t08-pdf'
 import { encodeF16ReportBundle, encodeF16ReportWorkbook, f16TextBytes } from './review-v3-f16-report-delivery'
 
@@ -10,6 +10,12 @@ interface Props {
   currentRun: ReviewRunV2 | null
   currentStale: boolean
   template: TemplateVersion | null
+  /** Main 授予的受众能力；未提供时只允许学生版，避免 UI 下拉自行提权（RUN-31/UI-15） */
+  audienceGrant?: { audience: T08Audience; granted: boolean; reason: string } | null
+  /** 同一 T07 冻结轮次的评分快照；缺失时报告如实声明不含评分矩阵（JDG-12） */
+  ratingSnapshot?: T08RatingSnapshot | null
+  /** 归档恢复代次（ASSET-10） */
+  cycle?: T08CaseCycle
 }
 
 function safeFilename(name: string): string {
@@ -48,10 +54,10 @@ async function reportBundle(report: T08Report): Promise<Blob> {
   return new Blob([buffer], { type: 'application/zip' })
 }
 
-export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, template }: Props): React.ReactElement {
+export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, template, audienceGrant, ratingSnapshot, cycle }: Props): React.ReactElement {
   const [runs, setRuns] = React.useState<ReviewRunV2[]>([])
   const [selectedId, setSelectedId] = React.useState('')
-  const [audience, setAudience] = React.useState<T08Audience>('student')
+  const [audience, setAudience] = React.useState<T08Audience>(audienceGrant?.granted ? audienceGrant.audience : 'student')
   const [format, setFormat] = React.useState<'md' | 'json' | 'xlsx' | 'html' | 'pdf' | 'bundle'>('md')
   const [busy, setBusy] = React.useState(false)
   const [notice, setNotice] = React.useState('')
@@ -73,19 +79,30 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
   }, [caseId, currentRun?.id])
 
   const run = runs.find((item) => item.id === selectedId) ?? currentRun
+  const grantedAudience = audienceGrant?.granted ? audienceGrant.audience : 'student'
+  // 受 Main 授权的受众是上限：即使组件状态被改成 reviewer，也只能按授权投影。
+  const effectiveAudience: T08Audience = audienceGrant?.granted ? audience : 'student'
   const isHistorical = !!run && (run.id !== currentRun?.id || currentStale)
   const report = React.useMemo(() => {
     if (!aggregate || !run) return null
-    try { return makeT08CaseReport({ aggregate, run, audience, template, stale: isHistorical }) }
+    try {
+      return makeT08CaseReport({
+        aggregate, run, template, stale: isHistorical,
+        audience: effectiveAudience,
+        audienceGrant: audienceGrant ?? undefined,
+        ratingSnapshot: ratingSnapshot ?? null,
+        cycle,
+      })
+    }
     catch { return null }
-  }, [aggregate, run, audience, template, isHistorical])
+  }, [aggregate, run, effectiveAudience, template, isHistorical, audienceGrant, ratingSnapshot, cycle])
 
   const exportFile = async (): Promise<void> => {
     if (!report) return
     setBusy(true)
     setNotice('')
     try {
-      const filename = safeFilename(report.caseId + '-' + report.runId + '-' + audience)
+      const filename = safeFilename(report.caseId + '-' + report.runId + '-' + report.audience)
       if (format === 'bundle') {
         saveBlob(await reportBundle(report), filename + '-delivery.zip')
       } else if (format === 'pdf') {
@@ -124,6 +141,7 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
         <div className="rounded-md bg-muted/50 p-2 leading-5">
           <strong className="block">所选运行 {run.id}</strong>
           <span>状态：{run.status} · 有效判断 {run.coverage.effectiveVerdicts}/{run.coverage.plannedChecks} · 待处理 {run.coverage.pendingChecks}</span>
+          <span className="block">案卷：{report.caseId} · 受众：{report.audience}{report.audienceGranted ? '（Main 已授权）' : '（学生版）'} · 归档代次：{report.archiveCycle?.archiveCycle ?? 0}</span>
           <p className="text-muted-foreground">输出绑定该 Run 的 inputManifest；模型意见不等于正式决定。</p>
           {report.stale && <p className="text-amber-700 dark:text-amber-400">历史/过期运行：未冻结的当前案卷字段及补件不会混入该次报告。</p>}
         </div>
@@ -133,11 +151,14 @@ export function ReviewV3T08ReportPanel({ aggregate, currentRun, currentStale, te
           </select>
         </label>
         <label className="block space-y-1">查看角色
-          <select className="w-full rounded border border-border bg-background p-2" value={audience} onChange={(event) => setAudience(event.target.value as T08Audience)}>
+          <select className="w-full rounded border border-border bg-background p-2" value={effectiveAudience}
+            onChange={(event) => setAudience(event.target.value as T08Audience)}>
             <option value="student">学生 / 申请人（不含内部意见）</option>
-            <option value="reviewer">审核人（含内部核对）</option>
-            <option value="organizer">组织者（含内部核对）</option>
+            <option value="reviewer" disabled={!audienceGrant?.granted || grantedAudience === 'student'}>审核人（需 Main 授权）</option>
+            <option value="organizer" disabled={!audienceGrant?.granted || grantedAudience !== 'organizer'}>组织者（需 Main 授权）</option>
           </select>
+          {!audienceGrant?.granted && <span className="block text-amber-700 dark:text-amber-400">内部受众需由主进程授予；当前仅可导出学生版，下拉不会提升权限。</span>}
+          {report.audienceNotice && <span className="block text-muted-foreground">{report.audienceNotice}</span>}
         </label>
         <div className="space-y-1">
           <label htmlFor="t08-export-format">导出格式</label>
