@@ -47,6 +47,8 @@ const windowContents = { isDestroyed: () => false, send() {} } as unknown as Web
 const channel = createChannel({ name: '合成审核渠道', provider: 'deepseek', baseUrl: 'https://example.invalid', apiKey: 'synthetic-test-key', enabled: true,
   models: [{ id: 'synthetic-model', name: '合成模型', enabled: true }] })
 updateSettings({ agentChannelId: channel.id, agentModelId: 'synthetic-model' })
+// MHI-03：bridge 只认审核模块的显式模型选择，不再回退全局 Agent 默认值。
+saveReviewModuleSettings({ agentModelSelection: { channelId: channel.id, modelId: 'synthetic-model' } })
 
 async function fixture() {
   const id = `bridge-${randomUUID()}`
@@ -183,11 +185,12 @@ describe('后台 Main 入口与受理边界', () => {
     const context = await pendingExecution()
     context.execution.owned()
     await context.admission
-    saveReviewModuleSettings({ agentModelSelection: null })
     expect(context.execution.input.channelId).toBe(selected.id)
     expect(context.execution.input.modelId).toBe('selected-model')
     context.execution.end('completed')
     await Bun.sleep(0)
+    // 恢复默认夹具选择，避免影响后续用例
+    saveReviewModuleSettings({ agentModelSelection: { channelId: channel.id, modelId: 'synthetic-model' } })
   })
 
 

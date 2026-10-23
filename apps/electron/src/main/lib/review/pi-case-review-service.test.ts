@@ -232,11 +232,15 @@ describe('Pi 审核结果提交与续审', () => {
     finishPiReviewRunV2({ assignmentId: next.assignmentId, sessionId: 'session-reconcile-update', caseId: context.caseId, runId: next.runId }, { status: 'completed' })
     expect(getRunV2(context.caseId, next.runId)?.coverage.documents.find((entry) => entry.documentVersionId === context.imageRef.documentVersionId)?.status).toBe('unread')
 
-    reconcilePiReviewRunsWithReadReceipts(context.caseId, listRunsV2(context.caseId))
-    const repaired = getRunV2(context.caseId, next.runId)!
-    expect(repaired.coverage.documents.find((entry) => entry.documentVersionId === context.imageRef.documentVersionId)).toMatchObject({
+    // RUN-44：历史查询只返回内存视图，不持久化改写已封存 Run。
+    const reconciled = reconcilePiReviewRunsWithReadReceipts(context.caseId, listRunsV2(context.caseId))
+    const repairedView = reconciled.find((run) => run.id === next.runId)!
+    expect(repairedView.coverage.documents.find((entry) => entry.documentVersionId === context.imageRef.documentVersionId)).toMatchObject({
       status: 'read',
       reason: expect.stringContaining(context.prepared.runId),
     })
+    // 读路径不得改写磁盘上的封存运行
+    expect(getRunV2(context.caseId, next.runId)?.coverage.documents
+      .find((entry) => entry.documentVersionId === context.imageRef.documentVersionId)?.status).toBe('unread')
   })
 })

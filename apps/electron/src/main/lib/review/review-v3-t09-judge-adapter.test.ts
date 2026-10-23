@@ -3,6 +3,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { TemplateVersion } from '@profer/shared'
 import type { T07State } from './review-v3-t07-rating-workflow'
 
 const configDir = mkdtempSync(join(tmpdir(), 'f18-judge-'))
@@ -14,6 +15,8 @@ const { issueT09JudgePackage, previewT09JudgePackage, importT09JudgePackage } =
 const { answerT09Task } = await import('./review-v3-t09-offline-codec')
 const { initT07State, readT07State, writeT07State } = await import('./review-v3-t07-state-store')
 const { applyT07MainAction } = await import('./review-v3-t07-main-service')
+const { saveDraft, publishTemplate } = await import('./template-store')
+const { createBatchV2 } = await import('./batch-store')
 
 function aggregate(caseId: string, revision = 3) {
   return {
@@ -35,7 +38,31 @@ function judging(batchId: string, caseId: string): T07State {
   }
 }
 
+/**
+ * JDG-09 新增的轮次新鲜度门禁要求批次仍存在、量表版本匹配且模板仍已发布。
+ * 用真实批次 + 已发布模板建立夹具，保持测试仍走 applyT07MainAction 的真实 CAS。
+ */
+function seedFreshBatch(batchId: string, caseId: string) {
+  const template: TemplateVersion = {
+    templateId: `tpl-${batchId}`, version: 4, schemaVersion: 2, name: 'F18 评分模板',
+    objectType: 'person', displayName: { template: '{{title}}' }, fields: [],
+    sections: [{ id: 'all', name: '核验', order: 0, required: false, criteria: [{
+      id: 'check', title: '内容检查', requirement: '核对材料中的申请内容',
+      execution: 'semantic', targetScope: 'case' }] }],
+    materialSlots: [], policyVersionIds: [], policyRefs: [],
+    stages: [{ id: 'review', name: '审核', kind: 'manual-review', executorRole: 'reviewer' }],
+    outputs: [], status: 'draft', createdAt: new Date().toISOString(),
+  }
+  saveDraft(template)
+  publishTemplate(template.templateId, 4)
+  createBatchV2({
+    id: batchId, name: 'F18 评分批次', templateId: template.templateId, templateVersion: 4,
+    policyVersionLock: [], caseIds: [caseId], createdAt: new Date().toISOString(),
+  })
+}
+
 function setup(batchId: string, caseId: string) {
+  seedFreshBatch(batchId, caseId)
   initT07State(batchId, judging(batchId, caseId), 0)
   const issued = issueT09JudgePackage({ aggregate: aggregate(caseId), batchId, assignmentId: 'asg-1' })
   const task = JSON.parse(issued.json)
