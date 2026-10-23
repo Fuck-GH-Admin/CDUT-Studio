@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
@@ -123,5 +124,42 @@ describe('材料版本链', () => {
       text: '创新创业项目', kind: 'table', format: 'table-cell',
       location: { kind: 'sheet-cell', sheet: '申报项目', row: 4, column: 'C' },
     })
+  })
+})
+
+describe('ASSET-02/04 原件冻结与材料身份', () => {
+  test('登记后落盘原件字节 hash 与版本 byteHash 完全一致', async () => {
+    saveDraft({ ...template, templateId: 'material-freeze-bytes' })
+    publishTemplate('material-freeze-bytes', 1)
+    const caseId = `material-freeze-${Date.now()}`
+    expect((await createCaseFromTemplate('material-freeze-bytes', 1, { title: '原件冻结', fieldValues: {}, subjects: [] }, actor, caseId)).ok).toBeTrue()
+    const sourcePath = join(SOURCE_DIR, 'freeze-申请表.txt')
+    writeFileSync(sourcePath, '冻结字节一致性验证')
+    let aggregate = readAggregate(caseId)!
+    const result = await registerMaterial(caseId, { requestId: 'freeze-1', actor, expectedRevision: aggregate.caseV2.revision, payload: { sourcePath, role: 'application' } })
+    expect(result.ok).toBeTrue()
+    aggregate = readAggregate(caseId)!
+    const doc = aggregate.caseV2.documents[0]!
+    const stored = readFileSync(join(CONFIG_DIR, 'review-cases', caseId, doc.assetPath!))
+    expect(createHash('sha256').update(stored).digest('hex')).toBe(doc.byteHash!)
+  })
+
+  test('同槽同名但不同 role 不互相停用，也不建立 supersedes', async () => {
+    saveDraft({ ...template, templateId: 'material-role-identity' })
+    publishTemplate('material-role-identity', 1)
+    const caseId = `material-role-${Date.now()}`
+    expect((await createCaseFromTemplate('material-role-identity', 1, { title: '材料身份', fieldValues: {}, subjects: [] }, actor, caseId)).ok).toBeTrue()
+    const rulePath = join(SOURCE_DIR, 'rule-申请表.txt')
+    const appPath = join(SOURCE_DIR, 'app-申请表.txt')
+    writeFileSync(rulePath, '规则原件')
+    writeFileSync(appPath, '申请原件')
+    let aggregate = readAggregate(caseId)!
+    expect((await registerMaterial(caseId, { requestId: 'role-1', actor, expectedRevision: aggregate.caseV2.revision, payload: { sourcePath: rulePath, role: 'rule', materialSlotId: 'forms', fileName: '申请表.pdf' } })).ok).toBeTrue()
+    aggregate = readAggregate(caseId)!
+    expect((await registerMaterial(caseId, { requestId: 'role-2', actor, expectedRevision: aggregate.caseV2.revision, payload: { sourcePath: appPath, role: 'application', materialSlotId: 'forms', fileName: '申请表.pdf' } })).ok).toBeTrue()
+    const docs = readAggregate(caseId)!.caseV2.documents
+    expect(docs).toHaveLength(2)
+    expect(docs.every((doc) => doc.active !== false)).toBeTrue()
+    expect(docs[1]?.supersedesVersionId).toBeUndefined()
   })
 })

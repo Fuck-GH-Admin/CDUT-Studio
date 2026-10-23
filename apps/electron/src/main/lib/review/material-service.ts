@@ -21,17 +21,55 @@ import { extractReviewableTextFile } from './document-service'
 const IMAGE_MIME_PREFIX = 'image/'
 const MAX_MATERIAL_BYTES = 50 * 1024 * 1024
 
-/** 复制原件进案卷并返回字节 hash 与相对 assetKey */
-function copyAsset(caseId: string, versionId: string, sourcePath: string): { byteHash: string; assetKey: string; sizeBytes: number; assetDirectory: string } {
+/** ASSET-02：把源文件冻结成一份不可变暂存副本，之后所有解析/hash/落盘只读这一份字节。 */
+export interface FrozenSource {
+  stagedPath: string
+  byteHash: string
+  sizeBytes: number
+  fileName: string
+  dispose(): void
+}
+
+export function freezeSourceFile(sourcePath: string): FrozenSource {
   if (!existsSync(sourcePath)) throw new CommandValidationError('VALIDATION_FAILED', `源文件不存在: ${sourcePath}`)
+  const fileName = sourcePath.split(/[\\/]/).pop() ?? 'material.bin'
+  const stagingDir = mkdtempSync(join(tmpdir(), 'cdut-material-freeze-'))
+  const stagedPath = join(stagingDir, fileName)
+  // Single read: the bytes that get hashed are the bytes that get parsed and copied.
+  const bytes = readFileSync(sourcePath)
+  writeFileSync(stagedPath, bytes, { flag: 'wx' })
+  const byteHash = createHash('sha256').update(bytes).digest('hex')
+  return {
+    stagedPath,
+    byteHash,
+    sizeBytes: bytes.length,
+    fileName,
+    dispose: () => rmSync(stagingDir, { recursive: true, force: true }),
+  }
+}
+
+/**
+ * ASSET-02/03：从冻结副本复制原件进案卷并返回字节 hash 与相对 assetKey。
+ * 复制后回读校验，任何不一致都抛错并由调用方清理本命令创建的目录，
+ * 保证版本回执指向的字节与登记时 hash 完全一致。
+ */
+function copyAsset(caseId: string, versionId: string, frozen: FrozenSource): { byteHash: string; assetKey: string; sizeBytes: number; assetDirectory: string } {
   const dir = join(getConfigDir(), 'review-cases', caseId, 'source-docs', versionId)
   mkdirSync(dir, { recursive: true })
-  const bytes = readFileSync(sourcePath)
-  const fileName = sourcePath.split(/[\\/]/).pop() ?? 'material.bin'
+  const fileName = frozen.fileName
   const target = join(dir, fileName)
-  copyFileSync(sourcePath, target)
+  const bytes = readFileSync(frozen.stagedPath)
+  const byteHash = createHash('sha256').update(bytes).digest('hex')
+  if (byteHash !== frozen.byteHash || bytes.length !== frozen.sizeBytes) {
+    throw new CommandValidationError('VALIDATION_FAILED', '原件在冻结后发生变化，已拒绝登记')
+  }
+  writeFileSync(target, bytes, { flag: 'wx' })
+  const persisted = readFileSync(target)
+  if (createHash('sha256').update(persisted).digest('hex') !== byteHash) {
+    throw new CommandValidationError('VALIDATION_FAILED', '原件落盘校验失败，已拒绝登记')
+  }
   return {
-    byteHash: createHash('sha256').update(bytes).digest('hex'),
+    byteHash,
     assetKey: `source-docs/${versionId}/${fileName}`,
     sizeBytes: bytes.length,
     assetDirectory: dir,
@@ -89,13 +127,17 @@ export async function registerMaterial(caseId: string, command: { requestId: str
   if (!command.payload.sourcePath || !existsSync(command.payload.sourcePath)) throw new CommandValidationError('VALIDATION_FAILED', '材料文件不存在')
   const inputSize = statSync(command.payload.sourcePath).size
   if (inputSize > MAX_MATERIAL_BYTES) throw new CommandValidationError('VALIDATION_FAILED', `材料超过 50 MB 上限（${(inputSize / 1024 / 1024).toFixed(1)} MB）`)
+  // ASSET-02: freeze once, then parse/hash/copy from the same immutable bytes.
+  const frozen = freezeSourceFile(command.payload.sourcePath)
+  let pdfImageTempDir: string | undefined
+  try {
   let parsedDocx: DocxReviewContent | undefined
   let parsedXlsx: XlsxReviewContent | undefined
   let docxParseError: string | undefined
   let xlsxParseError: string | undefined
   if (extname(command.payload.sourcePath).toLowerCase() === '.docx') {
     try {
-      parsedDocx = await extractDocxReviewContent(command.payload.sourcePath)
+      parsedDocx = await extractDocxReviewContent(frozen.stagedPath)
     } catch (error) {
       docxParseError = `DOCX 结构解析失败，审核时尝试纯文本回退：${error instanceof Error ? error.message : String(error)}`
     }
@@ -104,7 +146,7 @@ export async function registerMaterial(caseId: string, command: { requestId: str
   const incomingExtension = extname(command.payload.sourcePath).toLowerCase()
   if (xlsxExtensions.has(incomingExtension)) {
     try {
-      parsedXlsx = extractSpreadsheetReviewContent(command.payload.sourcePath)
+      parsedXlsx = extractSpreadsheetReviewContent(frozen.stagedPath)
     } catch (error) {
       xlsxParseError = `Excel 单元格结构解析失败，审核时尝试纯文本回退：${error instanceof Error ? error.message : String(error)}`
     }
@@ -118,14 +160,14 @@ export async function registerMaterial(caseId: string, command: { requestId: str
   let fallbackText: string | undefined
   let fallbackParseError: string | undefined
   const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
-  const pdfImageTempDir = incomingExtension === '.pdf' ? mkdtempSync(join(tmpdir(), 'cdut-review-pdf-images-')) : undefined
+  pdfImageTempDir = incomingExtension === '.pdf' ? mkdtempSync(join(tmpdir(), 'cdut-review-pdf-images-')) : undefined
   let parsedPdfImages: ReviewDocumentBlock[] = []
   let pdfParseWarning: string | undefined
   const pdfPageWarnings: string[] = []
   if (pdfImageTempDir) {
     try {
       const { renderPdfImageBlocks } = await import('./case-import')
-      const pdfImages = await renderPdfImageBlocks({ filePath: command.payload.sourcePath, fileName: basename(command.payload.sourcePath), documentId: 'pending-review', assetDir: pdfImageTempDir })
+      const pdfImages = await renderPdfImageBlocks({ filePath: frozen.stagedPath, fileName: frozen.fileName, documentId: 'pending-review', assetDir: pdfImageTempDir })
       parsedPdfImages = pdfImages.blocks
       // 页图像被截断或中途失败时如实进入解析警告，登记状态不伪造成 parsed。
       pdfPageWarnings.push(...pdfImages.warnings)
@@ -136,11 +178,14 @@ export async function registerMaterial(caseId: string, command: { requestId: str
   if (!parsedDocx && !parsedXlsx && supportedReviewExtensions.has(incomingExtension) && !imageExtensions.has(incomingExtension)) {
     try {
       fallbackText = incomingExtension === '.html' || incomingExtension === '.htm' || incomingExtension === '.eml'
-        ? await extractReviewableTextFile(command.payload.sourcePath, basename(command.payload.sourcePath))
-        : await extractTextFromFile(command.payload.sourcePath)
+        ? await extractReviewableTextFile(frozen.stagedPath, frozen.fileName)
+        : await extractTextFromFile(frozen.stagedPath)
     }
     catch (error) { fallbackParseError = error instanceof Error ? error.message : String(error) }
   }
+  // ASSET-03: track physical dirs created by this command so a failed CAS commit
+  // never leaves an orphan that could be mistaken for a registered material.
+  const createdAssetDirs = new Set<string>()
   try {
     return await submitCommand<RegisterMaterialPayload, DocumentVersion>(caseId, { ...command, type: 'RegisterMaterial' }, (aggregate, payload) => {
     // Re-check the live Main window after parsing/Host awaits and immediately
@@ -155,12 +200,16 @@ export async function registerMaterial(caseId: string, command: { requestId: str
     if ([...requestedReplacements].some((versionId) => !aggregate.caseV2.documents.some((doc) => doc.versionId === versionId && doc.active !== false))) {
       throw new CommandValidationError('VALIDATION_FAILED', '替换目标不存在或不再是当前材料版本')
     }
-    const sameLogic = aggregate.caseV2.documents.filter((doc) => doc.fileName === incomingName && doc.materialSlotId === payload.materialSlotId)
+    // ASSET-04: role is part of material identity. Same file name in the same slot
+    // but a different role is NOT an implicit replacement; only an explicit
+    // replacesVersionIds list may retire it.
+    const sameLogic = aggregate.caseV2.documents.filter((doc) => doc.fileName === incomingName && doc.materialSlotId === payload.materialSlotId && doc.role === payload.role)
     const versionSeq = sameLogic.length + 1
     const previousVersion = sameLogic.at(-1)
     const documentId = `doc-${aggregate.caseV2.documents.length + 1}-${Date.now().toString(36)}`
     const versionId = `${documentId}-v${versionSeq}`
-    const { byteHash, assetKey, sizeBytes, assetDirectory } = copyAsset(caseId, versionId, sourcePath)
+    const { byteHash, assetKey, sizeBytes, assetDirectory } = copyAsset(caseId, versionId, frozen)
+    createdAssetDirs.add(assetDirectory)
     const fileExtension = extname(incomingName).toLowerCase()
     const embeddedExt: Record<string, string> = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' }
     const blocks: DocumentVersion['blocks'] = []
@@ -231,7 +280,7 @@ export async function registerMaterial(caseId: string, command: { requestId: str
         // 同槽位同名旧版本停止参与新审核（supersedes：同 slotId+name 才替换）
         const replacedVersions = new Set(payload.replacesVersionIds ?? [])
         const docs = draft.caseV2.documents.map((doc) => (
-          (doc.fileName === incomingName && doc.materialSlotId === payload.materialSlotId) || replacedVersions.has(doc.versionId)
+          (doc.fileName === incomingName && doc.materialSlotId === payload.materialSlotId && doc.role === payload.role) || replacedVersions.has(doc.versionId)
             ? { ...doc, active: false }
             : doc
         ))
@@ -257,15 +306,23 @@ export async function registerMaterial(caseId: string, command: { requestId: str
         draft.caseV2.documents = [...docs, doc]
         const retiredVersions = new Set(aggregate.caseV2.documents.filter((old) =>
           old.active !== false && (requestedReplacements.has(old.versionId) ||
-            (old.fileName === incomingName && old.materialSlotId === payload.materialSlotId)))
+            (old.fileName === incomingName && old.materialSlotId === payload.materialSlotId && old.role === payload.role)))
           .map((old) => old.versionId))
         revokeCurrentSourceValidity(draft, retiredVersions, 'replace')
         return doc
       },
     }
     })
+  } catch (error) {
+    // No aggregate receipt committed => remove the bytes this command created.
+    for (const dir of createdAssetDirs) {
+      try { rmSync(dir, { recursive: true, force: true }) } catch { /* keep for diagnosis */ }
+    }
+    throw error
+  }
   } finally {
     if (pdfImageTempDir) rmSync(pdfImageTempDir, { recursive: true, force: true })
+    frozen.dispose()
   }
 }
 
