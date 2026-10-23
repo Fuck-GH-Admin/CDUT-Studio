@@ -7,10 +7,13 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CsLabLab } from '@profer/shared'
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 
 let rootDir = ''
 let lab: CsLabLab
 let fakeSessionId = ''
+/** Pi 工具执行签名包含 signal/onUpdate/ctx；cslab 工具不读取这三项，测试传空上下文。 */
+const toolExecCtx = undefined as unknown as ExtensionContext
 
 const SAMPLE_CIF = `data_SrTiO3
 _cell_length_a 3.905
@@ -74,7 +77,7 @@ describe('CSLab 科学工具集', () => {
       title: '钛酸锶钙钛矿',
       format: 'cif',
       content: SAMPLE_CIF,
-    })) as any
+    }, undefined, undefined, toolExecCtx)) as any
 
     expect(result.isError).toBeFalsy()
     expect(result.details.uri).toContain('mol')
@@ -96,7 +99,7 @@ describe('CSLab 科学工具集', () => {
       uri: `lab://${lab.id}/mol/fake-123`,
       supercell: { na: 2, nb: 2, nc: 2 },
       highlightPolyhedra: true,
-    })) as any
+    }, undefined, undefined, toolExecCtx)) as any
 
     expect(result.isError).toBeFalsy()
     expect(result.details.status).toBe('focused')
@@ -111,6 +114,8 @@ describe('CSLab 科学工具集', () => {
     expect(labInfo!.labName).toBe('Origin × VESTA 测试实验室')
 
     const prompt = buildSystemPrompt({
+      sessionId: fakeSessionId,
+      permissionMode: 'bypassPermissions',
       cslabLabBound: true,
       cslabLabInfo: labInfo,
     })

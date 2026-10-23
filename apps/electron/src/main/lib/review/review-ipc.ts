@@ -89,6 +89,14 @@ function assertLegacyChannelNotSuperseded(caseId: string, channel: string): void
   if (getCaseV2Aggregate(caseId)?.canonicalPlan) {
     throw new Error(`${channel} 已被冻结 CanonicalPlan 的新权威通道取代；旧兼容写不得改写新权威`)
   }
+  // 已进入批次评分的案卷，评分权威是 T07 评分轮次；旧 CAST_RATING 平行写会
+  // 产生两套票面，必须在入口明确拒绝而不是静默分叉。
+  if (channel !== REVIEW_IPC_CHANNELS.CAST_RATING_V2) return
+  const { listBatchStatesV2 } = require('./batch-store') as typeof import('./batch-store')
+  const active = listBatchStatesV2().find((state) => state.batch.caseIds.includes(caseId))
+  if (active) {
+    throw new Error(`该案卷属于批次 ${active.batch.id}，评分必须走 T07 评分通道；旧 CAST_RATING 不得并行记分`)
+  }
 }
 
 /**
@@ -743,7 +751,8 @@ export function registerReviewIpc(): void {
     assertC0ReviewMainSender(event)
     if (!input || typeof input.batchId !== 'string' || !input.batchId) throw new Error('参数 batchId 非法')
     const { getT07View } = require('./review-v3-t07-main-service') as typeof import('./review-v3-t07-main-service')
-    return getT07View(input.batchId, input.claim, input.safeMaterials ?? [])
+    // Integration: t07 service final signature is (batchId, claim); safeMaterials are folded into the service view.
+    return getT07View(input.batchId, input.claim)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T07_APPLY_ACTION, (event, input: {
     batchId: string; claim?: { role: 'judge' | 'organizer'; reviewerId?: string }

@@ -139,7 +139,7 @@ test('T08 报告：恢复代次与恢复前决定被标注为历史，受众未�
     checks: [], opinions: [],
   } as unknown as ReviewRunV2
   const report = makeT08CaseReport({ aggregate, run, audience: 'organizer', stale: false })
-  expect(report.archiveCycle.archiveCycle).toBe(1)
+  expect(report.archiveCycle?.archiveCycle).toBe(1)
   expect(report.markdown).toContain('最近恢复于 2026-09-10T00:00:00Z')
   expect(report.markdown).toContain('恢复前决定，仅作历史展示')
   expect(report.audienceGranted).toBe(false)
