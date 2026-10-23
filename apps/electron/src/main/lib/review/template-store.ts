@@ -486,13 +486,13 @@ export function validateTemplate(template: TemplateVersion): TemplateValidationI
   if (template.policyVersionIds.length === 0 && template.stages.some((stage) => stage.kind === 'auto-check') && authoredCriteria === 0) {
     issues.push({ level: 'warning', message: '模板声明了自动检查阶段但没有引用任何政策版本' })
   }
-  // TAR-13：自动检查阶段必须真有可执行标准；纯材料模板（无自动检查）允许发布但会被显式标记。
-  if (authoredCriteria === 0 && !hasPolicyBacking && template.stages.some((stage) => stage.kind === 'auto-check')
-      && !sections.some((section) => (section.criteria ?? []).some((criterion) => criterion.dataCheck))) {
-    issues.push({ level: 'error', message: '模板声明了自动检查阶段，但没有任何审核标准；请配置标准，或改为仅材料完整性模板' })
-  }
+  // TAR-13：发布必须区分“业务规则模板”和“仅材料/人工模板”。
+  // 自动检查阶段没有 authored criteria 时不一定为空转——运行时仍可消费案卷级
+  // AI/人工确认规则；因此这里不阻断发布，但必须如实警告并派生执行范围。
   if (authoredCriteria === 0 && !hasPolicyBacking && !sections.some((section) => (section.criteria ?? []).some((criterion) => criterion.dataCheck))) {
-    issues.push({ level: 'warning', message: '模板没有任何审核标准：发布后只能核对材料与人工办理，将被标记为仅材料/人工模板' })
+    issues.push({ level: 'warning', message: template.stages.some((stage) => stage.kind === 'auto-check')
+      ? '模板没有任何内置审核标准：自动检查阶段只能消费运行时确认的案卷规则；发布后标记为仅材料/人工模板'
+      : '模板没有任何审核标准：发布后只能核对材料与人工办理，将被标记为仅材料/人工模板' })
   }
   // N1b：精确政策引用校验（存在+已发布+hash 一致；缺失即 error 阻止发布）
   for (const ref of template.policyRefs ?? []) {

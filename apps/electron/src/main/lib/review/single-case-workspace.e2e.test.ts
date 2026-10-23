@@ -53,7 +53,7 @@ const { ensureBuiltinTemplateDrafts } = await import('./builtin-templates')
 const { getTemplate, saveDraft } = await import('./template-store')
 const { ensureWorkspaceAggregateV2, syncWorkspaceProjectionV2 } = await import('./workspace-service-v2')
 const { readAggregate } = await import('./case-store-v2')
-const { correctObservation, setEvidenceLink } = await import('./application-service')
+const { correctObservation, setEvidenceLink, updateFields, upsertCaseSubject } = await import('./application-service')
 const { registerMaterial } = await import('./material-service')
 const { submitCaseV2, respondSupplementV2, resolveSupplementV2 } = await import('./stage-workflow')
 const { openWorkspaceSupplementV2, acknowledgeWorkspaceMaterialV2, recordWorkspaceSubjectAdjudicationV2, decideWorkspaceCaseV2 } = await import('./workspace-business-service-v2')
@@ -150,6 +150,43 @@ describe('普通审核工作台单案完整链路', () => {
         })
         assertCommandSucceeded(registered)
       }
+    }
+
+    // MANAGER-INTAKE-GATE：旧 V1 迁移到新版模板后，必填字段与必需分项必须由
+    // 普通命令补齐（与用户在案卷页操作同一路径），不能绕过提交门禁。
+    const intakeTemplate = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)!
+    const caseFieldValues: Record<string, unknown> = {}
+    for (const field of intakeTemplate.fields.filter((item) => (item.scope ?? 'subject') === 'case' && item.required)) {
+      const currentCase = readAggregate(caseUnderTest.id)!
+      if (currentCase.caseV2.caseFields[field.key]) continue
+      caseFieldValues[field.key] = field.key === 'studentName' ? '林小满'
+        : field.key === 'studentId' ? '2025001'
+          : field.kind === 'number' ? 1 : field.kind === 'date' ? '2026-01-01' : '示例'
+    }
+    if (Object.keys(caseFieldValues).length > 0) {
+      const filled = await updateFields(caseUnderTest.id, {
+        requestId: commandId('intake-case-fields'), actor,
+        expectedRevision: readAggregate(caseUnderTest.id)!.caseV2.revision,
+        payload: { caseFieldValues },
+      }, intakeTemplate)
+      assertCommandSucceeded(filled)
+    }
+    for (const section of (intakeTemplate.sections ?? []).filter((item) => item.required)) {
+      const latest = readAggregate(caseUnderTest.id)!
+      if (latest.caseV2.subjects.some((subject) => subject.sectionId === section.id)) continue
+      const fieldValues = Object.fromEntries(intakeTemplate.fields
+        .filter((field) => (field.scope ?? 'subject') === 'subject' && field.required && (!field.sectionId || field.sectionId === section.id))
+        .map((field) => [field.key, field.kind === 'number' ? 1
+          : field.kind === 'date' ? '2026-01-01'
+            : field.kind === 'enum' ? (field.options?.[0]?.value ?? '示例')
+              : field.kind === 'boolean' ? true
+                : field.kind === 'multi' ? [field.options?.[0]?.value ?? '示例'] : '示例']))
+      const added = await upsertCaseSubject(caseUnderTest.id, {
+        requestId: commandId('intake-section-' + section.id), actor,
+        expectedRevision: latest.caseV2.revision,
+        payload: { title: `${section.name}示例事项`, sectionId: section.id, fieldValues },
+      }, intakeTemplate)
+      assertCommandSucceeded(added)
     }
 
     const submitted = await submitCaseV2(caseUnderTest.id, actor)

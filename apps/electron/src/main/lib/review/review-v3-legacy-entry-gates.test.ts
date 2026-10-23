@@ -496,12 +496,13 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     // → registerNativeWorkspaceMaterialV3 → registerMaterial），受信 Main 传来的纯路径字符串会被真实
     // 登记成 V2 RegisterMaterial 回执。旧断言要求 SOURCE_CAPABILITY_REQUIRED，那是该通道尚未接入
     // 原生材料服务时的行为，已过期；这里改为断言新的真实行为。
-    const aId = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
+    const aVersionId = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
       caseId: created.id, sourcePath: sourceA, role: 'evidence',
     })) as string
-    expect(typeof aId).toBe('string')
+    expect(typeof aVersionId).toBe('string')
     const afterPathRegister = readAggregate(created.id)!
-    const registeredA = afterPathRegister.caseV2.documents.find(doc => doc.documentId === aId)
+    // ASSET-05：两条登记通道统一返回 DocumentVersion.versionId（渲染层也按 versionId 使用）。
+    const registeredA = afterPathRegister.caseV2.documents.find(doc => doc.versionId === aVersionId)
     expect(registeredA).toMatchObject({ fileName: 'native-material-a.txt', role: 'evidence', active: true })
     expect(afterPathRegister.receiptLog.at(-1)).toMatchObject({ type: 'RegisterMaterial' })
 
@@ -513,7 +514,7 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(JSON.stringify(readAggregate(created.id))).toBe(beforeForged)
 
     // A 已在上面通过拖拽/路径通道真实登记，这里不再重复导入（同槽位同名会形成新版本并停用旧版本）。
-    const a = { id: aId, fileName: registeredA!.fileName, parseStatus: registeredA!.parseStatus }
+    const a = { id: registeredA!.documentId, versionId: registeredA!.versionId, fileName: registeredA!.fileName, parseStatus: registeredA!.parseStatus }
     const b = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.IMPORT_DOCUMENT_FROM_PATH, {
       caseId: created.id, sourcePath: sourceB, role: 'evidence',
     })) as { id: string; fileName: string }
@@ -567,7 +568,7 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     expect(typeof pdfId).toBe('string')
 
     const afterPdf = readAggregate(created.id)!
-    const pdfDoc = afterPdf.caseV2.documents.find(doc => doc.documentId === pdfId)!
+    const pdfDoc = afterPdf.caseV2.documents.find(doc => doc.versionId === pdfId)!
     expect(pdfDoc).toMatchObject({ fileName: 'real-material.pdf', role: 'evidence', active: true })
     // 真实解析：三页文本层都进入材料块，不是空占位（引擎同时写入锚点/定位行，故按内容断言）
     const pdfText = pdfDoc.blocks.map(block => block.text).join('\n')
@@ -589,7 +590,7 @@ describe('C1 legacy Main command isolation and compatibility', () => {
     const docxId = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
       caseId: created.id, sourcePath: docxSource, role: 'application',
     })) as string
-    const docxDoc = readAggregate(created.id)!.caseV2.documents.find(doc => doc.documentId === docxId)!
+    const docxDoc = readAggregate(created.id)!.caseV2.documents.find(doc => doc.versionId === docxId)!
     expect(docxDoc).toMatchObject({ fileName: 'real-material.docx', role: 'application', active: true })
     // 材料块的 kind 只有 text/table/image；DOCX 结构类型（标题/段落/单元格）记录在 format 上
     expect(docxDoc.blocks.find(block => block.format === 'heading')?.text).toBe('Eligibility requirements')
