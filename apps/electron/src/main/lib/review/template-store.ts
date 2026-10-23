@@ -130,8 +130,8 @@ export function isTemplateVersionRetired(templateId: string, version: number): b
   return readRetirement(templateId, version) !== undefined
 }
 
-/** 读取模板；version 缺省取最大已存版本 */
-export function getTemplate(templateId: string, version?: number): TemplateVersion | undefined {
+/** 读取磁盘上的版本正文（不做停用投影）；停用状态只存在于独立 sidecar。 */
+function readTemplateBody(templateId: string, version?: number): TemplateVersion | undefined {
   if (!isSafeTemplateId(templateId)) return undefined
   const dir = join(templatesRoot(), templateId, 'versions')
   if (!existsSync(dir)) return undefined
@@ -160,6 +160,20 @@ export function getTemplate(templateId: string, version?: number): TemplateVersi
     console.warn(`[审核模板] 模板解析失败: ${templateId}@${target}`, error)
     return undefined
   }
+}
+
+/**
+ * 读取模板；version 缺省取最大已存版本。
+ * 停用只投影状态，绝不改写版本正文：`templateId@version` 内容哈希保持不可变，
+ * 而所有真实读取方（模板库、路由目录、T07 批次新鲜度）都能看到 deprecated。
+ */
+export function getTemplate(templateId: string, version?: number): TemplateVersion | undefined {
+  const body = readTemplateBody(templateId, version)
+  if (!body) return undefined
+  if (body.status === 'published' && isTemplateVersionRetired(body.templateId, body.version)) {
+    return { ...body, status: 'deprecated' }
+  }
+  return body
 }
 
 /** 列出全部模板（每个取最新版本） */
@@ -237,7 +251,7 @@ export function restoreTemplateToLibrary(templateId: string): TemplateVersion {
 function saveDraftControlled(template: TemplateVersion, forceCandidate: boolean): TemplateVersion {
   if (template.status !== 'draft') throw new Error('saveDraft 只接受草稿状态模板')
   return withTemplateVersionLock(template.templateId, template.version, () => {
-    const existing = getTemplate(template.templateId, template.version)
+    const existing = readTemplateBody(template.templateId, template.version)
     if (existing && existing.status === 'published') {
       throw new Error(`版本 ${template.version} 已发布不可覆盖；请提升版本号`)
     }
@@ -438,8 +452,12 @@ export function validateTemplate(template: TemplateVersion): TemplateValidationI
 /** 发布：draft → published 不可变；error 清零才允许（02 §5.6） */
 export function publishTemplate(templateId: string, version: number): TemplateVersion {
   return withTemplateVersionLock(templateId, version, () => {
-    const template = getTemplate(templateId, version)
+    const template = readTemplateBody(templateId, version)
     if (!template) throw new Error(`模板不存在: ${templateId}@${version}`)
+    // 已停用版本只允许历史读取，不得借发布操作复活或改写正文。
+    if (isTemplateVersionRetired(templateId, version)) {
+      throw new Error(`版本 ${version} 已停用，不可重新发布；请提升版本号`)
+    }
     if (template.status === 'published') return template
     // 在实际发布事务中核验服务端资格；可修改的 sourceNote 不是授权凭据。
     const control = readPublicationControl(templateId, version)
@@ -469,7 +487,7 @@ export function publishTemplate(templateId: string, version: number): TemplateVe
  */
 export function deprecateTemplate(templateId: string, version: number, reason?: string): TemplateVersion {
   return withTemplateVersionLock(templateId, version, () => {
-    const template = getTemplate(templateId, version)
+    const template = readTemplateBody(templateId, version)
     if (!template) throw new Error(`模板不存在: ${templateId}@${version}`)
     if (template.status !== 'published') throw new Error('只有已发布版本可停用')
     if (isTemplateVersionRetired(templateId, version)) return { ...template, status: 'deprecated' as const }

@@ -3,7 +3,7 @@
  * 隔离：PROFER_CONFIG_DIR 指向唯一临时目录。
  */
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ALL_DEFAULT_TEMPLATES_V2, BUILTIN_TEMPLATES_V2, ensureBuiltinTemplateDrafts } from './builtin-templates'
 import { deprecateTemplate, getTemplate, isSafeTemplateId, isTemplateVersionRetired, listArchivedTemplates, listTemplateVersions, listTemplates, publishTemplate, removeTemplateFromLibrary, reorderTemplates, restoreTemplateToLibrary, saveDraft, validateTemplate } from './template-store'
@@ -122,18 +122,28 @@ describe('审核模板目录（M1）', () => {
     expect(listTemplates().some((template) => template.templateId === target.templateId)).toBeTrue()
   })
 
-  test('Given 已发布版本 When 停用 Then 只写停用元数据且正文不可覆写', () => {
-    const published = publishTemplate('document-checklist-v2', 1)
-    const deprecated = deprecateTemplate('document-checklist-v2', 1, '本地验证停用')
+  test('Given 已发布版本 When 停用 Then 正文逐字节不变但所有读取投影 deprecated', () => {
+    // 用本用例自建模板，避免依赖内置目录的归档/版本历史状态。
+    const base = { ...BUILTIN_TEMPLATES_V2[1]!, templateId: 'deprecate-probe-v1', version: 1, status: 'draft' as const }
+    saveDraft(base)
+    const published = publishTemplate('deprecate-probe-v1', 1)
+    const versionFile = join(CONFIG_DIR, 'review-templates', 'deprecate-probe-v1', 'versions', '1.json')
+    const beforeBytes = readFileSync(versionFile, 'utf-8')
+    const deprecated = deprecateTemplate('deprecate-probe-v1', 1, '本地验证停用')
     expect(deprecated.status).toBe('deprecated')
-    expect(isTemplateVersionRetired('document-checklist-v2', 1)).toBeTrue()
-    // 历史 templateId@version 的内容保持逐字节等价：正文仍是 published，hash 不变。
-    const stored = getTemplate('document-checklist-v2', 1)
-    expect(stored?.status).toBe('published')
-    expect(stored?.publishedAt).toBe(published.publishedAt)
-    expect(JSON.stringify(stored)).toBe(JSON.stringify(published))
-    // 停用后同版本不能被普通 saveDraft 覆写，必须提升版本号。
+    expect(isTemplateVersionRetired('deprecate-probe-v1', 1)).toBeTrue()
+    // 冻结正文逐字节不变（停用只写 sidecar，不重写 id@version）。
+    expect(readFileSync(versionFile, 'utf-8')).toBe(beforeBytes)
+    // 真实读取路径必须看到 deprecated，否则路由/T07 会继续接受停用版本。
+    expect(getTemplate('deprecate-probe-v1', 1)?.status).toBe('deprecated')
+    expect(listTemplates().find((t) => t.templateId === 'deprecate-probe-v1')?.status).toBe('deprecated')
+    expect(listTemplateVersions().find((t) => t.templateId === 'deprecate-probe-v1')?.status).toBe('deprecated')
+    // 路由目录只取 published：停用后不得再出现在可选列表。
+    expect(listTemplateVersions().filter((t) => t.status === 'published').some((t) => t.templateId === 'deprecate-probe-v1')).toBeFalse()
+    // 停用后同版本不能被 saveDraft 覆写，也不能被重新发布复活。
     expect(() => saveDraft({ ...published, status: 'draft', name: '被篡改' })).toThrow()
+    expect(() => publishTemplate('deprecate-probe-v1', 1)).toThrow()
+    expect(readFileSync(versionFile, 'utf-8')).toBe(beforeBytes)
   })
 })
 
