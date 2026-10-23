@@ -576,6 +576,8 @@ export const REVIEW_IPC_CHANNELS = {
   CREATE_CASE_V2: 'review-v2:create-case',
   GET_AGGREGATE_V2: 'review-v2:get-aggregate',
   UPDATE_FIELDS_V2: 'review-v2:update-fields',
+  /** 导入草案补录/编辑申报事项（必需分项）；Main 用已发布模板校验并 CAS 落盘。 */
+  UPSERT_CASE_SUBJECT_V2: 'review-v2:upsert-case-subject',
   CORRECT_OBSERVATION_V2: 'review-v2:correct-observation',
   GET_RUN_OBSERVATIONS_V2: 'review-v2:get-run-observations',
   EXPORT_REPORT_V2: 'review-v2:export-report',

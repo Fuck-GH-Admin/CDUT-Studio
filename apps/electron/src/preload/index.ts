@@ -4839,6 +4839,18 @@ const reviewAPI = {
   getAggregateV2: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.GET_AGGREGATE_V2, caseId) as Promise<import('@profer/shared').CaseAggregateV2 | undefined>,
   updateFieldsV2: (input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPDATE_FIELDS_V2, input) as Promise<import('@profer/shared').ReviewCommandResult | undefined>,
+  /** 导入草案补录/编辑申报事项（必填分项）；Main 用已发布模板校验并 CAS 落盘。 */
+  upsertCaseSubjectV2: (input: {
+    caseId: string
+    command: {
+      requestId: string; expectedRevision: number
+      payload: { subjectId?: string; title: string; type?: string; sectionId?: string; fieldValues?: Record<string, unknown> }
+      payloadHash?: string
+    }
+  }) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.UPSERT_CASE_SUBJECT_V2, input) as Promise<
+      import('@profer/shared').ReviewCommandResult<import('@profer/shared').ReviewSubject>
+    >,
   exportReportV2: (caseId: string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.EXPORT_REPORT_V2, caseId) as Promise<{ file: string; decision: { result: string; reason: string; at: string } | null }>,
   createAssignmentV2: (input: { sessionId: string; turnId: string; caseId?: string; templateId?: string; templateVersion?: number; actions: string[]; workRole?: 'reviewer' | 'student' }) =>

@@ -674,8 +674,11 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
         succeededByTemplate.set(key, item)
       }
     } catch (cause) {
+      // 建案前失败（模板/字段/来源校验）不得在回执里声称存在一个 caseId；
+      // 只有聚合确实落盘时才是“已建案但部分失败”，可恢复语义才成立。
+      const persistedCaseId = caseId && readAggregate(caseId) ? caseId : undefined
       cases.push({
-        groupId: group.groupId, ...(caseId ? { caseId } : {}), documents: [], status: 'failed',
+        groupId: group.groupId, ...(persistedCaseId ? { caseId: persistedCaseId } : {}), documents: [], status: 'failed',
         error: cause instanceof Error ? cause.message : String(cause),
       })
     }

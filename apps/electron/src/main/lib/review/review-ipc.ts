@@ -713,6 +713,11 @@ export function registerReviewIpc(): void {
     const aggregate = getCaseV2Aggregate(input.caseId)
     return !aggregate || isWorkspaceRunStaleV2(aggregate, input.runId)
   })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.UPSERT_CASE_SUBJECT_V2, (event, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
+    const command = bindC0LocalCaseCommand(event, input?.caseId, 'UPSERT_CASE_SUBJECT_V2', input?.command)
+    const { upsertCaseSubjectC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')
+    return upsertCaseSubjectC0(command as Parameters<typeof upsertCaseSubjectC0>[0])
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.CORRECT_OBSERVATION_V2, (event, input: { caseId: string; command: import('@profer/shared').ReviewCommandV2<unknown> }) => {
     const command = bindC0LocalCaseCommand(event, input?.caseId, 'CORRECT_OBSERVATION_V2', input?.command)
     const { correctObservationC0 } = require('./review-c0-case-service') as typeof import('./review-c0-case-service')

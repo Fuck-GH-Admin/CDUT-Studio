@@ -303,6 +303,11 @@ export function ReviewV3T06PhysicalImport({
       {receipt.cases.some(x => x.status === 'failed') && <p className="text-amber-700 dark:text-amber-300">部分案卷可能已写入材料；请查看现存案卷再重新选取原件，避免把同一批次当作全新导入。</p>}
       {receipt.cases.filter(x => x.status === 'failed').map(x => <p key={x.groupId} className="text-destructive">
         {x.groupId}：{x.error}（已登记 {x.documents.length} 份，后续可恢复）</p>)}
+      {receipt.cases.filter(x => x.warnings?.length).map(x => <div key={'warn-' + x.groupId} className="rounded border border-amber-300/60 bg-amber-50/40 p-2 text-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
+        <p className="font-medium">案卷 {x.caseId ?? x.groupId} 已入库，但提交审核前还需补齐：</p>
+        <ul className="mt-1 list-disc pl-4">{x.warnings!.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
+        <p className="mt-1 text-muted-foreground">到“案卷办理”打开该案卷，在“申报事项与分项”和案卷字段中补齐后再提交；材料不会丢失，也不会重复建案。</p>
+      </div>)}
     </div>}
     {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
   </section>

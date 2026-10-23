@@ -226,6 +226,92 @@ describe('T06 物理入库桥接', () => {
     expect(result.cases[0]?.error).toContain('材料槽不在所选模板中')
   })
 
+  test('B1 返修：普通用户补录必填字段与必需分项后，同一入库案卷可提交且原件不丢', async () => {
+    const { updateFields, upsertCaseSubject } = await import('./application-service')
+    const { getTemplate } = await import('./template-store')
+    const actor = { actorId: 'local-user', actorSource: 'local' as const, role: 'reviewer' as const }
+    const selection = seedSelection([{ name: '申请书.txt', content: '待补录申请书' }])
+    const receipt = (await service.commitT06PhysicalImport({
+      requestId: 'r-intake-fill', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, batchName: '补录批次',
+      groups: [{
+        groupId: 'g1', action: 'create', entryIds: [selection.entries[0]!.entryId],
+        title: '待补录案卷', templateId: requiredTemplateId, templateVersion: 1,
+        entryAssignments: [{ entryId: selection.entries[0]!.entryId, role: 'application', materialSlotId: 'application-form' }],
+      }],
+    })).cases[0]!
+    expect(receipt.status).toBe('done')
+    expect(receipt.warnings?.join('；')).toContain('申报金额')
+    expect(receipt.warnings?.join('；')).toContain('申报事项')
+    const caseId = receipt.caseId!
+    const before = (await import('./case-store-v2')).readAggregate(caseId)!
+    const template = getTemplate(requiredTemplateId, 1)!
+    const filled = await updateFields(caseId, {
+      requestId: 'fill-amount', actor, expectedRevision: before.caseV2.revision,
+      payload: { caseFieldValues: { amount: '5000' } },
+    }, template)
+    expect(filled.ok).toBe(true)
+    const afterField = (await import('./case-store-v2')).readAggregate(caseId)!
+    const added = await upsertCaseSubject(caseId, {
+      requestId: 'add-required-subject', actor, expectedRevision: afterField.caseV2.revision,
+      payload: { title: '项目一', sectionId: 'decl' },
+    }, template)
+    expect(added.ok).toBe(true)
+    const after = (await import('./case-store-v2')).readAggregate(caseId)!
+    expect(after.caseV2.subjects.map((subject) => subject.title)).toEqual(['项目一'])
+    expect(after.caseV2.caseFields.amount).toEqual({ kind: 'number', value: 5000 })
+    expect(after.caseV2.documents).toHaveLength(before.caseV2.documents.length)
+    expect(after.caseV2.documents[0]!.fileName).toBe('申请书.txt')
+    const submitted = await submitCaseV2(caseId)
+    expect(submitted.ok).toBe(true)
+    expect((await import('./case-store-v2')).readAggregate(caseId)!.caseV2.stage).toBe('submitted')
+  })
+
+  test('B1 返修负例：补录不能写未知分项/错误类型；T06 错误类型在入库阶段即拒绝', async () => {
+    const { updateFields, upsertCaseSubject } = await import('./application-service')
+    const { getTemplate } = await import('./template-store')
+    const actor = { actorId: 'local-user', actorSource: 'local' as const, role: 'reviewer' as const }
+    const selection = seedSelection([{ name: 'bad.txt', content: '负例原件' }])
+    const receipt = (await service.commitT06PhysicalImport({
+      requestId: 'r-intake-negative', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, batchName: '负例批次',
+      groups: [{
+        groupId: 'g1', action: 'create', entryIds: [selection.entries[0]!.entryId],
+        title: '负例案卷', templateId: requiredTemplateId, templateVersion: 1,
+        entryAssignments: [{ entryId: selection.entries[0]!.entryId, role: 'application', materialSlotId: 'application-form' }],
+      }],
+    })).cases[0]!
+    const caseId = receipt.caseId!
+    const template = getTemplate(requiredTemplateId, 1)!
+    const current = (await import('./case-store-v2')).readAggregate(caseId)!
+    const badSection = await upsertCaseSubject(caseId, {
+      requestId: 'bad-section', actor, expectedRevision: current.caseV2.revision,
+      payload: { title: '越界事项', sectionId: 'not-a-section' },
+    }, template)
+    expect(badSection.ok).toBe(false)
+    expect(badSection.ok ? '' : badSection.message).toContain('审核分项不存在')
+    const badType = await updateFields(caseId, {
+      requestId: 'bad-type', actor, expectedRevision: current.caseV2.revision,
+      payload: { caseFieldValues: { amount: { nested: true } } },
+    }, template)
+    expect(badType.ok).toBe(false)
+    expect(badType.ok ? '' : badType.message).toContain('必须是有效数字')
+    // T06 建案阶段同样拒绝不可转换的对象值，不能落成 "[object Object]"
+    const wrongTypeSelection = seedSelection([{ name: 'wrong.txt', content: '错误类型' }])
+    const wrongType = await service.commitT06PhysicalImport({
+      requestId: 'r-intake-wrong-type', selectionId: wrongTypeSelection.selectionId,
+      previewFingerprint: wrongTypeSelection.previewFingerprint, batchName: '错误类型批次',
+      groups: [{
+        groupId: 'g1', action: 'create', entryIds: [wrongTypeSelection.entries[0]!.entryId],
+        title: '错误类型案卷', templateId: requiredTemplateId, templateVersion: 1,
+        fieldValues: { amount: { nested: true } },
+      }],
+    })
+    expect(wrongType.cases[0]?.status).toBe('failed')
+    expect(wrongType.cases[0]?.error).toContain('必须是有效数字')
+    expect(wrongType.cases[0]?.caseId).toBeUndefined()
+  })
+
   test('BATCH-17：跳过/隐藏条目进入逐文件未入库清单（不是静默成功）', async () => {
     const root = mkdtempSync(join(tmpdir(), 't06-inventory-'))
     writeFileSync(join(root, 'visible.txt'), '可见原件')

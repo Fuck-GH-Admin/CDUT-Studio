@@ -9,7 +9,7 @@
  * AI 工具不能直接调用这些命令的人工动作；actor 来源按命令传入（本地模式 local）。
  */
 
-import type { Actor, CommandReceipt, EvidenceLink, FieldValue, Observation, ReviewCaseV2, TemplateVersion } from '@profer/shared'
+import type { Actor, CommandReceipt, EvidenceLink, FieldSpec, FieldValue, Observation, ReviewCaseV2, ReviewSubject, TemplateVersion } from '@profer/shared'
 import { buildEvidenceLinks, recordObservation, transitionEvidenceLink } from './evidence-service'
 import { getTemplate } from './template-store'
 import { validatePolicyRef } from './policy-store'
@@ -49,6 +49,49 @@ export interface CreateCaseOptions {
   allowIncompleteIntake?: boolean
 }
 
+/**
+ * 原始输入的类型门禁（RUN-38 返修）：
+ * - 只对“确实不可转换”的形状拒绝（对象/数组塞进标量、非数字塞进数字等）；
+ * - 允许历史契约中的标量规范化（数值字符串进 number、'true' 进 boolean、标量进 text/multi）；
+ * - 选项/日期格式仍由既有校验继续检查，不用这里替代业务校验。
+ */
+export function rawFieldTypeIssue(spec: FieldSpec, value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const kind = typeof value
+  switch (spec.kind) {
+    case 'text':
+      return ['string', 'number', 'boolean'].includes(kind) ? undefined : '必须是文本值，不能是对象或数组'
+    case 'number': {
+      const parsed = kind === 'number' ? value as number : kind === 'string' ? Number(value) : Number.NaN
+      return Number.isFinite(parsed) ? undefined : '必须是有效数字'
+    }
+    case 'boolean':
+      return (kind === 'boolean' || value === 'true' || value === 'false' || value === 1 || value === 0)
+        ? undefined : '必须是布尔值'
+    case 'date': {
+      if (kind !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(value as string)) return '必须是有效日期（YYYY-MM-DD）'
+      return Number.isFinite(Date.parse(value as string)) ? undefined : '日期无法解析'
+    }
+    case 'enum':
+      return ['string', 'number'].includes(kind) ? undefined : '必须是选项值'
+    case 'multi':
+      if (!Array.isArray(value) && kind !== 'string') return '必须是多选数组或单个选项'
+      if (Array.isArray(value) && value.some((item) => typeof item !== 'string' && typeof item !== 'number')) {
+        return '多选条目必须是文本或数字'
+      }
+      return undefined
+    case 'object':
+      return (kind === 'object' && !Array.isArray(value)) ? undefined : '必须是对象'
+    case 'rows':
+      return (Array.isArray(value) && value.every((item) => item && typeof item === 'object' && !Array.isArray(item)))
+        ? undefined : '必须是行对象数组'
+    case 'attachment':
+      return kind === 'string' && (value as string).trim() ? undefined : '必须是附件版本号'
+    default:
+      return undefined
+  }
+}
+
 function validateSectionSubjects(template: TemplateVersion, payload: CreateCasePayload, allowMissingRequiredSections = false): void {
   const sections = template.sections ?? []
   const sectionById = new Map(sections.map((section) => [section.id, section]))
@@ -73,6 +116,8 @@ function validateSectionSubjects(template: TemplateVersion, payload: CreateCaseP
       if (!allowedKeys.has(key)) throw new CommandValidationError('VALIDATION_FAILED', `${section ? `分项「${section.name}」` : '申报事项'}不接受字段 ${key}`)
       if (value === '' || value === null || value === undefined || (typeof value === 'string' && !value.trim())) continue
       const field = allowedFields.find((candidate) => candidate.key === key)!
+      const typeIssue = rawFieldTypeIssue(field, value)
+      if (typeIssue) throw new CommandValidationError('VALIDATION_FAILED', `${section?.name ? `${section.name}：` : ''}${field.label}${typeIssue}`)
       if (field.kind === 'number' && !Number.isFinite(typeof value === 'number' ? value : Number(value))) {
         throw new CommandValidationError('VALIDATION_FAILED', `${section?.name ? `${section.name}：` : ''}${field.label}必须是有效数字`)
       }
@@ -249,6 +294,8 @@ export function validateFieldValuesV2(
       if (spec.required && providedKeys.has(key)) issues.push({ key, reason: '必填字段缺失' })
       continue
     }
+    const typeIssue = rawFieldTypeIssue(spec, value)
+    if (typeIssue) issues.push({ key, reason: typeIssue })
     if (spec.kind === 'number') {
       const parsed = typeof value === 'number' ? value : Number(value)
       if (!Number.isFinite(parsed)) issues.push({ key, reason: '数字字段值不是有限数' })
@@ -398,6 +445,113 @@ export function setEvidenceLink(caseId: string, command: { requestId: string; ac
         const links = buildEvidenceLinks(draft.evidenceLinks, payload)
         draft.evidenceLinks = links
         return links
+      },
+    }
+  })
+}
+
+// ===== UpsertCaseSubject（导入草稿补录必需分项） =====
+
+/**
+ * 普通用户补录/编辑申报事项的唯一写入口。
+ *
+ * 目的：T06 批量入库可以先建“待补”草案，但必须有产品内可到达的方式补齐
+ * required section 与事项必填字段，随后同一案卷能正常 submit——不能要求用户
+ * 手改 JSON，也不能只返回 warning。
+ *
+ * 约束：
+ * - 仅 draft 阶段可补录（已提交案卷走阶段办理/补件，不在入库补录里绕过门禁）；
+ * - 模板必须仍是已发布版本，字段类型/作用域/分项归属都以该版本为准；
+ * - 更新既有事项时只覆盖显式提供的字段，其余字段保留并继续参与必填校验；
+ * - 走 V2 CAS/回执事务，重复 requestId 幂等。
+ */
+export interface UpsertCaseSubjectPayload {
+  subjectId?: string
+  title: string
+  type?: ReviewSubject['type']
+  sectionId?: string
+  fieldValues?: Record<string, unknown>
+}
+
+function isProvidedRaw(value: unknown): boolean {
+  return !(value === undefined || value === null || value === '' || (typeof value === 'string' && !value.trim()))
+}
+
+export function upsertCaseSubject(
+  caseId: string,
+  command: { requestId: string; actor: Actor; expectedRevision: number; payload: UpsertCaseSubjectPayload },
+  template?: TemplateVersion,
+): Promise<ReviewCommandResult<ReviewSubject>> {
+  return submitCommand<UpsertCaseSubjectPayload, ReviewSubject>(caseId, { ...command, type: 'UpsertCaseSubject' }, (aggregate, payload) => {
+    if (aggregate.caseV2.stage === 'archived') throw new CommandValidationError('INVALID_TRANSITION', '已归档案卷不可修改')
+    if (aggregate.caseV2.stage !== 'draft') {
+      throw new CommandValidationError('INVALID_TRANSITION', '仅草案阶段可补录申报事项；已提交案卷请通过阶段办理或补件流程处理')
+    }
+    if (!template) throw new CommandValidationError('DEPENDENCY_UNRESOLVED', '案卷模板不可用，不能校验申报事项')
+    if (template.status !== 'published') throw new CommandValidationError('INVALID_TRANSITION', '案卷绑定的模板版本尚未发布，不能写入申报事项')
+    const sections = template.sections ?? []
+    const section = payload.sectionId ? sections.find((item) => item.id === payload.sectionId) : undefined
+    if (payload.sectionId && !section) throw new CommandValidationError('VALIDATION_FAILED', `审核分项不存在：${payload.sectionId}`)
+    if (sections.length > 0 && !section) throw new CommandValidationError('VALIDATION_FAILED', '申报事项必须归入有效审核分项')
+    if (!payload.title?.trim()) throw new CommandValidationError('VALIDATION_FAILED', '申报事项名称不能为空')
+    const existing = payload.subjectId
+      ? aggregate.caseV2.subjects.find((subject) => subject.id === payload.subjectId)
+      : undefined
+    if (payload.subjectId && !existing) throw new CommandValidationError('NOT_FOUND', `申报事项不存在：${payload.subjectId}`)
+    const values = payload.fieldValues ?? {}
+    const allowed = template.fields.filter((field) =>
+      (field.scope ?? 'subject') === 'subject' && (!field.sectionId || field.sectionId === payload.sectionId))
+    for (const [key, value] of Object.entries(values)) {
+      const spec = allowed.find((field) => field.key === key)
+      if (!spec) throw new CommandValidationError('VALIDATION_FAILED', `分项不接受字段 ${key}`)
+      if (!isProvidedRaw(value)) continue
+      const typeIssue = rawFieldTypeIssue(spec, value)
+      if (typeIssue) throw new CommandValidationError('VALIDATION_FAILED', `${spec.label}${typeIssue}`)
+      if (spec.kind === 'enum' && spec.options?.length &&
+          !spec.options.some((option) => option.value === String(value))) {
+        throw new CommandValidationError('VALIDATION_FAILED', `${spec.label}不在可选范围内`)
+      }
+    }
+    for (const spec of allowed) {
+      if (!spec.required) continue
+      if (isProvidedRaw(values[spec.key])) continue
+      if (existing && existing.fields[spec.key] && !isFieldValueEmpty(existing.fields[spec.key])) continue
+      throw new CommandValidationError('VALIDATION_FAILED', `缺少必填字段：${spec.label}`)
+    }
+    return {
+      summary: existing ? `更新申报事项 ${existing.title}` : `新增申报事项 ${payload.title.trim()}`,
+      mutate: (draft) => {
+        const changes: Record<string, FieldValue> = {}
+        for (const [key, value] of Object.entries(values)) {
+          if (!isProvidedRaw(value)) continue
+          const spec = allowed.find((field) => field.key === key)!
+          changes[key] = fieldValueOf(spec, value)
+        }
+        if (existing) {
+          draft.caseV2.subjects = draft.caseV2.subjects.map((subject) => subject.id === existing.id
+            ? {
+                ...subject,
+                title: payload.title.trim(),
+                type: payload.type ?? subject.type,
+                ...(payload.sectionId ? { sectionId: payload.sectionId } : {}),
+                fields: { ...subject.fields, ...changes },
+                correction: 'user-confirmed',
+              }
+            : subject)
+          return draft.caseV2.subjects.find((subject) => subject.id === existing.id)!
+        }
+        const created: ReviewSubject = {
+          id: payload.subjectId?.trim() || `subject-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          type: payload.type ?? 'item',
+          title: payload.title.trim(),
+          ...(payload.sectionId ? { sectionId: payload.sectionId } : {}),
+          fields: changes,
+          sourceRefs: [],
+          correction: 'user-confirmed',
+          status: 'identified',
+        }
+        draft.caseV2.subjects = [...draft.caseV2.subjects, created]
+        return created
       },
     }
   })
