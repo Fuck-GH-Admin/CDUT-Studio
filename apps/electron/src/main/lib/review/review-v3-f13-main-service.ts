@@ -166,9 +166,27 @@ export function reviewLocalF13Appeal(input: F13ReviewAppealCommand): Promise<Rev
       throw new CommandValidationError('INVALID_TRANSITION', '复核指派已变更，请刷新后重试')
     }
     const run = currentT05Run(aggregate)
-    // 有新证据时必须在申诉提交后重新运行审核，旧 Run 不能为新证据背书。
-    const verifiedRunId = run && (appeal.newEvidenceDocumentVersionIds.length === 0
-      || run.startedAt > appeal.createdAt) ? run.id : undefined
+    // RUN-24: a later startedAt alone is not proof that the new evidence was
+    // reviewed. The verifying Run must have frozen those exact document
+    // versions in its immutable input manifest (and therefore in its checks).
+    // A T04/partial Run that never saw the new versions cannot back the review.
+    const runDocumentIds = new Set<string>()
+    const runVersionIds = new Set<string>()
+    for (const entry of run?.inputManifest.documentVersions ?? []) {
+      runDocumentIds.add(entry.documentId)
+      runVersionIds.add(entry.versionId)
+    }
+    const evidenceCovered = appeal.newEvidenceDocumentVersionIds.every((versionId) =>
+      runVersionIds.has(versionId) || runDocumentIds.has(versionId))
+    const verifiedRunId = run
+      && run.startedAt > appeal.createdAt
+      && evidenceCovered
+      ? run.id
+      : undefined
+    if (appeal.newEvidenceDocumentVersionIds.length > 0 && !verifiedRunId) {
+      throw new CommandValidationError('INVALID_TRANSITION',
+        '申诉新证据尚未由提交后启动的 Run 在冻结输入中核验，不能仅凭时间较新的 Run 复核')
+    }
     const plan = planF13AppealReview(aggregate, reviewer, {
       appealId: payload.appealId,
       resolution: payload.resolution,

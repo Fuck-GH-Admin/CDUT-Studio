@@ -191,8 +191,35 @@ describe('补件多请求门控（06 §5.3）', () => {
     expect(satisfied.ok).toBeTrue()
     if (satisfied.ok) {
       // 还有未结束请求 → 不恢复（06 §5.3）
+
       expect(satisfied.aggregate.caseV2.stage).toBe('awaiting-supplement')
     }
+  })
+
+  test('RUN-18: 最后一笔是 cancelled When 已无未结补件 Then 恢复 reviewing 并回流任务', async () => {
+    const { caseId, firstTaskId } = await seed()
+    let agg = readAggregate(caseId)!
+    const open = await recordStageDecision(caseId, { requestId: nextReq(), actor, expectedRevision: 1, payload: { action: 'return-for-supplement', taskId: firstTaskId, reason: 'r1', supplementRequiredElements: ['a'], supplementReason: '缺A' } }, template)
+    agg = open.ok ? open.aggregate : agg
+    const { submitCommand } = await import('./case-store-v2')
+    const second = await submitCommand(caseId, { requestId: nextReq(), actor, expectedRevision: agg.caseV2.revision, type: 'OpenSecondSupplement', payload: {} }, (a) => ({
+      summary: '测试注入第二个补件',
+      mutate: (draft) => {
+        draft.supplements = [...draft.supplements, { id: 'sup-test-2', caseId, originFindingKeys: [], requiredElements: ['b'], reason: '缺B', responsibleRole: 'student', status: 'open', responses: [], createdAt: new Date().toISOString(), originTaskId: firstTaskId, originStageId: 'first' }]
+      },
+    }))
+    agg = second.ok ? second.aggregate : agg
+    const [a, b] = agg.supplements
+    const satisfiedA = await resolveSupplementV2(caseId, { requestId: nextReq(), actor, expectedRevision: agg.caseV2.revision, payload: { supplementId: a!.id, outcome: 'satisfied', reason: 'A 齐' } })
+    expect(satisfiedA.ok).toBeTrue()
+    if (!satisfiedA.ok) return
+    expect(satisfiedA.aggregate.caseV2.stage).toBe('awaiting-supplement')
+    const cancelledB = await resolveSupplementV2(caseId, { requestId: nextReq(), actor, expectedRevision: satisfiedA.aggregate.caseV2.revision, payload: { supplementId: b!.id, outcome: 'cancelled', reason: 'B 不再需要' } })
+    expect(cancelledB.ok).toBeTrue()
+    if (!cancelledB.ok) return
+    // 无未结补件：即使最后一笔不是 satisfied 也必须恢复，否则案卷卡死。
+    expect(cancelledB.aggregate.caseV2.stage).toBe('reviewing')
+    expect(cancelledB.aggregate.tasks.some((task) => task.stageId === 'first' && task.status === 'open')).toBeTrue()
   })
 })
 

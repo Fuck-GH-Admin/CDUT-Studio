@@ -242,7 +242,11 @@ export async function resolveSupplementV2(caseId: string, command: { requestId: 
         draft.supplements = draft.supplements.map((request) => (request.id === payload.supplementId ? { ...request, status: payload.outcome } : request))
         // 多请求门控：所有未满足请求结束才恢复（open/responded/insufficient 都阻断；cancelled=明确豁免）
         const stillOpen = draft.supplements.some((request) => request.status === 'open' || request.status === 'responded' || request.status === 'insufficient')
-        if (payload.outcome === 'satisfied' && !stillOpen) {
+        // RUN-18: the last closure may be `cancelled` (or `insufficient` resolved later).
+        // The stage must resume whenever no unsettled supplement remains, not only
+        // when the final verdict happens to be `satisfied`; otherwise A=satisfied,
+        // B=cancelled leaves the case stuck in awaiting-supplement.
+        if (!stillOpen) {
           draft.caseV2.stage = 'reviewing'
           // G05 任务回流：按退回来源阶段重建开放任务（同轮次续审补交材料）
           const originStageId = target.originStageId
@@ -255,7 +259,7 @@ export async function resolveSupplementV2(caseId: string, command: { requestId: 
       entity: payload.outcome === 'satisfied' ? { ...target, status: 'satisfied' } : { ...target, status: payload.outcome },
     }
   })
-  if (result.ok && command.payload.outcome === 'satisfied'
+  if (result.ok
     && result.aggregate.caseV2.stage === 'reviewing'
     && result.aggregate.supplements.every((supplement) =>
       !['open', 'responded', 'insufficient'].includes(supplement.status))) {
