@@ -1187,7 +1187,9 @@ export class CdutAuthManager {
       webContents.on(
         'did-fail-load',
         (_event, errorCode, errorDescription, _url, isMainFrame) => {
-          if (!isMainFrame || errorCode === -3) return
+          // 认证已成功并进入画像抓取后，辅助页面（学籍卡片 / xjxxgl.do）的偶发失败
+          // 由抓取自身 try/catch 兜底，绝不能反向否决已经成功的整体登录。
+          if (!isMainFrame || errorCode === -3 || harvesting) return
           finish({ success: false, error: '无法打开内网认证页: ' + errorDescription })
         }
       )

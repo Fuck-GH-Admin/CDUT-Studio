@@ -151,6 +151,19 @@ export function closeAllHpcDatabases(): void {
   }
 }
 
+/** 只关闭指定实验室的 HPC 数据库连接，避免误伤其它活跃实验室。 */
+export function closeHpcDatabase(labIdInput: string): void {
+  const dbPath = getHpcDbPath(labIdInput)
+  const database = connections.get(dbPath)
+  if (!database) return
+  try {
+    database.raw.close()
+  } catch {
+    // 可能已被其它路径关闭，忽略。
+  }
+  connections.delete(dbPath)
+}
+
 function asScheduler(raw: unknown): CsLabHpcScheduler {
   return raw === 'pbs' || raw === 'lsf' ? raw : 'slurm'
 }

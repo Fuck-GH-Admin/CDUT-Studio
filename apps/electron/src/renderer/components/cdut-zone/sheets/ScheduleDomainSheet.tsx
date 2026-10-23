@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react'
 import type { BeijingTimeInfo, CdutDomainToolResult } from '@profer/shared'
-import { evaluateCourseLiveStatus, getBeijingTimeInfo } from '@profer/shared'
+import { computeBeijingTeachingWeek, evaluateCourseLiveStatus, getBeijingTimeInfo } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { formatBeijingClock } from '@/lib/beijing-greeting'
 
@@ -240,7 +240,8 @@ function RadarBanner({
 
 export function ScheduleDomainSheet(): React.ReactElement {
   const [tab, setTab] = React.useState<'mine' | 'other'>('mine')
-  const [week, setWeek] = React.useState<number>(1)
+  // 周次默认值按北京时间估算当前教学周，避免离线/冷启动时错误显示第 1 周
+  const [week, setWeek] = React.useState<number>(() => computeBeijingTeachingWeek())
   // 用户是否手动切换过周次（自动识别的当前教学周仅作首次默认值，绝不覆盖用户选择）
   const weekTouchedRef = React.useRef(false)
   // 星期默认值锁定北京时间（与宿主系统时区无关）

@@ -86,6 +86,8 @@ type BrowserTabRecord = {
   lastActivityAt: number
   /** 最近一次已通过策略的主框架导航目标；错误页不应污染地址栏和 Agent 状态。 */
   lastRequestedUrl: string | null
+  /** 最近一次真实提交的 HTTP(S) 页面；证书插页「返回安全页面」只信这个地址。 */
+  lastCommittedUrl: string | null
   zoomFactor: number
   highlightTimer?: ReturnType<typeof setTimeout>
 }
@@ -439,8 +441,16 @@ export class BrowserController {
     const contents = tab.view.webContents
     const currentUrl = contents.getURL()
     // 导航失败时 Chromium 可能把 WebContents URL 改成 chrome-error://chromewebdata/；
-    // 这不是可操作的用户地址，保留上一次合法目标，防止状态回推污染地址栏。
-    if (!currentUrl.startsWith('chrome-error://')) tab.state.url = currentUrl
+    // 证书安全插页则是超长的 data: HTML。二者都不是可操作的用户地址，
+    // 保留上一次合法目标，防止状态回推污染地址栏。
+    if (!currentUrl.startsWith('chrome-error://') && !currentUrl.startsWith('data:')) {
+      tab.state.url = currentUrl
+      // 仅记录真实提交的 HTTP(S) 页面，作为证书插页「返回安全页面」的可信落点。
+      try {
+        const protocol = new URL(currentUrl).protocol
+        if (protocol === 'http:' || protocol === 'https:') tab.lastCommittedUrl = currentUrl
+      } catch { /* 非完整 URL，跳过 */ }
+    }
     if (!tab.state.url && tab.lastRequestedUrl) tab.state.url = tab.lastRequestedUrl
     tab.state.title = contents.getTitle() || (currentUrl.startsWith('chrome-error://') ? '页面加载失败' : '未命名页面')
     tab.state.loading = contents.isLoading()
@@ -575,7 +585,8 @@ export class BrowserController {
   /**
    * 处理证书插页按钮哨兵回投（will-navigate / setWindowOpenHandler 双通道拦截）。
    * allow：登记内存态临时放行（会话×标签页×域名）并重新加载原目标；
-   * back：返回上一页，无历史则置空白页。
+   * back：显式加载最近一次安全落地页，无安全地址则置空白页；绝不 goBack，
+   *       避免回到 Chromium 为证书失败提交的错误条目形成插页循环。
    */
   private handleCertInterstitialSentinel(browserSession: BrowserSessionRecord, tab: BrowserTabRecord, action: 'allow' | 'back'): void {
     if (action === 'allow') {
@@ -596,11 +607,12 @@ export class BrowserController {
       return
     }
     const wc = tab.view.webContents
-    if (wc.navigationHistory.canGoBack()) {
-      wc.navigationHistory.goBack()
-    } else {
-      void wc.loadURL('about:blank').catch(() => undefined)
-    }
+    const canReturn = !!tab.lastCommittedUrl
+      && tab.lastCommittedUrl !== tab.lastRequestedUrl
+      && /^https?:/i.test(tab.lastCommittedUrl)
+    // 显式加载安全落点；goBack 会回到被阻断的错误条目并再次触发插页，形成死循环。
+    const safeReturnUrl = canReturn ? tab.lastCommittedUrl! : 'about:blank'
+    void wc.loadURL(safeReturnUrl).catch(() => undefined)
   }
 
   /**
@@ -831,6 +843,7 @@ export class BrowserController {
       openedByAgent: claimAsAgent,
       lastActivityAt: Date.now(),
       lastRequestedUrl: null,
+      lastCommittedUrl: null,
       zoomFactor: 1,
     }
     browserSession.hostView.addChildView(view)

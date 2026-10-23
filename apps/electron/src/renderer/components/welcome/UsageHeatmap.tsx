@@ -117,7 +117,7 @@ export interface UsageHeatmapProps {
   workspaceId?: string | null
 }
 
-export function UsageHeatmap({ workspaceId }: UsageHeatmapProps = {}): React.ReactElement {
+function UsageHeatmapComponent({ workspaceId }: UsageHeatmapProps = {}): React.ReactElement {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const targetWorkspaceId = workspaceId !== undefined ? workspaceId : currentWorkspaceId
   const [entries, setEntries] = React.useState<WorkspaceHeatmapEntry[] | null>(null)
@@ -226,3 +226,9 @@ export function UsageHeatmap({ workspaceId }: UsageHeatmapProps = {}): React.Rea
     </div>
   )
 }
+
+/**
+ * 欢迎页每秒时钟 tick 会重渲染父级；memo 隔离后 182 个 Tooltip 节点不再随之重跑，
+ * 避免主线程抖动推迟秒边界定时器。
+ */
+export const UsageHeatmap = React.memo(UsageHeatmapComponent)

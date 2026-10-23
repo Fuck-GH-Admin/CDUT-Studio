@@ -1,13 +1,21 @@
 /**
  * BeijingAnalogClock — 空会话欢迎区的立体拟物表盘
  *
- * 表盘时刻恒为 Asia/Shanghai，与宿主系统时区无关；
- * 指针角度采用正向增量展开，防止 59→0 与休眠唤醒时倒转；
+ * 表盘时刻恒为 Asia/Shanghai，与宿主系统时区无关。
+ * 旋转角度由「挂载锚点 + 真实时间差」纯推导，严禁改回浮点取模累加：
+ * 分/时针每秒仅移动 0.1°/0.0083°，浮点误差会让增量出现极小负值，
+ * 取模后得到约 359.999°，指针被判为向前追一整圈，叠加过渡即整圈跳闪（历史 Bug）。
+ * 休眠唤醒或系统时间回拨必须重取锚点并瞬时归位，避免超长角度过渡与表盘假死。
  * 颜色全部使用主题 token，深浅主题与各皮肤自动适配。
  */
 
 import * as React from 'react'
-import { getBeijingClockAngles } from '@/lib/beijing-greeting'
+import {
+  createBeijingClockAnchor,
+  getBeijingClockAngles,
+  resolveBeijingClockRotations,
+  shouldRebaseClockAnchor,
+} from '@/lib/beijing-greeting'
 
 interface BeijingAnalogClockProps {
   /** 当前时刻（由父级 1s 定时器驱动，与文本药丸共用同一份状态） */
@@ -23,19 +31,8 @@ const HAND_SHADOW_OFFSET = 'translate(0.7 0.9)'
 /** 秒针朱砂红：深浅主题下均有足够对比度，不随 --primary 皮肤漂移 */
 const SECOND_HAND_COLOR = 'hsl(6 78% 57%)'
 
-/**
- * 角度单调向前展开。
- * 真实时间只会前进，因此一律取正向增量：休眠/后台挂起唤醒后秒针顺时针快进，
- * 绝不像最短路径算法那样为「追赶时间」而逆时针回扫。
- */
-function useUnwrappedAngle(target: number): number {
-  const ref = React.useRef(target)
-  const current = ref.current
-  const currentMod = ((current % 360) + 360) % 360
-  const delta = ((target - currentMod) % 360 + 360) % 360
-  ref.current = current + delta
-  return ref.current
-}
+/** 休眠唤醒/时间回拨的重锚阈值：超过该间隔直接归位，不做超长角度过渡 */
+const REBASE_GAP_MS = 1500
 
 /** 指针旋转样式：以 viewBox 中心为轴心（百分比基准 = viewBox） */
 function handStyle(angle: number, transition: string | undefined): React.CSSProperties {
@@ -48,33 +45,37 @@ function handStyle(angle: number, transition: string | undefined): React.CSSProp
 }
 
 export function BeijingAnalogClock({ now }: BeijingAnalogClockProps): React.ReactElement {
-  const { hourAngle, minuteAngle, secondAngle, clockText } = getBeijingClockAngles(now)
-  const hourRotation = useUnwrappedAngle(hourAngle)
-  const minuteRotation = useUnwrappedAngle(minuteAngle)
-  const secondRotation = useUnwrappedAngle(secondAngle)
+  const { clockText } = getBeijingClockAngles(now)
+  const [anchor, setAnchor] = React.useState(() => createBeijingClockAnchor(now))
+  const [snap, setSnap] = React.useState(false)
+  const lastNowMsRef = React.useRef(now.getTime())
+
+  // 休眠唤醒（跨度超阈值）或系统时间回拨：本帧直接重取锚点并瞬时归位
+  const needsRebase = shouldRebaseClockAnchor(lastNowMsRef.current, now, REBASE_GAP_MS)
+  if (needsRebase) {
+    lastNowMsRef.current = now.getTime()
+    if (!snap) setSnap(true)
+    setAnchor(createBeijingClockAnchor(now))
+  }
+
+  const { hourRotation, minuteRotation, secondRotation } = resolveBeijingClockRotations(anchor, now)
+
+  // 提交后清除归位标记；下一次渲染恢复过渡时角度数值未变，不会二次动画
+  React.useEffect(() => {
+    lastNowMsRef.current = now.getTime()
+    if (snap) setSnap(false)
+  }, [now, snap])
+
+  // 秒针：150ms 机械跳动（无过冲，避免回弹被判成跳闪）；分/时针：300ms 顺滑跟随
+  const secondTransition = snap
+    ? undefined
+    : 'transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1)'
+  const slowTransition = snap
+    ? undefined
+    : 'transform 300ms cubic-bezier(0.22, 1, 0.36, 1)'
+
   // 多实例同屏时隔离渐变 ID
   const uid = React.useId().replace(/:/g, '')
-
-  // 首帧不挂 transition，避免指针从默认 0° 过渡到当前角度造成「飞转」
-  const [transitionsOn, setTransitionsOn] = React.useState(false)
-  React.useEffect(() => {
-    let secondFrame = 0
-    const firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => setTransitionsOn(true))
-    })
-    return () => {
-      window.cancelAnimationFrame(firstFrame)
-      window.cancelAnimationFrame(secondFrame)
-    }
-  }, [])
-
-  // 秒针：150ms 机械微弹跳；分/时针：300ms 顺滑跟随
-  const secondTransition = transitionsOn
-    ? 'transform 150ms cubic-bezier(0.4, 2.08, 0.55, 0.44)'
-    : undefined
-  const slowTransition = transitionsOn
-    ? 'transform 300ms cubic-bezier(0.22, 1, 0.36, 1)'
-    : undefined
 
   return (
     <div

@@ -29,8 +29,8 @@ import {
   getCsLabDatabase,
   setLabState,
 } from './cslab-db'
-import { closeAllHpcDatabases } from './cslab-hpc-db'
-import { closeAllShareDatabases } from './cslab-share-db'
+import { closeHpcDatabase } from './cslab-hpc-db'
+import { closeShareDatabase } from './cslab-share-db'
 import { stopVaultWatcher } from './cslab-canvas-sync'
 import { stopLabToolWatcher } from './cslab-tool-registry'
 import { stopShareWatcher } from './cslab-share-watcher'
@@ -186,9 +186,10 @@ export async function deleteLab(labId: string): Promise<void> {
     }
   }
 
+  // 仅关闭目标实验室的 SQLite 连接，避免误伤其它实验室的后台作业轮询与查询
   closeCsLabDatabase(join(labDir, 'db', 'central_meta.sqlite'))
-  closeAllHpcDatabases()
-  closeAllShareDatabases()
+  closeHpcDatabase(labId)
+  closeShareDatabase(labId)
 
   deleteLabFiles(labId)
 }
