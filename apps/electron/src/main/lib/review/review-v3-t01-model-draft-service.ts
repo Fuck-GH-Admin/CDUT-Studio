@@ -8,7 +8,7 @@
  *
  * 绝不在这里把模型输出当成已确认模板：解析、拒绝与人工审阅都在 T01 侧。
  */
-import { resolveReviewGatewayChannel, chatCompletion } from './review-model-gateway'
+import { resolveReviewGatewayChannel, chatCompletion, resolveReviewGatewayModelId } from './review-model-gateway'
 
 export interface T01ModelDraftResult {
   /** 模型原始输出；未做任何业务解释 */
@@ -16,12 +16,6 @@ export interface T01ModelDraftResult {
   /** Main 实际使用的渠道与模型，供界面如实展示「调用了哪个模型」 */
   channelName: string
   modelId: string
-}
-
-/** 与审核网关一致地解析实际模型：优先已启用模型，其次第一个可用模型。 */
-function resolveReviewGatewayModelId(channel: { models?: Array<{ id: string; enabled?: boolean }> }): string {
-  const models = channel.models ?? []
-  return (models.find((model) => model.enabled !== false) ?? models[0])?.id ?? ''
 }
 
 export interface T01ModelDraftInput {

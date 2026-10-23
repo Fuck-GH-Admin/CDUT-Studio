@@ -14,6 +14,14 @@ import type { OcrBlock, OcrRequest, OcrResult } from './ocr-port'
 /** 探测系统 tesseract 可执行文件与 chi_sim 语言包（缓存结果，进程内只探一次） */
 let cached: Promise<{ available: boolean; reason?: string }> | undefined
 
+/** 跨平台绝对路径判定：POSIX `/`、Windows 盘符 `C:\`/`C:/`、UNC `\\server\share`（MHI-07）。 */
+export function isAbsolutePagePath(value: string): boolean {
+  if (!value) return false
+  if (value.startsWith('/')) return true
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true
+  return value.startsWith('\\\\')
+}
+
 export function probeSystemTesseract(): Promise<{ available: boolean; reason?: string }> {
   return cached ??= probeAsync()
 }
@@ -84,9 +92,7 @@ export class SystemTesseractOcrPort {
 
   async recognize(request: OcrRequest): Promise<OcrResult> {
     if (!this.available) throw new Error(`OCR 不可用: ${this.unavailableReason ?? '未知原因'}`)
-    const absolute = request.pageAssetPath.startsWith('/')
-      ? request.pageAssetPath
-      : ''
+    const absolute = isAbsolutePagePath(request.pageAssetPath) ? request.pageAssetPath : ''
     if (!absolute) throw new Error(`OCR 输入必须是绝对路径: ${request.pageAssetPath}`)
     const language = request.language || 'chi_sim'
 

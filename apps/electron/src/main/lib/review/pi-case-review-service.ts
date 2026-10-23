@@ -253,15 +253,15 @@ export function reconcilePiReviewRunsWithReadReceipts(caseId: string, runs: Revi
     })
     if (JSON.stringify(documents) === JSON.stringify(run.coverage.documents)) return run
 
-    const repaired = { ...run, coverage: { ...run.coverage, documents } }
-    saveRunV2(repaired)
-    return repaired
+    // RUN-44：本函数只服务历史查询/导出（review-ipc 读路径、报告导出）。
+    // 读取不得持久化改写已封存运行的 coverage，否则历史快照会被事后重写。
+    return { ...run, coverage: { ...run.coverage, documents } }
   })
   const latest = reconciledRuns[0]
   if (latest && ['completed', 'partially-completed'].includes(latest.status)
     && latest.diagnostics.some((line) => line.includes('由项目普通 Pi 会话直接审核'))) {
-    const inheritedNames = applyPiReadReceiptInheritance(aggregate, latest, reconciledRuns.filter((run) => run.id !== latest.id))
-    if (inheritedNames.length > 0) saveRunV2(latest)
+    // 同上：只返回内存视图，读路径不落盘（RUN-44）。
+    applyPiReadReceiptInheritance(aggregate, latest, reconciledRuns.filter((run) => run.id !== latest.id))
   }
   return reconciledRuns
 }

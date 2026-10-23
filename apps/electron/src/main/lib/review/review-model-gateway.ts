@@ -16,6 +16,7 @@ import { decryptApiKey, listChannels } from '../channel-manager'
 import { getFetchFn } from '../proxy-fetch'
 import { getEffectiveProxyUrl } from '../proxy-settings-service'
 import { resolveOpenAIChatCompletionsUrl } from '@profer/core'
+import { pickChannelModelId, waitForRetry } from './review-model-identity'
 import { getReviewModuleSettings } from './module-settings-store'
 import { extractJson } from './review-json'
 export { extractJson } from './review-json'
@@ -190,13 +191,12 @@ function isUsableReviewChannel(channel: Channel): boolean {
 
 /** 取渠道要提交给模型的 ID：优先取已启用模型；demo 不做模型选择 UI */
 function firstModelId(channel: Channel): string | undefined {
-  const selection = getReviewModuleSettings().agentModelSelection
-  if (selection?.channelId === channel.id
-    && channel.models?.some((model) => model.id === selection.modelId && model.enabled !== false)) {
-    return selection.modelId
-  }
-  const enabled = channel.models?.find((model) => model.enabled !== false)
-  return enabled?.id ?? channel.models?.[0]?.id
+  return pickChannelModelId(channel, getReviewModuleSettings().agentModelSelection)
+}
+
+/** 回执用：返回本次请求实际提交的 modelId（与 `performChatCompletion` 同口径）。 */
+export function resolveReviewGatewayModelId(channel: Pick<Channel, 'id' | 'models'>): string {
+  return pickChannelModelId(channel, getReviewModuleSettings().agentModelSelection) ?? ''
 }
 
 /**
@@ -389,11 +389,13 @@ async function performChatCompletion(
       if (response.status === 429 && attempt < MAX_RETRIES) {
         const backoffMs = 8000 * (attempt + 1)
         console.warn(`[审核专区] 模型限流（429），${backoffMs / 1000}s 后第 ${attempt + 1} 次重试`)
-        await new Promise<void>((resolve, reject) => {
-          const backoffTimer = setTimeout(resolve, backoffMs)
-          // 退避期间外部取消立即中止等待
-          externalSignal?.addEventListener('abort', () => { clearTimeout(backoffTimer); reject(new Error('模型请求已取消')) }, { once: true })
-        })
+        try {
+          // 退避等待必须同时响应外部取消与本次请求的内部超时（同一 AbortController）。
+          await waitForRetry(backoffMs, controller.signal)
+        } catch {
+          if (externalSignal?.aborted) throw new Error('模型请求已取消')
+          throw new Error(`模型请求超时（超过 ${timeoutMs / 1000} 秒未响应）`)
+        }
         continue
       }
 
