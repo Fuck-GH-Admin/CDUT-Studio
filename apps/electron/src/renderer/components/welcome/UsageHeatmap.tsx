@@ -156,7 +156,7 @@ function UsageHeatmapComponent({ workspaceId }: UsageHeatmapProps = {}): React.R
       <div className="relative mb-[2px] ml-7 h-[14px]">
         {monthLabels.map((ml) => (
           <span
-            key={ml.label}
+            key={`${ml.label}-${ml.col}`}
             className="absolute top-0 text-[10px] text-muted-foreground/70 whitespace-nowrap"
             style={{ left: ml.col * STEP }}
           >
