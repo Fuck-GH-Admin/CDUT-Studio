@@ -360,12 +360,8 @@ export async function submitCaseV2(caseId: string, actor?: Actor, source?: Comma
       `案卷尚未补齐必填输入：${missingIntake.join('；')}。请在案卷页补全后再提交审核`)
   }
   // 必需材料槽门控（复查 §5.9：不能只判非空——按模板 minCount 逐槽核对 active 材料）
-  const missingSlots: string[] = []
-  for (const slot of template.materialSlots ?? []) {
-    if ((slot.requiredAt ?? 'submission') !== 'submission') continue
-    const active = aggregate.caseV2.documents.filter((doc) => doc.materialSlotId === slot.id && doc.active !== false)
-    if (active.length < slot.minCount) missingSlots.push(`${slot.name}（需 ${slot.minCount}，现有 ${active.length}）`)
-  }
+  const { collectMissingSubmissionSlots } = await import('./application-service')
+  const missingSlots = collectMissingSubmissionSlots(template, aggregate.caseV2.documents)
   if (missingSlots.length > 0) throw new CommandValidationError('VALIDATION_FAILED', `缺少必需材料：${missingSlots.join('；')}`)
   const firstStage = template.stages[0]
   if (!firstStage) throw new CommandValidationError('VALIDATION_FAILED', '模板没有审核阶段')

@@ -181,6 +181,9 @@ describe('T06 物理入库桥接', () => {
     expect(aggregate.caseV2.templateId).toBe(requiredTemplateId)
     expect(aggregate.caseV2.caseFields.amount).toBeUndefined()
     await expect(submitCaseV2(caseId)).rejects.toThrow('尚未补齐必填输入')
+    // MANAGER-INTAKE-GATE #2：不能靠绕过提交按钮直接开始审核/跑批次。
+    const { assembleAndRunReview } = await import('./run-async-service')
+    await expect(assembleAndRunReview(caseId)).rejects.toThrow(/尚未提交审核|尚未补齐/)
   })
 
   test('RUN-38/39：显式字段、事项、角色与必交槽一次入库后文件名保留且可提交', async () => {

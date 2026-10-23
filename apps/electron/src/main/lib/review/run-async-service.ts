@@ -79,6 +79,26 @@ async function assembleReviewClient(caseId: string): Promise<{ client: import('.
 }
 
 /** 同步执行一次真实审核（原 RUN_REVIEW_V2 handler 逻辑；调用方自行处理长等待） */
+/**
+ * MANAGER-INTAKE-GATE #2：未提交或必填输入/必交材料不齐的 draft 不能开始审核。
+ * 批量队列直接调用本模块，不能只靠 submitCaseV2 的单案按钮拦截。
+ */
+function assertCaseReadyForReview(
+  aggregate: { caseV2: import('@profer/shared').ReviewCaseV2 },
+  template: import('@profer/shared').TemplateVersion,
+): void {
+  const { collectMissingIntakeInputs, collectMissingSubmissionSlots } =
+    require('./application-service') as typeof import('./application-service')
+  const caseV2 = aggregate.caseV2
+  if (caseV2.stage === 'draft') throw new Error('案卷尚未提交审核，不能开始审核运行')
+  if (caseV2.stage === 'archived') throw new Error('已归档案卷不能开始审核运行')
+  const missingInputs = collectMissingIntakeInputs(template, caseV2)
+  const missingSlots = collectMissingSubmissionSlots(template, caseV2.documents)
+  if (missingInputs.length > 0 || missingSlots.length > 0) {
+    throw new Error(`案卷尚未补齐必填输入，不能开始审核：${[...missingInputs, ...missingSlots.map((slot) => `材料槽 ${slot}`)].join('；')}`)
+  }
+}
+
 export async function assembleAndRunReview(caseId: string, options: { signal?: AbortSignal; initiatedBy?: Actor } = {}): Promise<ReviewRunV2> {
   const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
   const { getTemplate } = require('./template-store') as typeof import('./template-store')
@@ -88,6 +108,7 @@ export async function assembleAndRunReview(caseId: string, options: { signal?: A
   if (!aggregate) throw new Error(`案卷聚合不存在: ${caseId}`)
   const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
   if (!template) throw new Error(`模板不存在: ${aggregate.caseV2.templateId}@${aggregate.caseV2.templateVersion}`)
+  assertCaseReadyForReview(aggregate, template)
   const { client, ocrPort, imageInspector } = await assembleReviewClient(caseId)
   const executors = await assembleV2Executors(aggregate, template, { client, ocrPort, imageInspector, signal: options.signal })
   return runReviewCaseV2(aggregate.caseV2, template, executors, {
@@ -131,6 +152,7 @@ export function startReviewRunAsync(caseId: string, initiatedBy: Actor, source?:
   if (!aggregate) throw new Error(`案卷聚合不存在: ${caseId}`)
   const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
   if (!template) throw new Error(`模板不存在: ${aggregate.caseV2.templateId}@${aggregate.caseV2.templateVersion}`)
+  assertCaseReadyForReview(aggregate, template)
   if (!resolveReviewGatewayChannel()) throw new Error('未配置可用模型渠道，无法执行真实审核（请在设置中配置渠道）')
 
   const runId = input?.runId ?? `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`

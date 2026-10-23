@@ -450,6 +450,20 @@ export function setEvidenceLink(caseId: string, command: { requestId: string; ac
   })
 }
 
+/** 提交/开审前必须满足的材料槽（与 submitCaseV2 保持同一解释）。 */
+export function collectMissingSubmissionSlots(
+  template: TemplateVersion,
+  documents: ReviewCaseV2['documents'],
+): string[] {
+  const missing: string[] = []
+  for (const slot of template.materialSlots ?? []) {
+    if ((slot.requiredAt ?? 'submission') !== 'submission') continue
+    const active = documents.filter((document) => document.materialSlotId === slot.id && document.active !== false).length
+    if (active < slot.minCount) missing.push(`${slot.name}（需 ${slot.minCount}，现有 ${active}）`)
+  }
+  return missing
+}
+
 // ===== UpsertCaseSubject（导入草稿补录必需分项） =====
 
 /**
