@@ -3,10 +3,10 @@ import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Actor, BatchGroupActionRequest, DocumentVersion, ReviewCaseV2, ReviewRunV2 } from '@profer/shared'
 import { createAggregate, readAggregate, submitCommand } from './case-store-v2'
-import { createBatchV2, readBatchStateV2, saveBatchStateV2, updateCaseStatus } from './batch-store'
+import { createBatchV2, readBatchStateV2, saveBatchStateV2, updateCaseStatus, persistCaseBinding } from './batch-store'
 import { getTemplate, publishTemplate, saveDraft } from './template-store'
 import { computeRunInputHash } from './run-service-v2'
-import { saveRunV2 } from './run-store-v2'
+import { listRunsV2, saveRunV2 } from './run-store-v2'
 import { applyBatchGroupAction, previewBatchGroupAction } from './batch-group-action-service'
 
 const CONFIG_DIR = join(import.meta.dir, '../../../../../../work/tmp', `profer-bulk-action-${Date.now()}`)
@@ -68,7 +68,12 @@ function makeBatch(caseIds: string[]): string {
     id: batchId, name: batchId, templateId: 'batch-b-test', templateVersion: 1,
     policyVersionLock: [], caseIds, createdAt: '2026-10-10T00:00:00Z',
   })
-  for (const caseId of caseIds) updateCaseStatus(batchId, caseId, 'done')
+  for (const caseId of caseIds) {
+    updateCaseStatus(batchId, caseId, 'done')
+    const run = [...listRunsV2(caseId)].sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))[0]
+    if (run) persistCaseBinding(batchId, caseId, { entryRunId: run.id, inputHash: run.inputManifest.hash,
+      planFingerprint: run.inputManifest.planFingerprint, bindingState: 'bound' })
+  }
   const state = readBatchStateV2(batchId)!
   state.status = 'queued'
   saveBatchStateV2(state)

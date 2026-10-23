@@ -6,17 +6,21 @@
  */
 import { createHash } from 'node:crypto'
 import { triageBatchCase } from '@profer/shared'
-import type { Actor, BatchAutomationReport, BatchAutomationReceipt, ReviewRunV2 } from '@profer/shared'
+import type { Actor, BatchAutomationReport, BatchAutomationReceipt, BatchStateV2, ReviewRunV2 } from '@profer/shared'
 import { readAggregate } from './case-store-v2'
-import { readBatchStateV2, saveBatchStateV2, finalizeBatch, assertBatchBusinessReadyForFinalization } from './batch-store'
+import { readBatchStateV2, saveBatchStateV2, finalizeBatch, assertBatchBusinessReadyForFinalization, readBoundRun } from './batch-store'
 import { checkAutoBatchAction, type AutoAction } from './batch-automation-gates'
-import { listRunsV2, readArtifact } from './run-store-v2'
+import { readArtifact } from './run-store-v2'
 import { getTemplate } from './template-store'
 import { decideWorkspaceCaseV2, isWorkspaceRunStaleV2 } from './workspace-business-service-v2'
 
 const activeAutomation = new Set<string>()
-function latestRun(caseId: string): ReviewRunV2 | undefined {
-  return [...listRunsV2(caseId)].sort((a,b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))[0]
+/**
+ * BATCH-01/14：只消费批次成员绑定的运行，绝不按“最新 Run”漂移。
+ * 缺少绑定即 fail closed，由调用方给出明确回执。
+ */
+function boundRun(entry: BatchStateV2['cases'][number]): ReviewRunV2 | undefined {
+  return readBoundRun(entry)
 }
 function stableId(parts: unknown[]): string {
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0,44)
@@ -39,6 +43,10 @@ export async function runBatchAutomation(batchId: string): Promise<BatchAutomati
     const configured = state.automation
     if (!configured || configured.mode === 'assist') throw new Error('此批次尚未启用自动化策略')
     const revision = configured.revision
+    const unbound = state.cases.filter((entry) => entry.status === 'done' && !entry.entryRunId)
+    if (unbound.length) {
+      throw new Error(`以下案卷缺少本批次运行绑定，请重新执行本批次后再自动处理: ${unbound.map((e) => e.caseId).join('、')}`)
+    }
     const results: BatchAutomationReceipt[] = []
     for (const entry of state.cases) {
       if (entry.status !== 'done') continue
@@ -46,7 +54,7 @@ export async function runBatchAutomation(batchId: string): Promise<BatchAutomati
       if (!current || current.status !== 'queued' || current.automation?.revision !== revision
         || current.automation.mode === 'assist') break
       const aggregate = readAggregate(entry.caseId)
-      const run = latestRun(entry.caseId)
+      const run = boundRun(entry)
       if (!aggregate || !run || aggregate.caseV2.stage === 'decided'
         || aggregate.caseV2.stage === 'archived' || aggregate.caseV2.stage === 'awaiting-supplement') continue
       const route = triageBatchCase({
@@ -108,16 +116,18 @@ export async function runBatchAutomation(batchId: string): Promise<BatchAutomati
   }
 }
 
-/** Finalize only when EVERY case has an auditable final business decision. */
+/**
+ * 统一定稿器（BATCH-02）：人工 assist、自动补件与自动通过都走同一业务门禁。
+ * 自动化策略只约束自动业务动作，不决定人工批次能否定稿。
+ */
 export function finalizeCompletedBatch(batchId: string) {
   const state = readBatchStateV2(batchId)
-  if (!state || state.status !== 'queued' || !state.automation || state.automation.mode === 'assist')
-    throw new Error('批次状态不允许自动定稿')
+  if (!state || state.status !== 'queued') throw new Error('批次状态不允许定稿（需先完成运行队列）')
   // The core finalizer has the authoritative shared gate; cannot be bypassed
   // through a raw 'finalize' IPC action or a different service caller.
   assertBatchBusinessReadyForFinalization(state)
   const { resolveFinalDecisionProjection } = require('./stage-workflow') as typeof import('./stage-workflow')
-  const decisions = state.cases.map(({ caseId }) => {
+  const decisions = state.cases.map(({ caseId, entryRunId, inputHash, planFingerprint }) => {
     const aggregate = readAggregate(caseId)
     if (!aggregate || !['decided', 'archived'].includes(aggregate.caseV2.stage)
       || aggregate.supplements.some((sup) => ['open', 'responded', 'insufficient'].includes(sup.status)))
@@ -125,12 +135,14 @@ export function finalizeCompletedBatch(batchId: string) {
     const projection = resolveFinalDecisionProjection(aggregate.decisions)
     const final = projection.decision
     if (!projection.isFinal || !final) throw new Error(`案卷缺少可追溯的正式决定: ${caseId}`)
-    return { caseId, decisionId: final.id, result: final.result, runId: final.basedOnRunId,
+    // BATCH-04：快照只记录本批次绑定的运行与决定，供冻结后审计比对。
+    return { caseId, entryRunId, inputHash, planFingerprint,
+      decisionId: final.id, result: final.result, runId: final.basedOnRunId,
       basedOnRevision: final.basedOnRevision, actor: final.actor }
   })
   return finalizeBatch(batchId, {
-    kind: 'audited-automation-batch', round: state.round, templateId: state.batch.templateId,
+    kind: 'audited-batch', round: state.round, templateId: state.batch.templateId,
     templateVersion: state.batch.templateVersion, policyVersions: state.batch.policyVersionLock,
-    automation: state.automation, decisions,
+    automation: state.automation ?? { mode: 'assist' }, decisions,
   })
 }

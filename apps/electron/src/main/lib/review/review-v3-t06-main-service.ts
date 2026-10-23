@@ -118,6 +118,32 @@ interface StoredSelection {
   createdAt: number
 }
 
+
+/**
+ * 从发布模板解析批次政策锁（BATCH-06）。
+ * 优先使用已解析的 policyRefs（含真实版本与内容哈希）；旧模板只有 policyVersionIds
+ * 时无法得知权威版本，拒绝创建批次，避免批次锁与 Run manifest 政策版本不一致。
+ */
+function resolvePolicyVersionLock(template: { policyRefs?: Array<{ policyId: string; version: number }>; policyVersionIds?: string[] }): Array<{ policyVersionId: string; version: number }> {
+  const refs = template.policyRefs ?? []
+  if (refs.length > 0) {
+    const seen = new Set<string>()
+    return refs.map((ref) => {
+      if (!ref.policyId || !Number.isSafeInteger(ref.version) || ref.version < 1) {
+        throw new Error(`模板政策引用缺少有效版本: ${ref.policyId || '(空)'}`)
+      }
+      if (seen.has(ref.policyId)) throw new Error(`模板政策引用重复: ${ref.policyId}`)
+      seen.add(ref.policyId)
+      return { policyVersionId: ref.policyId, version: ref.version }
+    })
+  }
+  const legacy = template.policyVersionIds ?? []
+  if (legacy.length > 0) {
+    throw new Error('模板缺少已解析政策引用（policyRefs），无法建立批次政策锁；请重新发布模板')
+  }
+  return []
+}
+
 const selections = new Map<string, StoredSelection>()
 /** requestId → 回执（幂等） */
 const receipts = new Map<string, T06CommitReceipt>()
@@ -406,10 +432,8 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
       createBatchV2({
         id: batchId, name: succeededByTemplate.size > 1 ? `${request.batchName} · ${template.name}` : request.batchName,
         templateId: group.templateId, templateVersion: group.templateVersion,
-        // 政策版本锁沿用模板声明的政策版本，不在此处臆造版本号
-        policyVersionLock: (template.policyVersionIds ?? []).map((policyVersionId) => ({
-          policyVersionId, version: 1,
-        })),
+        // BATCH-06：政策锁必须来自发布模板的权威已解析引用；缺版本或引用冲突时拒绝创建，不臆造 v1。
+        policyVersionLock: resolvePolicyVersionLock(template),
         caseIds: group.caseIds, createdAt: new Date().toISOString(),
       })
       batches.push({ batchId, ...group })

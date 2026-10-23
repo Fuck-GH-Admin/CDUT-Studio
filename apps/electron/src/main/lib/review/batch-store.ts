@@ -182,6 +182,20 @@ export function assertBatchBusinessReadyForFinalization(state: BatchStateV2): vo
     if (!projected.isFinal || !projected.decision) {
       throw new Error(`案卷缺少有效且可追溯的最终业务决定: ${entry.caseId}`)
     }
+    // BATCH-04：最终决定必须依据本批次绑定的运行；不得把其他轮次的审核成果计入本批。
+    if (!entry.entryRunId) {
+      throw new Error(`批次成员没有绑定运行（entryRunId），不能定稿: ${entry.caseId}`)
+    }
+    if (entry.bindingState === 'recovery-required') {
+      throw new Error(`批次成员运行结果未确认（恢复待核对），不能定稿: ${entry.caseId}`)
+    }
+    const boundRun = readBoundRun(entry)
+    if (!boundRun) {
+      throw new Error(`批次成员绑定的运行不存在或不属于本案，不能定稿: ${entry.caseId} (${entry.entryRunId})`)
+    }
+    if (projected.decision.basedOnRunId !== entry.entryRunId) {
+      throw new Error(`最终决定依据运行 ${projected.decision.basedOnRunId ?? '(未记录)'} 与本批次运行 ${entry.entryRunId} 不一致，不能定稿: ${entry.caseId}`)
+    }
   }
 }
 
@@ -440,7 +454,8 @@ export function recoverInterruptedBatch(batchId: string): BatchStateV2 {
     throw new Error('没有需要恢复的中断任务')
   }
   state.cases = state.cases.map((entry) => entry.status === 'running'
-    ? { ...entry, status: 'failed', error: '上次审核被中断，请检查案卷运行记录后手动重试' }
+    ? { ...entry, status: 'failed', bindingState: 'recovery-required' as const,
+        error: '上次审核被中断，请先核对本批次绑定运行的回执后手动重试' }
     : entry)
   state.status = 'queued'
   saveBatchStateV2(state)
@@ -476,15 +491,64 @@ export function retryBatchCases(batchId: string, caseIds: string[]): BatchStateV
     }
     throw new Error(`案卷当前状态不可重试: ${caseId} (${entry.status})`)
   }
-  state.cases = state.cases.map((entry) => requested.has(entry.caseId) ? { ...entry, status: 'queued', error: undefined } : entry)
+  // 重试产生新的批次尝试：清空旧运行绑定，旧 Run 仍保留在案卷历史中可追溯。
+  state.cases = state.cases.map((entry) => requested.has(entry.caseId)
+    ? { ...entry, status: 'queued', error: undefined, entryRunId: undefined, inputHash: undefined,
+        planFingerprint: undefined, bindingState: 'unbound' as const, startedAt: undefined, completedAt: undefined }
+    : entry)
   saveBatchStateV2(state)
   return state
 }
 
 
+/**
+ * 全局同案运行租约（BATCH-03）：以 caseId 为键，批次与单案入口共享；
+ * 重复启动必须明确拒止，不能并行产生两份独立 Run。
+ */
+const activeCaseRuns = new Map<string, string>()
+
+export function activeCaseRunOwner(caseId: string): string | undefined {
+  return activeCaseRuns.get(caseId)
+}
+
+/** 获取同案运行租约；已占用时抛出包含占用者的错误。返回释放函数。 */
+export function acquireCaseRunLease(caseId: string, owner: string): () => void {
+  assertSafeReviewStorageId(caseId, 'caseId')
+  const current = activeCaseRuns.get(caseId)
+  if (current && current !== owner) {
+    throw new Error(`案卷正在其他执行中运行（占用者: ${current}），拒绝重复启动: ${caseId}`)
+  }
+  activeCaseRuns.set(caseId, owner)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (activeCaseRuns.get(caseId) === owner) activeCaseRuns.delete(caseId)
+  }
+}
+
+/** 读取批次成员绑定的运行；无绑定或运行不属于本案时返回 undefined（调用方必须 fail closed）。 */
+export function readBoundRun(entry: BatchStateV2['cases'][number]) {
+  if (!entry.entryRunId) return undefined
+  const { getRunV2 } = require('./run-store-v2') as typeof import('./run-store-v2')
+  const run = getRunV2(entry.caseId, entry.entryRunId)
+  return run && run.caseId === entry.caseId ? run : undefined
+}
+
+type CaseBindingPatch = Partial<Pick<BatchStateV2['cases'][number],
+  'entryRunId' | 'inputHash' | 'planFingerprint' | 'bindingState' | 'batchAttemptId' | 'startedAt' | 'completedAt' | 'attemptCount'>>
+
+/** 写入成员运行绑定（BATCH-01/11）：绑定即持久化，后续消费者只读该 Run。 */
+export function persistCaseBinding(batchId: string, caseId: string, patch: CaseBindingPatch): void {
+  const state = readBatchStateV2(batchId)
+  if (!state) return
+  state.cases = state.cases.map((entry) => (entry.caseId === caseId ? { ...entry, ...patch } : entry))
+  saveBatchStateV2(state)
+}
+
 export interface BatchQueueOptions {
-  /** 运行参数注入（测试可传假执行器）；产品层复用 Pi 审核 Agent */
-  runCase?: (caseId: string) => Promise<{ status: string }>
+  /** 运行参数注入（测试可传假执行器）；产品层复用 Pi 审核 Agent。runId 必须回传以建立绑定。 */
+  runCase?: (caseId: string) => Promise<{ status: string; runId?: string }>
 }
 
 /**
@@ -492,6 +556,7 @@ export interface BatchQueueOptions {
  * - 单案失败记录 error 并继续（06 §7.1 坏案不拖全批）
  * - 定稿批次拒绝执行（重开新轮次后才能跑）
  * - 中断可重入：已 done 的跳过，failed/queued 重试
+ * - 每案建立同案租约并持久化 entryRunId（BATCH-01/03）
  */
 export async function runBatchQueue(batchId: string, options: BatchQueueOptions = {}): Promise<BatchStateV2> {
   const state = readBatchStateV2(batchId)
@@ -501,19 +566,46 @@ export async function runBatchQueue(batchId: string, options: BatchQueueOptions 
   if (!options.runCase) throw new Error('runBatchQueue 需要注入 runCase（产品层由 buildReviewExecutors 提供，避免隐式默认执行器）')
   const queued = state.cases.filter((entry) => entry.status === 'queued')
   if (queued.length === 0) throw new Error('没有待执行的案卷；失败项请先选择重试')
+  const conflicts = queued.filter((entry) => activeCaseRuns.has(entry.caseId))
+  if (conflicts.length) {
+    throw new Error(`以下案卷正在其他执行中运行，拒绝并发启动: ${conflicts.map((entry) => `${entry.caseId}(${activeCaseRuns.get(entry.caseId)})`).join('、')}`)
+  }
   const runCase = options.runCase
+  const attemptId = `${batchId}:r${state.round}:${Date.now().toString(36)}`
   activeBatchRuns.add(batchId)
   try {
     state.status = 'running'
     saveBatchStateV2(state)
     for (const entry of queued) {
+      const release = acquireCaseRunLease(entry.caseId, `batch:${batchId}`)
+      const startedAt = new Date().toISOString()
+      const previous = readBatchStateV2(batchId)?.cases.find((item) => item.caseId === entry.caseId)
       updateCaseStatus(batchId, entry.caseId, 'running')
+      persistCaseBinding(batchId, entry.caseId, {
+        batchAttemptId: attemptId, entryRunId: undefined, inputHash: undefined, planFingerprint: undefined,
+        bindingState: 'unbound', startedAt, completedAt: undefined,
+        attemptCount: (previous?.attemptCount ?? 0) + 1,
+      })
       try {
         const outcome = await runCase(entry.caseId)
+        const run = resolveAttemptRun(entry.caseId, outcome.runId, startedAt)
+        if (!run) {
+          updateCaseStatus(batchId, entry.caseId, 'failed', '执行器未返回可核对的运行 ID，无法建立批次绑定')
+          persistCaseBinding(batchId, entry.caseId, { bindingState: 'recovery-required', completedAt: new Date().toISOString() })
+          continue
+        }
+        persistCaseBinding(batchId, entry.caseId, {
+          entryRunId: run.id, inputHash: run.inputManifest.hash,
+          planFingerprint: run.inputManifest.planFingerprint, bindingState: 'bound',
+          completedAt: new Date().toISOString(),
+        })
         if (outcome.status === 'completed') updateCaseStatus(batchId, entry.caseId, 'done')
         else updateCaseStatus(batchId, entry.caseId, 'failed', `运行结束状态: ${outcome.status}`)
       } catch (error) {
         updateCaseStatus(batchId, entry.caseId, 'failed', error instanceof Error ? error.message : String(error))
+        persistCaseBinding(batchId, entry.caseId, { bindingState: 'recovery-required', completedAt: new Date().toISOString() })
+      } finally {
+        release()
       }
     }
     const final = readBatchStateV2(batchId)!
@@ -523,4 +615,16 @@ export async function runBatchQueue(batchId: string, options: BatchQueueOptions 
   } finally {
     activeBatchRuns.delete(batchId)
   }
+}
+
+/** 绑定本次尝试的运行：优先执行器回传的 runId，否则仅接受本次尝试开始后启动的运行。 */
+function resolveAttemptRun(caseId: string, runId: string | undefined, startedAt: string) {
+  const { getRunV2, listRunsV2 } = require('./run-store-v2') as typeof import('./run-store-v2')
+  if (runId) {
+    const run = getRunV2(caseId, runId)
+    return run && run.caseId === caseId ? run : undefined
+  }
+  return [...listRunsV2(caseId)]
+    .filter((run) => run.caseId === caseId && run.startedAt >= startedAt)
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
 }

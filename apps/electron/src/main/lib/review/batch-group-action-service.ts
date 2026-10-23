@@ -7,11 +7,11 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assessDecisionReadiness, groupBatchIssues, triageBatchCase } from '@profer/shared'
-import type { Actor, BatchGroupActionRequest, BatchGroupApplyRequest, BatchGroupApplyResult, BatchGroupPreview, BatchGroupPreviewRow, BatchTriageInput, ReviewRunV2 } from '@profer/shared'
+import type { Actor, BatchGroupActionRequest, BatchGroupApplyRequest, BatchGroupApplyResult, BatchGroupPreview, BatchGroupPreviewRow, BatchStateV2, BatchTriageInput, ReviewRunV2 } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
 import { readAggregate } from './case-store-v2'
-import { readBatchStateV2 } from './batch-store'
-import { listRunsV2, readArtifact } from './run-store-v2'
+import { readBatchStateV2, readBoundRun } from './batch-store'
+import { readArtifact } from './run-store-v2'
 import { getTemplate } from './template-store'
 import { isWorkspaceRunStaleV2, decideWorkspaceCaseV2, openWorkspaceSupplementV2, recordWorkspaceDispositionV2 } from './workspace-business-service-v2'
 
@@ -55,8 +55,9 @@ function validateRequest(req: BatchGroupActionRequest): void {
   }
 }
 
-function latestRun(caseId: string): ReviewRunV2 | undefined {
-  return [...listRunsV2(caseId)].sort((a,b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))[0]
+/** BATCH-14：问题组处置只读批次成员绑定的运行，不按“最新 Run”漂移。 */
+function boundRun(entry: BatchStateV2['cases'][number]): ReviewRunV2 | undefined {
+  return readBoundRun(entry)
 }
 
 function collect(batchId: string) {
@@ -67,7 +68,7 @@ function collect(batchId: string) {
     const aggregate = readAggregate(entry.caseId)
     return {
       caseId: entry.caseId, entryStatus: entry.status,
-      caseStage: aggregate?.caseV2.stage, run: latestRun(entry.caseId),
+      caseStage: aggregate?.caseV2.stage, run: boundRun(entry),
       batch: batch.batch,
     }
   })

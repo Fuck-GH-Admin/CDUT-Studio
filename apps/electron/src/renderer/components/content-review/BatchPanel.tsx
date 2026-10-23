@@ -467,12 +467,15 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
                 : selectedBatch.automation?.mode === 'auto-return' ? '自动补件' : '辅助'}
             </Button>
           )}
-          {selectedBatch?.automation && selectedBatch.automation.mode !== 'assist' && selectedBatch.status === 'queued' && (
+          {selectedBatch?.status === 'queued' && (
             <>
-              <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg px-3"
-                disabled={executing || handlingBatch} onClick={() => void processAutomation()}>
-                执行自动处理
-              </Button>
+              {selectedBatch.automation && selectedBatch.automation.mode !== 'assist' && (
+                <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg px-3"
+                  disabled={executing || handlingBatch} onClick={() => void processAutomation()}>
+                  执行自动处理
+                </Button>
+              )}
+              {/* BATCH-02：assist 人工批次与自动批次共用同一核验定稿入口，策略不决定能否定稿。 */}
               <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg px-3"
                 disabled={executing || handlingBatch} onClick={() => void finalizeCompleted()}>
                 核验并定稿
@@ -485,7 +488,7 @@ export function BatchPanel({ active, onOpenProject }: BatchPanelProps): JSX.Elem
               重开新评审轮次
             </Button>
           )}
-          {selectedBatch?.status === 'running' && (
+          {selectedBatch?.status === 'running' && !executing && (
             <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg px-3"
               disabled={executing || handlingBatch} onClick={() => void handleBatchAction('recover')}>
               <RefreshCw size={15} />恢复中断批次

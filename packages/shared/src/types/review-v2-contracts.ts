@@ -448,11 +448,35 @@ export interface BatchAutomationReport {
   conflicts: number
 }
 
+/**
+ * 批次成员对某一次审核运行的持久绑定（BATCH-01/04/11）。
+ * 后续分流、归组、自动处理与定稿只认 entryRunId，禁止再“取最新 Run”。
+ */
+export interface BatchCaseEntryBinding {
+  /** 本批次尝试 ID（重开/重试生成新 attempt） */
+  batchAttemptId?: string
+  /** 本批次该案卷唯一权威运行 ID */
+  entryRunId?: string
+  /** 该运行的输入清单哈希（与 Run.inputManifest.hash 对齐） */
+  inputHash?: string
+  /** 该运行的 Plan 指纹（有则记录） */
+  planFingerprint?: string
+  /** 尝试次数（失败重试递增） */
+  attemptCount?: number
+  startedAt?: string
+  completedAt?: string
+  /**
+   * unbound：尚未运行；bound：已绑定本批次运行；
+   * superseded：案卷已被其他轮次取代，需重审；recovery-required：崩溃后结果未知
+   */
+  bindingState?: 'unbound' | 'bound' | 'superseded' | 'recovery-required'
+}
+
 /** 批次运行状态（N5：batch-store 持久化形态，renderer 可读） */
 export interface BatchStateV2 {
   batch: import('./review-v2').ReviewBatch
   status: 'draft' | 'queued' | 'running' | 'finalized' | 'reopened'
-  cases: Array<{ caseId: string; status: 'queued' | 'running' | 'done' | 'failed' | 'paused'; error?: string }>
+  cases: Array<BatchCaseEntryBinding & { caseId: string; status: 'queued' | 'running' | 'done' | 'failed' | 'paused'; error?: string }>
   finalizedSnapshotHash?: string
   finalizedAt?: string
   round: number

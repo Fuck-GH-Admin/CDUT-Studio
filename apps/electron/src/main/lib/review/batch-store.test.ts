@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ReviewBatch, ReviewCaseV2 } from '@profer/shared'
 import { createAggregate, readAggregate, submitCommand } from './case-store-v2'
-import { createBatchV2, finalizeBatch, listBatchStatesV2, pushViaOutbox, recoverPendingPushesDetailed, recoverPendingPushes, readBatchStateV2, readFinalizedSnapshot, reopenBatch, updateCaseStatus, runBatchQueue, retryBatchCases, recoverInterruptedBatch } from './batch-store'
+import { createBatchV2, finalizeBatch, saveBatchStateV2, listBatchStatesV2, pushViaOutbox, recoverPendingPushesDetailed, recoverPendingPushes, readBatchStateV2, readFinalizedSnapshot, reopenBatch, updateCaseStatus, runBatchQueue, retryBatchCases, recoverInterruptedBatch } from './batch-store'
 import type { BatchStateV2 } from '@profer/shared'
 type Entry = BatchStateV2['cases'][number]
 import { MockSchoolAdapter } from './external-ports'
@@ -17,6 +17,31 @@ process.env.PROFER_CONFIG_DIR = CONFIG_DIR
 afterAll(() => rmSync(CONFIG_DIR, { recursive: true, force: true }))
 
 const batch = (id: string): ReviewBatch => ({ id, name: `批次${id}`, templateId: 't', templateVersion: 1, policyVersionLock: [{ policyVersionId: 'p', version: 1 }], caseIds: ['c1', 'c2'], createdAt: new Date().toISOString() })
+
+
+/** 测试助手：写入一条真实 Run 并建立批次成员绑定（BATCH-01/04 合同）。 */
+function seedRunSync(caseId: string, runId = `run-${caseId}-${Math.random().toString(36).slice(2, 8)}`): string {
+  const { saveRunV2 } = require('./run-store-v2') as typeof import('./run-store-v2')
+  saveRunV2({
+    id: runId, caseId, templateId: 't', templateVersion: 1,
+    inputManifest: { hash: 'valid-hash', templateVersion: 1, policyVersions: [{ policyVersionId: 'p', version: 1 }],
+      documentVersions: [], observationIds: [], evidenceLinkIds: [], effectiveRuleIds: ['rule-1'] },
+    status: 'completed', checkpoints: [], checks: [], opinions: [],
+    coverage: { documents: [], plannedChecks: 0, completedChecks: 0, effectiveVerdicts: 0, pendingChecks: 0 },
+    diagnostics: [], startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+  })
+  return runId
+}
+
+/** 测试助手：标记 done 并绑定运行；决定依据默认 test-run。 */
+function markDoneWithBinding(batchId: string, caseId: string, runId = 'test-run', seed = true): void {
+  if (seed) seedRunSync(caseId, runId)
+  updateCaseStatus(batchId, caseId, 'done')
+  const state = readBatchStateV2(batchId)!
+  state.cases = state.cases.map((entry) => entry.caseId === caseId
+    ? { ...entry, entryRunId: runId, bindingState: 'bound' as const, inputHash: 'valid-hash' } : entry)
+  saveBatchStateV2(state)
+}
 
 async function seedFinalCase(caseId: string, options: { final?: boolean; supplement?: boolean; appeal?: boolean } = {}): Promise<void> {
   const caseV2: ReviewCaseV2 = {
@@ -94,8 +119,8 @@ describe('批次状态机（R08）', () => {
     await seedFinalCase('b2-c1')
     await seedFinalCase('b2-c2')
     createBatchV2({ ...batch('b2'), caseIds: ['b2-c1', 'b2-c2'] })
-    updateCaseStatus('b2', 'b2-c1', 'done')
-    updateCaseStatus('b2', 'b2-c2', 'done')
+    markDoneWithBinding('b2', 'b2-c1')
+    markDoneWithBinding('b2', 'b2-c2')
     const finalized = finalizeBatch('b2', { ranking: [{ caseId: 'b2-c1', rank: 1 }] })
     expect(finalized.status).toBe('finalized')
     expect(finalized.finalizedSnapshotHash).toHaveLength(64)
@@ -124,7 +149,7 @@ describe('批次状态机（R08）', () => {
     await seedFinalCase(caseId, { final: false })
     const id = 'finalization-stage-only-batch'
     createBatchV2({ ...batch(id), caseIds: [caseId] })
-    updateCaseStatus(id, caseId, 'done')
+    markDoneWithBinding(id, caseId)
     expect(() => finalizeBatch(id, {})).toThrow('最终业务决定')
   })
 
@@ -134,7 +159,7 @@ describe('批次状态机（R08）', () => {
       await seedFinalCase(caseId, { [type]: true })
       const id = `finalization-${type}-batch`
       createBatchV2({ ...batch(id), caseIds: [caseId] })
-      updateCaseStatus(id, caseId, 'done')
+      markDoneWithBinding(id, caseId)
       expect(() => finalizeBatch(id, {})).toThrow(type === 'supplement' ? '补件' : '申诉')
       expect(readBatchStateV2(id)?.status).not.toBe('finalized')
     }
@@ -148,7 +173,7 @@ describe('批次状态机（R08）', () => {
     await seedFinalCase('finalization-safe-reopen')
     const id = 'finalization-safe-batch'
     createBatchV2({ ...batch(id), caseIds: ['finalization-safe-reopen'] })
-    updateCaseStatus(id, 'finalization-safe-reopen', 'done')
+    markDoneWithBinding(id, 'finalization-safe-reopen')
     finalizeBatch(id, {})
     expect(() => reopenBatch(id, '../escape', '用户输入')).toThrow('非法批次 ID')
     expect(readBatchStateV2(id)?.status).toBe('finalized')
@@ -185,7 +210,7 @@ describe('批次中断恢复与定向重试（B 切片）', () => {
     createBatchV2({ ...batch('retry-specific'), caseIds: ['c1', 'c2', 'c3'] })
     updateCaseStatus('retry-specific', 'c1', 'failed', '解析失败')
     updateCaseStatus('retry-specific', 'c2', 'failed', '服务异常')
-    updateCaseStatus('retry-specific', 'c3', 'done')
+    markDoneWithBinding('retry-specific', 'c3')
     retryBatchCases('retry-specific', ['c1'])
     const executed: string[] = []
     const result = await runBatchQueue('retry-specific', { runCase: async (id) => { executed.push(id); return { status: 'completed' } } })
@@ -206,7 +231,6 @@ describe('批次中断恢复与定向重试（B 切片）', () => {
     const id = 'retry-valid-done'
     const caseId = 'retry-valid-done-case'
     createBatchV2({ ...batch(id), caseIds: [caseId] })
-    updateCaseStatus(id, caseId, 'done')
     const { saveRunV2 } = await import('./run-store-v2')
     saveRunV2({
       id: 'run-valid-done', caseId, templateId: 't', templateVersion: 1,
@@ -219,6 +243,7 @@ describe('批次中断恢复与定向重试（B 切片）', () => {
       coverage: { documents: [], plannedChecks: 1, completedChecks: 1, effectiveVerdicts: 1, pendingChecks: 0 },
       diagnostics: [], startedAt: '2026-10-10T00:00:00Z', completedAt: '2026-10-10T00:00:01Z',
     })
+    markDoneWithBinding(id, caseId, 'run-valid-done', false)
     expect(() => retryBatchCases(id, [caseId])).toThrow('不可重试')
     expect(readBatchStateV2(id)?.cases[0]?.status).toBe('done')
   })
@@ -239,7 +264,7 @@ describe('批次中断恢复与定向重试（B 切片）', () => {
     let release!: () => void
     const entered = new Promise<void>((resolve) => { signal = resolve })
     const block = new Promise<void>((resolve) => { release = resolve })
-    const pending = runBatchQueue('active-run', { runCase: async () => { signal(); await block; return { status: 'completed' } } })
+    const pending = runBatchQueue('active-run', { runCase: async (caseId) => { signal(); await block; return { status: 'completed', runId: seedRunSync(caseId) } } })
     await entered
     expect(() => recoverInterruptedBatch('active-run')).toThrow('仍在当前进程')
     expect(() => retryBatchCases('active-run', ['c1'])).toThrow('执行中')
@@ -421,6 +446,49 @@ describe('Outbox 中断恢复与 WAL（第二轮可靠性收口）', () => {
   })
 })
 
+describe('批次绑定与同案互斥（BATCH-01/03/04）', () => {
+  test('Given 最终决定依据其他轮次运行 When 定稿 Then 拒止并指出差异', async () => {
+    await seedFinalCase('binding-mismatch')
+    createBatchV2({ ...batch('binding-mismatch-batch'), caseIds: ['binding-mismatch'] })
+    markDoneWithBinding('binding-mismatch-batch', 'binding-mismatch', 'run-other-round')
+    expect(() => finalizeBatch('binding-mismatch-batch', {})).toThrow('不一致')
+    expect(readBatchStateV2('binding-mismatch-batch')?.status).not.toBe('finalized')
+  })
+
+  test('Given 两个批次包含同一案卷 When 同时启动 Then 第二个批次明确拒止', async () => {
+    createBatchV2({ ...batch('mutex-a'), caseIds: ['mutex-case'] })
+    createBatchV2({ ...batch('mutex-b'), caseIds: ['mutex-case'] })
+    let signal!: () => void
+    let release!: () => void
+    const entered = new Promise<void>((resolve) => { signal = resolve })
+    const block = new Promise<void>((resolve) => { release = resolve })
+    const first = runBatchQueue('mutex-a', { runCase: async (caseId) => {
+      signal(); await block
+      return { status: 'completed', runId: seedRunSync(caseId) }
+    } })
+    await entered
+    await expect(runBatchQueue('mutex-b', { runCase: async (caseId) => ({ status: 'completed', runId: seedRunSync(caseId) }) }))
+      .rejects.toThrow('正在其他执行中运行')
+    release()
+    await first
+  })
+
+  test('Given assist 人工批次全部完成且有绑定运行 When 统一定稿 Then 允许定稿', async () => {
+    await seedFinalCase('assist-case')
+    createBatchV2({ ...batch('assist-batch'), caseIds: ['assist-case'] })
+    markDoneWithBinding('assist-batch', 'assist-case')
+    const draft = readBatchStateV2('assist-batch')!
+    draft.status = 'queued'
+    saveBatchStateV2(draft)
+    const { finalizeCompletedBatch } = await import('./batch-automation-service')
+    const finalized = finalizeCompletedBatch('assist-batch')
+    expect(finalized.status).toBe('finalized')
+    const snapshot = readFinalizedSnapshot('assist-batch') as { decisions: Array<{ entryRunId: string; runId: string }> }
+    expect(snapshot.decisions[0]?.entryRunId).toBe('test-run')
+    expect(snapshot.decisions[0]?.runId).toBe('test-run')
+  })
+})
+
 describe('批次队列执行（G06/G11 真实队列）', () => {
   test('Given 注入假 runCase When 执行 Then 逐案状态流转且坏案不阻塞', async () => {
     createBatchV2(batch('bq1'))
@@ -430,7 +498,7 @@ describe('批次队列执行（G06/G11 真实队列）', () => {
     const state = await runBatchQueue('bq1', {
       runCase: async (caseId: string) => {
         if (caseId === 'c1') throw new Error('解析失败（坏案）')
-        return { status: 'completed' }
+        return { status: 'completed', runId: seedRunSync(caseId) }
       },
     })
     const c1 = state.cases.find((entry) => entry.caseId === 'c1')!
@@ -444,8 +512,8 @@ describe('批次队列执行（G06/G11 真实队列）', () => {
     await seedFinalCase('bq2-case1')
     await seedFinalCase('bq2-case2')
     createBatchV2({ ...batch('bq2'), caseIds: ['bq2-case1', 'bq2-case2'] })
-    updateCaseStatus('bq2', 'bq2-case1', 'done')
-    updateCaseStatus('bq2', 'bq2-case2', 'done')
+    markDoneWithBinding('bq2', 'bq2-case1')
+    markDoneWithBinding('bq2', 'bq2-case2')
     finalizeBatch('bq2', {})
     await expect(runBatchQueue('bq2', { runCase: async () => ({ status: 'completed' }) })).rejects.toThrow('重开')
   })
@@ -469,7 +537,7 @@ describe('批次队列执行（G06/G11 真实队列）', () => {
     const blocker = new Promise<void>((resolve) => { release = resolve })
     let calls = 0
     const first = runBatchQueue('bq-concurrent', {
-      runCase: async () => { calls++; started(); await blocker; return { status: 'completed' } },
+      runCase: async (caseId) => { calls++; started(); await blocker; return { status: 'completed', runId: seedRunSync(caseId) } },
     })
     await entered
     await expect(runBatchQueue('bq-concurrent', {

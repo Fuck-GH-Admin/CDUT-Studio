@@ -3,11 +3,11 @@ import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DocumentVersion, ReviewCaseV2, ReviewRunV2, RuleSpec } from '@profer/shared'
 import { createAggregate, readAggregate, submitCommand } from './case-store-v2'
-import { createBatchV2, configureBatchAutomation, readBatchStateV2, saveBatchStateV2, requeueCaseAfterSupplement, updateCaseStatus, runBatchQueue, readFinalizedSnapshot } from './batch-store'
+import { createBatchV2, configureBatchAutomation, readBatchStateV2, saveBatchStateV2, requeueCaseAfterSupplement, updateCaseStatus, runBatchQueue, readFinalizedSnapshot, persistCaseBinding } from './batch-store'
 import { canonicalContentHash, publishPolicy, savePolicyDraft } from './policy-store'
 import { publishTemplate, saveDraft, getTemplate } from './template-store'
 import { computeRunInputHash } from './run-service-v2'
-import { saveRunV2 } from './run-store-v2'
+import { listRunsV2, saveRunV2 } from './run-store-v2'
 import { runBatchAutomation, finalizeCompletedBatch } from './batch-automation-service'
 import { checkAutoBatchAction } from './batch-automation-gates'
 import { respondSupplementV2, resolveSupplementV2 } from './stage-workflow'
@@ -95,7 +95,13 @@ function makeBatch(caseIds: string[]): string {
     templateId: 'batch-auto-test', templateVersion: 1,
     policyVersionLock: [{ policyVersionId: 'auto-policy', version: 1 }],
     createdAt: '2026-10-10T00:00:00Z' })
-  for (const caseId of caseIds) updateCaseStatus(batchId, caseId, 'done')
+  for (const caseId of caseIds) {
+    updateCaseStatus(batchId, caseId, 'done')
+    // BATCH-01：测试夹具与产品一致，标记 done 时绑定本次运行，避免消费者读“最新 Run”。
+    const run = [...listRunsV2(caseId)].sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))[0]
+    if (run) persistCaseBinding(batchId, caseId, { entryRunId: run.id, inputHash: run.inputManifest.hash,
+      planFingerprint: run.inputManifest.planFingerprint, bindingState: 'bound' })
+  }
   const ready = readBatchStateV2(batchId)!
   ready.status = 'queued'
   saveBatchStateV2(ready)
@@ -348,7 +354,10 @@ describe('C 阶段：显式授权的自动通过与退回', () => {
     configureBatchAutomation(batchId, 'auto-approve', true)
     const dispatched: string[] = []
     const reviewed = await runBatchQueue(batchId, {
-      runCase: async (caseId) => { dispatched.push(caseId); return { status: 'completed' } },
+      runCase: async (caseId) => {
+        dispatched.push(caseId)
+        return { status: 'completed', runId: [...listRunsV2(caseId)][0]!.id }
+      },
     })
     expect(dispatched).toEqual([first.caseId, second.caseId])
     expect(reviewed.cases.map((entry) => entry.status)).toEqual(['done', 'done'])
