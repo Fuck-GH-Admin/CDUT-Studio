@@ -51,6 +51,37 @@ async function seed(subjects: ReviewCaseV2['subjects'] = []): Promise<{ caseId: 
 }
 
 describe('三栏单案的 V2 业务闭环事务', () => {
+  test('RUN-14：两轮运行后旧 Run 只读，处置/认定只能写当前权威 Run', async () => {
+    const { caseId, run } = await seed()
+    const latest: ReviewRunV2 = {
+      ...run,
+      id: `run-2-${caseId}`,
+      startedAt: '2026-01-02T00:00:00.000Z',
+      completedAt: '2026-01-02T00:00:02.000Z',
+    }
+    saveRunV2(latest)
+    const staleWrite = await recordWorkspaceDispositionV2(caseId, {
+      requestId: request(), actor, expectedRevision: 0,
+      payload: { findingKey: 'check-a', disposition: 'false-positive', reason: '旧轮处置', runId: run.id, inputHash: run.inputManifest.hash },
+    })
+    expect(staleWrite.ok).toBeFalse()
+    if (!staleWrite.ok) {
+      expect(staleWrite.code).toBe('STALE_INPUT')
+      expect(staleWrite.message).toContain('当前轮审核运行')
+    }
+    const currentWrite = await recordWorkspaceDispositionV2(caseId, {
+      requestId: request(), actor, expectedRevision: 0,
+      payload: { findingKey: 'check-a', disposition: 'false-positive', reason: '当前轮处置', runId: latest.id, inputHash: latest.inputManifest.hash },
+    })
+    expect(currentWrite.ok).toBeTrue()
+    const currentAdjudication = await recordWorkspaceSubjectAdjudicationV2(caseId, {
+      requestId: request(), actor, expectedRevision: currentWrite.ok ? currentWrite.aggregate.caseV2.revision : 0,
+      payload: { subjectId: 'subject-a', outcome: 'accepted', reason: '当前轮认定', runId: run.id, inputHash: run.inputManifest.hash },
+    })
+    expect(currentAdjudication.ok).toBeFalse()
+    if (!currentAdjudication.ok) expect(currentAdjudication.code).toBe('STALE_INPUT')
+  })
+
   test('Given 未处理检查 When 直接决定 Then 阻断；处置后决定持久化为最终业务决定', async () => {
     const { caseId, run } = await seed()
     const blocked = await decideWorkspaceCaseV2(caseId, {

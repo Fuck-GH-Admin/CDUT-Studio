@@ -1,4 +1,4 @@
-import { bindLocalReviewerCommand, bindLocalSubmitterCommand } from './review-ipc-actor-guard'
+import { bindLocalReviewerCommand, bindLocalSubmitterCommand, deriveLocalSupplementResolverActor } from './review-ipc-actor-guard'
 import { bindC0LocalCaseCommand, bindC0LocalCreateIntent, assertC0ReviewMainSender } from './review-c0-authority'
 import { assertSafeReviewStorageId } from './review-storage-id'
 import { registerCMainV3AuthorPlanIpc } from './review-v3-main-author-plan-ipc'
@@ -1051,7 +1051,17 @@ export function registerReviewIpc(): void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.RESOLVE_SUPPLEMENT_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
     assertC0ReviewMainSender(event)
     const { resolveSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
-    return resolveSupplementV2(input.caseId, bindLocalReviewerCommand(input.command) as unknown as Parameters<typeof resolveSupplementV2>[1])
+    const command = bindLocalReviewerCommand(input.command)
+    // RUN-17：补件判定人由 Main 按 origin task 派生，不接受 renderer 自填角色。
+    // 本地 teacher 只是“本机试办”标签，不是学校授权；伪造 teacher claim 仍会被
+    // stage-workflow 的 assigneeRole/assigneeActorId 校验拒绝。
+    const aggregate = readAggregate(input.caseId)
+    const payload = command.payload as { supplementId?: unknown } | undefined
+    const supplementId = typeof payload?.supplementId === 'string' ? payload.supplementId : ''
+    return resolveSupplementV2(input.caseId, {
+      ...(command as unknown as Parameters<typeof resolveSupplementV2>[1]),
+      actor: deriveLocalSupplementResolverActor(aggregate, supplementId),
+    })
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.RESPOND_SUPPLEMENT_V2, (event, input: { caseId: string; command: Record<string, unknown> }) => {
     assertC0ReviewMainSender(event)

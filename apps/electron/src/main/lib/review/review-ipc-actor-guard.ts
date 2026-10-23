@@ -5,7 +5,7 @@
  * Until school role credentials are verified by a main-process SchoolPort,
  * privileged school/teacher decisions cannot be claimed through renderer IPC.
  */
-import type { Actor } from '@profer/shared'
+import type { Actor, CaseAggregateV2 } from '@profer/shared'
 import type { IpcMainInvokeEvent } from 'electron'
 import { assertMainWindowSender } from '../ipc-sender-guard'
 import { getMainWindow } from '../main-window-state'
@@ -19,6 +19,29 @@ export const LOCAL_REVIEWER_ACTOR: Actor = Object.freeze({
   actorSource: 'local',
   role: 'reviewer',
 })
+
+/**
+ * RUN-17：补件判定人由 Main 按补件来源任务派生。
+ *
+ * 本地 teacher 仅是“本机以教师阶段试办”的本地角色，不是学校认证；渲染层
+ * 自填的 role/actorId 一律不参与派生。来源任务指定了 assigneeActorId 时沿用它，
+ * 否则按角色使用固定的本地 actor。最终仍由 stage-workflow 校验任务归属。
+ */
+export function deriveLocalSupplementResolverActor(
+  aggregate: CaseAggregateV2 | undefined,
+  supplementId: string,
+): Actor {
+  const supplement = aggregate?.supplements.find((item) => item.id === supplementId)
+  const originTask = supplement?.originTaskId
+    ? aggregate?.tasks.find((item) => item.id === supplement.originTaskId)
+    : undefined
+  const role = originTask?.assigneeRole === 'teacher' ? 'teacher' as const : 'reviewer' as const
+  return {
+    actorId: originTask?.assigneeActorId ?? (role === 'teacher' ? 'local-teacher' : 'local-reviewer'),
+    actorSource: 'local',
+    role,
+  }
+}
 
 export function bindLocalReviewerCommand<T extends Record<string, unknown>>(command: T): T {
   const claim = command?.actor as Actor | undefined

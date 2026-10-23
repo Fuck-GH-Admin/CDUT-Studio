@@ -2,12 +2,13 @@
  * N3/R07 单测：阶段推进（初审≠decided）/最终驳回/多补件门控/申诉更正/最终投影
  */
 import { afterAll, describe, expect, test } from 'bun:test'
-import { rmSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ReviewCaseV2, TemplateVersion } from '@profer/shared'
 import { createAggregate, readAggregate } from './case-store-v2'
 import { ensureInitialTask, recordStageDecision, resolveAppealV2, resolveFinalDecisionProjection, resolveSupplementV2, respondSupplementV2, type StageDecisionPayload } from './stage-workflow'
 import { submitAppeal } from './business-workflow'
+import { registerMaterial } from './material-service'
 
 const CONFIG_DIR = join(import.meta.dir, '../../../../../../work/tmp', `profer-test-stage-${Date.now()}`)
 process.env.PROFER_CONFIG_DIR = CONFIG_DIR
@@ -265,6 +266,80 @@ describe('补件回复与任务回流（G04/G05）', () => {
     const denied = await respondSupplementV2(caseId, { requestId: nextReq(), actor: { actorId: 't-1', actorSource: 'local', role: 'teacher' }, expectedRevision: aggregate.caseV2.revision, payload: { supplementId: aggregate.supplements[0]!.id, note: '代回复' } })
     expect(denied.ok).toBeFalse()
     if (!denied.ok) expect(denied.code).toBe('INVALID_TRANSITION')
+  })
+})
+
+
+describe('RUN-19 补件材料归属与时效', () => {
+  test('Given 补件请求 When 用他案/请求前旧版本回复 Then 拒绝；请求后新版本可成功且重试幂等', async () => {
+    const { caseId, firstTaskId } = await seed()
+    mkdirSync(CONFIG_DIR, { recursive: true })
+    const oldPath = join(CONFIG_DIR, 'supp-old.txt')
+    writeFileSync(oldPath, '补件请求前已存在的材料')
+    let agg = readAggregate(caseId)!
+    const first = await registerMaterial(caseId, {
+      requestId: nextReq(), actor, expectedRevision: agg.caseV2.revision,
+      payload: { sourcePath: oldPath, role: 'evidence' },
+    })
+    expect(first.ok).toBeTrue()
+    agg = readAggregate(caseId)!
+    const oldVersionId = agg.caseV2.documents[0]!.versionId
+
+    const opened = await recordStageDecision(caseId, {
+      requestId: nextReq(), actor, expectedRevision: agg.caseV2.revision,
+      payload: { action: 'return-for-supplement', taskId: firstTaskId, reason: '缺少新材料', supplementRequiredElements: ['新材料'], supplementReason: '请补新材料' },
+    }, template)
+    expect(opened.ok).toBeTrue()
+    agg = opened.ok ? opened.aggregate : readAggregate(caseId)!
+    const supplementId = agg.supplements[0]!.id
+    expect(agg.supplements[0]!.documentVersionIdsAtRequest).toContain(oldVersionId)
+
+    const foreign = await respondSupplementV2(caseId, {
+      requestId: nextReq(), actor: { actorId: 'stu-run19', actorSource: 'local', role: 'student' },
+      expectedRevision: agg.caseV2.revision,
+      payload: { supplementId, note: '他案版本', documentVersionIds: ['doc-foreign-v1'] },
+    })
+    expect(foreign.ok).toBeFalse()
+    if (!foreign.ok) { expect(foreign.code).toBe('VALIDATION_FAILED'); expect(foreign.message).toContain('不属于本案当前有效原件') }
+
+    const reused = await respondSupplementV2(caseId, {
+      requestId: nextReq(), actor: { actorId: 'stu-run19', actorSource: 'local', role: 'student' },
+      expectedRevision: agg.caseV2.revision,
+      payload: { supplementId, note: '旧版本', documentVersionIds: [oldVersionId] },
+    })
+    expect(reused.ok).toBeFalse()
+    if (!reused.ok) { expect(reused.code).toBe('VALIDATION_FAILED'); expect(reused.message).toContain('请求前已有版本') }
+
+    const newPath = join(CONFIG_DIR, 'supp-new.txt')
+    writeFileSync(newPath, '补件请求后新登记的材料')
+    const registered = await registerMaterial(caseId, {
+      requestId: nextReq(), actor, expectedRevision: agg.caseV2.revision,
+      payload: { sourcePath: newPath, role: 'evidence' },
+    })
+    expect(registered.ok).toBeTrue()
+    agg = readAggregate(caseId)!
+    const newVersionId = agg.caseV2.documents.find((document) => document.fileName === 'supp-new.txt')!.versionId
+
+    const requestId = nextReq()
+    const replied = await respondSupplementV2(caseId, {
+      requestId, actor: { actorId: 'stu-run19', actorSource: 'local', role: 'student' },
+      expectedRevision: agg.caseV2.revision,
+      payload: { supplementId, note: '补交新原件', documentVersionIds: [newVersionId] },
+    })
+    expect(replied.ok).toBeTrue()
+    if (replied.ok) {
+      expect(replied.aggregate.supplements.find((item) => item.id === supplementId)?.status).toBe('responded')
+      expect(replied.aggregate.supplements.find((item) => item.id === supplementId)?.responses).toHaveLength(1)
+    }
+    // 同一 requestId 的重试不追加第二份回复（既有语义）。
+    const retryRev = replied.ok ? replied.aggregate.caseV2.revision : readAggregate(caseId)!.caseV2.revision
+    const retry = await respondSupplementV2(caseId, {
+      requestId, actor: { actorId: 'stu-run19', actorSource: 'local', role: 'student' },
+      expectedRevision: retryRev,
+      payload: { supplementId, note: '补交新原件', documentVersionIds: [newVersionId] },
+    })
+    expect(retry.ok).toBeTrue()
+    expect(readAggregate(caseId)!.supplements.find((item) => item.id === supplementId)?.responses).toHaveLength(1)
   })
 })
 

@@ -4916,6 +4916,7 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T05_STAGE_CAPABILITY, input) as Promise<{
       mode: 'local-business'; actorLabel: string; actorRole: 'reviewer' | 'teacher'
       eligibleTaskIds: string[]; hasCurrentRun: boolean
+      currentRunId?: string; currentRunReason?: string
     }>,
   /** T05 可信阶段决定（Main 重核身份/Run/准备度后原子写入） */
   recordT05StageDecision: (input: {

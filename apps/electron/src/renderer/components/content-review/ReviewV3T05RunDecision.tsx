@@ -24,6 +24,8 @@ export function ReviewV3T05RunDecision({
   const caseId = aggregate.caseV2.id
   const [runs, setRuns] = useState<ReviewRunV2[]>([])
   const [runId, setRunId] = useState('')
+  const [currentRunId, setCurrentRunId] = useState('')
+  const [runAuthorityNote, setRunAuthorityNote] = useState('')
   const [stale, setStale] = useState(true)
   const [findingKey, setFindingKey] = useState('')
   const [disposition, setDisposition] = useState<Disposition>('confirmed-issue')
@@ -44,12 +46,21 @@ export function ReviewV3T05RunDecision({
     let active = true
     setRuns([])
     setRunId('')
+    setCurrentRunId('')
+    setRunAuthorityNote('')
     setError('')
-    void window.reviewAPI.listRunsV2(caseId).then((list) => {
+    // RUN-14：写入只允许 Main 判定的当前权威业务 Run；历史 Run 保留只读展示。
+    void Promise.all([
+      window.reviewAPI.listRunsV2(caseId),
+      window.reviewAPI.getT05StageCapability({ caseId }),
+    ]).then(([list, capability]) => {
       if (!active) return
       const completed = list.filter((run) => run.status === 'completed' || run.status === 'partially-completed')
+      const currentId = capability.currentRunId ?? ''
       setRuns(completed)
-      setRunId(completed[0]?.id ?? '')
+      setCurrentRunId(currentId)
+      setRunAuthorityNote(currentId ? '' : `当前没有可办理的权威审核运行（${capability.currentRunReason ?? '无可用运行'}）；历史运行只读`)
+      setRunId(currentId && completed.some((run) => run.id === currentId) ? currentId : '')
     }).catch((cause: unknown) => {
       if (active) setError(cause instanceof Error ? cause.message : String(cause))
     })
@@ -126,11 +137,17 @@ export function ReviewV3T05RunDecision({
       <p className="text-muted-foreground">针对真实 Run 记录待办、补件、事项认定和本地决定。技术运行完成仅表示运行结束，检查结论以实际结果为准。</p>
       {runs.length === 0 ? (
         <p className="text-muted-foreground">尚无已完成的可核定 ReviewRun。先完成当前案卷审核。</p>
-      ) : (
+      ) : runs.some((entry) => entry.id === currentRunId) ? (
         <select className="w-full rounded border bg-background p-2" value={runId}
           onChange={(event) => setRunId(event.target.value)}>
-          {runs.map((entry) => <option key={entry.id} value={entry.id}>{entry.id} · {entry.status}</option>)}
+          {runs.filter((entry) => entry.id === currentRunId).map((entry) => <option key={entry.id} value={entry.id}>{entry.id} · {entry.status}</option>)}
         </select>
+      ) : (
+        <p className="text-muted-foreground">当前没有可办理的权威审核运行；历史运行只读，请先完成最新一轮审核。</p>
+      )}
+      {runAuthorityNote && <p role="status" className="text-amber-700">{runAuthorityNote}</p>}
+      {runs.some((entry) => entry.id !== currentRunId) && (
+        <p className="text-muted-foreground">历史运行 {runs.filter((entry) => entry.id !== currentRunId).length} 条：只读，不可写入处置/认定。</p>
       )}
       {run && stale && <p className="rounded border px-2 py-1 text-amber-700 dark:text-amber-300">当前运行的输入已变化或来源失效，请先重新审核，不可用旧 Run 写入人工决定。</p>}
       {run && !stale && (

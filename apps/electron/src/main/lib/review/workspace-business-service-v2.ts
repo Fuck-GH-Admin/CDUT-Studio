@@ -4,9 +4,10 @@
 import { assessDecisionReadiness } from '@profer/shared'
 import type { Actor, BusinessDecision, CaseAggregateV2, FieldValue, ReviewCommandResult, ReviewRunV2, SubjectAdjudication, SupplementRequest } from '@profer/shared'
 import { CommandValidationError, submitCommand } from './case-store-v2'
-import { getRunV2, readArtifact } from './run-store-v2'
+import { getRunV2, listRunsV2, readArtifact } from './run-store-v2'
 import { computeRunInputHash } from './run-service-v2'
 import { currentSourceValidityBlockers } from './source-current-validity-v3'
+import { resolveCurrentBusinessRun } from './review-runtime-contract'
 
 type WorkspaceDisposition = 'confirmed-issue' | 'human-confirmed-compliant' | 'false-positive' | 'supplement-requested' | 'waived' | 'escalated'
 type WorkspaceDecision = BusinessDecision['result']
@@ -91,6 +92,20 @@ function assertCurrentRun(aggregate: CaseAggregateV2, runId: string, inputHash: 
   const currentHash = computeRunInputHash(aggregate.caseV2, aggregate.observations as unknown as Array<Record<string, unknown>>, aggregate.evidenceLinks as unknown as Array<Record<string, unknown>>)
   if (currentHash !== inputHash) throw new CommandValidationError('STALE_INPUT', '案卷输入已变化，请重新运行后再处理')
   if (hasSupplementResponseAfterRun(aggregate, run)) throw new CommandValidationError('STALE_INPUT', '补件回复在审核运行后发生变化，请重新审核后再处理')
+  // RUN-14：只能对“当前权威业务 Run”办理处置/认定/补件，不能拿上一轮
+  // 输入哈希相同的旧 Run 串轮写入。判定复用 review-runtime-contract，
+  // 不做第二套时间戳/可见性规则；旧 Run 仍可在界面只读查看。
+  const authority = resolveCurrentBusinessRun({
+    aggregate,
+    runs: listRunsV2(aggregate.caseV2.id),
+    stale: (candidate) => isWorkspaceRunStaleV2(aggregate, candidate.id),
+  })
+  if (!authority.run) {
+    throw new CommandValidationError('STALE_INPUT', '当前没有可办理的权威审核运行；请先完成最新一轮审核')
+  }
+  if (authority.run.id !== run.id) {
+    throw new CommandValidationError('STALE_INPUT', `只能针对当前轮审核运行 ${authority.run.id} 办理；旧运行 ${run.id} 为只读历史`)
+  }
   return run
 }
 

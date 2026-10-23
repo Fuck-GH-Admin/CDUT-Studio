@@ -115,8 +115,18 @@ describe('全链路旅程（自检探查）', () => {
     expect(ins.ok).toBe(true)
     agg = ins.ok ? ins.aggregate : agg
     expect(agg.caseV2.stage).toBe('awaiting-supplement')
+    // RUN-19：补件回复必须引用“请求后新登记”的原件；这里走真实材料登记，而不是复用旧版本。
+    const newCert = join(CONFIG_DIR, 'journey-new-cert.txt')
+    writeFileSync(newCert, '新证书：省级一等奖，颁发单位 省教育厅，日期 2026-10-01')
+    const regNew = await registerMaterial(caseId, {
+      requestId: 'j-reg-sup-new', actor, expectedRevision: agg.caseV2.revision,
+      payload: { sourcePath: newCert, role: 'evidence', materialSlotId: 'certificates' },
+    })
+    expect(regNew.ok).toBeTrue()
+    agg = readAggregate(caseId)!
+    const newCertVersionId = agg.caseV2.documents.find((document) => document.fileName === 'journey-new-cert.txt')!.versionId
     // 再次回复（修复前 INVALID_TRANSITION）
-    const reply = await respondSupplementV2(caseId, { requestId: 'j-sup-2', actor: student, expectedRevision: agg.caseV2.revision, payload: { supplementId: sup.id, note: '已补含日期的新证书', documentVersionIds: [agg.caseV2.documents[1]!.versionId] } })
+    const reply = await respondSupplementV2(caseId, { requestId: 'j-sup-2', actor: student, expectedRevision: agg.caseV2.revision, payload: { supplementId: sup.id, note: '已补含日期的新证书', documentVersionIds: [newCertVersionId] } })
     expect(reply.ok).toBe(true)
     agg = reply.ok ? reply.aggregate : agg
     expect(agg.supplements[0]!.responses).toHaveLength(1)

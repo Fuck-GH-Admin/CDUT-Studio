@@ -161,7 +161,7 @@ export function recordStageDecision(
             break
           case 'return-for-supplement': {
             if (!payload.supplementRequiredElements?.length || !payload.supplementReason?.trim()) throw new CommandValidationError('VALIDATION_FAILED', '退回补件必须指定要素与原因')
-            supplement = { id: `sup-${Date.now()}`, caseId: draft.caseV2.id, originFindingKeys: [], materialSlotId: undefined, requiredElements: payload.supplementRequiredElements, reason: payload.supplementReason, responsibleRole: 'student', status: 'open', responses: [], createdAt: now, originTaskId: task.id, originStageId: task.stageId }
+            supplement = { id: `sup-${Date.now()}`, caseId: draft.caseV2.id, originFindingKeys: [], materialSlotId: undefined, requiredElements: payload.supplementRequiredElements, reason: payload.supplementReason, responsibleRole: 'student', status: 'open', responses: [], createdAt: now, documentVersionIdsAtRequest: draft.caseV2.documents.map((document) => document.versionId), originTaskId: task.id, originStageId: task.stageId }
             draft.supplements = [...draft.supplements, supplement!]
             draft.caseV2.stage = 'awaiting-supplement'
             // 补件回流：创建同阶段新轮次任务（等待补件核验后开放处理）
@@ -203,6 +203,25 @@ export function respondSupplementV2(caseId: string, command: { requestId: string
     // 角色校验（05 §2 补件责任方）：仅 student/submitter 可回复
     if (target.responsibleRole === 'student' && command.actor.role !== 'student' && command.actor.role !== 'reviewer') throw new CommandValidationError('INVALID_TRANSITION', '该补件由学生负责，其他角色不能代回复')
     if (!payload.note.trim() && !(payload.documentVersionIds?.length)) throw new CommandValidationError('VALIDATION_FAILED', '回复必须附说明或材料')
+    // RUN-19：补件回复的 documentVersionIds 必须由 Main 核验归属与时效，不能靠 UI 过滤。
+    const suppliedVersions = payload.documentVersionIds ?? []
+    if (suppliedVersions.length > 0) {
+      if (new Set(suppliedVersions).size !== suppliedVersions.length) {
+        throw new CommandValidationError('VALIDATION_FAILED', '补件材料版本 ID 不能重复')
+      }
+      const activeVersionIds = new Set(
+        aggregate.caseV2.documents.filter((document) => document.active !== false).map((document) => document.versionId),
+      )
+      const foreign = suppliedVersions.filter((versionId) => !activeVersionIds.has(versionId))
+      if (foreign.length > 0) {
+        throw new CommandValidationError('VALIDATION_FAILED', `补件材料不属于本案当前有效原件：${foreign.join('、')}`)
+      }
+      const atRequest = new Set(target.documentVersionIdsAtRequest ?? [])
+      const reused = suppliedVersions.filter((versionId) => atRequest.has(versionId))
+      if (reused.length > 0) {
+        throw new CommandValidationError('VALIDATION_FAILED', `补件材料必须是本次补件请求后新登记的原件，不能复用请求前已有版本：${reused.join('、')}`)
+      }
+    }
     return {
       summary: `补件回复：${target.id}`,
       mutate: (draft) => {

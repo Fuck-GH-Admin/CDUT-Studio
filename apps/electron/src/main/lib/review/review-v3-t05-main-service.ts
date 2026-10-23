@@ -341,6 +341,9 @@ export interface T05StageCapability {
   actorRole: T05LocalRole
   eligibleTaskIds: string[]
   hasCurrentRun: boolean
+  /** 当前权威业务 Run；旧 Run 只读，渲染层不得借此写处置/认定。 */
+  currentRunId?: string
+  currentRunReason?: string
   /** 该角色当前可执行的阶段动作（由 Main 判定，渲染层只展示） */
   allowedActions: T05StageAction[]
   /** 阶段动作被阻断时的真实原因 */
@@ -372,6 +375,8 @@ export function readT05StageCapability(caseId: string, claim?: T05RoleClaim): T0
     actorRole: actor.role as T05LocalRole,
     eligibleTaskIds: eligible,
     hasCurrentRun: Boolean(run),
+    ...(run ? { currentRunId: run.id } : {}),
+    currentRunReason: authority.reason,
     allowedActions,
     blockers: mode === 'local-business'
       ? [...eligibility.blockers, ...(run && t03 && !t03.allowed
