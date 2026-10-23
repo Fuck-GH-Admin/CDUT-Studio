@@ -1427,7 +1427,7 @@ export interface GradeRecord {
   courseName: string
   /** 综合成绩原始文本（可能为 "71"、"优"、"良" 等） */
   score: string
-  /** 可数值化时的成绩（优→95 / 良→85 / 中→75 / 及格→65 / 不及格→50 通用映射） */
+  /** 可数值化时的成绩（优/优秀→95、良/良好→85、中/中等→75、及格/合格→65、不及格/不合格→50） */
   scoreNumber?: number
   scoreLabel: string
   credit: number
@@ -1444,13 +1444,18 @@ export interface GradeRecord {
   electiveCategory: string
 }
 
-/** 五级制成绩通用映射（任意学生通用，无个人耦合） */
+/** 五级制/两级制成绩通用映射（兼容单字与双字评级，任意学生通用，无个人耦合） */
 const GRADE_WORD_SCORE: Readonly<Record<string, number>> = {
   优: 95,
+  优秀: 95,
   良: 85,
+  良好: 85,
   中: 75,
+  中等: 75,
   及格: 65,
+  合格: 65,
   不及格: 50,
+  不合格: 50,
 }
 
 /** 解析历年成绩 #dataList 表为结构化记录数组（表头含重复列时按列序消歧） */
@@ -1552,7 +1557,14 @@ export function buildGpaTracks(records: GradeRecord[]): { latest: GpaTrackSummar
         // 统一换算为绩点量纲：gp 为 0–5，scoreNumber 为 0–100，不能直接比较
         const ga = a.gp ?? (a.scoreNumber !== undefined ? scoreToGp(a.scoreNumber) : -Infinity)
         const gb = b.gp ?? (b.scoreNumber !== undefined ? scoreToGp(b.scoreNumber) : -Infinity)
-        return ga === gb ? 0 : ga > gb ? 1 : -1
+        if (ga !== gb) return ga > gb ? 1 : -1
+        // 绩点相同先比原始分，仍相同再比学期，落实「同分取最新」业务规则
+        const sa = a.scoreNumber ?? -Infinity
+        const sb = b.scoreNumber ?? -Infinity
+        if (sa !== sb) return sa > sb ? 1 : -1
+        const semA = `${a.makeupSemester || a.semester}`
+        const semB = `${b.makeupSemester || b.semester}`
+        return semA === semB ? 0 : semA > semB ? 1 : -1
       }).at(-1)
       if (chosen) picked.push(chosen)
     }
@@ -1562,6 +1574,11 @@ export function buildGpaTracks(records: GradeRecord[]): { latest: GpaTrackSummar
     let weightedGpSum = 0
     let requiredCredits = 0
     const failed: GpaTrackSummary['failed'] = []
+    /** 不及格判定：数值 < 60、绩点为 0，或成绩文本含明确未通过语义 */
+    const isFailedScore = (r: GradeRecord): boolean =>
+      (r.scoreNumber !== undefined && r.scoreNumber < 60)
+      || (r.gp !== undefined && r.gp === 0)
+      || /不及格|不合格|缺考|零分/.test(r.score)
     for (const r of picked) {
       if (r.credit > 0 && r.scoreNumber !== undefined) {
         creditSum += r.credit
@@ -1569,7 +1586,7 @@ export function buildGpaTracks(records: GradeRecord[]): { latest: GpaTrackSummar
         weightedGpSum += r.credit * (r.gp ?? scoreToGp(r.scoreNumber))
         if (r.courseAttr.includes('必修')) requiredCredits += r.credit
       }
-      if (r.scoreNumber !== undefined && r.scoreNumber < 60) {
+      if (isFailedScore(r)) {
         failed.push({ courseCode: r.courseCode, courseName: r.courseName, semester: r.semester, score: r.score })
       }
     }

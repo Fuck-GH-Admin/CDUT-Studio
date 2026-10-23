@@ -8,12 +8,15 @@
 
 import { describe, expect, it } from 'bun:test'
 import {
+  createBeijingClockAnchor,
   formatBeijingClock,
   getBeijingClockAngles,
   getBeijingGreetingParts,
   getBeijingHour,
   getBeijingTimeNumbers,
   greetingForBeijingHour,
+  resolveBeijingClockRotations,
+  shouldRebaseClockAnchor,
 } from '../src/renderer/lib/beijing-greeting'
 
 /** 构造某个「北京时间」时刻（用 UTC 时刻精确表达，避免测试机时区干扰） */
@@ -152,5 +155,64 @@ describe('getBeijingClockAngles 时区隔离（BDD-GREETING-05）', () => {
     expect(angles.minute).toBe(0)
     expect(angles.minuteAngle).toBe(0)
     expect(angles.clockText).toBe('01:00:00')
+  })
+})
+
+describe('resolveBeijingClockRotations（表盘锚点连续推导 BDD-GREETING-06）', () => {
+  it('Given 同一 now 连续解析两次 When 对比 Then 三个旋转角完全一致（同帧重渲染不得整圈跳变）', () => {
+    const anchor = createBeijingClockAnchor(beijingInstantHms(10, 4, 18))
+    const now = beijingInstantHms(10, 4, 19)
+    expect(resolveBeijingClockRotations(anchor, now)).toEqual(
+      resolveBeijingClockRotations(anchor, now),
+    )
+  })
+
+  it('Given 锚点 10:04:18.700 When 1 秒后 Then 秒针 +6°、分针 +0.1°、时针 +1/120°', () => {
+    const anchor = createBeijingClockAnchor(new Date(Date.UTC(2026, 9, 16, 2, 4, 18, 700)))
+    const now = new Date(Date.UTC(2026, 9, 16, 2, 4, 19, 700))
+    const rotations = resolveBeijingClockRotations(anchor, now)
+
+    expect(rotations.secondRotation - anchor.angles.secondAngle).toBe(6)
+    expect(rotations.minuteRotation - anchor.angles.minuteAngle).toBeCloseTo(0.1, 10)
+    expect(rotations.hourRotation - anchor.angles.hourAngle).toBeCloseTo(1 / 120, 10)
+  })
+
+  it('Given 北京时间 23:59:59 When 跨到次日 00:00:00 Then 秒针 354° → 360°，绝不回退到 0°', () => {
+    const anchor = createBeijingClockAnchor(beijingInstantHms(23, 59, 59))
+    const rotations = resolveBeijingClockRotations(anchor, new Date(anchor.atMs + 1000))
+
+    expect(anchor.angles.secondAngle).toBe(354)
+    expect(rotations.secondRotation).toBe(360)
+  })
+
+  it('Given 跨 1 小时 When 解析 Then 时针 +30°、分针 +360°、秒针 +21600°（连续不回绕）', () => {
+    const anchor = createBeijingClockAnchor(beijingInstantHms(10, 0, 0))
+    const rotations = resolveBeijingClockRotations(anchor, beijingInstantHms(11, 0, 0))
+
+    expect(rotations.hourRotation - anchor.angles.hourAngle).toBeCloseTo(30, 10)
+    expect(rotations.minuteRotation - anchor.angles.minuteAngle).toBeCloseTo(360, 10)
+    expect(rotations.secondRotation - anchor.angles.secondAngle).toBe(21600)
+  })
+
+  it('Given 锚点含毫秒 When 计算角度 Then 毫秒项参与时/分针角度', () => {
+    const angles = getBeijingClockAngles(new Date(Date.UTC(2026, 9, 16, 2, 4, 18, 500)))
+
+    expect(angles.millisecond).toBe(500)
+    expect(angles.minuteAngle).toBeCloseTo(25.85, 10)
+    expect(angles.hourAngle).toBeCloseTo(302.1541666667, 6)
+  })
+})
+
+describe('shouldRebaseClockAnchor（休眠唤醒/时间回拨重锚 BDD-GREETING-07）', () => {
+  const baseMs = new Date('2026-10-16T02:04:18.000Z').getTime()
+
+  it('Given 正常 1 秒 tick 或 1.4 秒迟到 When 判定 Then 无需重锚', () => {
+    expect(shouldRebaseClockAnchor(baseMs, new Date(baseMs + 1000))).toBe(false)
+    expect(shouldRebaseClockAnchor(baseMs, new Date(baseMs + 1400))).toBe(false)
+  })
+
+  it('Given 休眠 8 小时或系统时间回拨 When 判定 Then 必须重锚', () => {
+    expect(shouldRebaseClockAnchor(baseMs, new Date(baseMs + 8 * 3600_000))).toBe(true)
+    expect(shouldRebaseClockAnchor(baseMs, new Date(baseMs - 1000))).toBe(true)
   })
 })

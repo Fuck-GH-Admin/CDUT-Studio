@@ -83,11 +83,17 @@ export function WelcomeEmptyState(): React.ReactElement {
   const [tip] = React.useState<Tip>(() => getRandomTip(getPlatform()))
   const displayName = userProfile.userName || '用户'
 
-  // 实时北京时间时钟（秒级跳动，卸载时清理定时器）
+  // 实时北京时间时钟：对齐真实秒边界的自校正递归定时器，卸载时清理
   const [now, setNow] = React.useState(() => new Date())
   React.useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000)
-    return () => window.clearInterval(timer)
+    let timer = 0
+    const tick = (): void => {
+      setNow(new Date())
+      // 每次重新计算距下一整秒的延迟：不累积漂移，也不漏秒/重秒
+      timer = window.setTimeout(tick, 1000 - (Date.now() % 1000) + 20)
+    }
+    timer = window.setTimeout(tick, 1000 - (Date.now() % 1000) + 20)
+    return () => window.clearTimeout(timer)
   }, [])
   const { greeting } = getBeijingGreetingParts(now)
   const { clockText } = getBeijingClockAngles(now)

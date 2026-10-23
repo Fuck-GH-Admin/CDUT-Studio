@@ -888,8 +888,15 @@ export class YanhuExpressManager {
     tab.blockedTarget = null
     tab.blockedPreviousUrl = null
     tab.item.url = restoreUrl
-    // 休眠标签返回上一页时需惰性唤醒，否则恢复后无底层视图可显示
-    if (!tab.view) this.instantiateTab(tab, { restoring: false })
+    tab.item.error = null
+    // 休眠标签返回上一页时需惰性唤醒；已唤醒标签必须真正驱动导航，
+    // 否则仅元数据恢复、底层视图仍停留在被 stop 的空白/错误态（页面脱节）。
+    if (!tab.view) {
+      this.instantiateTab(tab, { restoring: false })
+    } else if (!tab.view.webContents.isDestroyed()) {
+      tab.item.loading = true
+      void this.loadWithFreshSignature(tab.view.webContents, restoreUrl)
+    }
     this.recomputeNavigation(tab)
     this.applyLayoutToActive()
     this.emitTabs()
