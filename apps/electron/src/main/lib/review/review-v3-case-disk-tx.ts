@@ -121,6 +121,7 @@ export function writeC2CaseStateDurably(caseId:string,text:string):void {
   if(!token) return refuse('durable state write without C-Tx owner')
   assertOwned(lock,token)
   const tmp=state+'.'+randomUUID()+'.tmp'
+  const previous=state+'.previous.json'
   let created=false
   try {
     const fd=openSync(tmp,'wx',0o600)
@@ -128,6 +129,17 @@ export function writeC2CaseStateDurably(caseId:string,text:string):void {
     try{writeFileSync(fd,text);fsyncSync(fd)}
     finally{closeSync(fd)}
     assertOwned(lock,token)
+    // ASSET-17：保留上一份“可解析”的主账，供断电/坏 JSON 时只读恢复。
+    // 只备份能通过 JSON 解析的当前文件；当前已损坏时保留更早的有效副本。
+    if(existsSync(state)){
+      try{
+        const current=readFileSync(state,'utf8')
+        JSON.parse(current)
+        const bakTmp=previous+'.'+randomUUID()+'.tmp'
+        writeFileSync(bakTmp,current,{flag:'wx',mode:0o600})
+        renameSync(bakTmp,previous)
+      }catch{/* 备份失败不得阻断业务写入；保留上一份已知有效副本 */}
+    }
     renameSync(tmp,state)
     if(process.platform!=='win32') {
       const dirfd=openSync(root,'r')

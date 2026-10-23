@@ -616,6 +616,8 @@ export const REVIEW_IPC_CHANNELS = {
   T06_PICK_PHYSICAL_SOURCE: 'review-v3:t06-pick-physical-source',
   /** T06 物理入库提交（建案 + 逐原件入库 + 批次回执，requestId 幂等） */
   T06_COMMIT_PHYSICAL_IMPORT: 'review-v3:t06-commit-physical-import',
+  /** 只读案卷存储诊断（坏/可恢复案卷不静默消失，ASSET-12） */
+  LIST_CASE_STORAGE_ISSUES_V3: 'review-v3:list-case-storage-issues',
   /** T05 可信阶段能力投影（只读；不构成授权） */
   T05_STAGE_CAPABILITY: 'review-v3:t05-stage-capability',
   /** T05 可信阶段决定（Main 重核身份/Run/准备度后原子写入） */

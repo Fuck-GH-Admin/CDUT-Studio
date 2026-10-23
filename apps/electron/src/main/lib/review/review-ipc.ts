@@ -995,6 +995,11 @@ export function registerReviewIpc(): void {
     const { requestT01ModelDraft } = require('./review-v3-t01-model-draft-service') as typeof import('./review-v3-t01-model-draft-service')
     return requestT01ModelDraft({ system: input.system, user: input.user })
   })
+  ipcMain.handle(REVIEW_IPC_CHANNELS.LIST_CASE_STORAGE_ISSUES_V3, (event) => {
+    assertC0ReviewMainSender(event)
+    const { listCaseStorageIssues } = require('./case-store-v2') as typeof import('./case-store-v2')
+    return listCaseStorageIssues()
+  })
   ipcMain.handle(REVIEW_IPC_CHANNELS.T06_PICK_PHYSICAL_SOURCE, async (event, input: { sourceKind?: string }) => {
     assertC0ReviewMainSender(event)
     if (input?.sourceKind !== 'folder' && input?.sourceKind !== 'zip') throw new Error('来源类型非法')
@@ -1285,6 +1290,12 @@ export function registerReviewIpc(): void {
   ipcMain.handle(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, async (_e, input: { caseId: string; sourcePath: string; role: 'application' | 'evidence' | 'rule' | 'attachment'; materialSlotId?: string; fileName?: string; replacesVersionIds?: string[] }) => {
     assertC0ReviewMainSender(_e)
     if (!input || typeof input.sourcePath !== 'string' || !input.sourcePath) throw new Error('参数 sourcePath 非法')
+    // ASSET-05：展示名与显式替换意图在两种案卷上必须同一契约；先校验再分流。
+    if (input.fileName !== undefined) {
+      const { basename } = require('node:path') as typeof import('node:path')
+      if (typeof input.fileName !== 'string' || !input.fileName || basename(input.fileName) !== input.fileName) throw new Error('参数 fileName 非法')
+    }
+    if (input.replacesVersionIds !== undefined && (!Array.isArray(input.replacesVersionIds) || input.replacesVersionIds.some((value) => typeof value !== 'string'))) throw new Error('参数 replacesVersionIds 非法')
     // Electron's existing webUtils.getPathForFile resolves the dropped OS
     // file in Preload. Route native V3 cases through the SAME C-owned physical
     // material importer as the system file picker (no second Case or storage).
@@ -1295,14 +1306,17 @@ export function registerReviewIpc(): void {
         input.caseId, input.sourcePath, input.role, undefined,
         () => assertC0ReviewMainSender(_e),
         input.materialSlotId,
+        {
+          ...(input.fileName ? { fileName: input.fileName } : {}),
+          ...(input.replacesVersionIds ? { replacesVersionIds: input.replacesVersionIds } : {}),
+        },
       )
-      return document.id
+      // 两个分支统一返回 DocumentVersion.versionId；documentId 不是调用方可用的版本号。
+      const after = readAggregate(input.caseId)
+      const version = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
+      if (!version) throw new Error('原生材料已登记但找不到对应原件版本')
+      return version.versionId
     }
-    if (input.fileName !== undefined) {
-      const { basename } = require('node:path') as typeof import('node:path')
-      if (typeof input.fileName !== 'string' || !input.fileName || basename(input.fileName) !== input.fileName) throw new Error('参数 fileName 非法')
-    }
-    if (input.replacesVersionIds !== undefined && (!Array.isArray(input.replacesVersionIds) || input.replacesVersionIds.some((value) => typeof value !== 'string'))) throw new Error('参数 replacesVersionIds 非法')
     const { registerMaterial } = require('./material-service') as typeof import('./material-service')
     const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
     const fresh = getCaseV2Aggregate(input.caseId)

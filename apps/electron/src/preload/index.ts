@@ -4913,6 +4913,11 @@ const reviewAPI = {
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T01_MODEL_DRAFT, input) as Promise<{
       raw: string; channelName: string; modelId: string
     }>,
+  /** 只读案卷存储诊断：损坏/可恢复案卷、主账落后副本等（不自动修复） */
+  listCaseStorageIssuesV3: () =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LIST_CASE_STORAGE_ISSUES_V3) as Promise<
+      Array<{ caseId: string; code: string; message: string; canReadFromBackup: boolean }>
+    >,
   /** T06 选择物理来源（Main 弹出真实 OS 选择器，渲染层只拿到不透明 entryId） */
   pickT06PhysicalSource: (input: { sourceKind: 'folder' | 'zip' }) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.T06_PICK_PHYSICAL_SOURCE, input) as Promise<

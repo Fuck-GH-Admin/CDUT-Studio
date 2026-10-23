@@ -33,6 +33,21 @@ function aggregatePath(caseId: string): string {
   return join(getConfigDir(), 'review-cases', caseId, 'state.v2.json')
 }
 
+function previousAggregatePath(caseId: string): string {
+  return aggregatePath(caseId) + '.previous.json'
+}
+
+function isUsableAggregate(candidate: unknown, caseId: string): candidate is CaseAggregateV2 {
+  const aggregate = candidate as CaseAggregateV2 | undefined
+  return !!aggregate?.caseV2 && aggregate.caseV2.id === caseId
+    && Number.isSafeInteger(aggregate.caseV2.revision) && aggregate.caseV2.revision >= 0
+    && Array.isArray(aggregate.receiptLog)
+}
+
+/**
+ * ASSET-17：主账 JSON 损坏时只读回退到上一份有效副本。
+ * 不自动改写主文件、不伪造 revision；下一次业务写入仍走正常 CAS。
+ */
 export function readAggregate(caseId: string): CaseAggregateV2 | undefined {
   const filePath = aggregatePath(caseId)
   if (!existsSync(filePath)) return undefined
@@ -40,8 +55,68 @@ export function readAggregate(caseId: string): CaseAggregateV2 | undefined {
     return JSON.parse(readFileSync(filePath, 'utf-8')) as CaseAggregateV2
   } catch (error) {
     console.warn(`[审核V2聚合] 解析失败: ${caseId}`, error)
-    return undefined
+    const previousPath = previousAggregatePath(caseId)
+    if (!existsSync(previousPath)) return undefined
+    try {
+      const candidate = JSON.parse(readFileSync(previousPath, 'utf-8')) as unknown
+      if (!isUsableAggregate(candidate, caseId)) {
+        console.warn(`[审核V2聚合] 上一有效副本身份不合法，拒绝恢复读取: ${caseId}`)
+        return undefined
+      }
+      console.warn(`[审核V2聚合] 已从上一有效主账副本恢复读取: ${caseId}（revision=${candidate.caseV2.revision}）`)
+      return candidate
+    } catch (backupError) {
+      console.warn(`[审核V2聚合] 上一有效主账副本也不可读: ${caseId}`, backupError)
+      return undefined
+    }
   }
+}
+
+export interface CaseStorageIssue {
+  caseId: string
+  code: 'invalid-main-json' | 'invalid-main-shape' | 'missing-main' | 'main-behind-backup'
+  message: string
+  canReadFromBackup: boolean
+}
+
+/**
+ * ASSET-12：坏案卷不再只从列表“静默消失”。只读诊断索引列出可定位的问题，
+ * 不自动修复、不改写任何主账。
+ */
+export function listCaseStorageIssues(): CaseStorageIssue[] {
+  const dir = join(getConfigDir(), 'review-cases')
+  if (!existsSync(dir)) return []
+  const issues: CaseStorageIssue[] = []
+  for (const caseId of readdirSync(dir)) {
+    try { assertSafeReviewStorageId(caseId, 'caseId') } catch { continue }
+    const filePath = aggregatePath(caseId)
+    const previousPath = previousAggregatePath(caseId)
+    if (!existsSync(filePath)) {
+      // 旧 V1 案卷只有 case.json 属正常历史，不算损坏。
+      if (existsSync(join(dir, caseId, 'case.json'))) continue
+      issues.push({ caseId, code: 'missing-main', message: '缺少 state.v2.json 主账', canReadFromBackup: existsSync(previousPath) })
+      continue
+    }
+    let parsed: unknown
+    try { parsed = JSON.parse(readFileSync(filePath, 'utf-8')) }
+    catch {
+      issues.push({ caseId, code: 'invalid-main-json', message: '主账 JSON 无法解析', canReadFromBackup: existsSync(previousPath) })
+      continue
+    }
+    if (!isUsableAggregate(parsed, caseId)) {
+      issues.push({ caseId, code: 'invalid-main-shape', message: '主账身份/修订号/回执账不合法', canReadFromBackup: existsSync(previousPath) })
+      continue
+    }
+    if (existsSync(previousPath)) {
+      try {
+        const previous = JSON.parse(readFileSync(previousPath, 'utf-8')) as unknown
+        if (isUsableAggregate(previous, caseId) && previous.caseV2.revision > parsed.caseV2.revision) {
+          issues.push({ caseId, code: 'main-behind-backup', message: `主账 revision ${parsed.caseV2.revision} 落后于上一副本 ${previous.caseV2.revision}，请核验`, canReadFromBackup: true })
+        }
+      } catch { /* 备份损坏本身不阻断列表；以主账为准 */ }
+    }
+  }
+  return issues
 }
 
 /** 聚合摘要列表（G13：重启后可恢复入口的数据面） */

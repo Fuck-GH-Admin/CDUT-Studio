@@ -117,6 +117,9 @@ function canonicalLock(lock: Array<{ policyVersionId: string; version: number }>
  */
 export function assertBatchMembersForCreation(batch: ReviewBatch): void {
   assertSafeBatchId(batch?.id)
+  // 路径/身份非法必须先于模板解析拒绝，避免错误信息掩盖穿越输入。
+  if (!Array.isArray(batch.caseIds) || batch.caseIds.length === 0) throw new Error('批次必须选择有效案卷')
+  for (const caseId of batch.caseIds) assertSafeReviewStorageId(caseId, 'caseId')
   if (!batch.templateId || !Number.isSafeInteger(batch.templateVersion) || batch.templateVersion < 1) {
     throw new Error('批次缺少有效模板版本')
   }

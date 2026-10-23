@@ -8,7 +8,8 @@
  * 材料按角色在左/中栏各自导入，不在上下文条放全局入口。
  *
  * 数据来源：reviewCaseListAtom（列表）/ reviewCaseAtom（当前案卷）；
- * 所有写入都经 use-review-actions，本组件不直接调用 window.reviewAPI。
+ * 所有写入都经 use-review-actions；唯一的直接读取是只读存储诊断
+ * （listCaseStorageIssuesV3），不写任何业务状态。
  */
 
 import * as React from 'react'
@@ -56,6 +57,7 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
   const templateRefresh = useAtomValue(templatesRefreshAtom)
   const setWorkspaceSection = useSetAtom(reviewWorkspaceSectionAtom)
 
+  const [storageIssues, setStorageIssues] = React.useState<Array<{ caseId: string; code: string; message: string; canReadFromBackup: boolean }>>([])
   const [createOpen, setCreateOpen] = React.useState(false)
   const [manualItemOpen, setManualItemOpen] = React.useState(false)
   const [manualItemCaseId, setManualItemCaseId] = React.useState<string | null>(null)
@@ -74,6 +76,15 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
     void actions.listArchivedCases().then(cases => { if (active) setArchivedCases(cases) })
     return () => { active = false }
   }, [actions, caseList])
+
+  React.useEffect(() => {
+    let active = true
+    const api = window.reviewAPI as typeof window.reviewAPI & { listCaseStorageIssuesV3?: () => Promise<Array<{ caseId: string; code: string; message: string; canReadFromBackup: boolean }>> }
+    void api.listCaseStorageIssuesV3?.().then((issues) => {
+      if (active) setStorageIssues(issues ?? [])
+    }).catch(() => { /* 诊断读取失败不阻断主流程 */ })
+    return () => { active = false }
+  }, [caseList, templateRefresh])
 
   React.useEffect(() => {
     let active = true
@@ -217,7 +228,9 @@ export function ReviewContextBar({ actions }: CaseManagerBarProps): React.ReactE
             <DropdownMenuItem onSelect={() => setCreateOpen(true)}><Plus size={14} />新建审核项目</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <span className="shrink-0 text-xs text-muted-foreground">{currentCase ? `${currentCase.documents.length} 份材料 · ${executionLabel(execution.status)}` : '未选择审核任务'}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{currentCase
+          ? `${nativeAggregate ? nativeAggregate.caseV2.documents.filter((document) => document.active !== false).length : currentCase.documents.length} 份材料 · ${executionLabel(execution.status)}`
+          : '未选择审核任务'}</span>
         <Button
           type="button"
           size="sm"
