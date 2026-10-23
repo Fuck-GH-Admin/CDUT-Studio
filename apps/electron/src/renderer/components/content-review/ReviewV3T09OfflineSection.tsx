@@ -56,11 +56,18 @@ export function ReviewV3T09OfflineSection(): JSX.Element {
 
   const caseId = aggregate?.caseV2.id
 
+  // OFF-16：切案必须清空上一案签发的包、回件文本与预览，避免把前案任务
+  // 下载/导入到新案 UI（导入仍会被 Main 的 caseId 校验拒绝，但不应误导交付）。
   React.useEffect(() => {
     lookupGeneration.current += 1
     setJudgeChoices([])
     setJudgeBatchId('')
     setJudgeAssignmentId('')
+    setIssued(null)
+    setReplyJson('')
+    setPreview(null)
+    setMessage('')
+    setSupplementId('')
   }, [caseId])
 
   const loadJudgeChoices = React.useCallback(async (): Promise<void> => {
