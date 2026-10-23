@@ -445,7 +445,7 @@ function continuationPrompt(aggregate: CaseAggregateV2, template: TemplateVersio
     `【续审同一运行】本次继续 runId=${run.id}，不新建运行。已保留 ${previousAccepted}/${expected.length} 项有效语义检查；请补齐下列未完成项并保留其他有效结论。`,
     `【未完成检查】\n${pendingText || '（无语义检查占位项；依据本次运行的剩余覆盖问题继续处理。）'}`,
     ...(rejectedText ? [`【上次提交被拒原因】\n${rejectedText}`] : []),
-    '修正出处时必须使用本案当前激活材料的有效 blockId 和准确引文；图像出处被拒时，先用 review_inspect_document_image 实际读取该图像块，再提交该检查。只有 rejected 为空且 missingChecks 为空时 finish=true 才会关闭运行；否则运行保持开放供本轮继续提交。',
+    '修正出处时必须使用本案当前激活材料的有效 blockId 和准确引文，且该 block 必须在本轮实际读取：文字块先用 review_read_document 读取，图像块先用 review_inspect_document_image 读取（完整预览原件也可），不能只凭原文包含引文。只有 rejected 为空且 missingChecks 为空时 finish=true 才会关闭运行；否则运行保持开放供本轮继续提交。finish 关闭的技术轮不等于完整业务通过，仍有待确认检查或未读材料时会记录为业务未就绪。',
   ].join('\n\n')
 }
 
@@ -744,10 +744,28 @@ function resolveSourceRefs(
   if (!Array.isArray(refs)) return { refs: [] }
   const resolved = refs.map((item) => sourceBlock(aggregate, item, requireQuote))
   if (resolved.some((item) => !item)) return { refs: [], error: '引用不属于本案当前激活材料，或 blockId/引文与解析原文不匹配' }
-  const imageReadState = readArtifact<{ blocks?: Record<string, string[]> }>(binding.caseId, binding.runId, 'node-pi-read-state')?.blocks ?? {}
+  const readState = readArtifact<PiDocumentReadState>(binding.caseId, binding.runId, 'node-pi-read-state')
+  const readBlocks = readState?.blocks ?? {}
+  const fullyPreviewed = new Set(readState?.fullyPreviewedDocumentVersionIds ?? [])
   if (resolved.some((item, index) => item?.block.kind === 'image'
-    && !imageReadState[refs[index]!.documentVersionId]?.includes(refs[index]!.blockId))) {
+    && !readBlocks[refs[index]!.documentVersionId]?.includes(refs[index]!.blockId))) {
     return { refs: [], error: '图像出处尚未通过本案视觉读取工具核验；先调用 review_inspect_document_image 再引用' }
+  }
+  // RUN-46：文字引用也必须来自本轮真实读取。仅“块文本包含 quote”只能证明原文里
+  // 存在这段字，不能证明 Agent 本轮读过该块；与图像分支同一门槛：逐块读取回执
+  // 或整份原件预览二者之一。旧运行继承的读取回执同样记在 read state 中。
+  if (requireQuote) {
+    const unread = resolved.find((item, index) => {
+      if (!item || item.block.kind === 'image') return false
+      const ref = refs[index]!
+      if (!ref.quote) return false
+      // SourceRef 本身不带 blockId，必须用输入 ref 的 blockId 对读取账本。
+      return !fullyPreviewed.has(item.ref.documentVersionId)
+        && !readBlocks[item.ref.documentVersionId]?.includes(ref.blockId)
+    })
+    if (unread) {
+      return { refs: [], error: '文字出处尚未在本轮实际读取；先用 review_read_document 读取该材料块（或完整预览原件）再引用，不能仅凭原文包含引文' }
+    }
   }
   return { refs: resolved.map((item) => item!.ref) }
 }
@@ -777,6 +795,50 @@ function recalculateCoverage(run: ReviewRunV2, aggregate: CaseAggregateV2, rules
     completedChecks: summary.completedChecks,
     effectiveVerdicts: summary.effectiveVerdicts,
     pendingChecks: summary.pendingChecks,
+  }
+}
+
+export interface PiReviewBusinessReadiness {
+  technicalCompleted: boolean
+  decisionReady: boolean
+  fullyRead: boolean
+  businessReady: boolean
+  pendingChecks: number
+  executionFailedChecks: number
+  notExecutedChecks: number
+  unreadDocuments: number
+  reasons: string[]
+  at: string
+}
+
+/**
+ * RUN-42：把“技术轮结束”和“业务可办理”分开。
+ * completed 只表示语义检查已全部提交且运行关闭；仍有待确认/未执行检查或未读材料时，
+ * 不能把该 Run 当成完整审核通过。该投影同时写入 artifact，供 UI/报告/T05 消费。
+ */
+export function summarizePiReviewBusinessReadiness(run: ReviewRunV2): PiReviewBusinessReadiness {
+  const pendingChecks = run.checks.filter((check) => check.status === 'awaiting-confirmation' || check.status === 'awaiting-supplement').length
+  const executionFailedChecks = run.checks.filter((check) => check.status === 'execution-failed').length
+  const notExecutedChecks = run.checks.filter((check) => check.status === 'not-executed').length
+  const unreadDocuments = run.coverage.documents.filter((entry) => entry.status !== 'read').length
+  const reasons: string[] = []
+  if (pendingChecks > 0) reasons.push(`${pendingChecks} 项检查待人工确认/补件`)
+  if (executionFailedChecks > 0) reasons.push(`${executionFailedChecks} 项检查执行失败`)
+  if (notExecutedChecks > 0) reasons.push(`${notExecutedChecks} 项检查未执行`)
+  if (unreadDocuments > 0) reasons.push(`${unreadDocuments} 份材料未读`)
+  const decisionReady = pendingChecks === 0 && executionFailedChecks === 0 && notExecutedChecks === 0
+  const fullyRead = unreadDocuments === 0
+  return {
+    technicalCompleted: run.status === 'completed',
+    decisionReady,
+    fullyRead,
+    businessReady: run.status === 'completed' && decisionReady && fullyRead,
+    pendingChecks,
+    executionFailedChecks,
+    notExecutedChecks,
+    unreadDocuments,
+    reasons,
+    at: new Date().toISOString(),
   }
 }
 
@@ -1027,8 +1089,25 @@ export function submitPiReviewResultV2(input: {
       '由项目普通 Pi 会话直接审核；未启动第二个审核模型会话。',
     ]
     recalculateCoverage(run, aggregate, rules, template)
+    // RUN-42：completed 只是技术轮结束；把业务可办理性单独落盘并写进诊断/意见，
+    // 避免 UI、报告或下游把“技术轮 completed”误读成“完整业务通过”。
+    const readiness = summarizePiReviewBusinessReadiness(run)
+    saveArtifact(input.binding.caseId, run.id, 'node-pi-business-readiness', readiness)
+    if (!readiness.businessReady) {
+      const reasonText = readiness.reasons.join('、') || '存在未完成事项'
+      run.diagnostics = [
+        ...run.diagnostics,
+        `技术轮完成，但业务未就绪：${reasonText}；completed 仅表示本轮技术执行结束，不代表完整审核通过，需人工处理后再决定。`,
+      ].slice(-50)
+      if (run.opinions[0]) {
+        run.opinions[0] = {
+          ...run.opinions[0],
+          detail: `${run.opinions[0].detail}\n\n【业务未就绪】${reasonText}。技术轮完成不等于完整审核通过；请先处理待确认项/未读材料，再由人工按权限决定。`,
+        }
+      }
+    }
     saveArtifact(input.binding.caseId, run.id, 'node-auto-check-extract', { observations: mergedObservations })
-    saveArtifact(input.binding.caseId, run.id, 'node-auto-check-summarize', { summary: opinion.detail, checks: run.checks, agentActivity: run.agentActivity ?? [] })
+    saveArtifact(input.binding.caseId, run.id, 'node-auto-check-summarize', { summary: run.opinions[0]?.detail ?? opinion.detail, checks: run.checks, agentActivity: run.agentActivity ?? [] })
   } else {
     if (observations.length > 0 || (input.result.checks?.length ?? 0) > 0) {
       saveArtifact(input.binding.caseId, run.id, 'node-auto-check-extract', { observations: mergedObservations })

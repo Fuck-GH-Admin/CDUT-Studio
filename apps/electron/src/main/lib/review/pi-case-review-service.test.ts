@@ -129,6 +129,18 @@ describe('Pi 审核结果提交与续审', () => {
     expect(stillOpen.checks.some((check) => check.status === 'execution-failed')).toBeFalse()
     expect(readArtifact<{ attempts: Array<{ rejected: Array<{ reason: string }> }> }>(context.caseId, context.prepared.runId, 'node-pi-submit-attempts')?.attempts[0]?.rejected[0]?.reason).toContain('图像出处尚未通过')
 
+    // RUN-46：只凭“原文包含引文”不够，正文块也必须在本轮实际读取。
+    const unreadText = submitPiReviewResultV2({
+      binding,
+      triggeredBy: 'user',
+      result: { summary: '未读正文直接引用。', checks: checksWithTextRef(context.textRef), finish: true },
+    })
+    expect(unreadText.rejected).toHaveLength(5)
+    expect(unreadText.rejected.every((item) => item.reason.includes('文字出处尚未在本轮实际读取'))).toBeTrue()
+    expect(unreadText.status).toBe('running')
+    expect(unreadText.missingChecks).toHaveLength(5)
+
+    recordPiReviewDocumentRead(binding, context.textRef.documentVersionId, [context.textRef.blockId], readAggregate(context.caseId)!.caseV2.documents)
     const corrected = submitPiReviewResultV2({
       binding,
       triggeredBy: 'user',
@@ -136,6 +148,17 @@ describe('Pi 审核结果提交与续审', () => {
     })
     expect(corrected).toMatchObject({ accepted: 5, rejected: [], missingChecks: [], status: 'completed' })
     expect(getRunV2(context.caseId, context.prepared.runId)?.checks).toHaveLength(5)
+
+    // RUN-42：技术轮 completed，但图像材料仍未读 -> 业务未就绪必须落盘且写进诊断。
+    const readiness = readArtifact<{ businessReady: boolean; unreadDocuments: number; reasons: string[] }>(
+      context.caseId, context.prepared.runId, 'node-pi-business-readiness')!
+    expect(readiness.businessReady).toBeFalse()
+    expect(readiness.unreadDocuments).toBeGreaterThan(0)
+    expect(readiness.reasons.join('；')).toContain('份材料未读')
+    const completedRun = getRunV2(context.caseId, context.prepared.runId)!
+    expect(completedRun.status).toBe('completed')
+    expect(completedRun.diagnostics.join('\n')).toContain('技术轮完成，但业务未就绪')
+    expect(completedRun.opinions[0]?.detail).toContain('技术轮完成不等于完整审核通过')
   })
 
   test('流结束后的部分完成运行可由“更新审核结果”续交，复用原 runId 与有效检查', async () => {
@@ -174,6 +197,10 @@ describe('Pi 审核结果提交与续审', () => {
     expect(getPiReviewBindingForSession(context.sessionId)).toMatchObject({ assignmentId: continued.assignmentId, runId: context.prepared.runId })
     expect(getRunV2(context.caseId, context.prepared.runId)?.status).toBe('running')
 
+    recordPiReviewDocumentRead(
+      { assignmentId: continued.assignmentId, sessionId: context.sessionId, caseId: context.caseId, runId: continued.runId },
+      context.textRef.documentVersionId, [context.textRef.blockId], readAggregate(context.caseId)!.caseV2.documents,
+    )
     const completed = submitPiReviewResultV2({
       binding: { assignmentId: continued.assignmentId, sessionId: context.sessionId, caseId: context.caseId, runId: continued.runId },
       triggeredBy: 'user',

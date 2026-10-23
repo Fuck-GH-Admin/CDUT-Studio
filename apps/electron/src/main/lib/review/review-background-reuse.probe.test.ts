@@ -20,7 +20,7 @@ import { AgentRunAlreadyActiveError } from '../agent-orchestrator-p0-guards'
 import { createCaseFromTemplate } from './application-service'
 import { readAggregate } from './case-store-v2'
 import { registerMaterial } from './material-service'
-import { finishPiReviewRunV2, preparePiReviewRunV2, submitPiReviewResultV2, getPiReviewBindingForSession } from './pi-case-review-service'
+import { finishPiReviewRunV2, preparePiReviewRunV2, recordPiReviewDocumentRead, submitPiReviewResultV2, getPiReviewBindingForSession } from './pi-case-review-service'
 import { admitPreparedPiReviewTurn, isPiReviewRunAdmitted } from './review-pi-admission'
 import { checkAssignment, createAssignment, findActivePiReviewAssignment, revokeAssignment } from './review-agent-assignment'
 import { getRunV2 } from './run-store-v2'
@@ -83,6 +83,8 @@ async function caseFixture() {
   const textBlock = doc.blocks.find(x => x.kind !== 'image')!
   const prepared = preparePiReviewRunV2({ caseId, sessionId, turnId: `turn-${suffix}` })
   const binding: Binding = { caseId, sessionId, runId: prepared.runId, assignmentId: prepared.assignmentId }
+  // RUN-46：文字引用必须来自本轮真实读取；夹具按真实工具顺序先读块再提交。
+  recordPiReviewDocumentRead(binding, doc.versionId, [textBlock.blockId], readAggregate(caseId)!.caseV2.documents)
   const input: AgentSendInput = {
     sessionId, channelId: 'probe-channel', modelId: 'probe-model', userMessage: prepared.userMessage,
     agentRuntime: 'pi', triggeredBy: 'user', uuid: `turn-${suffix}`,

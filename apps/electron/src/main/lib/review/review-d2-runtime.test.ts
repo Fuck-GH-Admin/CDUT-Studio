@@ -13,7 +13,7 @@ import { createAggregate, readAggregate } from './case-store-v2'
 import { registerMaterial } from './material-service'
 import { createCaseFromTemplate, setEvidenceLink } from './application-service'
 import { saveAuthoringCandidateDraft, saveDraft, isAuthoringCandidateDraft, publishTemplate, getTemplate } from './template-store'
-import { preparePiReviewRunV2, submitPiReviewResultV2 } from './pi-case-review-service'
+import { recordPiReviewDocumentRead, preparePiReviewRunV2, submitPiReviewResultV2 } from './pi-case-review-service'
 import { getRunV2 } from './run-store-v2'
 import { decideWorkspaceCaseV2 } from './workspace-business-service-v2'
 import { recordStageDecision, resolveAppealV2 } from './stage-workflow'
@@ -248,6 +248,10 @@ describe('D2 作者态到 Pi 有效审核规则（BDD）', () => {
     expect(verifyD2InstalledPlan(info.aggregate)).toEqual([])
     const prepared = preparePiReviewRunV2({ caseId: info.id, sessionId: 'd2-pi-simple', turnId: 'd2-turn-simple' })
     expect(prepared.userMessage).toContain('D2 固定技术预审包')
+    recordPiReviewDocumentRead(
+      { assignmentId: prepared.assignmentId, sessionId: 'd2-pi-simple', caseId: info.id, runId: prepared.runId },
+      info.sourceRef.documentVersionId, [info.sourceRef.blockId], readAggregate(info.id)!.caseV2.documents,
+    )
     const receipt = submitPiReviewResultV2({
       binding: { assignmentId: prepared.assignmentId, sessionId: 'd2-pi-simple', caseId: info.id, runId: prepared.runId },
       triggeredBy: 'user',
@@ -296,6 +300,7 @@ describe('D2 作者态到 Pi 有效审核规则（BDD）', () => {
     const prepared = preparePiReviewRunV2({ caseId: info.id, sessionId: 'd2-pi-archive', turnId: 'd2-archive-turn' })
     const byKey = (key: string) => info.plan.mapping.find((entry) => entry.objectKey === key)!
     const binding = { assignmentId: prepared.assignmentId, sessionId: 'd2-pi-archive', caseId: info.id, runId: prepared.runId }
+    recordPiReviewDocumentRead(binding, info.sourceRef.documentVersionId, [info.sourceRef.blockId], readAggregate(info.id)!.caseV2.documents)
     const read = byKey('item-1/read')
     const copy = byKey('item-1/copy')
     const open = byKey('item-1')
@@ -346,6 +351,7 @@ describe('D2 作者态到 Pi 有效审核规则（BDD）', () => {
     const info = await setup('special-campus-card', selection('special-campus-card', 'family'))
     const prepared = preparePiReviewRunV2({ caseId: info.id, sessionId: 'd2-pi-family', turnId: 'd2-family-turn' })
     const binding = { assignmentId: prepared.assignmentId, sessionId: 'd2-pi-family', caseId: info.id, runId: prepared.runId }
+    recordPiReviewDocumentRead(binding, info.sourceRef.documentVersionId, [info.sourceRef.blockId], readAggregate(info.id)!.caseV2.documents)
     const pending = info.plan.mapping.find((item) => item.authority === 'unverified-policy')!
     const denied = submitPiReviewResultV2({
       binding, triggeredBy: 'user',

@@ -58,6 +58,11 @@ export function exportCaseReport(caseId: string, options: ExportReportOptionsV2 
     lines.push(`- 技术运行状态：${lastRun.status}（尚未完成不等于审核通过）`)
     lines.push(`- 当前输入哈希：${lastRun.inputManifest.hash}`)
     lines.push(`- 检查覆盖：计划 ${lastRun.coverage.plannedChecks}、已完成 ${lastRun.coverage.completedChecks}、有效判断 ${lastRun.coverage.effectiveVerdicts}、待处理 ${lastRun.coverage.pendingChecks}`)
+    // RUN-42：completed 只代表技术轮结束；报告必须显式区分“业务未就绪”。
+    const unreadDocuments = lastRun.coverage.documents.filter((entry) => entry.status !== 'read').length
+    if (lastRun.status === 'completed' && (lastRun.coverage.pendingChecks > 0 || unreadDocuments > 0)) {
+      lines.push(`- 业务可办理性：技术轮已完成，但仍有 ${lastRun.coverage.pendingChecks} 项待处理检查、${unreadDocuments} 份未读材料；completed 不代表完整业务通过`)
+    }
     lines.push(`- 模型意见：${lastRun.opinions.length} 条`)
     lines.push(`- 有效规则集哈希：${lastRun.inputManifest.effectiveRuleSetHash ?? '旧运行未记录'}`)
     if(lastRun.error)lines.push(`- 运行错误：${lastRun.error}`)

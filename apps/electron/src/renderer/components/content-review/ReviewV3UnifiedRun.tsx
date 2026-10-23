@@ -147,6 +147,13 @@ export function ReviewV3UnifiedRun({ caseId, stage, documentCount, technicalPlan
     {ruleError && <p role="alert" className="text-xs text-amber-700">规则检查未完成：{ruleError}</p>}
     {piState?.runId && <p className="text-xs">AI 审核：{piRun?.status ?? piState.runStatus ?? '已受理'} · <span className="font-mono">{piState.runId}</span></p>}
     {summary && <p className="text-xs">已完成 {summary.completedChecks}/{summary.plannedChecks} 项；待处理 {summary.pendingChecks} 项；有依据的判断 {summary.effectiveVerdicts} 项</p>}
+    {piRun?.status === 'completed' && summary && (summary.pendingChecks > 0 || summary.documents.some((item) => item.status !== 'read')) &&
+      <p role="status" className="text-xs text-amber-700">
+        技术轮已完成，但业务未就绪：{summary.pendingChecks > 0 ? `${summary.pendingChecks} 项检查待人工确认` : ''}
+        {summary.pendingChecks > 0 && summary.documents.some((item) => item.status !== 'read') ? '、' : ''}
+        {summary.documents.some((item) => item.status !== 'read') ? `${summary.documents.filter((item) => item.status !== 'read').length} 份材料未读` : ''}
+        。completed 仅表示本轮技术执行结束，不代表完整审核通过。
+      </p>}
     {summary && summary.documents.some((item) => item.status !== 'read') &&
       <p role="alert" className="text-xs text-red-600">有 {summary.documents.filter((item) => item.status !== 'read').length} 份材料尚未确认读取成功；本轮结果不可视为完整审核。</p>}
     {piError && <p role="alert" className="text-xs text-red-600">AI 审核未完成：{piError}</p>}
