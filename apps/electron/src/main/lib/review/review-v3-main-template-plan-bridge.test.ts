@@ -51,10 +51,17 @@ function buildTemplate(): TemplateVersion {
   } as unknown as TemplateVersion
 }
 
-function caseWith(count: number | null, withPlan: boolean): CaseAggregateV2 {
+function caseWith(count: number | null, withPlan: boolean, confirmed = true): CaseAggregateV2 {
   const documents = withPlan
     ? [{ documentId: 'doc-1', versionId: 'ver-1', fileName: 'lab.docx', role: 'evidence',
       materialSlotId: 'lab-use-plan', active: true, parseStatus: 'parsed', parseRevision: 1, byteHash: 'h' }]
+    : []
+  // 只有人工确认的 Observation 才是已核实事实；申报表单值本身不算。
+  const observations = count !== null && confirmed
+    ? [{ id: 'obs-count', subjectId: 'case-s2', fieldKey: 'applicantCount',
+        value: { kind: 'number', value: count },
+        sourceRefs: [{ caseId: 'case-s2', documentVersionId: 'ver-1', parseRevision: 1, location: { kind: 'file' } }],
+        extractedBy: 'user' as const, confirmed: true, createdAt: '2026-10-21T00:00:00Z' }]
     : []
   return {
     caseV2: {
@@ -66,7 +73,7 @@ function caseWith(count: number | null, withPlan: boolean): CaseAggregateV2 {
       documents, subjects: [],
     },
     tasks: [], decisions: [], supplements: [], dispositions: [], receiptLog: [],
-    observations: [], evidenceLinks: [],
+    observations, evidenceLinks: [],
   } as unknown as CaseAggregateV2
 }
 
@@ -75,11 +82,11 @@ beforeAll(() => {
   publishTemplate(templateId, 1)
 })
 
-function checksFor(count: number | null, withPlan = true) {
+function checksFor(count: number | null, withPlan = true, confirmed = true, asOfDate?: string) {
   const published = buildTemplate()
   published.status = 'published'
-  const aggregate = caseWith(count, withPlan)
-  const result = compileTemplatePlanForCase({ aggregate, template: published })
+  const aggregate = caseWith(count, withPlan, confirmed)
+  const result = compileTemplatePlanForCase({ aggregate, template: published, ...(asOfDate ? { asOfDate } : {}) })
   if (!result.compiled) throw new Error('编译失败：' + result.unresolved.map((u) => u.reason).join('；'))
   return { result, proposals: evaluateT04Plan(result.compiled.plan, result.compiled.checks) }
 }
@@ -97,6 +104,12 @@ describe('A15 S2 四案例', () => {
     expect(headcount.outcome.status).toBe('non-compliant')
   })
 
+  test('RUN-34：仅有申报值、无人工作为事实确认 → pending，不得直接 compliant', () => {
+    const { proposals } = checksFor(18, true, false)
+    const headcount = proposals.find((item) => item.ruleId.includes('headcount'))!
+    expect(headcount.outcome.status).toBe('awaiting-confirmation')
+  })
+
   test('人数未知 → pending，不当作 0', () => {
     const { proposals } = checksFor(null)
     const headcount = proposals.find((item) => item.ruleId.includes('headcount'))!
@@ -109,6 +122,57 @@ describe('A15 S2 四案例', () => {
     const material = proposals.find((item) => item.ruleId.includes('required-material'))!
     expect(material.outcome.status).not.toBe('compliant')
     expect(material.sourceVersionIds.length).toBe(0)
+  })
+
+
+  test('RUN-33：subject/group 规则有真实目标，不再因只有 case 目标而编译失败', () => {
+    const template = buildTemplate()
+    template.status = 'published'
+    const criteria = template.sections![0]!.criteria
+    criteria.push({
+      id: 'subject-rule', title: '主体规则', requirement: '主体字段需核对',
+      execution: 'deterministic', targetScope: 'subject', when: { all: [] },
+      sourceRefIds: [], priority: 10, onFail: 'supplement', onUnknown: 'needs-confirmation',
+      confirmation: 'confirmed',
+    } as unknown as (typeof criteria)[number])
+    criteria.push({
+      id: 'group-rule', title: '分项规则', requirement: '分项需核对',
+      execution: 'deterministic', targetScope: 'group', when: { all: [] },
+      sourceRefIds: [], priority: 11, onFail: 'supplement', onUnknown: 'needs-confirmation',
+      confirmation: 'confirmed',
+    } as unknown as (typeof criteria)[number])
+    const aggregate = caseWith(18, true)
+    ;(aggregate.caseV2.subjects as unknown[]).push({
+      id: 'subj-1', type: 'item', title: '事项一', sectionId: 'lab',
+      fields: { applicantCount: { kind: 'number', value: 18 } }, sourceRefs: [],
+      correction: 'user-confirmed', status: 'confirmed',
+    })
+    const result = compileTemplatePlanForCase({ aggregate, template })
+    expect(result.unresolved).toHaveLength(0)
+    expect(result.compiled).toBeDefined()
+    const scopes = new Set(result.compiled!.plan.bindings.map((binding) => binding.targetKey.split(':')[0]))
+    expect([...scopes].sort()).toEqual(['case', 'group', 'subject'])
+  })
+
+  test('RUN-37：asOfDate 显式封进检查与计划指纹，缺省不偷用机器时间', () => {
+    const withDate = checksFor(18, true, true, '2026-10-21')
+    expect(withDate.result.compiled!.checks.every((check) => check.asOfDate === '2026-10-21')).toBeTrue()
+    const without = checksFor(18, true, true)
+    expect(without.result.compiled!.checks.every((check) => check.asOfDate === undefined)).toBeTrue()
+    expect(withDate.result.compiled!.plan.fingerprint).not.toBe(without.result.compiled!.plan.fingerprint)
+  })
+
+  test('RUN-40：审核员忽略的原件不进入材料槽计数与来源清单', () => {
+    const template = buildTemplate()
+    template.status = 'published'
+    const aggregate = caseWith(18, true)
+    ;(aggregate.caseV2.documents[0] as unknown as { unusedReason: string }).unusedReason = '[审核员忽略] 重复上传'
+    const result = compileTemplatePlanForCase({ aggregate, template })
+    const caseTarget = result.compiled!.plan.bindings.find((binding) => binding.targetKey.startsWith('case:'))!
+    expect(caseTarget.sourceVersionIds).toEqual([])
+    const material = evaluateT04Plan(result.compiled!.plan, result.compiled!.checks)
+      .find((item) => item.ruleId.includes('required-material'))!
+    expect(material.outcome.status).not.toBe('compliant')
   })
 
   test('gte 下限规则编译为 field-minimum，不能误用上限算子', () => {

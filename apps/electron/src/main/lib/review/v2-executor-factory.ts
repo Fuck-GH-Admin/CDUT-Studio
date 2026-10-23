@@ -344,7 +344,8 @@ export function resolveEffectiveFieldValue(
     if (subjectValue !== undefined) return { known: true, value: fieldValueOf(subjectValue), sourceRefs: [] }
     const observation = matching.find((candidate) => candidate.extractedBy !== 'user')
     if (observation) return {
-      known: true,
+      // RUN-35：AI 提取候选在人工确认前只是候选，不能当作已知事实进入确定性检查。
+      known: observation.confirmed === true,
       value: fieldValueOf(observation.value),
       observationId: typeof observation.id === 'string' ? observation.id : undefined,
       sourceRefs: sourceRefsFromUnknown(observation.sourceRefs),
@@ -353,12 +354,13 @@ export function resolveEffectiveFieldValue(
   }
   const caseValue = aggregate.caseV2.caseFields[fieldKey]
   if (caseValue !== undefined) {
-    const sourcedObservation = matching.find((candidate) => candidate.extractedBy !== 'user' && JSON.stringify(fieldValueOf(candidate.value)) === JSON.stringify(fieldValueOf(caseValue)))
+    const sourcedObservation = matching.find((candidate) => candidate.extractedBy !== 'user' && candidate.confirmed === true && JSON.stringify(fieldValueOf(candidate.value)) === JSON.stringify(fieldValueOf(caseValue)))
     return { known: true, value: fieldValueOf(caseValue), observationId: typeof sourcedObservation?.id === 'string' ? sourcedObservation.id : undefined, sourceRefs: sourceRefsFromUnknown(sourcedObservation?.sourceRefs) }
   }
   const observation = matching.find((candidate) => candidate.extractedBy !== 'user')
   if (observation) return {
-    known: true,
+    // RUN-35：未人工确认的 AI 候选不得 known=true；值仍保留供人工核对，但检查须 pending。
+    known: observation.confirmed === true,
     value: fieldValueOf(observation.value),
     observationId: typeof observation.id === 'string' ? observation.id : undefined,
     sourceRefs: sourceRefsFromUnknown(observation.sourceRefs),

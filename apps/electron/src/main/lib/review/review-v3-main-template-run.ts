@@ -38,7 +38,7 @@ export interface TemplateRuleRunResult {
 /** 由当前有效原件构造可核对的来源引用（缺原件就是空，绝不虚构）。 */
 function sourceRefsOf(aggregate: CaseAggregateV2): SourceRef[] {
   return (aggregate.caseV2.documents ?? [])
-    .filter((document) => document.active !== false)
+    .filter((document) => document.active !== false && !(document.unusedReason ?? '').startsWith('[审核员忽略]'))
     .map((document) => ({
       caseId: aggregate.caseV2.id,
       documentVersionId: document.versionId,
@@ -63,6 +63,8 @@ export function runTemplateRuleReview(input: {
   caseId: string
   phase?: 'submission' | 'decision'
   initiatedBy?: Actor
+  /** 业务判断日（YYYY-MM-DD），由调用方显式提供；缺省不偷用机器时间。 */
+  asOfDate?: string
 }): TemplateRuleRunResult {
   const aggregate = readAggregate(input.caseId)
   if (!aggregate) throw new CommandValidationError('NOT_FOUND', '案卷不存在')
@@ -78,7 +80,9 @@ export function runTemplateRuleReview(input: {
   }
 
   const phase = input.phase ?? 'submission'
-  const bridge = compileTemplatePlanForCase({ aggregate, template, phase })
+  const bridge = compileTemplatePlanForCase({
+    aggregate, template, phase, ...(input.asOfDate ? { asOfDate: input.asOfDate } : {}),
+  })
   if (!bridge.compiled) {
     throw new CommandValidationError('DEPENDENCY_UNRESOLVED',
       `模板规则尚不能编译为可执行计划：${bridge.unresolved.map((item) => `${item.ruleId}（${item.reason}）`).join('；')}`)
@@ -90,7 +94,9 @@ export function runTemplateRuleReview(input: {
   const ruleIds = bindings.map((item) => item.rule.id)
 
   const executedAt = new Date().toISOString()
-  const active = (aggregate.caseV2.documents ?? []).filter((document) => document.active !== false)
+  // RUN-40：审核员显式忽略的原件不得继续充当材料/来源；与 readiness 同一前缀口径。
+  const active = (aggregate.caseV2.documents ?? []).filter((document) =>
+    document.active !== false && !(document.unusedReason ?? '').startsWith('[审核员忽略]'))
   const proposals = evaluateT04Plan(plan, checks)
   if (proposals.length !== plan.bindings.length) {
     throw new CommandValidationError('DEPENDENCY_UNRESOLVED', 'T04 实际检查数量与冻结计划不一致')
@@ -147,6 +153,7 @@ export function runTemplateRuleReview(input: {
     diagnostics: [
       `模板规则计划：${ruleIds.length} 条规则，${results.length} 项检查`,
       `计划指纹：${planFingerprint}`,
+      `业务判断日：${input.asOfDate ?? '未指定（带有效期规则将保持待确认）'}`,
       ...reconciled.blockers.map((reason) => `覆盖阻断：${reason}`),
     ],
     startedAt: executedAt,

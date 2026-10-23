@@ -57,7 +57,7 @@ describe('F07 冻结计划 × 真实检查结果', () => {
     const a = binding('alice'), b = binding('bob')
     const output = reconcileF07PublishedPlan({
       plan: planOf(a, b), bindings: [bound(a), bound(b)],
-      results: [{ binding: a, proposal: proposal(a, 'compliant') }],
+      results: [{ binding: a, proposal: proposal(a, 'compliant', ['v1']) }],
       caseId: 'case-1', documents: [document()], verifiedSources: [source], recordedAt: '2026-10-21T00:00:00Z',
     })
     expect(output.checks.map(item => item.status)).toEqual(['compliant', 'not-executed'])
@@ -67,7 +67,11 @@ describe('F07 冻结计划 × 真实检查结果', () => {
 
   test('来源只附实际核实且被该项使用的原件，未知引用阻止全符合', () => {
     const a = binding('alice')
-    expect(checked([a], ['compliant']).checks[0]?.sourceRefs).toEqual([])
+    const empty = checked([a], ['compliant'])
+    expect(empty.checks[0]?.sourceRefs).toEqual([])
+    // RUN-36：无来源的符合结论必须降级为待确认，不能形成 compliant。
+    expect(empty.checks[0]?.status).toBe('awaiting-confirmation')
+    expect(empty.checks[0]?.reason).toContain('缺少可核验来源')
     const uncertain = checked([a], ['compliant'], [['v2']])
     expect(uncertain.checks[0]?.sourceRefs).toEqual([])
     expect(uncertain.blockers.join()).toContain('来源 v2 未通过')
@@ -102,7 +106,7 @@ describe('F07 冻结计划 × 真实检查结果', () => {
 
   test('合法零问题、待定、全部不适用与未读原件分别判定', () => {
     const a = binding('alice')
-    expect(checked([a], ['compliant']).allClearVerdictAllowed).toBeTrue()
+    expect(checked([a], ['compliant'], [['v1']]).allClearVerdictAllowed).toBeTrue()
     expect(checked([a], ['awaiting-confirmation']).coverage.pendingChecks).toBe(1)
     expect(checked([a], ['not-applicable']).allClearVerdictAllowed).toBeFalse()
     const unread = reconcileF07PublishedPlan({

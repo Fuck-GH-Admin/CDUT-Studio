@@ -67,6 +67,11 @@ export type T04PublishedPlanInput = {
   constraints: T04PublishedConstraint[]
   targets: T04PublishedTarget[]
   phase: 'submission' | 'decision'
+  /**
+   * 业务判断日（YYYY-MM-DD），由调用方显式给出并封进 Plan 指纹。
+   * 绝不从机器时钟推导；缺省时带有效期规则由 T04 保持 pending。
+   */
+  asOfDate?: string
 }
 
 export type T04PublishedRuleBinding = {
@@ -106,12 +111,15 @@ function materialRule(template: TemplateVersion, slot: TemplateVersion['material
  * chosen operations, target values, condition, versions and material receipt.
  */
 export function compilePublishedTemplateReviewPlan(input: T04PublishedPlanInput): T04PublishedPlanOutput {
-  const { template, effectiveRules, constraints, targets, phase } = input
+  const { template, effectiveRules, constraints, targets, phase, asOfDate } = input
   if (template.status !== 'published' || !nonempty(template.templateId) ||
       !Number.isSafeInteger(template.version) || template.version < 1 ||
       !targets.length || !['submission', 'decision'].includes(phase)) {
     return reject('Published template, phase and at least one target are required')
   }
+  // 判断日必须是显式合法日期；不接受时间戳、相对日期或机器时间兜底。
+  if (asOfDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(asOfDate))
+    return reject('asOfDate must be an explicit YYYY-MM-DD business date')
   const fieldDefinitions = new Map(template.fields.map(f => [f.key, f]))
   if (fieldDefinitions.size !== template.fields.length ||
       template.fields.some(f => !nonempty(f.key) || f.key.startsWith('__t04_material_count__:')))
@@ -214,7 +222,8 @@ export function compilePublishedTemplateReviewPlan(input: T04PublishedPlanInput)
       planBindings.push(binding)
       bindings.push({binding,rule,operation,policyVersionId:rule.policyVersionId})
       checks.push({binding,rule,operation,items:[item],
-        ...(constraint?.claimKey ? {policyClaimKey:constraint.claimKey} : {})})
+        ...(constraint?.claimKey ? {policyClaimKey:constraint.claimKey} : {}),
+        ...(asOfDate ? {asOfDate} : {})})
     }
   }
   const bindingLedgerHash = digest(bindings.map(x=>({
@@ -225,7 +234,8 @@ export function compilePublishedTemplateReviewPlan(input: T04PublishedPlanInput)
     digest({rules, typedConstraints:constraints, bindingLedgerHash}),
   ]
   const fingerprint = digest({schemaVersion:REVIEW_C0_SCHEMA_VERSION,templateId:template.templateId,
-    templateVersion:String(template.version),moduleDigests,bindingLedgerHash,phase})
+    templateVersion:String(template.version),moduleDigests,bindingLedgerHash,phase,
+    ...(asOfDate ? {asOfDate} : {})})
   const plan: CanonicalPlan = {
     schemaVersion: REVIEW_C0_SCHEMA_VERSION,
     planId:'plan-' + fingerprint.slice(0,28),

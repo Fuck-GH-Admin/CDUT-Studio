@@ -125,49 +125,140 @@ export function adaptT01ConstraintsToT04(
   return { constraints, unresolved }
 }
 
+/** 审核员显式忽略的材料：与 decision-readiness 使用同一前缀，避免两处口径分叉。 */
+const IGNORED_PREFIX = '[审核员忽略]'
+const isIgnored = (document: { unusedReason?: string }): boolean =>
+  typeof document.unusedReason === 'string' && document.unusedReason.startsWith(IGNORED_PREFIX)
+
+/** 当前参与审核的原件：有效且未被审核员显式忽略。 */
+function activeDocumentsOf(aggregate: CaseAggregateV2): CaseAggregateV2['caseV2']['documents'] {
+  return (aggregate.caseV2.documents ?? []).filter((document) => document.active !== false && !isIgnored(document))
+}
+
 /**
- * 由真实案卷构造 T04 目标快照（字段值、原件版本、材料槽状态）。
+ * 字段是否已被人工作为事实确认（而不是“表单填了就算核实”）。
  *
- * `fieldUnits` 来自负责人已确认的约束：T04 的 `value-limit` 只有在
- * 「字段值单位」与「规则单位」一致时才比较，否则判定为比较依据未知。
- * 单位只用于同一字段的等值比较，不引入任何新业务含义。
+ * 只认 `extractedBy=user && confirmed=true` 的 Observation；表单原始申报值
+ * 仅证明“申报过”，不能冒充已核实事实。返回的来源只保留当前有效原件。
  */
-export function buildT04TargetFromCase(
-  aggregate: CaseAggregateV2, template: TemplateVersion,
-  fieldUnits: Readonly<Record<string, string>> = {},
-): T04PublishedTarget {
-  // 来源必须是当前有效原件；缺失即空数组，绝不虚构来源
-  const active = (aggregate.caseV2.documents ?? []).filter((document) => document.active !== false)
-  const caseFields: Record<string, T04Value> = {}
-  for (const [key, value] of Object.entries(aggregate.caseV2.caseFields ?? {})) {
+function confirmedFactOf(
+  aggregate: CaseAggregateV2, subjectId: string, fieldKey: string, activeVersionIds: ReadonlySet<string>,
+): { confirmed: boolean; sourceRefIds: string[] } {
+  const confirmed = [...(aggregate.observations ?? [])].reverse().find((observation) =>
+    observation.subjectId === subjectId && observation.fieldKey === fieldKey &&
+    observation.extractedBy === 'user' && observation.confirmed === true)
+  if (!confirmed) return { confirmed: false, sourceRefIds: [] }
+  const sourceRefIds = [...new Set(confirmed.sourceRefs
+    .map((ref) => ref.documentVersionId)
+    .filter((id) => typeof id === 'string' && activeVersionIds.has(id)))]
+  return { confirmed: true, sourceRefIds }
+}
+
+/** FieldValue → T04Value；confirmed 只能来自人工确认凭据，不因“有值”而提升。 */
+function t04FieldsOf(
+  fields: Record<string, unknown>, aggregate: CaseAggregateV2, subjectId: string,
+  fieldUnits: Readonly<Record<string, string>>, activeVersionIds: ReadonlySet<string>,
+): Record<string, T04Value> {
+  const result: Record<string, T04Value> = {}
+  for (const [key, value] of Object.entries(fields ?? {})) {
     const record = value as { kind?: string; value?: unknown }
     if (!record || record.value === undefined || record.value === null) continue
+    const fact = confirmedFactOf(aggregate, subjectId, key, activeVersionIds)
     if (record.kind === 'number') {
       const numeric = typeof record.value === 'number' ? record.value : Number(record.value)
-      // confirmed=false 表示尚未人工确认，T04 会据此给出 pending 而不是当成 0
-      if (Number.isFinite(numeric)) {
-        const unit = fieldUnits[key]
-        caseFields[key] = { value: numeric, confirmed: true, ...(unit ? { unit } : {}) }
+      if (!Number.isFinite(numeric)) continue
+      const unit = fieldUnits[key]
+      result[key] = {
+        value: numeric, confirmed: fact.confirmed,
+        ...(unit ? { unit } : {}),
+        ...(fact.sourceRefIds.length ? { sourceRefIds: fact.sourceRefIds } : {}),
       }
     } else if (record.kind === 'text' || record.kind === 'date' || record.kind === 'enum') {
-      caseFields[key] = { value: String(record.value), confirmed: true }
+      result[key] = {
+        value: String(record.value), confirmed: fact.confirmed,
+        ...(fact.sourceRefIds.length ? { sourceRefIds: fact.sourceRefIds } : {}),
+      }
     }
   }
+  return result
+}
+
+/**
+ * 由真实案卷构造 T04 目标快照（case / subject / group 三类真实目标）。
+ *
+ * - case：案卷级字段 + 材料槽；
+ * - subject：每个未被忽略的审核主体，字段取该主体自身字段；
+ * - group：按主体所属 sectionId 分组（真实模板分项），字段取案卷级字段。
+ *
+ * 字段 confirmed 只由人工确认凭据决定；材料槽只统计未被忽略的原件。
+ */
+export function buildT04TargetsFromCase(
+  aggregate: CaseAggregateV2, template: TemplateVersion,
+  fieldUnits: Readonly<Record<string, string>> = {},
+): T04PublishedTarget[] {
+  const active = activeDocumentsOf(aggregate)
+  const activeVersionIds = new Set(active.map((document) => document.versionId))
+  const caseId = aggregate.caseV2.id
+  const caseFields = t04FieldsOf(aggregate.caseV2.caseFields ?? {}, aggregate, caseId, fieldUnits, activeVersionIds)
   const materialSlots: T04PublishedTarget['materialSlots'] = {}
   for (const slot of template.materialSlots ?? []) {
     const ids = active.filter((document) => document.materialSlotId === slot.id).map((document) => document.versionId)
     // confirmed=false 表示「未核实」，与「已确认缺件」不同，不能混为 0
     materialSlots[slot.id] = { documentVersionIds: ids, confirmed: true }
   }
-  return {
-    scope: 'case',
-    targetKey: `case:${aggregate.caseV2.id}`,
-    objectKey: `case:${aggregate.caseV2.id}`,
-    subjectId: aggregate.caseV2.id,
+  const targets: T04PublishedTarget[] = [{
+    scope: 'case', targetKey: `case:${caseId}`, objectKey: `case:${caseId}`, subjectId: caseId,
     fields: caseFields,
     sourceVersionIds: active.map((document) => document.versionId),
     materialSlots,
+  }]
+
+  const subjects = (aggregate.caseV2.subjects ?? []).filter((subject) => subject.status !== 'ignored')
+  for (const subject of subjects) {
+    const subjectVersionIds = [...new Set(subject.sourceRefs
+      .map((ref) => ref.documentVersionId)
+      .filter((id) => activeVersionIds.has(id)))]
+    const fields = t04FieldsOf(subject.fields ?? {}, aggregate, subject.id, fieldUnits, activeVersionIds)
+    // 主体自身被人工确认（correction=user-confirmed）时，其声明字段才算已核实；
+    // AI 提取的主体仍保持未确认，交给人工门禁。
+    if (subject.correction === 'user-confirmed') {
+      for (const [key, entry] of Object.entries(fields)) {
+        if (entry.confirmed) continue
+        const fact = confirmedFactOf(aggregate, subject.id, key, activeVersionIds)
+        if (fact.confirmed) fields[key] = { ...entry, confirmed: true, ...(fact.sourceRefIds.length ? { sourceRefIds: fact.sourceRefIds } : {}) }
+      }
+    }
+    targets.push({
+      scope: 'subject', targetKey: `subject:${subject.id}`, objectKey: `case:${caseId}`, subjectId: subject.id,
+      fields,
+      sourceVersionIds: subjectVersionIds.length ? subjectVersionIds : active.map((document) => document.versionId),
+      materialSlots: {},
+    })
   }
+
+  const sections = new Map<string, string[]>()
+  for (const subject of subjects) {
+    if (!subject.sectionId) continue
+    sections.set(subject.sectionId, [...(sections.get(subject.sectionId) ?? []), subject.id])
+  }
+  for (const [sectionId, subjectIds] of sections) {
+    const groupKey = `group:${caseId}:${sectionId}`
+    targets.push({
+      scope: 'group', targetKey: groupKey, objectKey: `case:${caseId}`, subjectId: groupKey,
+      fields: caseFields,
+      sourceVersionIds: active.map((document) => document.versionId),
+      materialSlots: {},
+    })
+  }
+  return targets
+}
+
+/** 兼容旧调用：只返回案卷级目标。新代码应使用 buildT04TargetsFromCase。 */
+export function buildT04TargetFromCase(
+  aggregate: CaseAggregateV2, template: TemplateVersion,
+  fieldUnits: Readonly<Record<string, string>> = {},
+): T04PublishedTarget {
+  return buildT04TargetsFromCase(aggregate, template, fieldUnits)[0]!
 }
 
 export interface CompileTemplatePlanInput {
@@ -176,6 +267,11 @@ export interface CompileTemplatePlanInput {
   phase?: 'submission' | 'decision'
   /** 已确认事实的额外来源版本（例如补件后新增原件）；默认用案卷当前有效原件 */
   extraSourceVersionIds?: string[]
+  /**
+   * 业务判断日（YYYY-MM-DD）。必须由调用方显式给出，绝不回退到机器时钟；
+   * 缺省时带有效期规则会保持 pending，而不是被系统时间悄悄判定。
+   */
+  asOfDate?: string
 }
 
 /**
@@ -198,13 +294,14 @@ export function compileTemplatePlanForCase(input: CompileTemplatePlanInput): T04
   for (const item of constraints) {
     if (item.constraint.unit) fieldUnits[item.constraint.fieldKey] = item.constraint.unit
   }
-  const target = buildT04TargetFromCase(aggregate, template, fieldUnits)
+  const targets = buildT04TargetsFromCase(aggregate, template, fieldUnits)
   const compiled = compilePublishedTemplateReviewPlan({
     template,
     effectiveRules,
     constraints,
-    targets: [target],
+    targets,
     phase: input.phase ?? 'submission',
+    ...(input.asOfDate ? { asOfDate: input.asOfDate } : {}),
   })
   return { compiled, constraints, unresolved, ruleIds }
 }

@@ -127,8 +127,16 @@ export function reconcileF07PublishedPlan(input: {
         selectedSources.push(source)
       }
     }
+    const result = toT04CheckResult(proposal, target, selectedSources, recordedAt)
+    // RUN-36：符合结论必须有可核验来源；空来源/无法定位的引用不能形成 compliant。
+    // 保留 T04 原判在 reason 中说明，状态降级为待人工确认，而不是伪造读取回执。
+    const evidenceMissing = result.status === 'compliant' && selectedSources.length === 0
     checks.push({
-      ...toT04CheckResult(proposal, target, selectedSources, recordedAt),
+      ...result,
+      ...(evidenceMissing ? {
+        status: 'awaiting-confirmation' as const,
+        reason: `符合结论缺少可核验来源引用，需人工核对：${result.reason}`,
+      } : {}),
       // T04 旧展示 ID 缺 subject；F07 以完整四元组稳定识别。
       checkId: id,
     })
