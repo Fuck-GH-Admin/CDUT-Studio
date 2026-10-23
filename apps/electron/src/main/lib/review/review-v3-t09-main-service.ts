@@ -110,8 +110,11 @@ export interface T09StagedAsset {
   mimeType: string
   sha256: string
   versionId: string
-  /** 回件包内的附件序号：重试按序号复用，同名同内容的两份文件不会互相顶替。 */
-  index: number
+  /**
+   * 回件包内的附件序号：重试按序号复用，同名同内容的两份文件不会互相顶替。
+   * 旧版本 staging 没有该字段；读取时按可选处理并回退到同名+同哈希匹配。
+   */
+  index?: number
   /** 该附件登记完成后的案卷 revision（Main 回读的真实值）。 */
   revision?: number
 }
@@ -353,7 +356,11 @@ async function applyT09StudentReply(input: {
   let ownRevision = input.baseRevision
   const versionIds: string[] = []
   for (const [index, asset] of reply.reply.assets.entries()) {
+    // 旧版本 staging 没有 index 字段：按“同名 + 同哈希”回退匹配，避免升级后
+    // 重试把已登记附件再复制一份。
     const prior = staged.assets.find((item) => item.index === index)
+      ?? staged.assets.find((item) => item.index === undefined
+        && item.sha256 === asset.sha256 && item.name === asset.name)
     if (prior) {
       if (prior.sha256 !== asset.sha256 || prior.name !== asset.name) {
         return { duplicate: false, receipt: reject('T09_ACTION_PAYLOAD_DRIFT: 相同 actionId 的附件载荷与首次导入不一致') }
