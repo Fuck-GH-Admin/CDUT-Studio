@@ -498,11 +498,13 @@ export class AnthropicAdapter implements ProviderAdapter {
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = this.normalizeUrl(input.baseUrl)
 
+    // 标题与轻量补全共用：systemPrompt 走 Anthropic 顶层 system 字段
     const body: Record<string, unknown> = {
       model: input.modelId,
-      max_tokens: 300,
+      max_tokens: input.maxTokens ?? 300,
       messages: [{ role: 'user', content: input.prompt }],
     }
+    if (input.systemPrompt) body.system = input.systemPrompt
 
     return {
       url: `${url}/messages`,

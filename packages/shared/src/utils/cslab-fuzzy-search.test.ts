@@ -65,4 +65,25 @@ describe('实验室多字段模糊搜索', () => {
       matchLabFuzzy(normal, 'nycl').score,
     )
   })
+
+  test('含空格的复合查询按 token AND 匹配', () => {
+    const lab = makeLab({
+      name: '固态电池界面实验室',
+      tags: ['电化学', '界面'],
+    })
+    expect(matchLabFuzzy(lab, '固态 电池').matched).toBe(true)
+    expect(matchLabFuzzy(lab, '界面 电化学').matched).toBe(true)
+  })
+
+  test('多 token 中任一未命中即整体未命中', () => {
+    const lab = makeLab({ name: '固态电池界面实验室' })
+    expect(matchLabFuzzy(lab, '固态 zzzz').matched).toBe(false)
+  })
+
+  test('tags 缺失时不抛异常', () => {
+    const lab = makeLab({ name: '演示实验室' })
+    const broken = { ...lab, tags: undefined as unknown as string[] }
+    expect(() => matchLabFuzzy(broken, 'ys')).not.toThrow()
+    expect(matchLabFuzzy(broken, 'ys').matched).toBe(true)
+  })
 })

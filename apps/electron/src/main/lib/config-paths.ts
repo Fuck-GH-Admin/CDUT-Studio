@@ -290,6 +290,15 @@ export function getMemoryConfigPath(): string {
 }
 
 /**
+ * 获取长期记忆图谱文件路径
+ *
+ * @returns ~/.cdutai/user-habit-graph.json
+ */
+export function getLongTermMemoryGraphPath(): string {
+  return join(getConfigDir(), 'user-habit-graph.json')
+}
+
+/**
  * 获取 Agent 预设配置文件路径
  *
  * @returns ~/.cdutai/agent-presets.json

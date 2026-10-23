@@ -11,6 +11,7 @@ import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SC
 import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
 import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
+import { LONGTERM_MEMORY_IPC_CHANNELS, type LongTermMemoryGraph, type LongTermMemoryHit, type LongTermMemoryNode, type LongTermMemoryNodeInput } from '@profer/shared'
 import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetChatStatus, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetTourFillEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
 import {
   CSLAB_IPC_CHANNELS,
@@ -1680,6 +1681,22 @@ export interface ElectronAPI {
     readDomainCache: (name: CdutDomainCacheName) => Promise<unknown>
     /** 写入业务域离线缓存（网络成功后原子落盘） */
     writeDomainCache: (input: { name: CdutDomainCacheName; payload: unknown }) => Promise<{ success: boolean }>
+  }
+
+  // ===== 长期记忆图谱（用户习惯与偏好） =====
+  longTermMemory: {
+    /** 读取全量长期记忆图谱 */
+    getGraph: () => Promise<LongTermMemoryGraph>
+    /** 手动新增记忆节点 */
+    addNode: (input: LongTermMemoryNodeInput) => Promise<LongTermMemoryNode>
+    /** 更新单个记忆节点（仅 category/title/content/tags/confidence 生效） */
+    updateNode: (node: LongTermMemoryNode) => Promise<LongTermMemoryNode | null>
+    /** 删除记忆节点 */
+    deleteNode: (nodeId: string) => Promise<{ success: boolean }>
+    /** 检索测试（星图面板即时模拟 RAG 命中） */
+    queryTest: (input: { query: string; topK?: number }) => Promise<LongTermMemoryHit[]>
+    /** 订阅图谱变更（多窗口同步） */
+    onChanged: (callback: () => void) => () => void
   }
 
   // ===== CDUT Science (CSLab) 专区 =====
@@ -4125,6 +4142,24 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.READ_DOMAIN_CACHE, name),
     writeDomainCache: (input: { name: CdutDomainCacheName; payload: unknown }) =>
       ipcRenderer.invoke(CDUT_ZONE_IPC_CHANNELS.WRITE_DOMAIN_CACHE, input),
+  },
+
+  // ===== 长期记忆图谱（用户习惯与偏好） =====
+  longTermMemory: {
+    getGraph: () => ipcRenderer.invoke(LONGTERM_MEMORY_IPC_CHANNELS.READ_GRAPH),
+    addNode: (input: LongTermMemoryNodeInput) =>
+      ipcRenderer.invoke(LONGTERM_MEMORY_IPC_CHANNELS.ADD_NODE, input),
+    updateNode: (node: LongTermMemoryNode) =>
+      ipcRenderer.invoke(LONGTERM_MEMORY_IPC_CHANNELS.UPDATE_NODE, node),
+    deleteNode: (nodeId: string) =>
+      ipcRenderer.invoke(LONGTERM_MEMORY_IPC_CHANNELS.DELETE_NODE, nodeId),
+    queryTest: (input: { query: string; topK?: number }) =>
+      ipcRenderer.invoke(LONGTERM_MEMORY_IPC_CHANNELS.QUERY_TEST, input),
+    onChanged: (callback: () => void) => {
+      const handler = () => callback()
+      ipcRenderer.on(LONGTERM_MEMORY_IPC_CHANNELS.CHANGED, handler)
+      return () => ipcRenderer.removeListener(LONGTERM_MEMORY_IPC_CHANNELS.CHANGED, handler)
+    },
   },
 
   // ===== CDUT Science (CSLab) 专区 =====

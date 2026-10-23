@@ -3,7 +3,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 
@@ -126,6 +126,21 @@ describe('实验室生命周期操作', () => {
     expect(listLabs().some((item) => item.id === lab.id)).toBe(false)
     const bound = listAgentSessions(true).find((item) => item.id === session.id)
     expect(bound?.cslabLabId).toBeUndefined()
+  })
+
+  test('重复删除保持幂等，并能清理只读文件', async () => {
+    const { createLab, deleteLab, listLabs } = await import('./cslab-manager')
+    const lab = createLab({ name: '幂等删除测试实验室' })
+    const readonlyFile = join(lab.rootPath, 'vault', 'notes', 'readonly.md')
+    writeFileSync(readonlyFile, '# 只读笔记\n', 'utf-8')
+    chmodSync(readonlyFile, 0o444)
+
+    await deleteLab(lab.id)
+    expect(existsSync(lab.rootPath)).toBe(false)
+
+    // 二次删除：清单已不存在，清理流程仍必须正常结束。
+    await expect(deleteLab(lab.id)).resolves.toEqual([])
+    expect(listLabs().some((item) => item.id === lab.id)).toBe(false)
   })
 })
 

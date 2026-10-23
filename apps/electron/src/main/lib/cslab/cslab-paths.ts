@@ -10,6 +10,7 @@
 import { join, resolve, sep, basename, normalize, parse } from 'node:path'
 import { homedir } from 'node:os'
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -221,11 +222,57 @@ export function updateLabManifest(labId: string, patch: Partial<CsLabLab>): CsLa
   return next
 }
 
+/** 递归解除只读属性，避免 Windows 下 rmSync 因只读文件/目录返回 EPERM。 */
+function clearReadonlyAttributes(dir: string): void {
+  try {
+    chmodSync(dir, 0o777)
+  } catch {
+    // 权限不足时继续尝试，最终由 rmSync 的重试兜底。
+  }
+  const entries = (() => {
+    try {
+      return readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return []
+    }
+  })()
+  for (const entry of entries) {
+    const child = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      clearReadonlyAttributes(child)
+    } else {
+      try {
+        chmodSync(child, 0o666)
+      } catch {
+        // 单个文件失败不阻断整体删除。
+      }
+    }
+  }
+}
+
 /** 物理删除实验室沙箱目录并注销索引（调用方必须先释放数据库与文件监听）。 */
 export function deleteLabFiles(labId: string): void {
   const root = assertSafeLabRootPath(resolveLabDir(labId))
-  rmSync(root, { recursive: true, force: true })
-  unregisterLabRoot(labId)
+  try {
+    if (!existsSync(root)) return
+    // Windows 下主进程自身 CWD 位于待删目录时会锁死目录，先切回 CSLab 根目录。
+    const cwd = normalizeForCompare(process.cwd())
+    const target = normalizeForCompare(root)
+    if (cwd === target || cwd.startsWith(`${target}${sep}`)) {
+      try {
+        process.chdir(getCsLabRootDir())
+      } catch (error) {
+        console.warn('[CSLab] 删除前切换工作目录失败:', error)
+      }
+    }
+    clearReadonlyAttributes(root)
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 })
+  } catch (error) {
+    // 物理删除失败仍注销索引，保证已删除实验室不会永远卡在 UI 中。
+    console.warn(`[CSLab] 物理删除实验室目录失败，已注销索引: ${root}`, error)
+  } finally {
+    unregisterLabRoot(labId)
+  }
 }
 
 /** 列出索引中所有可读实验室（跳过损坏清单）。 */

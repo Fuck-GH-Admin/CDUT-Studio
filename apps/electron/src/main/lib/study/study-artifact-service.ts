@@ -108,7 +108,7 @@ function normalizeMindMapNode(raw: unknown, depth: number): MindMapNode | null {
 function normalizeMindMap(json: unknown, sourceDocs: string[]): MindMapData {
   const obj = (json ?? {}) as Record<string, unknown>
   const root = normalizeMindMapNode(obj.root ?? obj, 0)
-  if (!root) throw new Error('模型未返回有效的思维导图结构')
+  if (!root) throw new Error('模型返回的思维导图 JSON 无法解析或结构不完整（可能被输出上限截断），请重试或降低导图规模。')
   return {
     id: genId('mindmap'),
     title: asString(obj.title, '学习思维导图').slice(0, 60),
@@ -141,7 +141,7 @@ function normalizeFlashcard(raw: unknown): FlashcardItem | null {
 function normalizeDeck(json: unknown, input: StudyGenerateArtifactInput): FlashcardDeck {
   const obj = (json ?? {}) as Record<string, unknown>
   const cards = asArray(obj.cards).map(normalizeFlashcard).filter((c): c is FlashcardItem => !!c)
-  if (cards.length === 0) throw new Error('模型未返回有效的抽认卡内容')
+  if (cards.length === 0) throw new Error('模型返回的抽认卡 JSON 无法解析或结构不完整（可能被输出上限截断），请减少卡片数量或更换模型后重试。')
   return {
     id: genId('deck'),
     title: asString(obj.title, input.focusedTopic || '抽认卡卡包').slice(0, 60),
@@ -190,7 +190,7 @@ function normalizeQuiz(json: unknown, input: StudyGenerateArtifactInput): QuizSe
   const questions = asArray(obj.questions)
     .map(normalizeQuizQuestion)
     .filter((q): q is QuizQuestion => !!q)
-  if (questions.length === 0) throw new Error('模型未返回有效的测验题目')
+  if (questions.length === 0) throw new Error('模型返回的测验 JSON 无法解析或结构不完整（可能被输出上限截断），请减少题目数量、降低难度或更换模型后重试。')
   const difficulty = input.difficulty ?? 'medium'
   return {
     id: genId('quiz'),
@@ -212,7 +212,7 @@ function buildMindMapPrompts(source: string, input: StudyGenerateArtifactInput):
   const system = [
     'You are the Lead Knowledge Architect (带教导师) for AI速课堂 (AI Quick Classroom) at 成都理工大学 (Chengdu University of Technology), specialized in synthesizing course materials into hierarchical concept mind maps (思维导图).',
     'Language Convention: The mind map is shown directly to the student. All generated student-facing content (node labels, notes, study prompts) MUST be written in the student\'s language — the language of the course material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
-    'Output format: Return strictly valid JSON without Markdown code fences or explanatory prose.',
+    'Output format: Respond with a single valid json object only (the first non-whitespace character must be "{" and the last must be "}"), without Markdown code fences or explanatory prose.',
     // 思维导图渲染协议锁定：产出由专用交互导图画布（径向贝塞尔）消费，严禁混入 Mermaid 图语法
     'Rendering Contract (STRICT): The JSON tree is rendered by the dedicated interactive mind-map canvas engine. NEVER embed Mermaid diagram syntax (```mermaid, flowchart TD, graph TD, node-link arrows like -->, or shape wrappers like ((x)) / [x] in labels) anywhere in the JSON payload; hierarchy MUST be expressed solely through the nested "children" structure.',
   ].join('\n')
@@ -243,7 +243,7 @@ function buildFlashcardPrompts(source: string, input: StudyGenerateArtifactInput
     'You are an expert cognitive scientist designing atomic flashcards based on the Minimum Information Principle (MIP).',
     'Structure each card as an atomic single-question, single-answer proposition adhering to Miller\'s 7±2 cognitive chunking limits, ensuring each card targets an independent concept.',
     'Language Convention: The flashcards are shown directly to the student. All generated card content (front, back, topic) MUST be written in the student\'s language — the language of the course material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
-    'Output format: Return strictly valid JSON without Markdown code fences or conversational prose.',
+    'Output format: Respond with a single valid json object only (the first non-whitespace character must be "{" and the last must be "}"), without Markdown code fences or conversational prose.',
   ].join('\n')
   const focus = input.focusedTopic ? `\nFocused Topic: ${input.focusedTopic}` : ''
   const user = [
@@ -272,7 +272,7 @@ function buildQuizPrompts(source: string, input: StudyGenerateArtifactInput): { 
     // 位置分布红线：模型天然倾向于把正确答案放首位（A），会产出「答案全是 A」的废卷
     'Answer-Position Distribution (STRICT): The correct option MUST NOT be biased toward the first position. Distribute correct answers across A/B/C/D as evenly as possible over the whole quiz (roughly 1/4 each for 4-option questions); NEVER place the correct answer at the first position for consecutive questions.',
     'Language Convention: The quiz is shown directly to the student. All generated content (questions, options, answers, explanations) MUST be written in the student\'s language — the language of the course material (e.g., Simplified Chinese). Keep your internal reasoning and planning in English.',
-    'Output format: Return strictly valid JSON without Markdown code fences or explanatory prose.',
+    'Output format: Respond with a single valid json object only (the first non-whitespace character must be "{" and the last must be "}"), without Markdown code fences or explanatory prose.',
   ].join('\n')
   const focus = input.focusedTopic ? `\nFocused Topic: ${input.focusedTopic}` : ''
   const user = [
@@ -291,6 +291,24 @@ function buildQuizPrompts(source: string, input: StudyGenerateArtifactInput): { 
     source,
   ].join('\n')
   return { system, user }
+}
+
+/**
+ * 工件生成的最大输出 tokens：按规模动态分配，避免复用图谱的 3000 小额度。
+ *
+ * 思考模型（如 deepseek-flash）的思考链与正文共享输出预算，额度不足时会出现
+ * 「正文为空」或 JSON 被截断，因此按工件类型与题量给出足够余量。
+ */
+export function resolveArtifactMaxTokens(input: StudyGenerateArtifactInput): number {
+  if (input.kind === 'mindmap') return 8_192
+  if (input.kind === 'flashcard') {
+    if (input.cardMode === 'concise') return 6_144
+    if (input.cardMode === 'in_depth') return 16_384
+    return 8_192
+  }
+  const count = Math.max(1, Math.min(50, input.questionCount ?? 5))
+  if (count >= 20) return 16_384
+  return Math.min(16_384, Math.max(8_192, 4_096 + count * 600))
 }
 
 /**
@@ -313,6 +331,7 @@ export async function generateStudyArtifact(
   const completionOptions: OneShotCompletionOptions = {
     channelId: input.channelId || sessionMeta?.channelId || undefined,
     modelId: input.modelId || sessionMeta?.modelId || undefined,
+    maxOutputTokens: resolveArtifactMaxTokens(input),
   }
 
   if (input.kind === 'mindmap') {

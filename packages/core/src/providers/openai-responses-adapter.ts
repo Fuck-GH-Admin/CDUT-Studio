@@ -412,17 +412,21 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = resolveOpenAIResponsesUrl(input.baseUrl, this.providerType)
 
+    // 标题与轻量补全共用：systemPrompt 走 Responses API 的 instructions
+    const body: Record<string, unknown> = {
+      model: input.modelId,
+      input: [{ role: 'user', content: input.prompt }],
+      max_output_tokens: input.maxTokens ?? 50,
+    }
+    if (input.systemPrompt) body.instructions = input.systemPrompt
+
     return {
       url,
       headers: {
         Authorization: `Bearer ${input.apiKey}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        model: input.modelId,
-        input: [{ role: 'user', content: input.prompt }],
-        max_output_tokens: 50,
-      }),
+      body: JSON.stringify(body),
     }
   }
 

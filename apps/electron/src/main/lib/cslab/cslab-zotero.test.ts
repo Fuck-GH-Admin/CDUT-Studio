@@ -180,6 +180,38 @@ describe('Zotero 增量同步', () => {
     const asset = listAssets(lab.id).find((item) => item.layerType === 'lit')
     expect(asset?.unsupported).toBe('Zotero 中已删除')
   })
+
+  test('无本地 PDF 的条目仍登记元数据，中文作者姓前名后', async () => {
+    const { DatabaseSync } = require('node:sqlite') as {
+      DatabaseSync: new (path: string) => {
+        exec(sql: string): void
+        close(): void
+      }
+    }
+    const db = new DatabaseSync(join(zoteroDir, 'zotero.sqlite'))
+    db.exec(`
+      INSERT INTO items (itemID, itemTypeID, key, dateModified, version, deleted)
+        VALUES (4, 1, 'META01', '2024-03-03', 21, 0);
+      INSERT INTO itemDataValues VALUES
+        (6, '固态电池界面综述'),
+        (7, '10.1000/cslab.2024.002');
+      INSERT INTO itemData VALUES (4, 1, 6), (4, 2, 7);
+      INSERT INTO creators VALUES (2, '三', '张');
+      INSERT INTO itemCreators VALUES (4, 2, 1, 0);
+    `)
+    db.close()
+
+    const { syncZoteroLibrary, listZoteroLiterature } = await import('./cslab-zotero')
+    const result = await syncZoteroLibrary(lab.id, { dataDir: zoteroDir })
+    expect(result.ok).toBe(true)
+    expect(result.added).toBe(1)
+
+    const item = listZoteroLiterature(lab.id).find((entry) => entry.title === '固态电池界面综述')
+    expect(item).toBeTruthy()
+    expect(item?.hasFile).toBe(false)
+    expect(item?.authors).toEqual(['张三'])
+    expect(item?.doi).toBe('10.1000/cslab.2024.002')
+  })
 })
 
 describe('Zotero 批注四向仿射投影', () => {

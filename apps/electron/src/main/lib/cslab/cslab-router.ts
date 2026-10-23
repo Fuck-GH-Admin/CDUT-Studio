@@ -60,7 +60,9 @@ import type {
   CsLabPxrdOptions,
   CsLabPlotExportResult,
   CsLabDemoLabResult,
+  AgentSessionMeta,
 } from '@profer/shared'
+import { AGENT_IPC_CHANNELS } from '@profer/shared'
 import { createDemoLab } from './cslab-demo'
 import {
   analyzeCrystalAsset,
@@ -231,6 +233,17 @@ const AUTH_EXEMPT_CHANNELS = new Set<string>([
 /** 另存为对话框签发的一次性令牌有效期。 */
 const SAVE_TOKEN_TTL_MS = 60_000
 const pendingSaveTokens = new Map<string, { path: string; expiresAt: number }>()
+
+/** 广播会话元数据变更，保证主窗口与科学助理窗口的 Jotai 会话列表同步。 */
+function broadcastSessionUpdated(session: AgentSessionMeta): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    win.webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+      sessionId: session.id,
+      payload: { kind: 'profer_event', event: { type: 'session_updated', session } },
+    })
+  }
+}
 
 /** Windows 路径大小写不敏感，比较前统一归一化。 */
 function normalizeSavePath(value: string): string {
@@ -477,8 +490,13 @@ export function registerCsLabIpc(): void {
     CSLAB_IPC_CHANNELS.DELETE_LAB,
     async (_event, labId: unknown): Promise<void> => {
       const normalizedLabId = asString(labId, '实验室标识')
-      await deleteLab(normalizedLabId)
+      // 先销毁科学助理窗口，释放 Chromium 持有的工作区文件句柄，再物理删除沙箱。
       closeCsLabAgentWindowForLab(normalizedLabId)
+      const unboundSessionIds = await deleteLab(normalizedLabId)
+      for (const sessionId of unboundSessionIds) {
+        const session = getAgentSessionMeta(sessionId)
+        if (session) broadcastSessionUpdated(session)
+      }
     },
   )
 
@@ -1846,7 +1864,8 @@ export function registerCsLabIpc(): void {
   ipcMain.handle(CSLAB_IPC_CHANNELS.UNBIND_SESSION_LAB, async (_event, input: unknown) => {
     const record = asObject(input, '会话绑定参数')
     const sessionId = asString(record.sessionId, '会话标识')
-    updateAgentSessionMeta(sessionId, { cslabLabId: undefined })
+    const updated = updateAgentSessionMeta(sessionId, { cslabLabId: undefined })
+    broadcastSessionUpdated(updated)
     return {
       sessionId,
       labId: null,

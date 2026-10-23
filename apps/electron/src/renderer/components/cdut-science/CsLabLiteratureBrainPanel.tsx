@@ -13,6 +13,13 @@ interface CsLabLiteratureBrainPanelProps {
   onOpenLiterature: (uri: string, page: number) => void
 }
 
+const TEXT_LAYER_HINT = '文献缺少文本层（扫描版 PDF），请导入带 OCR/文本层的 PDF 后再建索引。'
+
+/** 判断后端消息是否属于「扫描版 PDF 无文本层」而非真实异常。 */
+function isTextLayerMessage(message?: string): boolean {
+  return !!message && (message.includes('扫描版') || message.includes('未能从文献中提取文本'))
+}
+
 export function CsLabLiteratureBrainPanel({
   labId,
   onOpenLiterature,
@@ -22,14 +29,19 @@ export function CsLabLiteratureBrainPanel({
   const [indexInfo, setIndexInfo] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState<'build' | 'search' | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const [hint, setHint] = React.useState<string | null>(null)
 
   const build = async (force: boolean): Promise<void> => {
     setBusy('build')
     setError(null)
+    setHint(null)
     try {
       const payload = await window.electronAPI.cslab.buildLiteratureIndex({ labId, force })
       setIndexInfo(payload.message ?? null)
-      if (!payload.ok) setError(payload.message ?? '索引构建失败')
+      if (!payload.ok) {
+        if (isTextLayerMessage(payload.message)) setHint(TEXT_LAYER_HINT)
+        else setError(payload.message ?? '索引构建失败')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '索引构建失败')
     } finally {
@@ -41,6 +53,7 @@ export function CsLabLiteratureBrainPanel({
     if (!query.trim()) return
     setBusy('search')
     setError(null)
+    setHint(null)
     try {
       const payload = await window.electronAPI.cslab.searchLiterature({
         labId,
@@ -48,7 +61,10 @@ export function CsLabLiteratureBrainPanel({
         topK: 8,
       })
       setResult(payload)
-      if (!payload.ok) setError(payload.message ?? '检索失败')
+      if (!payload.ok) {
+        if (isTextLayerMessage(payload.message)) setHint(TEXT_LAYER_HINT)
+        else setError(payload.message ?? '检索失败')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '检索失败')
     } finally {
@@ -78,6 +94,12 @@ export function CsLabLiteratureBrainPanel({
           {busy === 'search' ? <Loader2 size={10} className="animate-spin" /> : '检索'}
         </button>
       </div>
+
+      {busy === 'search' && (
+        <p className="text-[10px] leading-relaxed text-cslab-muted">
+          检索中（首次需构建索引，请稍候）
+        </p>
+      )}
 
       <div className="flex items-center gap-2">
         <button
@@ -131,6 +153,12 @@ export function CsLabLiteratureBrainPanel({
           </div>
         </button>
       ))}
+
+      {hint && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-600 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400">
+          {hint}
+        </p>
+      )}
 
       {error && (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[10px] leading-relaxed text-red-600">

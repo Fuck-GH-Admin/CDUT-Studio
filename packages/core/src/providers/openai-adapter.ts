@@ -310,6 +310,10 @@ export class OpenAIAdapter implements ProviderAdapter {
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = resolveOpenAIChatCompletionsUrl(input.baseUrl, this.providerType)
     const apiKey = this.providerType === 'ollama' ? (input.apiKey || 'ollama') : input.apiKey
+    // 标题与轻量补全共用：systemPrompt 存在时前置 system 角色，maxTokens 缺省沿用 300
+    const messages: Array<{ role: string; content: string }> = input.systemPrompt
+      ? [{ role: 'system', content: input.systemPrompt }, { role: 'user', content: input.prompt }]
+      : [{ role: 'user', content: input.prompt }]
 
     return {
       url,
@@ -319,8 +323,8 @@ export class OpenAIAdapter implements ProviderAdapter {
       },
       body: JSON.stringify({
         model: input.modelId,
-        messages: [{ role: 'user', content: input.prompt }],
-        max_tokens: 300,
+        messages,
+        max_tokens: input.maxTokens ?? 300,
       }),
     }
   }

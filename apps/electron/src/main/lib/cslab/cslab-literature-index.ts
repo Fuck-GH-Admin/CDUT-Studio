@@ -329,21 +329,32 @@ export async function buildLabLiteratureIndex(
 
   const chunks: LiteratureChunk[] = []
   let extracted = 0
-  for (const entity of entities) {
+  let processedPages = 0
+  for (let entityIndex = 0; entityIndex < entities.length; entityIndex += 1) {
+    const entity = entities[entityIndex]!
     const text = await loadOrExtractText(labId, entity)
-    if (!text) continue
-    extracted += 1
-    for (const page of text.pages) {
-      const pageChunks = splitIntoChunks(page.text)
-      pageChunks.forEach((content, index) => {
-        chunks.push({
-          id: `${entity.uri}#p${page.page}-s${index}`,
-          literatureUri: entity.uri,
-          title: entity.title,
-          page: page.page,
-          text: content,
+    if (text) {
+      extracted += 1
+      for (const page of text.pages) {
+        const pageChunks = splitIntoChunks(page.text)
+        pageChunks.forEach((content, index) => {
+          chunks.push({
+            id: `${entity.uri}#p${page.page}-s${index}`,
+            literatureUri: entity.uri,
+            title: entity.title,
+            page: page.page,
+            text: content,
+          })
         })
-      })
+        processedPages += 1
+        // 大篇幅综述会切出大量页文本，定期让出事件循环，避免主进程假死。
+        if (processedPages % 200 === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve))
+        }
+      }
+    }
+    if ((entityIndex + 1) % 4 === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
     }
   }
 

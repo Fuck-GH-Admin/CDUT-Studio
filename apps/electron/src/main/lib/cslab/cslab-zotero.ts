@@ -512,6 +512,15 @@ function readAttachments(db: SqliteDatabase, itemIds: number[]): Map<number, Zot
   return result
 }
 
+/** 中文姓名在 Zotero 中姓存 lastName、名存 firstName，需按姓前名后拼接。 */
+const CJK_NAME_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/
+
+function formatCreatorName(firstName: string, lastName: string): string {
+  if (!firstName && !lastName) return ''
+  if (CJK_NAME_RE.test(firstName + lastName)) return `${lastName}${firstName}`.trim()
+  return [firstName, lastName].filter(Boolean).join(' ')
+}
+
 function readCreators(db: SqliteDatabase, itemIds: number[]): Map<number, string[]> {
   const result = new Map<number, string[]>()
   for (const chunk of chunkIds(itemIds)) {
@@ -530,7 +539,7 @@ function readCreators(db: SqliteDatabase, itemIds: number[]): Map<number, string
       const itemID = Number(row.itemID)
       const firstName = row.firstName == null ? '' : String(row.firstName).trim()
       const lastName = row.lastName == null ? '' : String(row.lastName).trim()
-      const name = [firstName, lastName].filter(Boolean).join(' ').trim()
+      const name = formatCreatorName(firstName, lastName)
       if (!name) continue
       const list = result.get(itemID) ?? []
       list.push(name)
@@ -827,14 +836,17 @@ export async function syncZoteroLibrary(
       }> = []
       for (const item of itemDeltas) {
         const attachment = attachments.get(item.itemID)
-        if (!attachment) continue
-        const pathResult = resolveZoteroAttachmentPath({
-          path: attachment.path,
-          attachmentKey: attachment.attachmentKey,
-          dataDir,
-          linkedBasePath: discovery.preferences.linkedBasePath,
-        })
-        if (!pathResult.path) continue
+        const pathResult = attachment
+          ? resolveZoteroAttachmentPath({
+              path: attachment.path,
+              attachmentKey: attachment.attachmentKey,
+              dataDir,
+              linkedBasePath: discovery.preferences.linkedBasePath,
+            })
+          : undefined
+        // 无本地 PDF 的条目仍登记元数据：hasFile 由读取侧按物理存在性计算，
+        // 避免只导入 DOI/BibTeX 的文献在 CSLab 中整条消失。
+        const absPath = pathResult?.path
 
         const existing = sourceByItemKey.get(item.key)
         const entityUuid = existing?.uri.split('/').pop() ?? `zotero-${item.key}`
@@ -857,9 +869,9 @@ export async function syncZoteroLibrary(
           labId,
           source: 'zotero',
           relPath: undefined,
-          absPath: pathResult.path,
+          absPath,
           zoteroItemKey: item.key,
-          zoteroAttachmentKey: attachment.attachmentKey,
+          zoteroAttachmentKey: attachment?.attachmentKey,
           metadataJson,
           updatedAt: now,
         }
@@ -883,7 +895,9 @@ export async function syncZoteroLibrary(
         })
         // 批注与删除阶段继续复用映射；更新放在事务外，事务内不再做纯计算。
         sourceByItemKey.set(item.key, source)
-        sourceByAttachmentKey.set(attachment.attachmentKey, source)
+        if (attachment?.attachmentKey) {
+          sourceByAttachmentKey.set(attachment.attachmentKey, source)
+        }
       }
 
       const preparedAnnotations: CsLabZoteroAnnotationRecord[] = []

@@ -144,6 +144,7 @@ import { BULLETIN_IPC_CHANNELS, type BulletinItem } from '@profer/shared'
 import { getBulletins } from './lib/bulletin-service'
 import { registerReviewIpc } from './lib/review/review-ipc'
 import { registerCsLabIpc } from './lib/cslab'
+import { registerLongTermMemoryIpc } from './lib/longterm-memory/longterm-memory-ipc'
 import { grantCsLabToolTrust, revokeCsLabToolTrust } from './lib/cslab/cslab-tool-trust'
 import { cdutAuthManager, CDUT_AUTH_PARTITION } from './lib/cdut/cdut-auth-manager'
 import { executeDomainTool } from './lib/cdut/cdut-jw-client'
@@ -6092,6 +6093,9 @@ export function registerIpcHandlers(): void {
 
   // 注册 CDUT Science (CSLab) IPC 处理器
   registerCsLabIpc()
+
+  // ===== 长期记忆图谱（用户习惯与偏好） =====
+  registerLongTermMemoryIpc()
 
   // ===== CDUT 专区特区账户 =====
   // 特区账户与通用账户物理隔离，独立持久化于 ~/.cdutai/cdut-account.json

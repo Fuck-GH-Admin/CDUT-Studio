@@ -224,6 +224,7 @@ import {
 } from './lib/bridge-registry'
 import { startScheduler, stopScheduler } from './lib/automation-scheduler'
 import { startPlanningReminderScheduler, stopPlanningReminderScheduler } from './lib/planning-reminder-scheduler'
+import { startLongTermMemoryConsolidator } from './lib/longterm-memory/longterm-memory-reflector'
 import { destroyPlanningWindow } from './lib/planning-window'
 import { destroyCsLabAgentWindow } from './lib/cslab/cslab-window-manager'
 import { getWindowFrameColor, updateWindowFrameAppearance } from './lib/titlebar-overlay'
@@ -344,6 +345,9 @@ async function recoverEnabledDingTalkBots(): Promise<void> {
 }
 
 let mainWindow: BrowserWindow | null = null
+
+/** 长期记忆睡眠整合定时器的停止句柄 */
+let stopLongTermMemoryConsolidator: (() => void) | null = null
 
 /** 诊断 payload 解析失败时保留原始字符串，避免整条记录因解析异常而丢失。 */
 function parseDiagnosticPayload(raw: string): unknown {
@@ -1042,6 +1046,9 @@ async function bootstrap(): Promise<void> {
     safeRun('startBridgeSelfHealing', startBridgeSelfHealing)
     safeRun('startScheduler', startScheduler)
     safeRun('startPlanningReminderScheduler', startPlanningReminderScheduler)
+    safeRun('startLongTermMemoryConsolidator', () => {
+      stopLongTermMemoryConsolidator = startLongTermMemoryConsolidator()
+    })
   }, 0)
 
   // 启动时恢复团队会话：先检查已登录，否则用 refreshToken 尝试恢复
@@ -1240,6 +1247,9 @@ app.on('before-quit', () => {
   stopScheduler()
   // 停止任务/日程提醒调度器
   stopPlanningReminderScheduler()
+  // 停止长期记忆睡眠整合定时器（已 unref，这里显式清理更稳妥）
+  stopLongTermMemoryConsolidator?.()
+  stopLongTermMemoryConsolidator = null
   // 销毁规划窗口
   destroyPlanningWindow()
   // 销毁科学助理独立窗口

@@ -76,6 +76,9 @@ export * from './wechat'
 export * from './automation'
 export * from './recommendation'
 
+// 长期记忆图谱（用户习惯与偏好）
+export * from './longterm-memory'
+
 // 论文知识库（Paper Knowledge Base）相关类型
 export * from './knowledge-base'
 

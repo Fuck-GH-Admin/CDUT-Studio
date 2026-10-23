@@ -241,11 +241,25 @@ export function ScienceAgentWindowView({
   }, [activateSession, createBoundSession, creating, sessions.length, setAgentSessions])
 
   // 会话标题由 Agent 自动生成后会回写全局 atom；优先以 atom 为准，保持侧栏标题实时。
+  // 两个列表都必须按实验室过滤，避免解绑/删除后回退到旧的本地会话数组形成“幽灵会话”。
   const sessionList = React.useMemo(() => {
-    const bound = sessionsInStore.filter((session) => !session.archived && session.cslabLabId === labId)
-    const source = bound.length > 0 ? bound : sessions
+    const filterBound = (list: AgentSessionMeta[]): AgentSessionMeta[] =>
+      list.filter((session) => !session.archived && session.cslabLabId === labId)
+    const source = sessionsInStore.length > 0 ? filterBound(sessionsInStore) : filterBound(sessions)
     return sortAgentSessions(source)
   }, [labId, sessions, sessionsInStore])
+
+  // 当前激活会话被解绑或删除后，自动收敛到列表首项；列表为空则清空选择。
+  React.useEffect(() => {
+    if (!ready) return
+    if (sessionList.length === 0) {
+      if (activeSessionId !== null) setActiveSessionId(null)
+      return
+    }
+    if (!activeSessionId || !sessionList.some((session) => session.id === activeSessionId)) {
+      activateSession(sessionList[0]!.id)
+    }
+  }, [ready, sessionList, activeSessionId, activateSession])
 
   /** 同一次变更同时写入本地列表与全局 atom，保持窗口与主侧栏一致。 */
   const applySessionUpdate = React.useCallback(

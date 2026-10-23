@@ -119,6 +119,7 @@ import {
   workspaceCapabilitiesVersionAtom,
   sessionMemoryDisabledMapAtom,
   sessionContextModeMapAtom,
+  agentContextIndexGlobalAtom,
   studyTeachingModeAtomFamily,
 } from '@/atoms/agent-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
@@ -1046,7 +1047,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
   // 会话级上下文模式：经典 = resume 全量历史；索引 = 只做会话历史 RAG。
   const [sessionContextModeMap, setSessionContextModeMap] = useAtom(sessionContextModeMapAtom)
   const sessionContextMode: AgentContextMode = sessionContextModeMap[sessionId] ?? 'classic'
-  const [globalContextIndexEnabled, setGlobalContextIndexEnabled] = React.useState(false)
+  const [globalContextIndexEnabled, setGlobalContextIndexEnabled] = useAtom(agentContextIndexGlobalAtom)
 
   React.useEffect(() => {
     void window.electronAPI
@@ -1055,7 +1056,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       .catch(() => {
         // 读取失败保持默认关闭，不影响输入栏使用
       })
-  }, [])
+  }, [setGlobalContextIndexEnabled])
 
   // 单轮聚焦优先；其次全局索引开关；最后才是会话选择。
   const effectiveContextMode: AgentContextMode = sessionMemoryDisabled
@@ -1064,22 +1065,26 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       ? 'index'
       : sessionContextMode
 
-  const handleContextModeChange = React.useCallback((mode: AgentContextMode) => {
-    setSessionContextModeMap((prev) => ({ ...prev, [sessionId]: mode }))
-  }, [sessionId, setSessionContextModeMap])
-
   const handleGlobalContextIndexChange = React.useCallback(async (enabled: boolean) => {
     const previous = globalContextIndexEnabled
     setGlobalContextIndexEnabled(enabled)
     try {
       const settings = await window.electronAPI.updateSettings({ agentContextIndexGlobal: enabled })
       setGlobalContextIndexEnabled(settings.agentContextIndexGlobal === true)
-      toast.success(enabled ? '全部会话已切换为索引模式' : '全部会话已恢复会话级上下文模式')
+      toast.success(enabled ? '全部会话已切换为索引模式' : '已关闭全部会话索引，恢复会话级上下文模式')
     } catch (error) {
       setGlobalContextIndexEnabled(previous)
       toast.error('上下文模式设置保存失败', { description: error instanceof Error ? error.message : String(error) })
     }
-  }, [globalContextIndexEnabled])
+  }, [globalContextIndexEnabled, setGlobalContextIndexEnabled])
+
+  // 全局索引开启时点击「经典」视为一键退出全局索引，再写回当前会话选择。
+  const handleContextModeChange = React.useCallback(async (mode: AgentContextMode) => {
+    if (mode === 'classic' && globalContextIndexEnabled) {
+      await handleGlobalContextIndexChange(false)
+    }
+    setSessionContextModeMap((prev) => ({ ...prev, [sessionId]: mode }))
+  }, [sessionId, setSessionContextModeMap, globalContextIndexEnabled, handleGlobalContextIndexChange])
 
   const [presetMenuOpen, setPresetMenuOpen] = React.useState(false)
   const openWorkspacePresets = React.useCallback(() => {
@@ -3226,12 +3231,12 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
         <ContextModeToggleButton
           mode={effectiveContextMode}
           onChange={handleContextModeChange}
-          disabled={sessionMemoryDisabled || globalContextIndexEnabled}
+          disabled={sessionMemoryDisabled}
           disabledReason={
             sessionMemoryDisabled
               ? '记忆关闭时为单轮聚焦，不加载历史，无需选择上下文模式。'
               : globalContextIndexEnabled
-                ? '已由「全部会话使用索引」全局开关强制启用索引模式。'
+                ? '当前由「全部会话使用索引」强制启用；点击「经典」可关闭该全局开关。'
                 : undefined
           }
           isProcessing={streaming || backgroundWaiting}
