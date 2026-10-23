@@ -31,6 +31,7 @@ import {
 } from './cslab-db'
 import { closeHpcDatabase } from './cslab-hpc-db'
 import { closeShareDatabase } from './cslab-share-db'
+import { closeCsLabVaultCache } from './cslab-vault-cache'
 import { stopVaultWatcher } from './cslab-canvas-sync'
 import { stopLabToolWatcher } from './cslab-tool-registry'
 import { stopShareWatcher } from './cslab-share-watcher'
@@ -163,17 +164,22 @@ async function stopLabWatchers(labId: string): Promise<void> {
 /**
  * 彻底删除实验室：
  * 1. 停止文件监听并解绑历史会话；
- * 2. 关闭 SQLite 连接，避免 Windows 文件句柄占用导致 EBUSY；
+ * 2. 关闭 SQLite 连接（含 vault_cache），避免 Windows 文件句柄占用导致 EBUSY/EPERM；
  * 3. 物理删除沙箱目录并注销索引。
+ *
+ * 幂等：清单缺失或目录已被部分删除时仍继续清理，返回被解绑的会话 ID 供调用方广播。
  */
-export async function deleteLab(labId: string): Promise<void> {
+export async function deleteLab(labId: string): Promise<string[]> {
   const labDir = resolveLabDir(labId)
   const manifest = readLabManifest(labDir)
-  if (!manifest) throw new Error('实验室不存在或清单损坏')
+  if (!manifest) {
+    console.warn(`[CSLab] 清单缺失或已损坏，继续执行幂等清理: ${labDir}`)
+  }
 
   await stopLabWatchers(labId)
 
   // 历史会话脱敏解绑；显式传 archived 防止 updateAgentSessionMeta 触发自动解归档。
+  const unboundSessionIds: string[] = []
   for (const session of listAgentSessions(true)) {
     if (session.cslabLabId !== labId) continue
     try {
@@ -181,6 +187,7 @@ export async function deleteLab(labId: string): Promise<void> {
         cslabLabId: undefined,
         archived: session.archived,
       })
+      unboundSessionIds.push(session.id)
     } catch (error) {
       console.warn(`[CSLab] 解绑实验室会话失败 (${session.id}):`, error)
     }
@@ -190,8 +197,10 @@ export async function deleteLab(labId: string): Promise<void> {
   closeCsLabDatabase(join(labDir, 'db', 'central_meta.sqlite'))
   closeHpcDatabase(labId)
   closeShareDatabase(labId)
+  closeCsLabVaultCache(labId)
 
   deleteLabFiles(labId)
+  return unboundSessionIds
 }
 
 export async function getLabSnapshot(labId: string): Promise<CsLabLabSnapshot> {

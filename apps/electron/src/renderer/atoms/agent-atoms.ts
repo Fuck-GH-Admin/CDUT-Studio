@@ -1279,3 +1279,9 @@ export const sessionContextModeAtom = atomFamily((sessionId: string) =>
   atom((get) => get(sessionContextModeMapAtom)[sessionId] ?? 'classic'),
 )
 
+/**
+ * 全局索引开关，对应设置项 agentContextIndexGlobal。
+ * 由输入栏上下文模式按钮与「设置 → Agent 配置」共同读写，保证两处状态同步。
+ */
+export const agentContextIndexGlobalAtom = atom(false)
+

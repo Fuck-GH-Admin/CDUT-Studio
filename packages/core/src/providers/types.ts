@@ -250,7 +250,12 @@ export interface StreamRequestInput {
   continuationMessages?: ContinuationMessage[]
 }
 
-/** 标题生成请求的输入参数 */
+/**
+ * 非流式轻量补全请求的输入参数。
+ *
+ * 标题生成与长期记忆审核等「极简一次性判定」共用同一条非流式通道；
+ * systemPrompt / maxTokens 均为可选，缺省时保持标题链路的既有行为。
+ */
 export interface TitleRequestInput {
   /** 供应商 API Base URL */
   baseUrl: string
@@ -258,8 +263,12 @@ export interface TitleRequestInput {
   apiKey: string
   /** 模型 ID */
   modelId: string
-  /** 标题生成 prompt（已包含用户消息） */
+  /** 用户消息 prompt（标题生成时已包含用户消息） */
   prompt: string
+  /** 可选系统提示词：与 prompt 分离发送，供非流式轻量补全使用 */
+  systemPrompt?: string
+  /** 输出 token 上限；缺省沿用各适配器既有标题默认值 */
+  maxTokens?: number
 }
 
 // ===== 适配器接口 =====

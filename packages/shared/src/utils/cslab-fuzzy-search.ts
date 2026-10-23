@@ -100,24 +100,34 @@ export interface CsLabFuzzyMatchResult {
 /**
  * 多字段模糊匹配：名称 100 > 编号 70 > 标签 55 > 描述 35。
  * 空查询始终命中且不加权；置顶项仅在已命中结果中获得小幅加分。
+ *
+ * 查询按空白切分为多个 token，采用 AND 语义：每个 token 都必须至少命中一个字段。
+ * 这样「固态 电池」这类带空格的复合查询不会因为空格字符无法参与子序列匹配而整体失效。
  */
 export function matchLabFuzzy(lab: CsLabLab, rawQuery: string): CsLabFuzzyMatchResult {
   const query = rawQuery.trim().toLowerCase()
   if (!query) return { matched: true, score: 0 }
 
+  const tokens = query.split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return { matched: true, score: 0 }
+
   const fields: Array<{ text: string; weight: number }> = [
-    { text: lab.name, weight: 100 },
-    { text: lab.code, weight: 70 },
-    { text: lab.tags.join(' '), weight: 55 },
-    { text: lab.description, weight: 35 },
+    { text: lab.name ?? '', weight: 100 },
+    { text: lab.code ?? '', weight: 70 },
+    { text: lab.tags?.join(' ') ?? '', weight: 55 },
+    { text: lab.description ?? '', weight: 35 },
   ]
 
-  let best = 0
-  for (const field of fields) {
-    const fieldScore = matchField(field.text, query)
-    if (fieldScore > 0) best = Math.max(best, field.weight + fieldScore)
+  let total = 0
+  for (const token of tokens) {
+    let best = 0
+    for (const field of fields) {
+      const fieldScore = matchField(field.text, token)
+      if (fieldScore > 0) best = Math.max(best, field.weight + fieldScore)
+    }
+    if (best === 0) return { matched: false, score: 0 }
+    total += best
   }
 
-  if (best === 0) return { matched: false, score: 0 }
-  return { matched: true, score: best + (lab.pinned ? 5 : 0) }
+  return { matched: true, score: total + (lab.pinned ? 5 : 0) }
 }

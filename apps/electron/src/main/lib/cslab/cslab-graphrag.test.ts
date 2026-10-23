@@ -130,4 +130,56 @@ describe('跨文献 GraphRAG', () => {
     const result = await searchLabLiterature({ labId: lab.id, query: '   ' })
     expect(result.ok).toBe(false)
   })
+
+  test('索引过期时先返回旧索引，并在后台完成重建', async () => {
+    const { getCsLabDatabase, upsertEntity } = await import('./cslab-db')
+    const { resolveLabDir } = await import('./cslab-paths')
+    const { readLiteratureIndex } = await import('./cslab-literature-index')
+    const labDir = resolveLabDir(lab.id)
+    const db = getCsLabDatabase(join(labDir, 'db', 'central_meta.sqlite'))
+    const now = Date.now()
+    const uri = `cdut://${lab.id}/lit/lit-c`
+    upsertEntity(db, {
+      uri,
+      labId: lab.id,
+      layerType: 'lit',
+      entityUuid: 'lit-c',
+      title: 'Perovskite Nanocrystal Emission',
+      format: 'pdf',
+      revision: 2,
+      locked: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+    writeFileSync(
+      join(labDir, 'db', 'lit-text', 'lit-c.json'),
+      JSON.stringify({
+        uri,
+        updatedAt: now + 1000,
+        pages: [{ page: 1, text: 'Photoluminescence quantum yield of perovskite nanocrystals reaches unity.' }],
+        extractedAt: now,
+      }),
+      'utf-8',
+    )
+
+    const { searchLabLiterature } = await import('./cslab-graphrag-router')
+    // 新文献尚未进入索引：本次检索必须立即返回旧索引结果，而不是同步等待重建。
+    const stale = await searchLabLiterature({ labId: lab.id, query: 'photoluminescence' })
+    expect(stale.ok).toBe(true)
+    expect(stale.hits).toHaveLength(0)
+
+    let rebuilt = false
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const index = await readLiteratureIndex(lab.id)
+      if (index?.literatureCount === 3) {
+        rebuilt = true
+        break
+      }
+    }
+    expect(rebuilt).toBe(true)
+
+    const fresh = await searchLabLiterature({ labId: lab.id, query: 'photoluminescence' })
+    expect(fresh.hits.length).toBeGreaterThan(0)
+  })
 })

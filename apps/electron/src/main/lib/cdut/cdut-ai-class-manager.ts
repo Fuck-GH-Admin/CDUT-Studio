@@ -339,7 +339,11 @@ export function deleteAiClassSession(sessionId: string): void {
 
 // ===== 静默模型编排：一次性 JSON 补全 =====
 
-/** 一次性补全默认硬超时（毫秒）：90 秒熔断，杜绝网络悬挂导致 Promise 无限 Pending */
+/**
+ * 一次性补全默认硬超时（毫秒）：90 秒熔断，杜绝网络悬挂导致 Promise 无限 Pending。
+ *
+ * 该值是**单次 HTTP 请求尝试**的超时；重试时每个尝试独立计时，最坏总耗时不超过 2 × 90 = 180 秒。
+ */
 export const ONE_SHOT_COMPLETION_TIMEOUT_MS = 90_000
 
 /** 一次性补全调用选项（渠道继承 / 超时覆盖 / 外部取消） */
@@ -348,19 +352,183 @@ export interface OneShotCompletionOptions {
   channelId?: string
   /** 显式指定模型 ID（优先于全局 settings.agentModelId） */
   modelId?: string
-  /** 请求硬超时（毫秒），缺省 90 秒 */
+  /** 请求硬超时（毫秒），缺省 90 秒（单次请求尝试超时，重试时每个尝试独立计时） */
   timeoutMs?: number
+  /** 单次补全的最大输出 tokens；缺省沿用图谱额度 GRAPH_MAX_TOKENS */
+  maxOutputTokens?: number
   /** 外部取消信号（触发后立即中断底层 fetch） */
   signal?: AbortSignal
+}
+
+/** 一次性补全自动扩容重试上限 */
+const MAX_ONE_SHOT_OUTPUT_TOKENS = 32_768
+
+/** 一次性补全响应检查结果 */
+export interface CompletionResponseInspection {
+  /** 提取出的正文；无正文时为 null */
+  text: string | null
+  /** 供应商终止原因（finish_reason / stop_reason / finishReason / incomplete_details.reason） */
+  finishReason: string | null
+  /** 正文有效字符数 */
+  textChars: number
+  /** 思考链字符数（仅诊断，绝不作为正文） */
+  reasoningChars: number
+}
+
+/** 把未知值安全收窄为普通对象 */
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+/** 把未知值安全收窄为对象数组 */
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.map(asRecord).filter((item): item is Record<string, unknown> => item !== null)
+    : []
+}
+
+/** 安全拼接 OpenAI 风格 content（字符串 / 内容块数组 / null / undefined） */
+function collectOpenAIContent(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part
+      const record = asRecord(part)
+      if (!record) return ''
+      return typeof record.text === 'string' ? record.text : ''
+    })
+    .join('')
+}
+
+/** 统计思考字段字符数（各家网关命名不一，仅用于诊断） */
+function countReasoningChars(message: Record<string, unknown> | null): number {
+  if (!message) return 0
+  let total = 0
+  for (const field of ['reasoning_content', 'reasoning', 'thinking'] as const) {
+    const value = message[field]
+    if (typeof value === 'string') total += value.length
+  }
+  return total
+}
+
+/**
+ * 按协议从非流式响应中提取正文与终止原因。
+ *
+ * 标题场景继续使用 `parseTitleResponse`；本函数服务一次性 JSON 补全，
+ * 必须同时满足：正文多形态拼接、思考块隔离、终止原因透出、畸形响应不抛异常。
+ */
+export function inspectCompletionResponse(
+  protocol: CompletionProtocol,
+  data: unknown,
+): CompletionResponseInspection {
+  const record = asRecord(data)
+  if (!record) return { text: null, finishReason: null, textChars: 0, reasoningChars: 0 }
+
+  if (protocol === 'google') {
+    const candidate = asRecordArray(record.candidates)[0]
+    const content = asRecord(candidate?.content)
+    const text = asRecordArray(content?.parts)
+      // Gemini 思考片段带 thought: true，绝不能混入正文
+      .filter((part) => part.thought !== true)
+      .map((part) => (typeof part.text === 'string' ? part.text : ''))
+      .join('')
+      .trim()
+    return {
+      text: text || null,
+      finishReason: typeof candidate?.finishReason === 'string' ? candidate.finishReason : null,
+      textChars: text.length,
+      reasoningChars: 0,
+    }
+  }
+
+  if (protocol === 'openai-responses') {
+    const outputText = typeof record.output_text === 'string' ? record.output_text.trim() : ''
+    const collected = asRecordArray(record.output)
+      .flatMap((item) => asRecordArray(item.content))
+      .map((part) => (part.type === 'output_text' && typeof part.text === 'string' ? part.text : ''))
+      .join('')
+      .trim()
+    const text = outputText || collected
+    const incomplete = asRecord(record.incomplete_details)
+    const finishReason =
+      typeof incomplete?.reason === 'string'
+        ? incomplete.reason
+        : typeof record.status === 'string'
+          ? record.status
+          : null
+    return {
+      text: text || null,
+      finishReason,
+      textChars: text.length,
+      reasoningChars: 0,
+    }
+  }
+
+  if (protocol === 'anthropic') {
+    const blocks = asRecordArray(record.content)
+    const text = blocks
+      .filter((block) => block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text as string)
+      .join('')
+      .trim()
+    const reasoningChars = blocks
+      .filter((block) => block.type === 'thinking' && typeof block.thinking === 'string')
+      .reduce((total, block) => total + (block.thinking as string).length, 0)
+    return {
+      text: text || null,
+      finishReason: typeof record.stop_reason === 'string' ? record.stop_reason : null,
+      textChars: text.length,
+      reasoningChars,
+    }
+  }
+
+  // openai-chat
+  const choice = asRecordArray(record.choices)[0]
+  const message = asRecord(choice?.message)
+  const text = collectOpenAIContent(message?.content).trim()
+  return {
+    text: text || null,
+    finishReason: typeof choice?.finish_reason === 'string' ? choice.finish_reason : null,
+    textChars: text.length,
+    reasoningChars: countReasoningChars(message),
+  }
+}
+
+/** 终止原因是否为输出长度截断 */
+function isLengthFinishReason(reason: string | null): boolean {
+  return !!reason && /^(length|max_tokens|max_output_tokens)$/i.test(reason)
+}
+
+/** 终止原因是否为内容安全拦截 */
+function isContentFilterFinishReason(reason: string | null): boolean {
+  return !!reason && /content_filter|safety|blocked/i.test(reason)
+}
+
+/** 空正文错误文案 */
+function buildEmptyResponseError(reason: string | null, retried: boolean): string {
+  const retryNote = retried ? '，已自动扩容重试仍无结果' : ''
+  const guidance = isContentFilterFinishReason(reason)
+    ? '请调整所选资料范围或更换渠道后重试。'
+    : '请更换渠道或模型后重试。'
+  return `模型响应未包含正文内容（终止原因：${reason ?? '未知'}）${retryNote}，${guidance}`
+}
+
+/** 输出截断错误文案 */
+function buildTruncatedResponseError(reason: string | null, tokens: number): string {
+  return `模型输出达到长度上限被截断（终止原因：${reason ?? 'length'}，当前上限 ${tokens} tokens），请减少题目 / 卡片数量、降低难度，或更换支持更长输出的模型后重试。`
 }
 
 /**
  * 一次性的非流式模型调用（复用 generateTitle 的渠道 / 鉴权 / 适配器链路）。
  *
  * 渠道继承优先级：显式 options.channelId / modelId → 全局 settings；
- * 两者皆无时抛出可读错误。请求强制硬超时熔断（默认 90 秒），超时后中断底层
- * fetch 并抛出明确原因；所有失败路径均抛出携带可读文案的异常，由调用方决定
- * 静默降级（图谱推演）还是直接呈现（学习工件生成）。
+ * 两者皆无时抛出可读错误。请求强制硬超时熔断（默认单次 90 秒），超时后中断
+ * 底层 fetch 并抛出明确原因；空正文 / 输出截断时自动扩容重试一次。
+ * 所有失败路径均抛出携带可读文案的异常，由调用方决定静默降级（图谱推演）
+ * 还是直接呈现（学习工件生成）。
  */
 export async function oneShotJsonCompletion(
   systemPrompt: string,
@@ -409,15 +577,10 @@ export async function oneShotJsonCompletion(
     bodyObj = { model: modelId }
   }
 
-  // 严格按渠道 Provider 协议注入 system prompt 与响应约束，杜绝 400 报错或 Token 截断
+  // 严格按渠道 Provider 协议注入 system prompt 与响应约束，杜绝 400 报错
   if (protocol === 'google') {
     bodyObj['contents'] = [{ role: 'user', parts: [{ text: userPrompt }] }]
     bodyObj['systemInstruction'] = { parts: [{ text: systemPrompt }] }
-    bodyObj['generationConfig'] = {
-      maxOutputTokens: GRAPH_MAX_TOKENS,
-      temperature: 0,
-      responseMimeType: 'application/json',
-    }
     delete bodyObj['max_tokens']
     delete bodyObj['system']
     delete bodyObj['messages']
@@ -425,14 +588,12 @@ export async function oneShotJsonCompletion(
     bodyObj['model'] = modelId
     bodyObj['instructions'] = systemPrompt
     bodyObj['input'] = [{ role: 'user', content: userPrompt }]
-    bodyObj['max_output_tokens'] = GRAPH_MAX_TOKENS
     bodyObj['temperature'] = 0
     delete bodyObj['max_tokens']
     delete bodyObj['system']
     delete bodyObj['messages']
   } else if (protocol === 'openai-chat') {
     bodyObj['model'] = modelId
-    bodyObj['max_tokens'] = GRAPH_MAX_TOKENS
     bodyObj['temperature'] = 0
     bodyObj['messages'] = [
       { role: 'system', content: systemPrompt },
@@ -444,58 +605,107 @@ export async function oneShotJsonCompletion(
   } else {
     // Anthropic 原生与兼容通道（/messages）
     bodyObj['model'] = modelId
-    bodyObj['max_tokens'] = GRAPH_MAX_TOKENS
     bodyObj['temperature'] = 0
     bodyObj['system'] = systemPrompt
     bodyObj['messages'] = [{ role: 'user', content: userPrompt }]
     delete bodyObj['response_format']
   }
-  req.body = JSON.stringify(bodyObj)
 
-  // 硬超时熔断 + 外部取消：定时器触发 abort 中断底层 fetch，finally 中复位
+  /** 按当前尝试额度写入协议对应的输出上限字段 */
+  const applyMaxOutputTokens = (tokens: number): void => {
+    if (protocol === 'google') {
+      bodyObj['generationConfig'] = {
+        maxOutputTokens: tokens,
+        temperature: 0,
+        responseMimeType: 'application/json',
+      }
+    } else if (protocol === 'openai-responses') {
+      bodyObj['max_output_tokens'] = tokens
+    } else {
+      bodyObj['max_tokens'] = tokens
+    }
+  }
+
   const timeoutMs = Math.max(1_000, options.timeoutMs ?? ONE_SHOT_COMPLETION_TIMEOUT_MS)
+  const maxOutputTokens = Math.max(1_000, options.maxOutputTokens ?? GRAPH_MAX_TOKENS)
   const externalSignal = options.signal
-  const controller = new AbortController()
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    controller.abort()
-  }, timeoutMs)
-  const onExternalAbort = (): void => controller.abort()
-  if (externalSignal?.aborted) controller.abort()
-  else externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
-
   const startedAt = Date.now()
-  console.info(`[AI速课堂] 静默推演开始: channel=${channel.name || channelId} model=${modelId} timeout=${timeoutMs}ms`)
+  console.info(`[AI速课堂] 静默推演开始: channel=${channel.name || channelId} model=${modelId} timeout=${timeoutMs}ms maxTokens=${maxOutputTokens}`)
+
+  let firstFailure: string | null = null
+
   try {
     const fetchFn = getFetchFn(await getEffectiveProxyUrl())
-    const resp = await fetchFn(req.url, {
-      method: 'POST',
-      headers: req.headers,
-      body: req.body,
-      signal: controller.signal,
-    })
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => 'unknown')
-      throw new Error(`模型请求失败（HTTP ${resp.status}）：${errText.slice(0, 200)}`)
+    // 最多两次尝试：首次按请求额度，空正文 / 截断时扩容一次
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (externalSignal?.aborted) throw new Error('生成已取消。')
+
+      const attemptTokens =
+        attempt === 0
+          ? maxOutputTokens
+          : Math.min(maxOutputTokens * 2, MAX_ONE_SHOT_OUTPUT_TOKENS)
+      applyMaxOutputTokens(attemptTokens)
+      req.body = JSON.stringify(bodyObj)
+
+      // 每次尝试独立计时，避免首次耗时挤占重试窗口
+      const controller = new AbortController()
+      let attemptTimedOut = false
+      const timer = setTimeout(() => {
+        attemptTimedOut = true
+        controller.abort()
+      }, timeoutMs)
+      const onExternalAbort = (): void => controller.abort()
+      if (externalSignal?.aborted) controller.abort()
+      else externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+
+      try {
+        const resp = await fetchFn(req.url, {
+          method: 'POST',
+          headers: req.headers,
+          body: req.body,
+          signal: controller.signal,
+        })
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => 'unknown')
+          const httpError = new Error(`模型请求失败（HTTP ${resp.status}）：${errText.slice(0, 200)}`)
+          // 首次请求的 HTTP 错误不重试；重试遇到鉴权错误必须优先暴露
+          if (attempt === 0 || resp.status === 401 || resp.status === 403) throw httpError
+          // 其他重试错误（如部分模型不支持更高 max_tokens 的 400）回抛首次失败原因
+          throw new Error(firstFailure ?? httpError.message)
+        }
+
+        const data: unknown = await resp.json()
+        const inspection = inspectCompletionResponse(protocol, data)
+        const truncated = isLengthFinishReason(inspection.finishReason)
+        if (inspection.text && !truncated) return inspection.text
+
+        const failure = truncated
+          ? buildTruncatedResponseError(inspection.finishReason, attemptTokens)
+          : buildEmptyResponseError(inspection.finishReason, attempt > 0)
+
+        if (attempt === 0 && !externalSignal?.aborted) {
+          firstFailure = failure
+          console.warn(
+            `[AI速课堂] 一次性补全异常: channel=${channel.name || channelId} model=${modelId} protocol=${protocol} finish=${inspection.finishReason ?? 'unknown'} textChars=${inspection.textChars} reasoningChars=${inspection.reasoningChars}`,
+          )
+          continue
+        }
+        throw new Error(failure)
+      } catch (error) {
+        if (externalSignal?.aborted) throw new Error('生成已取消。')
+        if (attemptTimedOut) {
+          throw new Error(`模型请求超时（${Math.round(timeoutMs / 1000)} 秒）已熔断，请检查网络或更换渠道后重试。`)
+        }
+        throw error instanceof Error ? error : new Error(String(error))
+      } finally {
+        clearTimeout(timer)
+        externalSignal?.removeEventListener('abort', onExternalAbort)
+      }
     }
-    const data: unknown = await resp.json()
-    const output = adapter.parseTitleResponse(data)
-    if (!output) {
-      throw new Error('模型返回结果为空，请确认所选模型支持 JSON 输出后重试。')
-    }
-    return output
-  } catch (error) {
-    if (timedOut) {
-      throw new Error(`模型请求超时（${Math.round(timeoutMs / 1000)} 秒）已熔断，请检查网络或更换渠道后重试。`)
-    }
-    if (externalSignal?.aborted) {
-      throw new Error('生成已取消。')
-    }
-    throw error instanceof Error ? error : new Error(String(error))
+
+    // 理论上不可达：两次尝试均未返回正文时给出首次失败原因
+    throw new Error(firstFailure ?? '模型返回结果为空，请重试。')
   } finally {
-    clearTimeout(timer)
-    externalSignal?.removeEventListener('abort', onExternalAbort)
     console.info(`[AI速课堂] 静默推演结束: 耗时 ${Date.now() - startedAt}ms`)
   }
 }

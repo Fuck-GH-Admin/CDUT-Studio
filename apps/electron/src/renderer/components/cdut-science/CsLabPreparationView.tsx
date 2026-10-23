@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import {
   Archive,
   ArchiveRestore,
@@ -80,6 +80,7 @@ function sortLabs(list: CsLabLab[]): CsLabLab[] {
 export function CsLabPreparationView(): React.ReactElement {
   const setActiveView = useSetAtom(activeViewAtom)
   const setAuth = useSetAtom(cslabAuthAtom)
+  const activeLabId = useAtomValue(cslabActiveLabIdAtom)
   const setActiveLabId = useSetAtom(cslabActiveLabIdAtom)
   const setSnapshot = useSetAtom(cslabSnapshotAtom)
   const setAssets = useSetAtom(cslabAssetsAtom)
@@ -218,6 +219,12 @@ export function CsLabPreparationView(): React.ReactElement {
 
   const handleDeleted = (labId: string): void => {
     setLabs((previous) => previous.filter((lab) => lab.id !== labId))
+    // 删除活跃实验室时同步置空，避免主视图继续请求已删除的沙箱。
+    if (activeLabId === labId) {
+      setActiveLabId(null)
+      setSnapshot(null)
+      setAssets([])
+    }
   }
 
   const renderMenuItems = (

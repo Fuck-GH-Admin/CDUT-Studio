@@ -24,6 +24,23 @@ const DEFAULT_TOP_K = 5
 const MAX_TOP_K = 20
 const EXCERPT_MAX_CHARS = 500
 
+/** 同一实验室只允许一个后台重建任务，避免检索抖动触发重复构建。 */
+const pendingIndexBuilds = new Map<string, Promise<void>>()
+
+/** 后台单飞重建文献索引；失败只记录警告，不影响本次检索。 */
+function scheduleLiteratureIndexRebuild(labId: string): void {
+  if (pendingIndexBuilds.has(labId)) return
+  const task = buildLabLiteratureIndex(labId)
+    .then(() => undefined)
+    .catch((error: unknown) => {
+      console.warn('[CSLab] 后台重建文献索引失败:', error)
+    })
+    .finally(() => {
+      pendingIndexBuilds.delete(labId)
+    })
+  pendingIndexBuilds.set(labId, task)
+}
+
 function buildExcerpt(chunk: LiteratureChunk, queryTerms: Set<string>): string {
   const sentences = chunk.text
     .replace(/\r/g, '')
@@ -160,11 +177,10 @@ export async function searchLabLiterature(
   try {
     let index = await readLiteratureIndex(labId)
     if (index) {
-      // 文献集合发生变化时自动重建，避免返回过期切块。
+      // 文献集合变化时先用旧索引即时响应，再后台单飞重建，避免检索请求同步解析全部 PDF。
       const status = await getLiteratureIndexStatus(labId)
       if (status.fingerprint !== index.fingerprint) {
-        const rebuilt = await buildLabLiteratureIndex(labId)
-        index = rebuilt.index ?? index
+        scheduleLiteratureIndexRebuild(labId)
       }
     } else {
       const built = await buildLabLiteratureIndex(labId)

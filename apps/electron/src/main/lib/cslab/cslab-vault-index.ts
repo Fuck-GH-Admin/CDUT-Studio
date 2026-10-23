@@ -570,14 +570,22 @@ export function searchVaultNotes(
     return records.slice(0, limit).map((record) => summarizeRecord(record, backlinkIndex))
   }
   return records
-    .filter((record) =>
-      [record.title, record.relPath, record.excerpt, ...record.tags, ...record.outlinks].some(
-        (value) => value.toLowerCase().includes(keyword),
-      ),
-    )
-    .slice(0, Math.max(1, Math.min(limit * 3, 300)))
-    .map((record) => summarizeRecord(record, backlinkIndex))
-    .slice(0, limit)
+    .map((record) => ({ record, score: scoreVaultRecord(record, keyword) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || b.record.mtimeMs - a.record.mtimeMs)
+    .slice(0, Math.max(1, Math.min(limit, 300)))
+    .map((item) => summarizeRecord(item.record, backlinkIndex))
+}
+
+/** 标题命中 > 标签 > 摘要 > 路径 / 出链；同字段只计一次。 */
+function scoreVaultRecord(record: VaultNoteRecord, keyword: string): number {
+  let score = 0
+  if (record.title.toLowerCase().includes(keyword)) score += 50
+  if (record.tags.some((tag) => tag.toLowerCase().includes(keyword))) score += 30
+  if (record.excerpt.toLowerCase().includes(keyword)) score += 10
+  if (record.relPath.toLowerCase().includes(keyword)) score += 5
+  if (record.outlinks.some((link) => link.toLowerCase().includes(keyword))) score += 5
+  return score
 }
 
 export function getVaultIndexStatus(labIdInput: string): CsLabVaultIndexStatus {

@@ -130,6 +130,7 @@ import type { CommandExecutionResult } from './command-execution'
 import { createCommandExecutionLedger } from './pi-execution-ledger'
 import { getSettings } from './settings-service'
 import { getCsLabPromptLabInfo } from './cslab/cslab-science'
+import { resolveLabDir } from './cslab/cslab-paths'
 import { buildSystemPrompt, buildDynamicContext, appendSystemPromptSections } from './agent-prompt-builder'
 import { buildAgentContextEnvelope } from './agent-message-envelope'
 import { buildPiTaskPrompt } from './pi-task-prompt'
@@ -170,6 +171,10 @@ import {
 import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
 import { buildAttachedDocumentsContext } from './document-parse-tools'
 import { buildDocumentEvidenceForMessage } from './rag/workspace-rag-service'
+import { buildLongTermMemoryBlock } from './longterm-memory/longterm-memory-rag'
+import { extractToolNamesFromMessages, reflectOnTurn } from './longterm-memory/longterm-memory-reflector'
+import { auditLongTermMemoryCandidate } from './longterm-memory/longterm-memory-auditor'
+import { runLightweightCompletion } from './lightweight-completion'
 import { buildIndexedContextPrompt } from './context-rag/conversation-retrieval'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getOrCreateShellSnapshot } from './shell-snapshot'
@@ -789,6 +794,46 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 后台静默提炼用户长期习惯。
+   *
+   * setImmediate 让出事件循环，保证不拖慢 STREAM_COMPLETE 与界面响应；
+   * 内部提示词（附件元数据、工具提示等）不参与反思，避免「递归自咬」。
+   */
+  private scheduleLongTermMemoryReflection(input: {
+    userMessage: string
+    toolNames: string[]
+    internal: boolean
+    compact: boolean
+    channelId: string
+    modelId: string
+  }): void {
+    if (input.internal || input.compact) return
+    const { channelId, modelId } = input
+    setImmediate(() => {
+      reflectOnTurn({
+        userMessage: input.userMessage,
+        toolNames: input.toolNames,
+        // 新增语义候选先过一轮隔离极简审核：提示词、渠道与主对话完全解耦
+        auditCandidate: (candidate, userMessage) =>
+          auditLongTermMemoryCandidate({
+            candidate,
+            userMessage,
+            complete: ({ systemPrompt, userPrompt, maxTokens }) =>
+              runLightweightCompletion({
+                channelId,
+                modelId,
+                systemPrompt,
+                userPrompt,
+                maxTokens,
+                timeoutMs: 10_000,
+              }),
+          }),
+      })
+        .catch((error) => console.warn('[长期记忆] 后台反思失败（已隔离）:', error))
+    })
+  }
+
+  /**
    * 解析当前轮次应激活的场景能力组列表。
    * 采用「历史激活继承 + 当轮意图探测 + 专区环境绑定」三位一体策略。
    */
@@ -1223,19 +1268,14 @@ export class AgentOrchestrator {
         }
       }
     } else if (lastContextMode === 'index' && input.disableContextMemory !== true) {
-      // index → classic：旧 Pi transcript 不包含索引模式轮次，恢复它会造成上下文缺口。
-      // 清空 canonical 链，让本轮走最近轮次回填并重新建立经典 transcript。
-      console.log('[上下文索引] 检测到 索引→经典，重置经典会话链，下一轮使用最近轮次回填')
-      existingSdkSessionId = undefined
+      // index → classic：保留索引前的 canonical 链（sdkSessionId / piSessionFile / piEntryBindings），
+      // 直接 resume 原经典 transcript。索引模式轮次仅存在于会话 JSONL，不会进入经典 transcript，
+      // 这是已知取舍；严禁再通过清空 canonical 链的方式制造绑定丢失与快照链断裂。
+      console.log('[上下文索引] 检测到 索引→经典，保留原经典会话链继续 resume')
       try {
-        updateAgentSessionMeta(sessionId, {
-          sdkSessionId: undefined,
-          piSessionFile: undefined,
-          piEntryBindings: {},
-          lastContextMode: 'classic',
-        })
+        updateAgentSessionMeta(sessionId, { lastContextMode: 'classic' })
       } catch (error) {
-        console.warn(`[上下文索引] 重置经典会话链失败 (${sessionId}):`, error)
+        console.warn(`[上下文索引] 记录模式失败 (${sessionId}):`, error)
       }
     } else if (input.disableContextMemory === true) {
       console.log(`[Agent 编排] 会话 ${sessionId} 启用了单轮聚焦模式，跳过恢复 SDK 历史: ${existingSdkSessionId}`)
@@ -1298,6 +1338,22 @@ export class AgentOrchestrator {
       } else {
         // 安全红线：默认工作区初始化失败时必须中止，严禁回退到用户主目录或进程目录
         throw new Error('[Agent 编排] 无法初始化默认工作区，已拒绝回退到用户主目录')
+      }
+
+      // 科学助理会话绑定实验室但没有独立工作区时，把 cwd 定向到实验室 Vault，
+      // 保证 Agent 产出的笔记、图表与数据落在实验室资产目录，而不是通用会话沙箱。
+      const cslabLabId = sessionMeta?.cslabLabId
+      if (cslabLabId && !targetWorkspaceId && !input.isolatedRuntimeSession) {
+        const labRoot = resolveLabDir(cslabLabId)
+        if (existsSync(labRoot)) {
+          const labVault = join(labRoot, 'vault')
+          // 历史/损坏实验室可能缺少 vault；根目录存在即自愈补齐，不回退到无关沙箱。
+          if (!existsSync(labVault)) mkdirSync(labVault, { recursive: true })
+          agentCwd = labVault
+          console.log(`[CSLab] 会话 ${sessionId} 使用实验室 Vault 作为 cwd: ${labVault}`)
+        } else {
+          console.warn(`[CSLab] 实验室根目录不存在，回退默认会话沙箱: ${labRoot}`)
+        }
       }
 
       const effectiveWorkspaceId = targetWorkspaceId ?? workspace?.id
@@ -1461,6 +1517,20 @@ export class AgentOrchestrator {
         } catch (error) {
           console.warn('[工作区 RAG] 前置检索失败，已跳过:', error)
         }
+      }
+
+      // 11.8 长期记忆图谱：对用户提问执行纯内存 BM25 + 标签桥接召回，
+      // 命中项作为 <user_longterm_memory> 注入 <SYSTEM_CONTEXT>，不改动静态 System Prompt。
+      try {
+        const habitBlock = runtimeUserMessage.trim() === '/compact'
+          ? ''
+          : buildLongTermMemoryBlock(runtimeUserMessage)
+        if (habitBlock) {
+          systemContextBlocks.push(habitBlock)
+          console.log(`[长期记忆] 已注入用户长期习惯上下文（${habitBlock.length} 字符）`)
+        }
+      } catch (error) {
+        console.warn('[长期记忆] 前置检索失败，已跳过:', error)
       }
 
       // Context Sandwich 动态环境与用户请求封包：
@@ -3096,6 +3166,16 @@ export class AgentOrchestrator {
 
           // 15. 持久化 assistant 消息
           this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+
+          // 15.1 长期记忆静默反思：setImmediate 让出事件循环，绝不阻塞 UI 与 STREAM_COMPLETE。
+          this.scheduleLongTermMemoryReflection({
+            userMessage,
+            toolNames: extractToolNamesFromMessages(accumulatedMessages),
+            internal: input.internalPrompt != null,
+            compact: runtimeUserMessage.trim() === '/compact',
+            channelId,
+            modelId: resolvedModel,
+          })
 
           try {
             updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {})

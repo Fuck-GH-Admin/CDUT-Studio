@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/t
 interface ContextModeToggleButtonProps {
   mode: AgentContextMode
   onChange: (mode: AgentContextMode) => void
-  /** 记忆关闭或全局索引开关开启时禁用 */
+  /** 记忆关闭时禁用；全局索引通过点击「经典」退出，不再禁用按钮 */
   disabled?: boolean
   /** 禁用原因（用于 tooltip） */
   disabledReason?: string
