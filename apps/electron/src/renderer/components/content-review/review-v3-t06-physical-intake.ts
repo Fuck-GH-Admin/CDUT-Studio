@@ -182,6 +182,7 @@ export interface T06CommitReceipt {
   batchId?: string
   batches?: Array<{ batchId: string; templateId: string; templateVersion: number; caseIds: string[] }>
   batchError?: string
+  inventory?: { accepted: number; excluded: T06PhysicalExcludedEntry[]; warnings: string[] }
 }
 /** Main implements these through its existing trusted case/material/batch writer. */
 export interface T06PhysicalWriterPorts {

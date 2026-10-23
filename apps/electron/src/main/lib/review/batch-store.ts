@@ -80,6 +80,73 @@ export function listBatchStatesV2(): BatchStateV2[] {
     .sort((a, b) => b.batch.createdAt.localeCompare(a.batch.createdAt))
 }
 
+/**
+ * 从已发布模板解析批次政策锁（BATCH-06/BATCH-09 共用）。
+ * 优先 policyRefs（真实版本）；旧模板只有 policyVersionIds 时无法得知权威版本，
+ * 拒绝创建批次，不臆造 v1。
+ */
+export function resolvePolicyVersionLock(
+  template: { policyRefs?: Array<{ policyId: string; version: number }>; policyVersionIds?: string[] },
+): Array<{ policyVersionId: string; version: number }> {
+  const refs = template.policyRefs ?? []
+  if (refs.length > 0) {
+    const seen = new Set<string>()
+    return refs.map((ref) => {
+      if (!ref.policyId || !Number.isSafeInteger(ref.version) || ref.version < 1) {
+        throw new Error(`模板政策引用缺少有效版本: ${ref.policyId || '(空)'}`)
+      }
+      if (seen.has(ref.policyId)) throw new Error(`模板政策引用重复: ${ref.policyId}`)
+      seen.add(ref.policyId)
+      return { policyVersionId: ref.policyId, version: ref.version }
+    })
+  }
+  const legacy = template.policyVersionIds ?? []
+  if (legacy.length > 0) {
+    throw new Error('模板缺少已解析政策引用（policyRefs），无法建立批次政策锁；请重新发布模板')
+  }
+  return []
+}
+
+function canonicalLock(lock: Array<{ policyVersionId: string; version: number }>): string {
+  return JSON.stringify([...lock].sort((a, b) => a.policyVersionId.localeCompare(b.policyVersionId) || a.version - b.version))
+}
+
+/**
+ * BATCH-09：Main 侧批次创建门禁。UI 过滤不是权威——逐案读聚合核模板版本，
+ * 并核政策锁来自同一份已发布模板；不一致时整批拒绝，不保存伪合法批次。
+ */
+export function assertBatchMembersForCreation(batch: ReviewBatch): void {
+  assertSafeBatchId(batch?.id)
+  if (!batch.templateId || !Number.isSafeInteger(batch.templateVersion) || batch.templateVersion < 1) {
+    throw new Error('批次缺少有效模板版本')
+  }
+  const { getTemplate } = require('./template-store') as typeof import('./template-store')
+  const { readAggregate } = require('./case-store-v2') as typeof import('./case-store-v2')
+  const template = getTemplate(batch.templateId, batch.templateVersion)
+  if (!template || template.status !== 'published') {
+    throw new Error(`批次模板不存在或未发布: ${batch.templateId}@${batch.templateVersion}`)
+  }
+  const expectedLock = resolvePolicyVersionLock(template)
+  if (canonicalLock(batch.policyVersionLock ?? []) !== canonicalLock(expectedLock)) {
+    throw new Error('批次政策锁与已发布模板的政策引用不一致，请重新选择模板后再建批')
+  }
+  const problems: string[] = []
+  for (const caseId of batch.caseIds) {
+    const aggregate = readAggregate(caseId)
+    if (!aggregate) { problems.push(`${caseId}：案卷不存在或主账损坏`); continue }
+    if (aggregate.caseV2.templateId !== batch.templateId || aggregate.caseV2.templateVersion !== batch.templateVersion) {
+      problems.push(`${caseId}：案卷模板 ${aggregate.caseV2.templateId}@${aggregate.caseV2.templateVersion} 与批次不一致`)
+    }
+  }
+  if (problems.length > 0) throw new Error(`批次成员与模板/政策锁不一致：${problems.join('；')}`)
+}
+
+/** 产品入口使用的校验后建批；低层 createBatchV2 仅供已有事务与测试夹具。 */
+export function createBatchV2Validated(batch: ReviewBatch): BatchStateV2 {
+  assertBatchMembersForCreation(batch)
+  return createBatchV2(batch)
+}
+
 /** 创建批次（锁定模板/政策版本，A12） */
 export function createBatchV2(batch: ReviewBatch): BatchStateV2 {
   assertSafeBatchId(batch?.id)
@@ -453,10 +520,24 @@ export function recoverInterruptedBatch(batchId: string): BatchStateV2 {
   if (state.status !== 'running' && !state.cases.some((entry) => entry.status === 'running')) {
     throw new Error('没有需要恢复的中断任务')
   }
-  state.cases = state.cases.map((entry) => entry.status === 'running'
-    ? { ...entry, status: 'failed', bindingState: 'recovery-required' as const,
-        error: '上次审核被中断，请先核对本批次绑定运行的回执后手动重试' }
-    : entry)
+  const { getRunV2 } = require('./run-store-v2') as typeof import('./run-store-v2')
+  state.cases = state.cases.map((entry) => {
+    if (entry.status !== 'running') return entry
+    // BATCH-11：先核对该成员持久 Run 的真实终态，不能把“批次状态没写完”
+    // 一律降级成 failed，也不能把未知外部结果冒充成功。
+    const run = entry.entryRunId ? getRunV2(entry.caseId, entry.entryRunId) : undefined
+    if (run && run.caseId === entry.caseId && run.status === 'completed') {
+      return { ...entry, status: 'done' as const, bindingState: 'bound' as const,
+        completedAt: entry.completedAt ?? run.completedAt,
+        error: `已按持久运行 ${run.id} 的完成回执认领；请继续完成业务决定后再定稿` }
+    }
+    if (run && run.caseId === entry.caseId && (run.status === 'failed' || run.status === 'cancelled')) {
+      return { ...entry, status: 'failed' as const, bindingState: 'bound' as const,
+        error: `已核对持久运行 ${run.id} 终态为 ${run.status}，可人工重试` }
+    }
+    return { ...entry, status: 'failed' as const, bindingState: 'recovery-required' as const,
+      error: '上次审核被中断，请先核对本批次绑定运行的回执后手动重试' }
+  })
   state.status = 'queued'
   saveBatchStateV2(state)
   return state

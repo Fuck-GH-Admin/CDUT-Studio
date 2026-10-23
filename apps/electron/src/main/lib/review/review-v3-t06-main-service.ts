@@ -14,7 +14,7 @@
  * - 绝不把「文件躺在磁盘上」当作已入库。
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, relative, sep } from 'node:path'
 import { BrowserWindow, dialog } from 'electron'
@@ -22,7 +22,11 @@ import type { Actor, TemplateVersion } from '@profer/shared'
 import { CommandValidationError, readAggregate } from './case-store-v2'
 import { collectMissingIntakeInputs, createCaseFromTemplate } from './application-service'
 import { getTemplate } from './template-store'
-import { createBatchV2 } from './batch-store'
+import { createBatchV2Validated, readBatchStateV2, resolvePolicyVersionLock } from './batch-store'
+import {
+  isRequestLedgerBusy, readT06RequestLedger, readT06SelectionRecord, saveT06RequestLedger, saveT06SelectionRecord,
+  type T06RequestGroupRecord, type T06RequestLedgerRecord, type T06StoredSelectionRecord,
+} from './review-v3-t06-ledger'
 import { isNativeWorkspaceCaseV3, registerNativeWorkspaceMaterialV3 } from './native-workspace-case-v3'
 import { registerMaterial } from './material-service'
 import { decodeReviewB2Zip } from './review-zip-intake-v3-b2'
@@ -124,6 +128,8 @@ export interface T06CommitReceipt {
   /** 混合业务会按已发布模板拆为多个真实批次，而不是伪造跨模板锁。 */
   batches?: Array<{ batchId: string; templateId: string; templateVersion: number; caseIds: string[] }>
   batchError?: string
+  /** 本次来源的逐文件入库审计（接受/跳过/拒绝），随回执一并返回。 */
+  inventory?: { accepted: number; excluded: T06PhysicalExcludedEntry[]; warnings: string[] }
 }
 
 const MAIN_ACTOR: Actor = { actorId: 'local-reviewer', actorSource: 'local', role: 'reviewer' }
@@ -146,6 +152,8 @@ interface StoredSelection {
   selectionId: string
   fingerprint: string
   sourceKind: T06SourceKind
+  /** ZIP 原始压缩包路径（恢复时重新读取并核对条目哈希） */
+  zipPath?: string
   excluded: T06PhysicalExcludedEntry[]
   /** ZIP 只读取一次并常驻内存，避免提交时重读磁盘导致与预览不一致 */
   zipBytes?: Uint8Array
@@ -157,37 +165,26 @@ interface StoredSelection {
 }
 
 
-/**
- * 从发布模板解析批次政策锁（BATCH-06）。
- * 优先使用已解析的 policyRefs（含真实版本与内容哈希）；旧模板只有 policyVersionIds
- * 时无法得知权威版本，拒绝创建批次，避免批次锁与 Run manifest 政策版本不一致。
- */
-function resolvePolicyVersionLock(template: { policyRefs?: Array<{ policyId: string; version: number }>; policyVersionIds?: string[] }): Array<{ policyVersionId: string; version: number }> {
-  const refs = template.policyRefs ?? []
-  if (refs.length > 0) {
-    const seen = new Set<string>()
-    return refs.map((ref) => {
-      if (!ref.policyId || !Number.isSafeInteger(ref.version) || ref.version < 1) {
-        throw new Error(`模板政策引用缺少有效版本: ${ref.policyId || '(空)'}`)
-      }
-      if (seen.has(ref.policyId)) throw new Error(`模板政策引用重复: ${ref.policyId}`)
-      seen.add(ref.policyId)
-      return { policyVersionId: ref.policyId, version: ref.version }
-    })
-  }
-  const legacy = template.policyVersionIds ?? []
-  if (legacy.length > 0) {
-    throw new Error('模板缺少已解析政策引用（policyRefs），无法建立批次政策锁；请重新发布模板')
-  }
-  return []
-}
-
 const selections = new Map<string, StoredSelection>()
 /** requestId → 回执（幂等） */
 const receipts = new Map<string, T06CommitReceipt>()
 const receiptRequests = new Map<string, string>()
 /** (来源选择、目标案卷、原件令牌) → 实际登记的版本。不能跨案卷复用。 */
 const registered = new Map<string, string>()
+/** 本进程正在执行的 T06 requestId；跨进程由持久账本 ownerPid 兜底。 */
+const activeRequests = new Set<string>()
+
+/**
+ * 仅供故障注入测试：模拟 Electron 进程重启——清空进程内缓存，保留磁盘账本。
+ * 生产代码不得调用；恢复能力必须依赖磁盘，而不是这个钩子。
+ */
+export function __resetT06ProcessCachesForTest(): void {
+  selections.clear()
+  receipts.clear()
+  receiptRequests.clear()
+  registered.clear()
+  activeRequests.clear()
+}
 
 const sha256 = (value: Uint8Array | string): string =>
   createHash('sha256').update(value).digest('hex')
@@ -291,9 +288,23 @@ export function buildT06SelectionFromPath(target: string, sourceKind: T06SourceK
   const selection: StoredSelection = {
     selectionId: `sel-${randomUUID()}`,
     fingerprint: fingerprintOf(entries), sourceKind, entries, warnings, excluded, createdAt: Date.now(),
+    ...(sourceKind === 'zip' ? { zipPath: target } : {}),
     ...(zipBytes ? { zipBytes } : {}),
   }
   selections.set(selection.selectionId, selection)
+  // RUN-45/BATCH-07：预览选择也落盘，重启后仍可按原 selectionId 恢复；
+  // 恢复时必须重新核对每个原件的 SHA-256，源被改动就明确拒绝。
+  saveT06SelectionRecord({
+    schemaVersion: 1, selectionId: selection.selectionId, fingerprint: selection.fingerprint,
+    sourceKind, ...(selection.zipPath ? { zipPath: selection.zipPath } : {}),
+    entries: entries.map((entry) => ({
+      entryId: entry.entryId, relativePath: entry.relativePath, byteLength: entry.byteLength,
+      contentSha256: entry.contentSha256,
+      ...(entry.absolutePath ? { absolutePath: entry.absolutePath } : {}),
+      ...(entry.zipEntryName ? { zipEntryName: entry.zipEntryName } : {}),
+    })),
+    warnings, excluded, createdAt: selection.createdAt,
+  })
   return {
     selectionId: selection.selectionId,
     previewFingerprint: selection.fingerprint,
@@ -316,6 +327,61 @@ export async function pickT06PhysicalSource(sourceKind: T06SourceKind): Promise<
     : { title: '选择要入库的 ZIP', properties: ['openFile'], filters: [{ name: 'ZIP', extensions: ['zip'] }] })
   if (picked.canceled || picked.filePaths.length === 0) return null
   return buildT06SelectionFromPath(picked.filePaths[0]!, sourceKind)
+}
+
+/**
+ * 按 selectionId 取得来源：优先进程内缓存，其次持久账本。
+ * 持久账本恢复必须重新读取原件/ZIP 并核对内容哈希；不能把旧路径直接当有效来源。
+ */
+function loadSelection(selectionId: string): StoredSelection | undefined {
+  const cached = selections.get(selectionId)
+  if (cached) return cached
+  const record = readT06SelectionRecord(selectionId)
+  if (!record) return undefined
+  let zipBytes: Uint8Array | undefined
+  if (record.sourceKind === 'zip') {
+    if (!record.zipPath || !existsSync(record.zipPath)) {
+      throw new CommandValidationError('NOT_FOUND', '原 ZIP 来源已不存在，请重新选择来源')
+    }
+    const raw = readFileSync(record.zipPath)
+    zipBytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+    const decoded = decodeReviewB2Zip(zipBytes)
+    const byName = new Map(decoded.accepted.map((item) => [item.entryName, item.bytes]))
+    for (const entry of record.entries) {
+      if (!entry.zipEntryName) throw new CommandValidationError('VALIDATION_FAILED', `ZIP 账本缺少条目名：${entry.relativePath}`)
+      const bytes = byName.get(entry.zipEntryName)
+      if (!bytes || bytes.byteLength !== entry.byteLength || sha256(bytes) !== entry.contentSha256) {
+        throw new CommandValidationError('VALIDATION_FAILED', `ZIP 来源在预览后已变化，请重新选择来源：${entry.relativePath}`)
+      }
+    }
+  } else {
+    for (const entry of record.entries) {
+      if (!entry.absolutePath || !existsSync(entry.absolutePath)) {
+        throw new CommandValidationError('NOT_FOUND', `源文件已不存在，请重新选择来源：${entry.relativePath}`)
+      }
+      if (hashFile(entry.absolutePath) !== entry.contentSha256) {
+        throw new CommandValidationError('VALIDATION_FAILED', `源文件在预览后已变化，请重新选择来源：${entry.relativePath}`)
+      }
+    }
+  }
+  const restored: StoredSelection = {
+    selectionId: record.selectionId, fingerprint: record.fingerprint, sourceKind: record.sourceKind,
+    ...(record.zipPath ? { zipPath: record.zipPath } : {}),
+    excluded: record.excluded ?? [],
+    ...(zipBytes ? { zipBytes } : {}),
+    entries: record.entries.map((entry) => ({
+      entryId: entry.entryId, relativePath: entry.relativePath, byteLength: entry.byteLength,
+      contentSha256: entry.contentSha256,
+      ...(entry.absolutePath ? { absolutePath: entry.absolutePath } : {}),
+      ...(entry.zipEntryName ? { zipEntryName: entry.zipEntryName } : {}),
+    })),
+    warnings: record.warnings ?? [], createdAt: record.createdAt,
+  }
+  if (fingerprintOf(restored.entries) !== record.fingerprint) {
+    throw new CommandValidationError('VALIDATION_FAILED', '来源账本指纹不一致，请重新选择来源')
+  }
+  selections.set(selectionId, restored)
+  return restored
 }
 
 function bytesOf(selection: StoredSelection, entry: StoredEntry): Uint8Array {
@@ -469,7 +535,28 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
     return cached
   }
 
-  const selection = selections.get(request.selectionId)
+  // RUN-45/BATCH-15：先看持久账本与执行中请求，避免并发的相同 requestId 穿透缓存检查。
+  const priorLedger = readT06RequestLedger(request.requestId)
+  if (priorLedger) {
+    if (priorLedger.requestFingerprint !== requestFingerprint) {
+      throw new CommandValidationError('VALIDATION_FAILED', '相同请求号包含不同的分案内容，请重新选择来源')
+    }
+    if (priorLedger.status === 'completed' && priorLedger.receipt) {
+      const stored = priorLedger.receipt as T06CommitReceipt
+      receipts.set(request.requestId, stored)
+      receiptRequests.set(request.requestId, requestFingerprint)
+      return stored
+    }
+    if (isRequestLedgerBusy(priorLedger)) {
+      throw new CommandValidationError('INVALID_TRANSITION',
+        '相同请求号正在其他进程处理中；请等待其完成或核对账本后再恢复，不能并行重做')
+    }
+  }
+  if (activeRequests.has(request.requestId)) {
+    throw new CommandValidationError('INVALID_TRANSITION', '相同请求号正在本进程处理中，请勿重复提交')
+  }
+
+  const selection = loadSelection(request.selectionId)
   if (!selection) throw new CommandValidationError('NOT_FOUND', '来源选择已失效，请重新选择')
   if (selection.fingerprint !== request.previewFingerprint) {
     throw new CommandValidationError('VALIDATION_FAILED', '来源内容在预览后发生变化，请重新预览')
@@ -491,6 +578,24 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
     }
   }
 
+  activeRequests.add(request.requestId)
+  const ledger: T06RequestLedgerRecord = priorLedger ?? {
+    schemaVersion: 1, requestId: request.requestId, requestFingerprint,
+    selectionId: request.selectionId, previewFingerprint: request.previewFingerprint,
+    ownerPid: process.pid, status: 'running',
+    startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    groups: request.groups.map((group): T06RequestGroupRecord => ({ groupId: group.groupId, status: 'pending', documents: [] })),
+  }
+  ledger.ownerPid = process.pid
+  ledger.status = 'running'
+  ledger.selectionId = request.selectionId
+  ledger.previewFingerprint = request.previewFingerprint
+  ledger.groups = request.groups.map((group) => {
+    const prior = ledger.groups.find((item) => item.groupId === group.groupId)
+    return prior ?? { groupId: group.groupId, status: 'pending', documents: [] }
+  })
+  saveT06RequestLedger(ledger)
+  try {
   const cases: T06CaseReceipt[] = []
   const succeededByTemplate = new Map<string, { templateId: string; templateVersion: number; caseIds: string[] }>()
   for (const group of request.groups as T06CommitGroup[]) {
@@ -574,6 +679,20 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
         error: cause instanceof Error ? cause.message : String(cause),
       })
     }
+    const recorded = cases[cases.length - 1]
+    if (recorded) {
+      const target = ledger.groups.find((item) => item.groupId === recorded.groupId)
+      if (target) {
+        target.status = recorded.status === 'done' ? 'done' : 'failed'
+        if (recorded.caseId) target.caseId = recorded.caseId
+        target.documents = recorded.documents.map((document) => ({ ...document }))
+        if (recorded.warnings?.length) target.warnings = recorded.warnings
+        else delete target.warnings
+        if (recorded.error) target.error = recorded.error
+        else delete target.error
+      }
+      saveT06RequestLedger(ledger)
+    }
   }
 
   const batches: NonNullable<T06CommitReceipt['batches']> = []
@@ -583,13 +702,24 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
       const template = getTemplate(group.templateId, group.templateVersion)
       if (!template || template.status !== 'published') throw new Error('模板在入库后被撤销发布')
       const batchId = `batch-${sha256(request.requestId + '\u0000' + templateKey).slice(0, 20)}`
-      createBatchV2({
-        id: batchId, name: succeededByTemplate.size > 1 ? `${request.batchName} · ${template.name}` : request.batchName,
-        templateId: group.templateId, templateVersion: group.templateVersion,
-        // BATCH-06：政策锁必须来自发布模板的权威已解析引用；缺版本或引用冲突时拒绝创建，不臆造 v1。
-        policyVersionLock: resolvePolicyVersionLock(template),
-        caseIds: group.caseIds, createdAt: new Date().toISOString(),
-      })
+      const existingBatch = readBatchStateV2(batchId)
+      if (existingBatch) {
+        // 重启续跑：同一请求的确定性 batchId 已存在时核对身份后复用，不重复建批。
+        if (existingBatch.batch.templateId !== group.templateId
+          || existingBatch.batch.templateVersion !== group.templateVersion
+          || existingBatch.batch.caseIds.length !== group.caseIds.length
+          || group.caseIds.some((caseId) => !existingBatch.batch.caseIds.includes(caseId))) {
+          throw new Error(`已存在同名批次但成员/模板不一致: ${batchId}`)
+        }
+      } else {
+        createBatchV2Validated({
+          id: batchId, name: succeededByTemplate.size > 1 ? `${request.batchName} · ${template.name}` : request.batchName,
+          templateId: group.templateId, templateVersion: group.templateVersion,
+          // BATCH-06：政策锁必须来自发布模板的权威已解析引用；缺版本或引用冲突时拒绝创建，不臆造 v1。
+          policyVersionLock: resolvePolicyVersionLock(template),
+          caseIds: group.caseIds, createdAt: new Date().toISOString(),
+        })
+      }
       batches.push({ batchId, ...group })
     } catch (cause) {
       batchErrors.push(`${templateKey}：${cause instanceof Error ? cause.message : String(cause)}`)
@@ -600,10 +730,19 @@ export async function commitT06PhysicalImport(request: T06PhysicalCommitRequest)
     requestId: request.requestId, cases,
     ...(batches[0] ? { batchId: batches[0].batchId, batches } : {}),
     ...(batchErrors.length || !batches.length ? { batchError: batchErrors.join('；') || '没有全部原件入库成功的案卷，未创建批次' } : {}),
+    inventory: { accepted: selection.entries.length, excluded: selection.excluded, warnings: selection.warnings },
   }
+  ledger.status = 'completed'
+  ledger.batches = batches
+  if (receipt.batchError) ledger.batchError = receipt.batchError
+  ledger.receipt = receipt
+  saveT06RequestLedger(ledger)
   receipts.set(request.requestId, receipt)
   receiptRequests.set(request.requestId, requestFingerprint)
   // 已落库／失败回执都固定后释放解压缓存；来源压缩字节仍可用于重新选择分案。
   selection.zipDecodedCache = undefined
   return receipt
+  } finally {
+    activeRequests.delete(request.requestId)
+  }
 }

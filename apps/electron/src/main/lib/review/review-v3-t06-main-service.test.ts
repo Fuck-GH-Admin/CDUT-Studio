@@ -226,6 +226,94 @@ describe('T06 物理入库桥接', () => {
     expect(result.cases[0]?.error).toContain('材料槽不在所选模板中')
   })
 
+  test('BATCH-17：跳过/隐藏条目进入逐文件未入库清单（不是静默成功）', async () => {
+    const root = mkdtempSync(join(tmpdir(), 't06-inventory-'))
+    writeFileSync(join(root, 'visible.txt'), '可见原件')
+    writeFileSync(join(root, '.hidden.txt'), '隐藏原件')
+    const selection = service.buildT06SelectionFromPath(root, 'folder')
+    expect(selection.entries.map(entry => entry.relativePath)).toEqual(['visible.txt'])
+    expect(selection.excluded?.some(item => item.relativePath === '.hidden.txt' && item.reason.includes('隐藏'))).toBe(true)
+  })
+
+  test('BATCH-15：同一 requestId 并发提交只有一个执行，另一个明确 busy', async () => {
+    const selection = seedSelection([{ name: 'concurrent.txt' }])
+    const request = {
+      requestId: 'r-concurrent', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, templateId, templateVersion: 1, batchName: '并发批次',
+      groups: [{ groupId: 'g1', entryIds: selection.entries.map(entry => entry.entryId),
+        action: 'create' as const, title: '并发案卷', applicant: '甲' }],
+    }
+    const first = service.commitT06PhysicalImport(request)
+    const second = service.commitT06PhysicalImport(request)
+    await expect(second).rejects.toThrow('正在本进程处理中')
+    const receipt = await first
+    expect(receipt.cases[0]?.status).toBe('done')
+  })
+
+  test('RUN-45/BATCH-07：模拟进程重启后按原 requestId 从持久账本恢复，不重复建案/入库', async () => {
+    const selection = seedSelection([{ name: 'resume.txt', content: '恢复原件' }])
+    const request = {
+      requestId: 'r-resume-ledger', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, templateId, templateVersion: 1, batchName: '恢复批次',
+      groups: [{ groupId: 'g1', entryIds: selection.entries.map(entry => entry.entryId),
+        action: 'create' as const, title: '恢复案卷', applicant: '甲' }],
+    }
+    const first = await service.commitT06PhysicalImport(request)
+    const caseId = first.cases[0]!.caseId!
+    const before = (await import('./case-store-v2')).readAggregate(caseId)!
+    service.__resetT06ProcessCachesForTest()
+    const resumed = await service.commitT06PhysicalImport(request)
+    expect(resumed).toEqual(first)
+    const after = (await import('./case-store-v2')).readAggregate(caseId)!
+    expect(after.caseV2.revision).toBe(before.caseV2.revision)
+    expect(after.caseV2.documents).toHaveLength(before.caseV2.documents.length)
+  })
+
+  test('RUN-45：中断在组执行中的账本（owner 进程已死）可被接管续跑并完成', async () => {
+    const selection = seedSelection([{ name: 'half.txt', content: '半成品' }])
+    const request = {
+      requestId: 'r-resume-half', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, templateId, templateVersion: 1, batchName: '半成品批次',
+      groups: [{ groupId: 'g1', entryIds: selection.entries.map(entry => entry.entryId),
+        action: 'create' as const, title: '半成品案卷', applicant: '甲' }],
+    }
+    const salaries = await import('node:crypto')
+    const fingerprint = salaries.createHash('sha256').update(JSON.stringify(request)).digest('hex')
+    const ledgerDir = join(configDir, 'review-t06-intake', 'requests')
+    mkdirSync(ledgerDir, { recursive: true })
+    writeFileSync(join(ledgerDir, 'r-resume-half.json'), JSON.stringify({
+      schemaVersion: 1, requestId: 'r-resume-half', requestFingerprint: fingerprint,
+      selectionId: selection.selectionId, previewFingerprint: selection.previewFingerprint,
+      ownerPid: 2147483646, status: 'running',
+      startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      groups: [{ groupId: 'g1', status: 'pending', documents: [] }],
+    }))
+    service.__resetT06ProcessCachesForTest()
+    const receipt = await service.commitT06PhysicalImport(request)
+    expect(receipt.cases[0]?.status).toBe('done')
+    expect(receipt.batches?.[0]?.batchId).toBeTruthy()
+  })
+
+  test('BATCH-09：产品建批入口拒绝不存在案卷/模板不符/政策锁不一致', async () => {
+    const { createBatchV2Validated } = await import('./batch-store')
+    const base = { name: '校验批次', templateId, templateVersion: 1, policyVersionLock: [], createdAt: new Date().toISOString() }
+    expect(() => createBatchV2Validated({ ...base, id: 'b2-missing', caseIds: ['case-does-not-exist'] } as never))
+      .toThrow('批次成员与模板/政策锁不一致')
+    expect(() => createBatchV2Validated({ ...base, id: 'b2-lock', caseIds: ['case-does-not-exist'],
+      policyVersionLock: [{ policyVersionId: 'p', version: 2 }] } as never))
+      .toThrow('政策锁')
+    const selection = seedSelection([{ name: 'valid.txt' }])
+    const receipt = await service.commitT06PhysicalImport({
+      requestId: 'r-valid-batch', selectionId: selection.selectionId,
+      previewFingerprint: selection.previewFingerprint, templateId, templateVersion: 1, batchName: '合法批次',
+      groups: [{ groupId: 'g1', entryIds: selection.entries.map(entry => entry.entryId),
+        action: 'create' as const, title: '合法案卷', applicant: '甲' }],
+    })
+    const caseId = receipt.cases[0]!.caseId!
+    const created = createBatchV2Validated({ ...base, id: 'b2-valid', caseIds: [caseId] } as never)
+    expect(created.batch.caseIds).toEqual([caseId])
+  })
+
   test('预览后即使字节长度未变，更换原件也必须拒绝入库', async () => {
     const root = mkdtempSync(join(tmpdir(), 't06-swapped-'))
     writeFileSync(join(root, 'proof.txt'), 'AAA')

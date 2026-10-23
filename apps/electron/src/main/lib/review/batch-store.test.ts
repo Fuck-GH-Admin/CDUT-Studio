@@ -206,6 +206,24 @@ describe('批次中断恢复与定向重试（B 切片）', () => {
     expect(recovered.cases[2]?.error).toBe('此前失败')
   })
 
+  test('BATCH-11：恢复先核对持久 Run：已完成认领为 done，缺失 Run 才标 recovery-required', () => {
+    createBatchV2({ ...batch('recover-bound'), caseIds: ['rb-1', 'rb-2'] })
+    const state = readBatchStateV2('recover-bound')!
+    const runId = seedRunSync('rb-1', 'run-rb-1')
+    state.status = 'running'
+    state.cases = [
+      { caseId: 'rb-1', status: 'running', entryRunId: runId, bindingState: 'bound' },
+      { caseId: 'rb-2', status: 'running', entryRunId: 'run-rb-missing', bindingState: 'bound' },
+    ]
+    saveBatchStateV2(state)
+    const recovered = recoverInterruptedBatch('recover-bound')
+    expect(recovered.cases[0]?.status).toBe('done')
+    expect(recovered.cases[0]?.bindingState).toBe('bound')
+    expect(recovered.cases[0]?.error).toContain('认领')
+    expect(recovered.cases[1]?.status).toBe('failed')
+    expect(recovered.cases[1]?.bindingState).toBe('recovery-required')
+  })
+
   test('Given 失败和成功共存 When 选择单个失败案卷重试 Then 只执行选中的失败项', async () => {
     createBatchV2({ ...batch('retry-specific'), caseIds: ['c1', 'c2', 'c3'] })
     updateCaseStatus('retry-specific', 'c1', 'failed', '解析失败')

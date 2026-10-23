@@ -1190,8 +1190,9 @@ export function registerReviewIpc(): void {
 
   // ===== N5b：批次管理（薄委托 batch-store） =====
   ipcMain.handle(REVIEW_IPC_CHANNELS.CREATE_BATCH_V2, (_e, input: { batch: import('@profer/shared').ReviewBatch }) => {
-    const { createBatchV2 } = require('./batch-store') as typeof import('./batch-store')
-    return createBatchV2(input.batch)
+    const { createBatchV2Validated } = require('./batch-store') as typeof import('./batch-store')
+    // BATCH-09：Main 逐案核模板版本与政策锁，不信任渲染层筛选结果。
+    return createBatchV2Validated(input.batch)
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.GET_BATCH_V2, (_e, batchId: string) => {
     const { readBatchStateV2 } = require('./batch-store') as typeof import('./batch-store')

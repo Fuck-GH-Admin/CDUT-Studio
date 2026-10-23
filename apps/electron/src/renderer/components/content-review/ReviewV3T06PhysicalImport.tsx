@@ -291,6 +291,9 @@ export function ReviewV3T06PhysicalImport({
     {receipt && <div role="status" className="space-y-1 text-xs">
       <p>完成 {receipt.cases.filter(x => x.status === 'done').length} 案；
         失败 {receipt.cases.filter(x => x.status === 'failed').length} 案。</p>
+      {!!receipt.inventory?.excluded.length && <p className="text-muted-foreground">
+        本次来源另有 {receipt.inventory.excluded.length} 个条目未入库（可在上方“逐文件未入库清单”核对）。
+      </p>}
       {(receipt.batches?.length ?? 0) > 0
         ? receipt.batches!.map(batch => <p key={batch.batchId}>已创建 {batch.caseIds.length} 案批次：{batch.batchId}（{templates.find(item => item.templateId === batch.templateId && item.version === batch.templateVersion)?.name ?? batch.templateId}）</p>)
         : receipt.batchId ? <p>已创建批次：{receipt.batchId}</p> : <p>批次未创建：{receipt.batchError ?? '没有完整导入的案卷'}</p>}
