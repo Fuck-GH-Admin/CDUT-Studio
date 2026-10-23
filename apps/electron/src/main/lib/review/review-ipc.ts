@@ -896,11 +896,11 @@ export function registerReviewIpc(): void {
           try {
             const document = await registerNativeWorkspaceMaterialV3(caseId, path, 'evidence', undefined,
               () => assertC0ReviewMainSender(event))
-            // SourceDocument 只给 documentId；真实版本号以案卷聚合为准
+            // SourceDocument 只给 documentId；真实版本号与登记后的 revision 以案卷聚合为准。
             const after = getCaseV2Aggregate(caseId)
             const version = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
-            if (!version) throw new Error('附件已登记但找不到对应原件版本')
-            return version.versionId
+            if (!after || !version) throw new Error('附件已登记但找不到对应原件版本')
+            return { versionId: version.versionId, revision: after.caseV2.revision }
           } finally {
             const { unlinkSync } = require('node:fs') as typeof import('node:fs')
             try { unlinkSync(path) } catch (error) {
@@ -908,17 +908,30 @@ export function registerReviewIpc(): void {
             }
           }
         },
-        respondSupplement: async (caseId, supplementId, note, documentVersionIds, expectedRevision) => {
+        respondSupplement: async (caseId, supplementId, note, documentVersionIds, expectedRevision, meta) => {
           const aggregate = getCaseV2Aggregate(caseId)
           if (!aggregate) return { ok: false, message: '案卷不存在' }
-          // OFF-02: 必须使用预览时的 expectedRevision 做 CAS，不能重读最新 revision；
-          // requestId 以补件 ID 为幂等锚点，崩溃重放不产生第二份答复。
+          if (!meta?.actionId) throw new Error('T09 导入缺少 actionId，不能建立幂等回执')
+          // OFF-02：expectedRevision 由导入服务按「预览版本 + 本 action 附件登记推进」
+          // 计算，这里不再重读最新 revision；外部并发由 submitCommand 的 CAS 拒绝。
+          // requestId 以 actionId 为幂等锚点：崩溃重放不产生第二份答复，也可按
+          // receiptLog 回查该 action 是否已真实写入（verifyApplied）。
           const written = await respondSupplementV2(caseId, {
-            requestId: `t09-${supplementId}`, actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
+            requestId: `t09-${meta.actionId}`, actor: { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
             expectedRevision,
             payload: { supplementId, note, documentVersionIds },
           })
           return { ok: written.ok, message: written.ok ? undefined : `${written.code}: ${written.message}` }
+        },
+        verifyApplied: ({ caseId, actionId }) => {
+          // 事务回执与业务写入同一事务落盘：存在该 action 的 RespondSupplement
+          // 回执即证明上次写入已生效，可恢复为 duplicate，不再重发业务写。
+          const aggregate = getCaseV2Aggregate(caseId)
+          if (!aggregate) return undefined
+          const receipt = aggregate.receiptLog.find((item) =>
+            item.requestId === `t09-${actionId}` && item.type === 'RespondSupplement')
+          if (!receipt) return { applied: false }
+          return { applied: true, revision: receipt.revision }
         },
       },
     })

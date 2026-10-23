@@ -110,6 +110,10 @@ export interface T09StagedAsset {
   mimeType: string
   sha256: string
   versionId: string
+  /** 回件包内的附件序号：重试按序号复用，同名同内容的两份文件不会互相顶替。 */
+  index: number
+  /** 该附件登记完成后的案卷 revision（Main 回读的真实值）。 */
+  revision?: number
 }
 
 export interface T09StagingRecord {
@@ -117,7 +121,13 @@ export interface T09StagingRecord {
   caseId: string
   requestHash: string
   supplementId: string
+  /** 预览确认的版本：外部并发以它为基线判定。 */
   baseRevision: number
+  /**
+   * 本 action 自己登记附件后推进到的准确 revision。
+   * 崩溃后重试以它判定「案卷是否只被本 action 推进过」，不能无条件取最新版本。
+   */
+  stagedRevision?: number
   status: 'staged' | 'applying' | 'applied'
   assets: T09StagedAsset[]
   appliedRevision?: number
@@ -201,28 +211,198 @@ export function previewT09Package(input: {
   if (parsed.type !== 'reply') throw new Error('T09_NOT_A_REPLY_PACKAGE')
   const task = readT09TaskPackage(input.aggregate.caseV2.id, parsed.requestPackageId)
   if (!task) throw new Error('T09_TASK_PACKAGE_NOT_FOUND')
-  return { preview: previewT09Reply(parsed, task, buildT09State(input.aggregate)), task }
+  const preview = previewT09Reply(parsed, task, buildT09State(input.aggregate))
+  // 崩溃续跑：案卷 revision 是本 action 自己登记附件推进的，不是外部并发。
+  // 仅当 live revision 正好等于 staging 记录的 stagedRevision 时，才把预览
+  // 显示为可导入，并说明导入将按该版本续跑（不会被当成旧预览版本拒绝）。
+  if (preview.status === 'conflict') {
+    const staged = readT09Staging(input.aggregate.caseV2.id, parsed.actionId)
+    const ownPartial = staged && staged.requestHash === parsed.hash
+      && staged.assets.length > 0 && staged.stagedRevision === input.aggregate.caseV2.revision
+    if (ownPartial && staged) {
+      const structural = previewT09Reply(parsed, task,
+        { ...buildT09State(input.aggregate), revision: parsed.baseRevision })
+      if (structural.status === 'ready') {
+        return { preview: { ...structural, details: [
+          ...structural.details,
+          `本次回件已登记 ${staged.assets.length} 份附件（案卷 revision 已由本 action 推进到 ${staged.stagedRevision}）；导入将按该版本续跑，不会重复登记`,
+        ] }, task }
+      }
+    }
+  }
+  return { preview, task }
+}
+
+/** 一次附件登记的真实结果（Main 回读案卷，不是 Renderer 自报）。 */
+export interface T09AssetRegistration {
+  versionId: string
+  /**
+   * 本次登记完成后的案卷 revision。
+   * 附件登记本身就是一次案卷事务，会推进 revision；补件答复的 CAS 必须用这个
+   * 「本 action 自己推进后」的准确版本，而不是预览时的旧版本。
+   */
+  revision: number
 }
 
 export interface T09ImportDeps {
   readAggregate: (caseId: string) => import('@profer/shared').CaseAggregateV2 | undefined
   /**
-   * 把附件字节登记为真实 DocumentVersion，返回 versionId。
+   * 把附件字节登记为真实 DocumentVersion，并回报登记后的案卷 revision。
    * meta 只用于归属：actionId 让原件可回溯到这次离线答复，displayName 是
    * 用户原始文件名（不得被临时文件 UUID 前缀替代）。
    */
   registerAsset: (caseId: string, name: string, mimeType: string, bytes: Uint8Array,
-    meta?: { actionId: string; index: number; displayName: string }) => Promise<string>
-  /** 原子答复补件；expectedRevision 必须是预览确认过的版本，不得换成“最新”。 */
+    meta?: { actionId: string; index: number; displayName: string }) => Promise<T09AssetRegistration>
+  /**
+   * 原子答复补件。expectedRevision 必须是「预览版本 + 本 action 已登记附件推进的
+   * 准确版本」；Main 侧据此 CAS，不得在写入前无条件重读最新版本覆盖外部并发。
+   */
   respondSupplement: (caseId: string, supplementId: string, note: string,
     documentVersionIds: string[], expectedRevision: number,
     meta?: { actionId: string }) => Promise<{ ok: boolean; message?: string }>
   /**
-   * 可选：崩溃恢复时核验该 actionId 是否已经真正写入补件答复。
-   * 未提供时，处于 applying 的导入返回“待核验”，既不重复写也不假装成功。
+   * 可选：崩溃恢复时核验该 actionId 是否已经真正写入补件答复（例如按 actionId
+   * 查事务回执）。未提供时，处于 applying 的导入返回“待核验”，既不重复写也不假装成功。
    */
   verifyApplied?: (input: { caseId: string; supplementId: string; actionId: string; requestHash: string })
     => { applied: boolean; revision?: number } | undefined
+}
+
+interface T09ApplyOutcome {
+  receipt: T09Receipt
+  /** 业务写入在更早的尝试里已经生效（崩溃恢复核验命中），本次没有重复写。 */
+  duplicate: boolean
+}
+
+/**
+ * 执行「附件先登记 + 补件原子答复」。
+ *
+ * `baseRevision` 是本次允许写入的基线：
+ * - 首次导入 = 预览确认的 revision；
+ * - 崩溃续跑 = staging 记录的 `stagedRevision`（本 action 自己上次推进到的准确版本）。
+ *
+ * 任何一步发现案卷版本偏离基线（外部并发写入），立即失败关闭并保留 staging，
+ * 绝不改成「读取最新 revision 再写」。
+ */
+async function applyT09StudentReply(input: {
+  caseId: string
+  reply: T09ReplyPackage
+  baseRevision: number
+  deps: T09ImportDeps
+}): Promise<T09ApplyOutcome> {
+  const { caseId, reply, deps } = input
+  const reject = (message: string): T09Receipt => ({ actionId: reply.actionId, hash: reply.hash,
+    caseId: reply.caseId, status: 'rejected', message })
+  if (reply.reply.kind !== 'student-reply') {
+    return { duplicate: false, receipt: reject('评委评分包尚未接入本地评分写入') }
+  }
+  const supplementId = reply.reply.supplementId
+
+  const existing = readT09Staging(caseId, reply.actionId)
+  if (existing && existing.requestHash !== reply.hash) {
+    return { duplicate: false, receipt: reject('T09_ACTION_PAYLOAD_DRIFT: 相同 actionId 的载荷与首次导入不一致') }
+  }
+  if (existing?.status === 'applied') {
+    // 双保险：lookup 已处理，这里防止竞态重复进入。
+    return { duplicate: true, receipt: { actionId: reply.actionId, hash: reply.hash, caseId: reply.caseId,
+      status: 'accepted', newRevision: existing.appliedRevision } }
+  }
+  if (existing?.status === 'applying') {
+    // 上次中断在“业务写入”阶段：先按耐久回执核验是否已生效，绝不再写一遍。
+    // 此时 live revision 可能是基线（未写成）或基线+1（已写成），不能先做相等判断。
+    const verified = deps.verifyApplied?.({
+      caseId: reply.caseId, supplementId, actionId: reply.actionId, requestHash: reply.hash,
+    })
+    if (!verified) {
+      return { duplicate: false, receipt: reject(
+        'T09_RECOVERY_UNCERTAIN: 上次导入在业务写入中断，需先核验补件答复是否已生效') }
+    }
+    if (verified.applied) {
+      saveT09Staging(caseId, { ...existing, status: 'applied', appliedRevision: verified.revision })
+      return { duplicate: true, receipt: { actionId: reply.actionId, hash: reply.hash, caseId: reply.caseId,
+        status: 'accepted', newRevision: verified.revision } }
+    }
+  }
+
+  // OFF-02：写入前案卷必须仍停在本 action 已知的基线；外部并发已推进则拒绝。
+  const live = deps.readAggregate(reply.caseId)
+  if (!live) throw new Error('T09_CASE_NOT_FOUND')
+  if (live.caseV2.revision !== input.baseRevision) {
+    return { duplicate: false, receipt: reject(
+      `T09_REVISION_CHANGED: 预览版本 ${input.baseRevision} 已变为 ${live.caseV2.revision}，请重新预览后再导入`) }
+  }
+
+  const staged: T09StagingRecord = existing ?? {
+    actionId: reply.actionId, caseId: reply.caseId, requestHash: reply.hash,
+    supplementId, baseRevision: input.baseRevision,
+    status: 'staged', assets: [], updatedAt: new Date().toISOString(),
+  }
+  // 续跑前核验：上次已登记的附件必须仍在案卷有效材料里，否则不能声称已有新材料。
+  if (staged.assets.length > 0) {
+    const activeVersions = new Set((live.caseV2.documents ?? [])
+      .filter((document) => document.active !== false)
+      .map((document) => document.versionId))
+    const missing = staged.assets.find((asset) => !activeVersions.has(asset.versionId))
+    if (missing) {
+      return { duplicate: false, receipt: reject(
+        'T09_STAGED_ASSET_MISSING: 上次已登记的附件已不在案卷有效材料中，请重新预览后再导入') }
+    }
+  }
+
+  // 1) 附件先成为真实 DocumentVersion；同一 actionId 已登记的附件按序号复用。
+  let ownRevision = input.baseRevision
+  const versionIds: string[] = []
+  for (const [index, asset] of reply.reply.assets.entries()) {
+    const prior = staged.assets.find((item) => item.index === index)
+    if (prior) {
+      if (prior.sha256 !== asset.sha256 || prior.name !== asset.name) {
+        return { duplicate: false, receipt: reject('T09_ACTION_PAYLOAD_DRIFT: 相同 actionId 的附件载荷与首次导入不一致') }
+      }
+      versionIds.push(prior.versionId)
+      continue
+    }
+    // 登记前确认案卷仍停在本 action 已知版本，避免把外部并发写入算成自己的推进。
+    const before = deps.readAggregate(reply.caseId)
+    if (!before || before.caseV2.revision !== ownRevision) {
+      saveT09Staging(caseId, { ...staged, status: 'staged' })
+      return { duplicate: false, receipt: reject(
+        `T09_REVISION_CHANGED: 附件登记前案卷已被其他操作更新（期望 ${ownRevision}，当前 ${before?.caseV2.revision ?? '未知'}），请重新预览后再导入`) }
+    }
+    const bytes = unpackT09Asset(asset)
+    const registered = await deps.registerAsset(reply.caseId, asset.name, asset.mimeType, bytes,
+      { actionId: reply.actionId, index, displayName: asset.name })
+    // 本 action 一次登记只应推进一个 revision；其它推进说明有外部写入穿插，必须失败关闭。
+    if (!Number.isSafeInteger(registered.revision) || registered.revision !== ownRevision + 1) {
+      saveT09Staging(caseId, { ...staged, status: 'staged' })
+      return { duplicate: false, receipt: reject(
+        `T09_REVISION_CHANGED: 附件登记期间案卷被其他操作更新（期望 ${ownRevision + 1}，实际 ${registered.revision}），请重新预览后再导入`) }
+    }
+    ownRevision = registered.revision
+    staged.assets.push({ name: asset.name, mimeType: asset.mimeType, sha256: asset.sha256,
+      versionId: registered.versionId, index, revision: ownRevision })
+    staged.stagedRevision = ownRevision
+    saveT09Staging(caseId, staged)
+    versionIds.push(registered.versionId)
+  }
+
+  // 2) 记下“正在写入”，再执行补件 CAS；成功前不得对外宣称已应用。
+  staged.status = 'applying'
+  staged.stagedRevision = ownRevision
+  saveT09Staging(caseId, staged)
+  const written = await deps.respondSupplement(reply.caseId, supplementId, reply.reply.note,
+    versionIds, ownRevision, { actionId: reply.actionId })
+  if (!written.ok) {
+    // 保留 staged（含已登记 versionId），重试不再复制材料。
+    saveT09Staging(caseId, { ...staged, status: 'staged' })
+    return { duplicate: false, receipt: reject(written.message ?? '补件答复写入失败') }
+  }
+  const current = deps.readAggregate(reply.caseId)
+  const appliedRevision = current?.caseV2.revision
+  saveT09Staging(caseId, { ...staged, status: 'applied', appliedRevision })
+  return { duplicate: false, receipt: {
+    actionId: reply.actionId, hash: reply.hash, caseId: reply.caseId,
+    status: 'accepted', newRevision: appliedRevision,
+  } }
 }
 
 /**
@@ -232,11 +412,15 @@ export interface T09ImportDeps {
  * 否则补件会声称「已有新材料」而案卷里查不到。
  *
  * 事务边界（OFF-01/02/03）：
- * 1. 预览确认的 revision 在真正写入前重新比对；案卷已前进则拒绝，绝不悄悄
- *    改用最新 revision 提交；
- * 2. 附件按 actionId 记入 staging，重试复用已登记 versionId，不重复登记副本；
- * 3. 业务成功后才把 staging 标为 applied；receipts.json 丢失时据此恢复 duplicate；
- * 4. 失败保留 staged，成功/失败后都清理过期的临时落盘文件。
+ * 1. 首次导入以预览确认的 revision 为基线；附件登记会真实推进 revision，
+ *    因此补件答复使用「本 action 自己登记后的准确 revision」做 CAS，
+ *    既不沿用旧预览版本，也不无条件读取最新版本；
+ * 2. 每一步都要求案卷仍停在本 action 已知版本；外部并发写入一律拒绝；
+ * 3. 附件按 actionId + 序号记入 staging，重试复用已登记 versionId，不重复登记副本；
+ * 4. 崩溃后若 revision 已被本 action 推进，按 staging 的 stagedRevision 续跑；
+ *    `applying` 且无法核验时返回“待核验”，绝不静默重复写；
+ * 5. 业务成功后才把 staging 标为 applied；receipts.json 丢失时据此恢复 duplicate；
+ * 6. 失败保留 staged，成功/失败后都清理过期的临时落盘文件。
  */
 export async function importT09Package(input: {
   caseId: string
@@ -250,90 +434,44 @@ export async function importT09Package(input: {
   const task = readT09TaskPackage(input.caseId, parsed.requestPackageId)
   if (!task) throw new Error('T09_TASK_PACKAGE_NOT_FOUND')
 
+  // 崩溃续跑：本 action 已登记过附件时，案卷 revision 是它自己推进的，
+  // 不能再按「预览版本 == 当前版本」判成并发冲突。只有案卷仍停在本 action
+  // 上次登记后的准确版本才续跑；被外部推进则失败关闭。
+  const staged = readT09Staging(input.caseId, parsed.actionId)
+  const resumeRevision = staged !== undefined && staged.requestHash === parsed.hash
+    && (staged.status === 'staged' || staged.status === 'applying')
+    && staged.assets.length > 0
+    && Number.isSafeInteger(staged.stagedRevision)
+    ? staged.stagedRevision : undefined
+  if (resumeRevision !== undefined && staged) {
+    if (parsed.caseId !== input.caseId || parsed.requestHash !== task.hash
+      || parsed.baseRevision !== task.baseRevision) {
+      return { status: 'rejected', preview: { status: 'rejected', caseId: parsed.caseId,
+        actionId: parsed.actionId, baseRevision: parsed.baseRevision,
+        currentRevision: aggregate.caseV2.revision, details: ['回件包与原任务包不匹配'] } }
+    }
+    const applied = await applyT09StudentReply({ caseId: input.caseId, reply: parsed,
+      baseRevision: resumeRevision, deps: input.deps })
+    try { pruneT09AssetTempRoot() } catch { /* 清理失败不影响业务结果 */ }
+    if (applied.receipt.status === 'accepted') {
+      saveT09Receipt(input.caseId, applied.receipt)
+      return { status: applied.duplicate ? 'duplicate' : 'accepted', receipt: applied.receipt }
+    }
+    return { status: 'rejected', preview: { status: 'rejected', caseId: parsed.caseId,
+      actionId: parsed.actionId, baseRevision: parsed.baseRevision,
+      currentRevision: input.deps.readAggregate(input.caseId)?.caseV2.revision ?? aggregate.caseV2.revision,
+      details: [applied.receipt.message ?? '业务写入未确认'] } }
+  }
+
   const state = buildT09State(aggregate)
   const outcome = await importT09Reply(
     parsed,
     task,
     state,
     async (actionId) => readT09Receipt(input.caseId, actionId) ?? stagingReceipt(input.caseId, actionId),
-    async (reply: T09ReplyPackage, expectedRevision: number) => {
-      if (reply.reply.kind !== 'student-reply') {
-        return { actionId: reply.actionId, hash: reply.hash, caseId: reply.caseId,
-          status: 'rejected', message: '评委评分包尚未接入本地评分写入' } as T09Receipt
-      }
-      const reject = (message: string): T09Receipt => ({ actionId: reply.actionId, hash: reply.hash,
-        caseId: reply.caseId, status: 'rejected', message })
-
-      // OFF-02：预览确认的 revision 必须仍是当前版本；否则要求重新预览，绝不换新版本提交。
-      const live = input.deps.readAggregate(reply.caseId)
-      if (!live) throw new Error('T09_CASE_NOT_FOUND')
-      if (live.caseV2.revision !== expectedRevision) {
-        return reject(`T09_REVISION_CHANGED: 预览版本 ${expectedRevision} 已变为 ${live.caseV2.revision}，请重新预览后再导入`)
-      }
-
-      const existing = readT09Staging(input.caseId, reply.actionId)
-      if (existing && existing.requestHash !== reply.hash) {
-        return reject('T09_ACTION_PAYLOAD_DRIFT: 相同 actionId 的载荷与首次导入不一致')
-      }
-      if (existing?.status === 'applied') {
-        // 双保险：lookup 已处理，这里防止竞态重复进入。
-        return { actionId: reply.actionId, hash: reply.hash, caseId: reply.caseId,
-          status: 'accepted', newRevision: existing.appliedRevision } as T09Receipt
-      }
-      if (existing?.status === 'applying') {
-        const verified = input.deps.verifyApplied?.({
-          caseId: reply.caseId, supplementId: reply.reply.supplementId,
-          actionId: reply.actionId, requestHash: reply.hash,
-        })
-        if (!verified) {
-          return reject('T09_RECOVERY_UNCERTAIN: 上次导入在业务写入中断，需先核验补件答复是否已生效')
-        }
-        if (verified.applied) {
-          saveT09Staging(input.caseId, { ...existing, status: 'applied', appliedRevision: verified.revision })
-          return { actionId: reply.actionId, hash: reply.hash, caseId: reply.caseId,
-            status: 'accepted', newRevision: verified.revision } as T09Receipt
-        }
-      }
-
-      const staged: T09StagingRecord = existing ?? {
-        actionId: reply.actionId, caseId: reply.caseId, requestHash: reply.hash,
-        supplementId: reply.reply.supplementId, baseRevision: expectedRevision,
-        status: 'staged', assets: [], updatedAt: new Date().toISOString(),
-      }
-
-      // 1) 附件先成为真实 DocumentVersion；已登记的同名同哈希附件直接复用。
-      const versionIds: string[] = []
-      for (const [index, asset] of reply.reply.assets.entries()) {
-        const prior = staged.assets.find((item) => item.sha256 === asset.sha256 && item.name === asset.name)
-        if (prior) { versionIds.push(prior.versionId); continue }
-        const bytes = unpackT09Asset(asset)
-        const versionId = await input.deps.registerAsset(reply.caseId, asset.name, asset.mimeType, bytes,
-          { actionId: reply.actionId, index, displayName: asset.name })
-        staged.assets.push({ name: asset.name, mimeType: asset.mimeType, sha256: asset.sha256, versionId })
-        saveT09Staging(input.caseId, staged)
-        versionIds.push(versionId)
-      }
-
-      // 2) 记下“正在写入”，再执行补件 CAS；成功前不得对外宣称已应用。
-      staged.status = 'applying'
-      saveT09Staging(input.caseId, staged)
-      const written = await input.deps.respondSupplement(
-        reply.caseId, reply.reply.supplementId, reply.reply.note, versionIds, expectedRevision,
-        { actionId: reply.actionId },
-      )
-      if (!written.ok) {
-        // 保留 staged（含已登记 versionId），重试不再复制材料。
-        saveT09Staging(input.caseId, { ...staged, status: 'staged' })
-        return reject(written.message ?? '补件答复写入失败')
-      }
-      const current = input.deps.readAggregate(reply.caseId)
-      const appliedRevision = current?.caseV2.revision
-      saveT09Staging(input.caseId, { ...staged, status: 'applied', appliedRevision })
-      return {
-        actionId: reply.actionId, hash: reply.hash, caseId: reply.caseId,
-        status: 'accepted', newRevision: appliedRevision,
-      } as T09Receipt
-    },
+    async (reply: T09ReplyPackage, expectedRevision: number) =>
+      (await applyT09StudentReply({ caseId: input.caseId, reply, baseRevision: expectedRevision,
+        deps: input.deps })).receipt,
   )
   // 无论成败都回收过期临时文件；成功路径同样清理（OFF-06）。
   try { pruneT09AssetTempRoot() } catch { /* 清理失败不影响业务结果 */ }
