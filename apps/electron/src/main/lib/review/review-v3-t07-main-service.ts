@@ -11,6 +11,7 @@
  */
 import { readBatchStateV2 } from './batch-store'
 import { getTemplate } from './template-store'
+import { getCase } from './case-store'
 import { createT07RoundFromPublishedTemplate } from './review-v3-t07-round-setup'
 import {
   applyT07Action, projectT07View, currentT07Round, computeT07Ranking,
@@ -48,6 +49,44 @@ export function deriveT07Actor(claim: T07MainActorClaim | undefined): T07Actor {
   return { actorId: reviewerId, role: 'judge', actorSource: 'local' }
 }
 
+/**
+ * Main 派生匿名材料：只读案卷本体，绝不采用 Renderer 提供的摘要。
+ * 文档标题用中性序号，避免文件名把学号/姓名带进匿名视图（JDG-02/JDG-15）。
+ */
+function trustedMaterials(state: T07State): T07SafeCaseMaterial[] {
+  return state.cases.map((entry) => {
+    const reviewCase = getCase(entry.caseId)
+    if (!reviewCase) return { caseId: entry.caseId, summary: '', documents: [] }
+    const summary = reviewCase.items.map((item) => item.title.trim()).filter(Boolean).join('；')
+    const documents = reviewCase.documents
+      .filter((doc) => doc.role !== 'rule')
+      .map((doc, index) => ({ id: doc.id, title: '材料 ' + (index + 1) }))
+    return { caseId: entry.caseId, summary, documents }
+  })
+}
+
+/**
+ * 轮次新鲜度门禁（JDG-09 本地可实现部分）：
+ * 批次必须仍存在、量表版本仍与轮次锁定一致且模板仍为已发布，案卷集合不得被换掉。
+ * 批次状态机与重开语义由 batch 组提供，见 handoffs/judging-IPC-REQUEST.md。
+ */
+function assertRoundFresh(batchId: string, state: T07State): void {
+  const batch = readBatchStateV2(batchId)?.batch
+  if (!batch) throw new Error('T07_BATCH_NOT_FOUND')
+  if (batch.templateId !== undefined && state.rubricVersion !== batch.templateVersion) {
+    throw new Error('T07_RUBRIC_VERSION_STALE: 批次量表版本已变化，请重新建立评分轮次')
+  }
+  const template = getTemplate(batch.templateId, batch.templateVersion)
+  if (!template || template.status !== 'published') {
+    throw new Error('T07_TEMPLATE_NOT_PUBLISHED: 批次量表已不再处于发布状态')
+  }
+  const current = new Set(batch.caseIds)
+  const known = new Set(state.cases.map((entry) => entry.caseId))
+  if (current.size !== known.size || [...current].some((id) => !known.has(id))) {
+    throw new Error('T07_CASES_CHANGED: 批次案卷集合已变化，旧轮次评分不能继续提交')
+  }
+}
+
 export interface T07StateView {
   revision: number
   view: T07View
@@ -55,15 +94,15 @@ export interface T07StateView {
 }
 
 /** 读取并投影评分视图。 */
-export function getT07View(batchId: string, claim: T07MainActorClaim | undefined,
-  safeMaterials: T07SafeCaseMaterial[] = []): T07StateView {
+export function getT07View(batchId: string, claim: T07MainActorClaim | undefined): T07StateView {
   const actor = deriveT07Actor(claim)
   const persisted = readT07State(batchId)
   if (!persisted) throw new Error('T07_STATE_NOT_INITIALIZED')
   return {
     revision: persisted.revision,
     updatedAt: persisted.updatedAt,
-    view: projectT07View(persisted.state, actor, safeMaterials),
+    // 材料只来自 Main 对案卷的读取，Renderer 无法注入摘要或 N/A 维度。
+    view: projectT07View(persisted.state, actor, trustedMaterials(persisted.state)),
   }
 }
 
@@ -89,9 +128,12 @@ export function initT07MainState(input: {
   return {
     revision: persisted.revision,
     updatedAt: persisted.updatedAt,
-    view: projectT07View(persisted.state, actor, []),
+    view: projectT07View(persisted.state, actor, trustedMaterials(persisted.state)),
   }
 }
+
+/** T04 事实端口尚未接通前，N/A 一律失败关闭；接通后由 Main 规则评估替换。 */
+const trustedNaEligible: ((caseId: string, dimensionId: string) => boolean) | undefined = undefined
 
 export interface T07ApplyResult {
   revision: number
@@ -112,6 +154,9 @@ export function applyT07MainAction(input: {
   expectedRevision: number
   /** 首次初始化时提供；已存在时忽略（禁止静默重置评分） */
   initialState?: T07State
+  /**
+   * @deprecated Renderer 不得提供材料或 N/A 条件；保留字段仅为编译兼容，运行时忽略。
+   */
   safeMaterials?: T07SafeCaseMaterial[]
   naEligible?: (caseId: string, dimensionId: string) => boolean
 }): T07ApplyResult {
@@ -121,18 +166,21 @@ export function applyT07MainAction(input: {
 
   const base = existing.state
   if (base.batchId !== input.batchId) throw new Error('T07_BATCH_MISMATCH')
+  assertRoundFresh(input.batchId, base)
 
   const next = applyT07Action(base, input.action, {
     actor,
     at: new Date().toISOString(),
-    ...(input.naEligible ? { naEligible: input.naEligible } : {}),
+    // N/A 适用条件尚未有 Main 侧 T04 事实端口（见 handoff）；此处失败关闭，
+    // 绝不采用 Renderer 传入的 naEligible 冒充条件已核验。
+    ...(trustedNaEligible ? { naEligible: trustedNaEligible } : {}),
   })
 
   const persisted: T07PersistedState = writeT07State(input.batchId, next, input.expectedRevision)
 
   return {
     revision: persisted.revision,
-    view: projectT07View(next, actor, input.safeMaterials ?? []),
+    view: projectT07View(next, actor, trustedMaterials(next)),
     ranking: computeT07Ranking(next),
   }
 }

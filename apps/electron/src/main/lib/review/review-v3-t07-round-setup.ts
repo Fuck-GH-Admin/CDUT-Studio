@@ -1,6 +1,17 @@
 /** 从锁定的批次和正式发布的模板建立评分轮次，禁止使用演示量表代替业务规则。 */
 import type { ReviewBatch, RubricSpec, TemplateVersion } from '@profer/shared'
 import type { T07State } from './review-v3-t07-rating-workflow'
+import { decimalT04 } from './review-v3-t04-rules-scoring'
+
+/** 与 F08 定点内核一致：分数/权重/量尺最多六位小数，且必须可精确表示。 */
+function assertFixedDecimal(value: number, label: string): void {
+  if (!Number.isFinite(value)) throw new Error(label + '不是有效数值')
+  try {
+    decimalT04(Number(value.toFixed(6)))
+  } catch {
+    throw new Error(label + '最多支持六位小数')
+  }
+}
 
 function checkedRubric(rubric: RubricSpec | undefined): RubricSpec {
   if (!rubric || !Array.isArray(rubric.dimensions) || rubric.dimensions.length === 0) {
@@ -28,6 +39,23 @@ function checkedRubric(rubric: RubricSpec | undefined): RubricSpec {
     totalWeight += dimension.weight
   }
   if (totalWeight <= 0) throw new Error('模板评分维度的总权重必须大于零')
+  // 负名额会让「入选名单为空」被当成成功冻结；在建轮次就拒绝。
+  if (rubric.quota !== undefined && (!Number.isSafeInteger(rubric.quota) || rubric.quota < 0)) {
+    throw new Error('模板名额必须是非负安全整数')
+  }
+  if (rubric.tieBreaker === 'by-dimension' && !rubric.dimensions.length) {
+    throw new Error('按维度打破同分需要至少一个评分维度')
+  }
+  for (const dimension of rubric.dimensions) {
+    assertFixedDecimal(dimension.min, '维度 ' + dimension.id + ' 的下限')
+    assertFixedDecimal(dimension.max, '维度 ' + dimension.id + ' 的上限')
+    assertFixedDecimal(dimension.weight, '维度 ' + dimension.id + ' 的权重')
+  }
+  if (rubric.scaleConversion) {
+    assertFixedDecimal(rubric.scaleConversion.fromMax, '换算源量尺')
+    assertFixedDecimal(rubric.scaleConversion.toMax, '换算目标量尺')
+  }
+  if (rubric.divergenceThreshold !== undefined) assertFixedDecimal(rubric.divergenceThreshold, '分歧阈值')
   if (rubric.scaleConversion &&
     (!Number.isFinite(rubric.scaleConversion.fromMax) || rubric.scaleConversion.fromMax <= 0 ||
       !Number.isFinite(rubric.scaleConversion.toMax) || rubric.scaleConversion.toMax <= 0)) {
