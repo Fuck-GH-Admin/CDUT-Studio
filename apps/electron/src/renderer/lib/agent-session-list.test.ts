@@ -248,6 +248,7 @@ describe('P04-S01 renderer snapshot and late upsert owner filtering', () => {
       presetId: null,
       presetReference: null,
       openAIThinkingLevel: null,
+      studyTeachingMode: null,
       codexFastMode: false,
       autoQueueSendEnabled: true,
       workspaceId: null,
