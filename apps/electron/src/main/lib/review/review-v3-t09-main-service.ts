@@ -255,7 +255,7 @@ export interface T09ImportDeps {
    * 用户原始文件名（不得被临时文件 UUID 前缀替代）。
    */
   registerAsset: (caseId: string, name: string, mimeType: string, bytes: Uint8Array,
-    meta?: { actionId: string; index: number; displayName: string }) => Promise<T09AssetRegistration>
+    meta?: { actionId: string; index: number; displayName: string; materialSlotId?: string }) => Promise<T09AssetRegistration>
   /**
    * 原子答复补件。expectedRevision 必须是「预览版本 + 本 action 已登记附件推进的
    * 准确版本」；Main 侧据此 CAS，不得在写入前无条件重读最新版本覆盖外部并发。
@@ -352,6 +352,9 @@ async function applyT09StudentReply(input: {
     }
   }
 
+  // OFF-05：附件归属以补件请求声明的材料槽为准（Main 从案卷读取，不是渲染层自选）。
+  const supplement = (deps.readAggregate(reply.caseId)?.supplements ?? []).find((item) => item.id === supplementId)
+  const targetSlotId = supplement?.materialSlotId
   // 1) 附件先成为真实 DocumentVersion；同一 actionId 已登记的附件按序号复用。
   let ownRevision = input.baseRevision
   const versionIds: string[] = []
@@ -377,7 +380,7 @@ async function applyT09StudentReply(input: {
     }
     const bytes = unpackT09Asset(asset)
     const registered = await deps.registerAsset(reply.caseId, asset.name, asset.mimeType, bytes,
-      { actionId: reply.actionId, index, displayName: asset.name })
+      { actionId: reply.actionId, index, displayName: asset.name, ...(targetSlotId ? { materialSlotId: targetSlotId } : {}) })
     // 本 action 一次登记只应推进一个 revision；其它推进说明有外部写入穿插，必须失败关闭。
     if (!Number.isSafeInteger(registered.revision) || registered.revision !== ownRevision + 1) {
       saveT09Staging(caseId, { ...staged, status: 'staged' })

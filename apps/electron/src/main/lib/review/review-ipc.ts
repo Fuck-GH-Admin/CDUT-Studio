@@ -891,37 +891,22 @@ export function registerReviewIpc(): void {
         },
       })
     }
-    const { registerNativeWorkspaceMaterialV3 } = require('./native-workspace-case-v3') as typeof import('./native-workspace-case-v3')
     const { respondSupplementV2 } = require('./stage-workflow') as typeof import('./stage-workflow')
-    const { importT09Package, t09AssetTempRoot } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
-    const { writeFileSync } = require('node:fs') as typeof import('node:fs')
-    const { join } = require('node:path') as typeof import('node:path')
-    const { randomUUID } = require('node:crypto') as typeof import('node:crypto')
+    const { importT09Package } = require('./review-v3-t09-main-service') as typeof import('./review-v3-t09-main-service')
+    const { registerT09StudentAsset } = require('./review-v3-t09-asset-registration') as typeof import('./review-v3-t09-asset-registration')
     const result = await importT09Package({
       caseId: input.caseId, packageJson: input.packageJson,
       deps: {
         readAggregate: (caseId) => getCaseV2Aggregate(caseId),
-        registerAsset: async (caseId, name, _mimeType, bytes) => {
-          // 附件必须成为真实原件：先落临时文件，再走原生材料登记。
-          // 临时文件只是中转；权威原件在材料存储，finally 内即时删除。
-          const safeName = String(name).replace(/[^A-Za-z0-9._-]/g, '_').slice(-120) || 'offline-asset.bin'
-          const path = join(t09AssetTempRoot(), `${randomUUID()}-${safeName}`)
-          writeFileSync(path, bytes)
-          try {
-            const document = await registerNativeWorkspaceMaterialV3(caseId, path, 'evidence', undefined,
-              () => assertC0ReviewMainSender(event))
-            // SourceDocument 只给 documentId；真实版本号与登记后的 revision 以案卷聚合为准。
-            const after = getCaseV2Aggregate(caseId)
-            const version = after?.caseV2.documents.find((item) => item.documentId === document.id && item.active !== false)
-            if (!after || !version) throw new Error('附件已登记但找不到对应原件版本')
-            return { versionId: version.versionId, revision: after.caseV2.revision }
-          } finally {
-            const { unlinkSync } = require('node:fs') as typeof import('node:fs')
-            try { unlinkSync(path) } catch (error) {
-              if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') console.warn('[T09] 临时附件清理失败:', error)
-            }
-          }
-        },
+        // OFF-05：保留离线包原文件名，并按补件请求的材料槽归属真实登记；
+        // 原生/模板两种案卷走同一 helper，临时文件在里面即时清理。
+        registerAsset: async (caseId, name, _mimeType, bytes, meta) => registerT09StudentAsset({
+          caseId,
+          displayName: meta?.displayName || name,
+          bytes,
+          ...(meta?.materialSlotId ? { materialSlotId: meta.materialSlotId } : {}),
+          authorizeAtCommit: () => assertC0ReviewMainSender(event),
+        }),
         respondSupplement: async (caseId, supplementId, note, documentVersionIds, expectedRevision, meta) => {
           const aggregate = getCaseV2Aggregate(caseId)
           if (!aggregate) return { ok: false, message: '案卷不存在' }
