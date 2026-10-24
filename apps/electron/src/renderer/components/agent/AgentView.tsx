@@ -45,6 +45,7 @@ import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
 import { RichTextInput, type RichTextInputHandle } from '@/components/ai-elements/rich-text-input'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
 import {
+  AgentComposerCdutToggle,
   AgentComposerToolMenuItem,
   AgentComposerToolPopover,
   AgentComposerToolTrigger,
@@ -640,6 +641,33 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     () => sessions.find((s) => s.id === sessionId),
     [sessions, sessionId],
   )
+  // CDUT 教务能力开关：显式元数据优先；旧会话回退到已激活能力组，避免显示与真实挂载不一致。
+  const cdutToolsEnabled = sessionMeta?.enableCdutTools
+    ?? (sessionMeta?.activatedToolGroups?.includes('cdut-tools') ?? false)
+  const [cdutTogglePending, setCdutTogglePending] = React.useState(false)
+  const handleToggleCdutTools = React.useCallback((): void => {
+    if (cdutTogglePending) return
+    const next = !cdutToolsEnabled
+    setCdutTogglePending(true)
+    void window.electronAPI
+      .updateSessionEnableCdutTools(sessionId, next, sessionMeta?.revision)
+      .then((updated) => {
+        setAgentSessions((previous) => previous.map((item) => (
+          item.id === updated.id ? updated : item
+        )))
+        toast.success(next ? 'CDUT 教务能力已开启' : 'CDUT 教务能力已关闭', {
+          description: next
+            ? '下一轮提问可调用课表、成绩、教室等工具。'
+            : '后续提问不再挂载教务工具，节省上下文。',
+        })
+      })
+      .catch((error) => {
+        toast.error('CDUT 能力切换失败', {
+          description: error instanceof Error ? error.message : '请稍后重试',
+        })
+      })
+      .finally(() => setCdutTogglePending(false))
+  }, [cdutToolsEnabled, cdutTogglePending, sessionId, sessionMeta?.revision, setAgentSessions])
   // 全局快捷键归属：顶栏激活 Tab 即本会话时才响应（组合分屏时两个 AgentView 同屏挂载，
   // 由 activeTabId 仲裁，不再需要旧侧面板 embedded 互斥）。
   const activeTabId = useAtomValue(activeTabIdAtom)
@@ -2479,6 +2507,10 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       permissionModeOverride: permissionMode,
       disableContextMemory: sessionMemoryDisabled,
       contextMode: effectiveContextMode,
+      // 仅显式设置过的会话携带开关；旧会话保持 undefined，继续走关键词兼容探测。
+      ...(sessionMeta?.enableCdutTools !== undefined && {
+        enableCdutTools: sessionMeta.enableCdutTools,
+      }),
       // AI 速课堂：仅在本运行内用户显式切换过才消息级透传；未切换交由编排层读会话元数据兜底
       ...(isAiClass && store.get(studyTeachingModeAtomFamily(sessionId)) && {
         studyTeachingMode: store.get(studyTeachingModeAtomFamily(sessionId)),
@@ -3224,6 +3256,16 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
         />
       ),
     },
+    {
+      key: 'cdut-tools',
+      node: (
+        <AgentComposerCdutToggle
+          enabled={cdutToolsEnabled}
+          pending={cdutTogglePending}
+          onToggle={handleToggleCdutTools}
+        />
+      ),
+    },
     // Fast Mode 保留会话/请求层能力，但不在输入工具栏暴露切换入口。
     {
       key: 'context-mode',
@@ -3315,6 +3357,9 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     taskGraphEnabled,
     sessionMemoryDisabled,
     handleToggleSessionMemory,
+    cdutToolsEnabled,
+    cdutTogglePending,
+    handleToggleCdutTools,
     effectiveContextMode,
     handleContextModeChange,
     globalContextIndexEnabled,

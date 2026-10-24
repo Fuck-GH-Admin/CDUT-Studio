@@ -156,6 +156,7 @@ import {
   buildLiteratureIndex,
   searchLabLiterature,
 } from './cslab-graphrag-router'
+import { getLiteratureGraph } from './cslab-literature-index'
 import { registerProferFilePath } from '../local-file-protocol'
 import { updateAgentSessionMeta } from '../agent-session-manager'
 import {
@@ -1271,6 +1272,11 @@ export function registerCsLabIpc(): void {
             : undefined,
       })
     },
+  )
+
+  // 文献智脑全景图谱（未搜索时的默认视图）
+  ipcMain.handle(CSLAB_IPC_CHANNELS.GET_LITERATURE_GRAPH, async (_event, labId: unknown) =>
+    getLiteratureGraph(asString(labId, '实验室标识')),
   )
 
   // ===== 实验规程与批次 =====

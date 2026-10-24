@@ -48,6 +48,22 @@ function getHumanLocation(node: SerializableBlock): string {
   return `第${page}页·${colDesc}`
 }
 
+/**
+ * 空表格判定：除分隔行/结构符外没有任何实质单元格内容（非空字符 < 2）。
+ * 用于入笼清洗，防止空表格 Markdown 污染正文与检索切块。
+ */
+function isEmptyTableMarkdown(markdown: string): boolean {
+  const rows = markdown
+    .split('\n')
+    .map((row) => row.trim())
+    .filter(Boolean)
+  if (rows.length === 0) return true
+  const dataRows = rows.filter((row) => !/^(\|?\s*:?-{2,}:?\s*\|)+$/.test(row) && !/^\|?[\s:|-]+\|?$/.test(row))
+  if (dataRows.length === 0) return true
+  const contentChars = dataRows.join('').replace(/[|:\-`*_\s]/g, '')
+  return contentChars.length < 2
+}
+
 /** 单块 → Markdown 片段（返回空字符串表示该块不进入正文） */
 function serializeBlock(node: SerializableBlock, includeAnchors = true): string {
   // 页眉/页脚脱离主正文流
@@ -74,7 +90,8 @@ function serializeBlock(node: SerializableBlock, includeAnchors = true): string 
       break
     case 'equation': {
       const latex = node.equation?.latex.trim() || text
-      if (latex.length === 0) {
+      // 无语义残缺公式清洗：去空白后非空字符不足 2 的碎片（如孤立 =、+）不进入正文。
+      if (latex.replace(/\s/g, '').length < 2) {
         body = ''
         break
       }
@@ -82,9 +99,11 @@ function serializeBlock(node: SerializableBlock, includeAnchors = true): string 
       body = tag ? `$$\n${latex} \\tag{${tag}}\n$$` : `$$\n${latex}\n$$`
       break
     }
-    case 'table':
-      body = node.table?.markdown ?? ''
+    case 'table': {
+      const markdown = node.table?.markdown ?? ''
+      body = isEmptyTableMarkdown(markdown) ? '' : markdown
       break
+    }
     case 'figure':
       body = text.length > 0 ? `> **[${getHumanLocation(node)}]** ${text}` : `> **[${getHumanLocation(node)}]**`
       break

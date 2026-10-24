@@ -457,6 +457,8 @@ export function createAgentSession(
     modelId,
     workspaceId: effectiveWorkspaceId,
     agentRuntime: normalizeAgentRuntime(agentRuntime),
+    // 新会话默认关闭：避免无关提问挂载沉重的教务工具；用户在输入栏显式点亮后持久化为 true。
+    enableCdutTools: false,
     ...(effectivePresetId ? { presetId: effectivePresetId, presetReference: presetReferenceForId(presetWorkspaceSlug, effectivePresetId) } : {}),
     ...(draft ? { draft: true } : {}),
     createdAt: now,

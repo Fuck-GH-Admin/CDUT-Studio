@@ -117,6 +117,15 @@ export async function digitizePlot(
       String(Math.max(8, Math.min(60, input.tolerance ?? 28))),
     ]
     if (input.color) args.push('--color', input.color)
+    if (input.colors && input.colors.length > 0) {
+      const validColors = input.colors
+        .map((color) => color.trim())
+        .filter((color) => /^#[0-9a-fA-F]{6}$/.test(color))
+      if (validColors.length > 0) args.push('--colors', validColors.join(','))
+    }
+    if (input.seriesCount && input.seriesCount > 0) {
+      args.push('--series-count', String(Math.max(2, Math.min(4, Math.floor(input.seriesCount)))))
+    }
 
     const stdout = await runner.runPython(labId, 'cslab-plot-digitizer.py', args, {
       timeoutMs: 120_000,

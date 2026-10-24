@@ -1979,7 +1979,14 @@ function buildDiscoverToolsTool(
   mountedNames: ReadonlySet<string>,
   disabledGroups: ReadonlySet<string>,
   onActivateGroup?: (groupId: string) => void,
+  isGroupActive?: (groupId: AgentPresetToolGroup) => boolean,
 ): ToolDefinition {
+  /** 会话级开关判定：未提供时回退全量兼容（单测路径）。 */
+  const sessionGroupActive = (groupId: string): boolean =>
+    isGroupActive?.(groupId as AgentPresetToolGroup) ?? true
+  /** 输入栏显式关闭（或预设禁用）组统一附带的硬约束警示。 */
+  const OFF_GROUP_WARNING =
+    '该工具集当前在输入栏处于关闭状态，本轮对话中不存在也不会被挂载。请直接回复并提示用户在输入栏左下方开启 CDUT 徽标（或前往预设设置启用）。严禁自行猜测工具名称，严禁通过终端或文件系统扫描寻找未挂载工具。'
   return sdk.defineTool({
     name: 'discover_tools',
     label: 'CDUT Studio 能力发现',
@@ -1995,11 +2002,18 @@ function buildDiscoverToolsTool(
           const mountedTools = groupToolNames.filter((name) =>
             [...mountedNames].some((mounted) => mounted === name || mounted.endsWith(`__${name}`)),
           )
+          const presetDisabled = disabledGroups.has(group.id)
+          const sessionActive = sessionGroupActive(group.id)
+          const enabled = !presetDisabled && sessionActive
+          // mounted=已挂载可直接调用；activatable=会话内可激活（本轮未挂载但开启）；off=输入栏关闭或预设禁用。
+          const activation: 'mounted' | 'activatable' | 'off' =
+            mountedTools.length > 0 ? 'mounted' : enabled ? 'activatable' : 'off'
           return {
             id: group.id,
             label: group.label,
-            hint: group.hint,
-            enabled: !disabledGroups.has(group.id),
+            hint: enabled ? group.hint : `${group.hint}【注意】${OFF_GROUP_WARNING}`,
+            enabled,
+            activation,
             mountedTools,
           }
         })
@@ -2010,6 +2024,7 @@ function buildDiscoverToolsTool(
 
       if (category && onActivateGroup) {
         for (const group of groups) {
+          // 用户显式关闭（或预设禁用）的组不允许被模型静默激活：必须由用户在输入栏开启。
           if (group.enabled) onActivateGroup(group.id)
         }
       }
@@ -2017,7 +2032,7 @@ function buildDiscoverToolsTool(
       const isDocumentQuery = category && /(?:pdf|doc|docx|xlsx|pptx|parse|markdown|文档|解析)/i.test(category)
       const tip = isDocumentQuery
         ? '【Kernel Document Engine】PDF/Office attachments have already been pre-parsed and dual-state persisted by the client kernel high-precision document engine: the complete clean Markdown is written to clean_markdown_path inside <attached_documents>, workspace documents have a silent RAG index built, and relevant <document_evidence> excerpts are injected automatically when the user asks a question. No parsing tools are needed; trust this content and answer from it directly.'
-        : 'mountedTools lists the tools that are actually mounted right now and can be called directly; enabled=false means the capability group is disabled by the current preset, and the user must enable it in preset settings before it becomes usable.'
+        : 'mountedTools lists the tools actually mounted right now and callable directly. activation: mounted=mounted & callable; activatable=enabled in this session but not yet mounted; off=turned off in the input bar or disabled by the preset — for off groups NEVER guess tool names or scan the filesystem; tell the user to enable the badge / preset instead. enabled=false means the group is unavailable in this session.'
 
       const payload = { groups, tip }
       return {
@@ -2218,7 +2233,13 @@ export async function buildPiBuiltinTools(
   // 15. Tier 2 能力发现保底工具（常驻）
   try {
     const mountedBeforeDiscover = new Set(tools.map((tool) => tool.name))
-    tools.push(buildDiscoverToolsTool(sdk, mountedBeforeDiscover, new Set(ctx.disabledToolGroups ?? []), ctx.onActivateToolGroup))
+    tools.push(buildDiscoverToolsTool(
+      sdk,
+      mountedBeforeDiscover,
+      new Set(ctx.disabledToolGroups ?? []),
+      ctx.onActivateToolGroup,
+      isGroupActive,
+    ))
   } catch (error) {
     console.error('[Pi 桥接] 注入能力发现工具失败:', error)
   }

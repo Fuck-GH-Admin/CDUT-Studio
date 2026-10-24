@@ -142,6 +142,7 @@ import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-pla
 import { resolveAgentModelRouting } from './agent-model-routing'
 
 import { validateToolInput } from './agent-tool-input-validator'
+import { applyCdutToolGate, CDUT_TOOLS_GROUP_ID } from './agent-cdut-tools-gate'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 
 // 已提取的工具模块
@@ -847,6 +848,8 @@ export class AgentOrchestrator {
       triggeredBy?: string
       disabledToolGroups?: readonly string[]
       hasAttachedDocuments?: boolean
+      /** 消息级 CDUT 开关；缺省回退会话元数据。 */
+      enableCdutTools?: boolean
     },
   ): Set<string> {
     const meta = getAgentSessionMeta(sessionId)
@@ -855,9 +858,24 @@ export class AgentOrchestrator {
 
     const text = userMessage || ''
 
-    // 1. CDUT 教务专区/关键词探测
-    if (/(?:课表|成绩|教室|自习|学分|选课|教务|考务|考试|培养方案|cdut|青果)/i.test(text)) {
-      activeGroups.add('cdut-tools')
+    // 1. CDUT 教务工具组：显式开关优先，正则仅旧会话兜底
+    const explicitCdut = options.enableCdutTools ?? meta?.enableCdutTools
+    const cdutGate = applyCdutToolGate({
+      explicit: explicitCdut,
+      groups: activeGroups,
+      text,
+      disabled: options.disabledToolGroups,
+    })
+    if (
+      options.enableCdutTools !== undefined
+      && meta?.enableCdutTools !== options.enableCdutTools
+    ) {
+      updateAgentSessionMeta(sessionId, { enableCdutTools: options.enableCdutTools })
+    }
+    if (!cdutGate.enabled) {
+      activeGroups.delete(CDUT_TOOLS_GROUP_ID)
+    } else {
+      activeGroups.add(CDUT_TOOLS_GROUP_ID)
     }
 
     // 2. 受管浏览器关键词/上下文探测
@@ -1626,6 +1644,7 @@ export class AgentOrchestrator {
         triggeredBy: input.triggeredBy,
         disabledToolGroups: [...disabledToolGroups],
         hasAttachedDocuments: Boolean(attachedDocumentsBlock),
+        enableCdutTools: input.enableCdutTools,
       })
       // Pi 通过 customTools 接收内置与外部 MCP 能力。
       // 在这里复用已完成的 Profer MCP 注入和过滤流程，避免两套配置来源漂移。

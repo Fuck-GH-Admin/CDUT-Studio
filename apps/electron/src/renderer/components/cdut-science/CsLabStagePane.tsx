@@ -61,6 +61,7 @@ interface CsLabStagePaneProps {
   mol: CsLabMolAsset | null
   figureAsset?: CsLabAssetSummary | null
   initialPage?: number
+  focusHighlight?: { page: number; bbox: [number, number, number, number] }
   loading: boolean
   saving: boolean
   staleCapsuleIds: Set<string>
@@ -106,6 +107,7 @@ export function CsLabStagePane({
   mol,
   figureAsset,
   initialPage,
+  focusHighlight,
   loading,
   saving,
   staleCapsuleIds,
@@ -258,6 +260,7 @@ export function CsLabStagePane({
             labId={labId}
             literature={literature}
             initialPage={initialPage}
+            focusHighlight={focusHighlight}
             onSelection={onPdfSelection}
           />
         ) : pane.viewType === 'dag' && canvas && pane.canvasRelPath ? (

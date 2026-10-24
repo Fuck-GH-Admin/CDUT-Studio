@@ -161,6 +161,7 @@ function searchIndex(
       score: item.score,
       communityId: community?.id ?? '',
       communityTitle: community?.title ?? '未聚类',
+      bbox: item.chunk.bbox,
     }
   })
 

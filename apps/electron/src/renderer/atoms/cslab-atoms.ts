@@ -118,6 +118,8 @@ export interface CsLabPaneState {
   canvasMtimeMs?: number
   /** PDF 窗格首次定位页码（1 起）。 */
   pdfInitialPage?: number
+  /** PDF 窗格聚焦高亮（文献智脑命中联动）：页码 + 页内归一化 bbox。 */
+  pdfFocusHighlight?: { page: number; bbox: [number, number, number, number] }
   /** 出版图窗格对应的绘图文档标识。 */
   plotId?: string
 }

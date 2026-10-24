@@ -23,6 +23,8 @@ export const CSLAB_IPC_CHANNELS = {
   LIST_LABS: 'cslab:list-labs',
   CREATE_LAB: 'cslab:create-lab',
   CREATE_DEMO_LAB: 'cslab:create-demo-lab',
+  /** 重置演示实验室：清理沙箱并重新写入官方样本。 */
+  RESET_DEMO_LAB: 'cslab:reset-demo-lab',
   OPEN_LAB: 'cslab:open-lab',
   GET_LAB_SNAPSHOT: 'cslab:get-lab-snapshot',
   RENAME_LAB: 'cslab:rename-lab',
@@ -73,6 +75,8 @@ export const CSLAB_IPC_CHANNELS = {
   // ===== 文献阅读 =====
   GET_LITERATURE_ITEM: 'cslab:get-literature-item',
   GET_LITERATURE_URL: 'cslab:get-literature-url',
+  /** 结构化智能导读（按需解析并缓存全文结构）。 */
+  GET_LITERATURE_GUIDE: 'cslab:get-literature-guide',
 
   // ===== 图表逆向数字化 =====
   DIGITIZE_PLOT: 'cslab:digitize-plot',
@@ -93,6 +97,7 @@ export const CSLAB_IPC_CHANNELS = {
   // ===== 跨文献 GraphRAG =====
   BUILD_LITERATURE_INDEX: 'cslab:build-literature-index',
   SEARCH_LITERATURE: 'cslab:search-literature',
+  GET_LITERATURE_GRAPH: 'cslab:get-literature-graph',
 
   // ===== 实验规程与批次 =====
   RUN_LIST_PROTOCOLS: 'cslab:run-list-protocols',
@@ -263,6 +268,11 @@ export type CsLabLayerType =
   | 'mol'
   | 'doc'
   | 'capsule'
+  /** 地理灾害栅格（DEM/GeoTIFF 与推演输出网格）。 */
+  | 'geo'
+
+/** 官方演示实验室类型；普通实验室缺省。 */
+export type CsLabDemoKind = 'origin-vesta' | 'sklgp-geohazard'
 
 export type CsLabLabStatus = '运行中' | '调试中' | '筹建中' | '已归档'
 
@@ -357,6 +367,8 @@ export interface CsLabLab {
   archivedAt?: number
   /** 归档前的业务状态；解除归档时恢复，避免把「调试中/筹建中」误还原为「运行中」。 */
   statusBeforeArchive?: CsLabLabStatus
+  /** 官方演示实验室类型；普通实验室缺省。 */
+  demoKind?: CsLabDemoKind
 }
 
 export interface CsLabCreateLabInput {
@@ -365,6 +377,8 @@ export interface CsLabCreateLabInput {
   tags?: string[]
   /** 自定义实验室根目录；缺省落在 ~/.cdutai/cslab-workspaces/{labId}。 */
   rootPath?: string
+  /** 内部创建演示实验室时使用；普通新建不传。 */
+  demoKind?: CsLabDemoKind
 }
 
 /** 演示实验室关键科学指标（由演示图版构建时一次性计算）。 */
@@ -375,6 +389,12 @@ export interface CsLabDemoStats {
   ramanRSquared: number
   /** 拉曼分峰解析面积与离散梯形积分的相对误差。 */
   ramanAreaRelativeError: number
+  /** 泥石流演示峰值流量（m³/s）。 */
+  peakDischargeM3s?: number
+  /** 泥石流演示最大冲出距离（m）。 */
+  runoutDistanceM?: number
+  /** 泥石流演示最大流动水深（m）。 */
+  maxFlowDepthM?: number
 }
 
 /** 演示实验室创建结果（含预生成出版图）。 */
@@ -385,6 +405,10 @@ export interface CsLabDemoLabResult {
   /** 全部预生成出版图 ID（顺序固定）。 */
   plotIds?: string[]
   stats?: CsLabDemoStats
+  /** 演示实验室类型；旧调用缺省视为 origin-vesta。 */
+  kind?: CsLabDemoKind
+  /** 泥石流演示推演指标。 */
+  geohazardStats?: CsLabDemoStats
 }
 
 export interface CsLabAssetSummary {
@@ -513,10 +537,31 @@ export interface CsLabManuscriptSummary {
   hasDocx: boolean
 }
 
+/**
+ * Canvas 编辑器主状态（Sidecar v2）。
+ * header/main/footer 使用 unknown[]，避免把 @hufe921/canvas-editor 的类型泄漏进 shared。
+ */
+export interface CsLabCanvasData {
+  header?: unknown[]
+  main: unknown[]
+  footer?: unknown[]
+}
+
+/** Canvas 原生批注；id 即 canvas groupId，锚点保存在元素 groupIds 上。 */
+export interface CsLabManuscriptComment {
+  id: string
+  content: string
+  createdAt: string
+  user?: string
+}
+
 export interface CsLabManuscript {
   uri: string
   title: string
   docJson: unknown
+  /** Sidecar v2：Canvas IElement[] 主状态；旧稿缺失时由渲染层即时升级。 */
+  canvasData?: CsLabCanvasData
+  comments?: CsLabManuscriptComment[]
   capsules: CsLabCapsule[]
   updatedAt: number
   docxPath?: string
@@ -541,6 +586,8 @@ export interface CsLabSaveManuscriptAsInput {
   format?: 'docx' | 'md'
   title: string
   docJson: unknown
+  canvasData?: CsLabCanvasData
+  comments?: CsLabManuscriptComment[]
   capsules: CsLabCapsule[]
 }
 
@@ -561,6 +608,8 @@ export interface CsLabSaveManuscriptInput {
   uri: string
   title: string
   docJson: unknown
+  canvasData?: CsLabCanvasData
+  comments?: CsLabManuscriptComment[]
   capsules: CsLabCapsule[]
 }
 
@@ -742,6 +791,14 @@ export interface CsLabLiteratureItem {
   annotationCount: number
   hasFile: boolean
   updatedAt: number
+  /** 已解析的章节数（结构 sidecar 存在时有值）。 */
+  sectionCount?: number
+  /** 解析出的关键词。 */
+  keywords?: string[]
+  /** 是否已有结构化解析 sidecar。 */
+  hasStructure?: boolean
+  /** 解析失败时的可读提示。 */
+  parseWarning?: string
 }
 
 export interface CsLabZoteroAnnotation {
@@ -793,6 +850,10 @@ export interface CsLabPlotDigitizeInput {
   calibration: CsLabPlotCalibration
   /** 目标曲线颜色（#rrggbb）；缺省由后端按色相峰值自动选择。 */
   color?: string
+  /** 多曲线分色提取：多个 #rrggbb，逐色构建掩码；优先于 color。 */
+  colors?: string[]
+  /** 自动聚类的目标簇数（2-4）；0/缺省 = 按色相主峰自动估计。 */
+  seriesCount?: number
   tolerance?: number
 }
 
@@ -918,6 +979,8 @@ export interface CsLabLiteratureSearchHit {
   score: number
   communityId: string
   communityTitle: string
+  /** 命中切块在 PDF 页内的归一化坐标 [x0, y0, x1, y1]；旧索引缺省时仅跳页不高亮。 */
+  bbox?: [number, number, number, number]
 }
 
 export interface CsLabLiteratureIndexStatus {
@@ -932,6 +995,80 @@ export interface CsLabLiteratureSearchResult {
   ok: boolean
   builtAt?: number
   hits: CsLabLiteratureSearchHit[]
+  message?: string
+}
+
+// ===== 文献智能导读 =====
+
+export interface CsLabLiteratureSectionRef {
+  title: string
+  level: number
+  page: number
+  /** 章节正文摘录（用于局限/结论卡片）。 */
+  excerpt?: string
+}
+
+export interface CsLabLiteratureEquationRef {
+  latex: string
+  tag?: string
+  page: number
+}
+
+export interface CsLabLiteratureTableRef {
+  page: number
+  caption?: string
+  markdownPreview: string
+}
+
+export interface CsLabLiteratureGuide {
+  ok: boolean
+  uri: string
+  title: string
+  authors: string[]
+  year?: string
+  doi?: string
+  publication?: string
+  pageCount: number
+  abstract?: string
+  keywords: string[]
+  outline: CsLabLiteratureSectionRef[]
+  equations: CsLabLiteratureEquationRef[]
+  tables: CsLabLiteratureTableRef[]
+  limitations: CsLabLiteratureSectionRef[]
+  conclusion?: CsLabLiteratureSectionRef
+  readingPath: string[]
+  parsedAt?: number
+  message?: string
+}
+
+export interface CsLabLiteratureGuideInput {
+  labId: string
+  literatureUri: string
+}
+
+/** 全景知识图谱节点（文献级聚合）。 */
+export interface CsLabLiteratureGraphNode {
+  uri: string
+  title: string
+  communityId: string
+  communityTitle: string
+  chunkCount: number
+}
+
+/** 全景知识图谱边（文献对共现强度，已按文献对聚合）。 */
+export interface CsLabLiteratureGraphEdge {
+  source: string
+  target: string
+  weight: number
+}
+
+/** 未搜索时的文献智脑全景图谱载荷。 */
+export interface CsLabLiteratureGraphResult {
+  ok: boolean
+  nodes: CsLabLiteratureGraphNode[]
+  edges: CsLabLiteratureGraphEdge[]
+  communityCount: number
+  builtAt?: number
   message?: string
 }
 
@@ -1719,10 +1856,32 @@ export interface CsLabPromptAssetSummary {
   format?: string
 }
 
+export interface CsLabPromptLiteratureSummary {
+  uri: string
+  title: string
+  year?: string
+  doi?: string
+  pageCount?: number
+  sectionCount?: number
+}
+
+export interface CsLabPromptGeoAssetSummary {
+  uri: string
+  title: string
+  format?: string
+  width?: number
+  height?: number
+  cellsize?: number
+}
+
 export interface CsLabPromptLabInfo {
   labId: string
   labName: string
   vaultDir?: string
   structures: readonly CsLabPromptAssetSummary[]
   plots: readonly { id: string; title: string }[]
+  /** 已登记文献（提示词注入用，不含全文）。 */
+  literature?: readonly CsLabPromptLiteratureSummary[]
+  /** 地理栅格资产（DEM/GeoTIFF/推演输出）。 */
+  geoAssets?: readonly CsLabPromptGeoAssetSummary[]
 }

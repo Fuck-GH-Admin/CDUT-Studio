@@ -15,6 +15,7 @@ import {
   Hand,
   Highlighter,
   Loader2,
+  MessagesSquare,
   Minus,
   MousePointer2,
   Plus,
@@ -37,6 +38,8 @@ interface CsLabPdfViewerProps {
   labId: string
   literature: CsLabLiteratureItem
   initialPage?: number
+  /** 文献智脑命中联动：跳转到指定页并高亮归一化 bbox 选框。 */
+  focusHighlight?: { page: number; bbox: [number, number, number, number] }
   onSelection: (selection: CsLabPdfSelection) => void
 }
 
@@ -69,6 +72,7 @@ export function CsLabPdfViewer({
   labId,
   literature,
   initialPage,
+  focusHighlight,
   onSelection,
 }: CsLabPdfViewerProps): React.ReactElement {
   const isWindows = React.useMemo(() => detectIsWindows(), [])
@@ -87,6 +91,34 @@ export function CsLabPdfViewer({
   const [pointerMode, setPointerMode] = React.useState<'scroll' | 'hand'>('scroll')
   const [panning, setPanning] = React.useState(false)
   const panRef = React.useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null)
+  /** 「在对话中研讨」发送状态与一次性提示。 */
+  const [discussing, setDiscussing] = React.useState(false)
+  const [notice, setNotice] = React.useState<string | null>(null)
+
+  /** 把导读提示词预填到实验室研讨助理输入框（不自动发送）。 */
+  const discussInAgentWindow = async (): Promise<void> => {
+    setDiscussing(true)
+    setNotice(null)
+    try {
+      const result = await window.electronAPI.cslab.sendToAgentWindow({
+        labId,
+        source: 'asset',
+        assetUri: literature.uri,
+        prompt: [
+          `我正在研读《${literature.title}》。请优先基于客户端内核文档引擎已预解析的全文证据（<attached_documents> 的 clean_markdown 与自动注入的 <document_evidence>）直接作答：`,
+          '1. 先给全文结构、核心贡献与关键公式导引（全局导读）；',
+          '2. 仅在我针对具体段落追问时，再局部精读对应章节。',
+          '禁止逐页翻阅 PDF、扫描文件系统或重复调用文档解析。',
+        ].join('\n'),
+        createdAt: Date.now(),
+      })
+      setNotice(result.delivered ? '已预填到科学助理输入框' : '科学助理未就绪，请稍后重试')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '发送至科学助理失败')
+    } finally {
+      setDiscussing(false)
+    }
+  }
 
   // ===== 文档加载（Worker 失败自动降级） =====
   React.useEffect(() => {
@@ -187,6 +219,14 @@ export function CsLabPdfViewer({
     wrapper?.scrollIntoView({ block: 'start', behavior: 'auto' })
   }, [initialPage, document, pageCount])
 
+  // ===== 智脑命中联动：跳页 + bbox 聚焦高亮 =====
+  React.useEffect(() => {
+    if (!focusHighlight || !document) return
+    const target = Math.max(1, Math.min(pageCount, focusHighlight.page))
+    const wrapper = pageRefs.current.get(target)
+    wrapper?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [focusHighlight, document, pageCount])
+
   const registerPage = React.useCallback((page: number, element: HTMLDivElement | null): void => {
     if (element) pageRefs.current.set(page, element)
     else pageRefs.current.delete(page)
@@ -248,7 +288,10 @@ export function CsLabPdfViewer({
         style={{ paddingRight: isWindows ? 132 : 10 }}
       >
         <BookOpen size={12} className="shrink-0 text-cslab-muted" />
-        <span className="min-w-0 flex-1 truncate font-serif text-[12px] text-cslab-text">
+        <span
+          className="min-w-0 flex-1 truncate font-serif text-[12px] text-cslab-text"
+          title={literature.title}
+        >
           {literature.title}
         </span>
         <span className="shrink-0 text-[10px] tabular-nums text-cslab-muted">
@@ -329,11 +372,31 @@ export function CsLabPdfViewer({
         >
           <Hand size={12} />
         </button>
+        <span className="mx-0.5 h-4 w-px shrink-0 bg-cslab-border" />
+        <button
+          type="button"
+          disabled={discussing}
+          onClick={() => void discussInAgentWindow()}
+          className={cn(
+            'rounded p-1 transition-colors',
+            'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text disabled:opacity-50',
+          )}
+          aria-label="在对话中研讨"
+          title="在对话中研讨：把全局导读提示词预填到科学助理输入框"
+        >
+          {discussing ? <Loader2 size={12} className="animate-spin" /> : <MessagesSquare size={12} />}
+        </button>
       </div>
 
       {workerFallback && (
         <p className="shrink-0 border-b border-cslab-border bg-cslab-surface px-3 py-1 text-[10px] text-cslab-muted">
           PDF Worker 不可用，已切换主线程渲染（功能不受影响）
+        </p>
+      )}
+
+      {notice && (
+        <p className="shrink-0 border-b border-cslab-border bg-cslab-accent/10 px-3 py-1 text-[10px] text-cslab-accent">
+          {notice}
         </p>
       )}
 
@@ -371,6 +434,7 @@ export function CsLabPdfViewer({
                 scale={scale}
                 literatureUri={literature.uri}
                 annotations={showAnnotations ? annotations : []}
+                focusBbox={focusHighlight?.page === pageNumber ? focusHighlight.bbox : undefined}
                 onSelection={onSelection}
                 onVisible={setCurrentPage}
                 registerRef={registerPage}
@@ -389,6 +453,8 @@ interface PdfPageViewProps {
   scale: number
   literatureUri: string
   annotations: CsLabZoteroAnnotation[]
+  /** 智脑命中聚焦：页内归一化 bbox [x0, y0, x1, y1]；4s 渐隐或点击消除。 */
+  focusBbox?: [number, number, number, number]
   onSelection: (selection: CsLabPdfSelection) => void
   onVisible: (page: number) => void
   registerRef: (page: number, element: HTMLDivElement | null) => void
@@ -407,6 +473,7 @@ function PdfPageView({
   scale,
   literatureUri,
   annotations,
+  focusBbox,
   onSelection,
   onVisible,
   registerRef,
@@ -423,6 +490,18 @@ function PdfPageView({
   const [selection, setSelection] = React.useState<SelectionRect | null>(null)
   /** 按住 Ctrl（或 Cmd）时显示十字光标 —— 框选的唯一起动条件。 */
   const [ctrlHeld, setCtrlHeld] = React.useState(false)
+  /** 智脑聚焦选框：4s 渐隐，任意按下立即消除。 */
+  const [focusBox, setFocusBox] = React.useState<[number, number, number, number] | null>(null)
+
+  React.useEffect(() => {
+    if (!focusBbox) {
+      setFocusBox(null)
+      return
+    }
+    setFocusBox(focusBbox)
+    const timer = setTimeout(() => setFocusBox(null), 4000)
+    return () => clearTimeout(timer)
+  }, [focusBbox])
 
   React.useEffect(() => {
     const update = (event: KeyboardEvent): void => setCtrlHeld(event.ctrlKey || event.metaKey)
@@ -521,6 +600,8 @@ function PdfPageView({
   )
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
+    // 智脑聚焦选框：任何按下立即消除。
+    setFocusBox((current) => (current ? null : current))
     // 仅 Ctrl/Cmd + 左键启动框选；普通拖动完全放行（浏览/抓手模式由外层容器接管）。
     if (!event.ctrlKey && !event.metaKey) return
     if (event.button !== 0) return
@@ -628,6 +709,20 @@ function PdfPageView({
     >
       <canvas ref={canvasRef} className="block h-full w-full select-none" />
       <div ref={overlayRef} className="pointer-events-none absolute inset-0">
+        {focusBox && dimensions && (
+          <div
+            className="pointer-events-none absolute rounded-[3px] border-2 border-amber-400 bg-amber-300/30"
+            style={{
+              left: focusBox[0] * width,
+              top: focusBox[1] * height,
+              width: Math.max(10, (focusBox[2] - focusBox[0]) * width),
+              height: Math.max(8, (focusBox[3] - focusBox[1]) * height),
+              boxShadow: '0 0 0 3px rgba(251, 191, 36, 0.25)',
+              transition: 'opacity 0.6s ease 3.2s',
+              opacity: 1,
+            }}
+          />
+        )}
         {pageAnnotations.map((annotation) => {
           const rects = annotation.position?.rects ?? annotation.rects
           const rotation = annotation.position?.rotation ?? 0

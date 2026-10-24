@@ -4011,6 +4011,28 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 切换指定会话的 CDUT 专属工具开关（输入栏徽标；下一轮生效）。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_ENABLE_CDUT_TOOLS,
+    async (_, sessionId: string, enabled: boolean, expectedRevision?: number): Promise<AgentSessionMeta> => {
+      if (typeof enabled !== 'boolean') throw new Error(`无效的 CDUT 开关状态: ${String(enabled)}`)
+      const current = getAgentSessionMeta(sessionId)
+      if (!current) throw new Error(`Agent 会话不存在: ${sessionId}`)
+      if (expectedRevision !== undefined && (current.revision ?? 0) !== expectedRevision) {
+        throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
+      }
+      const groups = new Set(current.activatedToolGroups ?? [])
+      if (enabled) groups.add('cdut-tools')
+      else groups.delete('cdut-tools')
+      const updated = updateAgentSessionMeta(sessionId, {
+        enableCdutTools: enabled,
+        activatedToolGroups: Array.from(groups),
+      })
+      publishAgentSessionProjection(updated)
+      return updated
+    }
+  )
+
   // 空闲会话的 Codex Fast Mode：下一轮 Pi 请求读取持久化状态。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE,

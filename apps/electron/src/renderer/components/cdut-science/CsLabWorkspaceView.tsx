@@ -523,6 +523,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
       paneId: CsLabPaneId,
       literature: CsLabLiteratureItem,
       initialPage?: number,
+      focusHighlight?: { page: number; bbox: [number, number, number, number] },
     ): Promise<void> => {
       const existingPane = CSLAB_PANE_IDS.find(
         (id) => paneLiterature[id]?.uri === literature.uri,
@@ -530,6 +531,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
       if (existingPane) {
         focusPane(existingPane)
         if (initialPage) patchPane(existingPane, { pdfInitialPage: initialPage })
+        if (focusHighlight) patchPane(existingPane, { pdfFocusHighlight: focusHighlight })
         showToast('info', '该文献已在其他窗格打开')
         return
       }
@@ -540,6 +542,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
         assetUri: undefined,
         manuscriptUri: undefined,
         pdfInitialPage: initialPage,
+        pdfFocusHighlight: focusHighlight,
       })
       setPaneTables((previous) => ({ ...previous, [paneId]: null }))
       setPaneManuscripts((previous) => ({ ...previous, [paneId]: null }))
@@ -2368,11 +2371,16 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           {drawer.mode === 'brain' && (
             <CsLabLiteratureBrainPanel
               labId={labId}
-              onOpenLiterature={(uri, page) => {
+              onOpenLiterature={(uri, page, bbox) => {
                 void (async () => {
                   const item = await window.electronAPI.cslab.getLiteratureItem({ labId, uri })
                   if (!item) return
-                  await openLiteratureInPane(activePaneId, item, page > 0 ? page : undefined)
+                  await openLiteratureInPane(
+                    activePaneId,
+                    item,
+                    page > 0 ? page : undefined,
+                    bbox && bbox.length === 4 && page > 0 ? { page, bbox } : undefined,
+                  )
                 })()
               }}
             />

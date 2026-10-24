@@ -859,6 +859,13 @@ export interface AgentSessionMeta {
   cslabLabId?: string
   /** 当前 Agent 会话是否已激活 PPT 专用能力；缺省为 false。 */
   pptCapabilityActive?: boolean
+  /**
+   * 输入栏 CDUT 专属能力开关。
+   * - true：强制挂载 cdut-tools；
+   * - false：强制关闭（默认值，避免无关提问挂载沉重的教务工具）；
+   * - undefined：旧会话兼容，退化为关键词探测。
+   */
+  enableCdutTools?: boolean
   /** 当前 Agent 会话已按需激活的场景能力组列表（如 'cdut-tools' | 'browser' | 'automation' 等）；缺省为空。 */
   activatedToolGroups?: string[]
   /** 是否置顶 */
@@ -1414,6 +1421,8 @@ export interface AgentSendInput {
   contextMode?: AgentContextMode
   /** AI 速课堂专用：本轮消息的带教模式；缺省回退会话元数据，再回退 'balanced'。 */
   studyTeachingMode?: import('./study').StudyTeachingMode
+  /** 本轮是否启用 CDUT 教务工具组；缺省回退会话元数据（undefined 时按旧会话关键词兼容）。 */
+  enableCdutTools?: boolean
   /** 用户通过 /skill:xxx 引用的 Skill slug 列表 */
   mentionedSkills?: string[]
   /** 用户通过 #mcp:xxx 引用的 MCP 服务器名称列表 */
@@ -2353,6 +2362,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_AGENT_EFFORT: 'agent:update-session-agent-effort',
   /** 切换指定会话的 AI 速课堂带教模式（fast/balanced/strict，跨会话持久化）。运行中允许切换，下一轮生效。 */
   UPDATE_SESSION_STUDY_TEACHING_MODE: 'agent:update-session-study-teaching-mode',
+  /** 切换指定会话的 CDUT 专属工具开关（输入栏徽标；下一轮生效）。 */
+  UPDATE_SESSION_ENABLE_CDUT_TOOLS: 'agent:update-session-enable-cdut-tools',
   /** 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单展示）。 */
   GET_PI_REASONING_CAPABILITY: 'agent:get-pi-reasoning-capability',
   /** 切换指定空闲会话的 Agent runtime；跨 runtime 时清除 SDK 会话恢复 ID。 */

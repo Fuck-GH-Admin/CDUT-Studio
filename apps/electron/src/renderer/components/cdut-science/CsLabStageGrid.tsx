@@ -153,6 +153,7 @@ export function CsLabStageGrid({
             mol={mols[paneId]}
             figureAsset={figureAsset}
             initialPage={pane.pdfInitialPage}
+            focusHighlight={pane.pdfFocusHighlight}
             loading={loading[paneId]}
             saving={saving[paneId]}
             staleCapsuleIds={staleCapsuleIds}

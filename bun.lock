@@ -61,6 +61,8 @@
         "@emoji-mart/data": "^1.2.1",
         "@emoji-mart/react": "^1.1.1",
         "@fontsource-variable/inter": "5.2.8",
+        "@hufe921/canvas-editor": "1.0.6",
+        "@hufe921/canvas-editor-plugin-comment": "0.0.1",
         "@larksuiteoapi/node-sdk": "^1.65.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@pierre/diffs": "^1.1.20",
@@ -478,6 +480,10 @@
     "@headlessui/tailwindcss": ["@headlessui/tailwindcss@0.2.2", "https://registry.npmmirror.com/@headlessui/tailwindcss/-/tailwindcss-0.2.2.tgz", { "peerDependencies": { "tailwindcss": "^3.0 || ^4.0" } }, "sha512-xNe42KjdyA4kfUKLLPGzME9zkH7Q3rOZ5huFihWNWOQFxnItxPB3/67yBI8/qBfY8nwBRx5GHn4VprsoluVMGw=="],
 
     "@hono/node-server": ["@hono/node-server@2.1.3", "https://registry.npmmirror.com/@hono/node-server/-/node-server-2.1.3.tgz", { "peerDependencies": { "hono": "^4" } }, "sha512-TA//nWMqPhbfdfneACk6t5a9eqbS9lABEPyKn0/xZTah3H3U2XaVg85rJFl0/Fyit0I552YDHgXGVSf3GwqbUw=="],
+
+    "@hufe921/canvas-editor": ["@hufe921/canvas-editor@1.0.6", "", {}, "sha512-Pd+IxXOlXESBSoxxIOOyj2iYYXY4YtrsHIIx90odWdf53OvhywrdfOeH+SgLwUKVDTP53rz25Kzr6i8D7D064g=="],
+
+    "@hufe921/canvas-editor-plugin-comment": ["@hufe921/canvas-editor-plugin-comment@0.0.1", "", { "peerDependencies": { "@hufe921/canvas-editor": ">=1.0.0" } }, "sha512-2Xd8TW2P7UTgID4t0fXwGXnFWen3SCth/QSA6ezj0SAF1YxqTt3s/cQOH6tHbJfmrN3Vsw/Jy9gRbkxXOFh4CA=="],
 
     "@iconify/types": ["@iconify/types@2.0.0", "https://registry.npmmirror.com/@iconify/types/-/types-2.0.0.tgz", {}, "sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg=="],
 

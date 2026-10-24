@@ -92,6 +92,84 @@ def build_color_mask(image, color, tolerance):
     return cv2.inRange(hsv, lower, upper)
 
 
+def hue_distance(a, b):
+    """HSV 色相环距离（0-179 环形）。"""
+    diff = abs(a - b)
+    return min(diff, 180 - diff)
+
+
+def build_series_masks(image, colors, tolerance, series_count):
+    """按显式颜色或自动聚类产出多组 (label, mask)。
+
+    依赖红线：仅使用 cv2.kmeans（环境无 sklearn）。
+    极端少像素防御：有效前景像素不足以支撑 k 簇时降级单掩码，
+    避免 OpenCV C++ 层断言崩溃。
+    """
+    import cv2
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    if colors:
+        masks = []
+        for color in colors:
+            mask = build_color_mask(image, color, tolerance)
+            if np.any(mask > 0):
+                masks.append((color, mask))
+        if masks:
+            return masks
+        return [("auto", build_color_mask(image, "", tolerance))]
+
+    h_channel = hsv[:, :, 0]
+    s_channel = hsv[:, :, 1]
+    v_channel = hsv[:, :, 2]
+    valid = (s_channel > 80) & (v_channel > 50)
+    ys, xs = np.nonzero(valid)
+    if len(ys) == 0:
+        return [("auto", np.zeros(h_channel.shape, dtype=np.uint8))]
+
+    hues = h_channel[ys, xs].astype(np.float32)
+
+    if series_count:
+        k = max(1, min(4, int(series_count)))
+    else:
+        # 依据色相直方图主峰数量估簇数（峰间距 > 2*tolerance，占比 >= 8%）。
+        histogram = np.bincount(hues.astype(np.int64).ravel(), minlength=180)
+        threshold = max(1, int(histogram.max() * 0.08))
+        peaks = [
+            int(h)
+            for h in range(180)
+            if histogram[h] >= threshold
+            and histogram[h] >= histogram[(h - 1) % 180]
+            and histogram[h] >= histogram[(h + 1) % 180]
+        ]
+        merged_peaks = []
+        for peak in peaks:
+            if all(hue_distance(peak, kept) > tolerance * 2 for kept in merged_peaks):
+                merged_peaks.append(peak)
+        k = max(1, min(4, len(merged_peaks)))
+
+    # 少像素防御：像素数不足以稳定支撑 k 簇时直接降级单掩码。
+    if k <= 1 or len(hues) < max(80, k * 50):
+        return [("auto", build_color_mask(image, "", tolerance))]
+
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.5)
+    _, _labels, centers = cv2.kmeans(hues, k, None, criteria, 3, cv2.KMEANS_PP_CENTERS)
+    merged_centers = []
+    for center in centers.ravel().tolist():
+        if all(hue_distance(center, kept) > tolerance for kept in merged_centers):
+            merged_centers.append(center)
+
+    masks = []
+    for center in merged_centers:
+        lower = np.array([max(0, int(center) - tolerance), 70, 40], dtype=np.uint8)
+        upper = np.array([min(179, int(center) + tolerance), 255, 255], dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower, upper)
+        if np.any(mask > 0):
+            masks.append((f"hue-{int(center)}", mask))
+    if len(masks) <= 1:
+        return [("auto", build_color_mask(image, "", tolerance))]
+    return masks
+
+
 def fit_axis(ticks, preferred, coordinate="px"):
     # X 轴按 px 拟合，Y 轴按 py 拟合；两者都必须使用各自的像素方向。
     pixels = np.array([tick[coordinate] for tick in ticks], dtype=np.float64)
@@ -236,6 +314,8 @@ def main():
     parser.add_argument("--calibration", required=True)
     parser.add_argument("--mode", choices=["line", "scatter"], default="line")
     parser.add_argument("--color", default="")
+    parser.add_argument("--colors", default="", help="逗号分隔的多个 #rrggbb，启用多曲线分色提取")
+    parser.add_argument("--series-count", type=int, default=0, help="自动聚类的目标曲线簇数（2-4）；0 = 按色相主峰自动估计")
     parser.add_argument("--tolerance", type=int, default=28)
     args = parser.parse_args()
 
@@ -272,10 +352,11 @@ def main():
         emit({"ok": False, "message": f"标定参数无效：{error}"})
         return
 
-    mask = build_color_mask(image, args.color.strip(), max(8, args.tolerance))
-    if not np.any(mask > 0):
-        emit({"ok": False, "message": "未在框选区域检测到目标颜色曲线"})
-        return
+    tolerance = max(8, args.tolerance)
+    color_list = [item.strip() for item in args.colors.split(",") if item.strip()]
+    if not color_list and args.color.strip():
+        color_list = [args.color.strip()]
+    series_masks = build_series_masks(image, color_list, tolerance, args.series_count)
 
     x_fit = fit_axis(x_ticks, x_pref, "px")
     y_fit = fit_axis(y_ticks, y_pref, "py")
@@ -283,34 +364,34 @@ def main():
         emit({"ok": False, "message": "标定刻度不足，至少需要 X/Y 各 2 个刻度"})
         return
 
-    curves = extract_lines(mask) if args.mode == "line" else extract_scatter(mask)
-    if not curves:
-        emit({"ok": False, "message": "未提取到有效曲线或散点"})
-        return
-
     series = []
-    for index, pixels in enumerate(curves):
-        values = []
-        pixel_list = []
-        for px, py in pixels:
-            value_x = apply_axis(px, x_fit)
-            value_y = apply_axis(py, y_fit)
-            if not math.isfinite(value_x) or not math.isfinite(value_y):
+    for mask_label, mask in series_masks:
+        curves = extract_lines(mask) if args.mode == "line" else extract_scatter(mask)
+        for index, pixels in enumerate(curves):
+            values = []
+            pixel_list = []
+            for px, py in pixels:
+                value_x = apply_axis(px, x_fit)
+                value_y = apply_axis(py, y_fit)
+                if not math.isfinite(value_x) or not math.isfinite(value_y):
+                    continue
+                values.append([float(value_x), float(value_y)])
+                pixel_list.append([float(px), float(py)])
+            if len(values) < 2:
                 continue
-            values.append([float(value_x), float(value_y)])
-            pixel_list.append([float(px), float(py)])
-        if len(values) < 2:
-            continue
-        series.append(
-            {
-                "label": f"series-{index + 1}",
-                "points": values,
-                "pixels": pixel_list,
-            }
-        )
+            label = mask_label
+            if len(curves) > 1:
+                label = f"{mask_label}-{index + 1}"
+            series.append(
+                {
+                    "label": label,
+                    "points": values,
+                    "pixels": pixel_list,
+                }
+            )
 
     if not series:
-        emit({"ok": False, "message": "提取结果为空，请调整颜色或标定后重试"})
+        emit({"ok": False, "message": "未提取到有效曲线或散点，请调整颜色或标定后重试"})
         return
 
     emit(

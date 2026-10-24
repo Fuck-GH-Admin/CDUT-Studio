@@ -53,6 +53,7 @@ import {
   type CsLabZoteroBridgeStatus,
   type CsLabZoteroAnnotation,
   type CsLabLiteratureItem,
+  type CsLabLiteratureGraphResult,
   type CsLabLiteratureSearchResult,
   type CsLabPlotDigitizeInput,
   type CsLabPlotDigitizeResult,
@@ -1028,6 +1029,8 @@ export interface ElectronAPI {
 
   /** 热切换指定会话的权限模式（运行中生效，仅影响该 session） */
   updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode, expectedRevision?: number) => Promise<AgentSessionMeta>
+  /** 切换指定会话的 CDUT 专属工具开关（下一轮生效）。 */
+  updateSessionEnableCdutTools: (sessionId: string, enabled: boolean, expectedRevision?: number) => Promise<AgentSessionMeta>
   /** 切换当前会话的 ChatGPT Codex Fast Mode。 */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
   /** 切换当前会话的 ChatGPT Codex 推理档位（跨会话持久化）。 */
@@ -1836,6 +1839,8 @@ export interface ElectronAPI {
       topK?: number
       literatureUri?: string
     }) => Promise<CsLabLiteratureSearchResult>
+    /** 文献智脑全景图谱（未搜索时的默认视图） */
+    getLiteratureGraph: (labId: string) => Promise<CsLabLiteratureGraphResult>
 
     /** 实验规程与批次 */
     listProtocols: (labId: string) => Promise<CsLabProtocol[]>
@@ -3138,6 +3143,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE, sessionId, mode, expectedRevision)
   },
 
+  updateSessionEnableCdutTools: (sessionId: string, enabled: boolean, expectedRevision?: number) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_ENABLE_CDUT_TOOLS, sessionId, enabled, expectedRevision)
+  },
+
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
   },
@@ -4316,6 +4325,8 @@ const electronAPI: ElectronAPI = {
       topK?: number
       literatureUri?: string
     }) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SEARCH_LITERATURE, input),
+    getLiteratureGraph: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_GRAPH, labId),
 
     listProtocols: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_LIST_PROTOCOLS, labId),
