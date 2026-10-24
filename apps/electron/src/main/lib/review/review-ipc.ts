@@ -51,6 +51,9 @@ const SOURCE_ROLES: ReadonlySet<string> = new Set(['rule', 'application', 'evide
 /** 审核类型枚举（CREATE_CASE 入参白名单） */
 const CASE_TYPES: ReadonlySet<string> = new Set(['综合测评', '活动申请', '自定义审核'])
 
+/** 可续跑的运行状态（未终态：崩溃中断 / 运行中 / 等待人工输入） */
+const RESUMABLE_RUN_STATUSES: ReadonlySet<string> = new Set(['failed', 'running', 'awaiting-input'])
+
 /** 收窄字符串入参（非字符串 → 中文错误，IPC 边界上类型注解不生效） */
 function requireString(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0) {
@@ -65,6 +68,14 @@ function requireString(value: unknown, name: string): string {
  * 由 registerIpcHandlers() 在应用启动时调用一次（幂等由外层守卫保证）。
  */
 export function registerReviewIpc(): void {
+  // 启动恢复：上次进程退出时仍在 running 的运行不可能自行推进，先标记为中断（可续跑）
+  try {
+    const { recoverInterruptedRuns } = require('./run-store-v2') as typeof import('./run-store-v2')
+    recoverInterruptedRuns()
+  } catch (error) {
+    console.warn('[审核专区] 中断运行恢复失败（不阻断处理器注册）', error)
+  }
+
   // ===== 案卷管理 =====
 
   /** 载入演示案卷（首次复制进配置目录，之后读存储） */
@@ -282,6 +293,7 @@ export function registerReviewIpc(): void {
     const { runReviewCaseV2 } = require('./run-service-v2') as typeof import('./run-service-v2')
     const { resolveReviewGatewayChannel, chatCompletion, REVIEW_RUN_TIMEOUT_MS } = require('./review-model-gateway') as typeof import('./review-model-gateway')
     const { assembleV2Executors } = require('./v2-executor-factory') as typeof import('./v2-executor-factory')
+    const { listRunsV2 } = require('./run-store-v2') as typeof import('./run-store-v2')
     const resolved = resolveReviewGatewayChannel()
     if (!resolved) throw new Error('未配置可用模型渠道，无法执行批次审核')
     const client = {
@@ -296,7 +308,8 @@ export function registerReviewIpc(): void {
         if (!aggregate) throw new Error(`案卷聚合不存在: ${caseId}`)
         const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
         if (!template) throw new Error(`模板不存在: ${aggregate.caseV2.templateId}`)
-        const run = await runReviewCaseV2(aggregate.caseV2, template, assembleV2Executors(aggregate, template, { client }), {})
+        const resumable = listRunsV2(caseId).find((candidate) => RESUMABLE_RUN_STATUSES.has(candidate.status))
+        const run = await runReviewCaseV2(aggregate.caseV2, template, assembleV2Executors(aggregate, template, { client }), resumable ? { resumeRunId: resumable.id } : {})
         return { status: run.status }
       },
     })
@@ -325,6 +338,36 @@ export function registerReviewIpc(): void {
     }
     const executors = assembleV2Executors(aggregate, template, { client })
     return runReviewCaseV2(aggregate.caseV2, template, executors, {})
+  })
+  /** 续跑：沿用既有运行检查点，生成新运行（旧运行文件不动） */
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RESUME_RUN_V2, async (_e, input: { caseId: string; runId?: string }) => {
+    if (!input || typeof input !== 'object') throw new Error('参数 input 缺失或类型非法')
+    const caseId = requireString(input.caseId, 'caseId')
+    if (input.runId !== undefined && typeof input.runId !== 'string') throw new Error('参数 runId 类型非法')
+    const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+    const { getTemplate } = require('./template-store') as typeof import('./template-store')
+    const { runReviewCaseV2 } = require('./run-service-v2') as typeof import('./run-service-v2')
+    const { resolveReviewGatewayChannel, chatCompletion, REVIEW_RUN_TIMEOUT_MS } = require('./review-model-gateway') as typeof import('./review-model-gateway')
+    const { assembleV2Executors } = require('./v2-executor-factory') as typeof import('./v2-executor-factory')
+    const aggregate = getCaseV2Aggregate(caseId)
+    if (!aggregate) throw new Error(`案卷聚合不存在: ${caseId}`)
+    const template = getTemplate(aggregate.caseV2.templateId, aggregate.caseV2.templateVersion)
+    if (!template) throw new Error(`模板不存在: ${aggregate.caseV2.templateId}@${aggregate.caseV2.templateVersion}`)
+    // 未指定目标运行：取最近一条未终态运行（崩溃中断 / 等待输入）
+    const targetRunId = input.runId ?? findResumableRunId(caseId)
+    if (!targetRunId) throw new Error('没有可续跑的运行')
+    const resolved = resolveReviewGatewayChannel()
+    if (!resolved) throw new Error('未配置可用模型渠道，无法执行真实审核（请在设置中配置渠道）')
+    const client = {
+      protocol: (resolved.channel as { protocol?: string }).protocol ?? 'openai-chat',
+      complete: async (request: { prompt: string; system: string; signal?: AbortSignal }) => ({
+        content: await chatCompletion(resolved.channel, [
+          { role: 'system', content: request.system },
+          { role: 'user', content: request.prompt },
+        ], { timeoutMs: REVIEW_RUN_TIMEOUT_MS }),
+      }),
+    }
+    return runReviewCaseV2(aggregate.caseV2, template, assembleV2Executors(aggregate, template, { client }), { resumeRunId: targetRunId })
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.CAST_RATING_V2, (_e, input: { caseId: string; command: Record<string, unknown> }) => {
     const { castRating } = require('./rating-service') as typeof import('./rating-service')
@@ -481,6 +524,12 @@ export function registerReviewIpc(): void {
   })
 
   console.log('[审核专区] IPC 处理器注册完成')
+}
+
+/** 最近一条可续跑运行（failed/running/awaiting-input）的 ID；无则 undefined */
+function findResumableRunId(caseId: string): string | undefined {
+  const { listRunsV2 } = require('./run-store-v2') as typeof import('./run-store-v2')
+  return listRunsV2(caseId).find((run) => RESUMABLE_RUN_STATUSES.has(run.status))?.id
 }
 
 /** GET_RUN 的实现（独立函数，避免 handler 内联依赖） */

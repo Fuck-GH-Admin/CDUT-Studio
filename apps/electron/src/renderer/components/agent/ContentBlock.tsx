@@ -292,7 +292,7 @@ function TaskGetCollapsedSummary({ task }: { task: ParsedTaskGetResult }): React
         </>
       )}
       {task.description && (
-        <span className="hidden min-w-0 truncate text-[13px] text-muted-foreground/60 sm:inline">
+        <span className="hidden min-w-0 truncate text-[13px] text-muted-foreground/60 min-[420px]:inline">
           {task.description}
         </span>
       )}
@@ -327,7 +327,7 @@ function TaskListCollapsedSummary({ tasks }: { tasks: ParsedTaskListItem[] }): R
         </span>
       )}
       {pendingCount > 0 && (
-        <span className="hidden shrink-0 rounded-full bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground/65 sm:inline">
+        <span className="hidden shrink-0 rounded-full bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground/65 min-[420px]:inline">
           {pendingCount} 待处理
         </span>
       )}

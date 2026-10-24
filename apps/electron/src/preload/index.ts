@@ -1552,6 +1552,8 @@ export interface ElectronAPI {
     triggerSync: (workspaceId: string) => Promise<void>
     getPendingChanges: (workspaceId: string) => Promise<unknown[]>
     discardPendingChanges: (workspaceId: string) => Promise<void>
+    listDeadLetters: () => Promise<unknown[]>
+    retryDeadLetters: () => Promise<{ retried: number }>
     onStatusChanged: (callback: (data: unknown) => void) => () => void
   }
 
@@ -3942,6 +3944,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(SYNC_IPC_CHANNELS.GET_PENDING_CHANGES, workspaceId),
     discardPendingChanges: (workspaceId: string) =>
       ipcRenderer.invoke(SYNC_IPC_CHANNELS.DISCARD_PENDING_CHANGES, workspaceId),
+    listDeadLetters: () =>
+      ipcRenderer.invoke(SYNC_IPC_CHANNELS.LIST_DEAD_LETTERS),
+    retryDeadLetters: () =>
+      ipcRenderer.invoke(SYNC_IPC_CHANNELS.RETRY_DEAD_LETTERS) as Promise<{ retried: number }>,
     onStatusChanged: (callback: (data: unknown) => void) => {
       const listener = (_: unknown, data: unknown): void => callback(data)
       ipcRenderer.on(SYNC_IPC_CHANNELS.STATUS_CHANGED, listener)
@@ -4767,6 +4773,8 @@ const reviewAPI = {
   listRunsV2: (caseId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.LIST_RUNS_V2, caseId) as Promise<import('@profer/shared').ReviewRunV2[]>,
   getRunV2: (caseId: string, runId: string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.GET_RUN_V2, { caseId, runId }) as Promise<import('@profer/shared').ReviewRunV2 | undefined>,
+  resumeRunV2: (caseId: string, runId?: string) =>
+    ipcRenderer.invoke(REVIEW_IPC_CHANNELS.RESUME_RUN_V2, { caseId, runId }) as Promise<import('@profer/shared').ReviewRunV2>,
   cancelRunV2: (runId: string) => ipcRenderer.invoke(REVIEW_IPC_CHANNELS.CANCEL_RUN_V2, runId) as Promise<boolean>,
   migrateCaseV2: (caseId: string) =>
     ipcRenderer.invoke(REVIEW_IPC_CHANNELS.MIGRATE_CASE_V2, caseId) as Promise<import('@profer/shared').ReviewCaseV2 | undefined>,

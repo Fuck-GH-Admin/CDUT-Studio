@@ -148,6 +148,16 @@ type TemplateFieldInput = { key: string; label: string; kind: string; required: 
     await refreshList()
     toast.success('案卷已提交，进入审核')
   }), [current, run, store, refreshList])
+  const runCaseReview = useCallback(() => run(async () => {
+    if (!current) return
+    const { status } = await window.reviewAPI.runReviewV2(current.caseV2.id)
+    toast.success(`审核运行结束：${status}`)
+  }), [current, run])
+  const resumeCaseReview = useCallback(() => run(async () => {
+    if (!current) return
+    const { status } = await window.reviewAPI.resumeRunV2(current.caseV2.id)
+    toast.success(`已续跑：${status}`)
+  }), [current, run])
   const updateTitle = useCallback(() => {
     if (!current) return
     return run(async () => {
@@ -237,6 +247,8 @@ type TemplateFieldInput = { key: string; label: string; kind: string; required: 
               {(current.caseV2.stage === 'draft' || (current.caseV2.stage === 'submitted' && current.tasks.length === 0)) && (
                 <Button size="sm" onClick={submitCase}>{current.caseV2.stage === 'draft' ? '提交案卷' : '恢复审核任务'}</Button>
               )}
+              <Button size="sm" variant="outline" disabled={!current} onClick={runCaseReview}>运行审核</Button>
+              <Button size="sm" variant="outline" disabled={!current} onClick={resumeCaseReview}>继续运行</Button>
             </div>
             <BusinessFlowSection aggregate={current} onResult={applyResult} />
             <p className="font-medium">{current.caseV2.title}</p>

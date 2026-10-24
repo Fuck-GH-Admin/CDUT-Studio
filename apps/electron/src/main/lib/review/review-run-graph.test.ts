@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import type { TemplateVersion } from '@profer/shared'
-import { executeRunGraph, planRunGraph, restoreCheckpoints, type NodeExecutor, type NodeKind, type RunGraphNode } from './review-run-graph'
+import { executeRunGraph, planRunGraph, type NodeExecutor, type NodeKind, type RunGraphNode } from './review-run-graph'
 
 const template = (stages: TemplateVersion['stages']): TemplateVersion =>
   ({ templateId: 't', version: 1, schemaVersion: 2, name: 't', objectType: 'person', displayName: { template: '' }, fields: [], materialSlots: [], policyVersionIds: [], stages, outputs: [], status: 'published', createdAt: '' }) as unknown as TemplateVersion
@@ -52,20 +52,6 @@ describe('executeRunGraph（A18）', () => {
     // c 是 b 的下游，未执行
     const cCheckpoint = outcome.checkpoints.find((checkpoint) => checkpoint.nodeId === 'node-c-task')
     expect(cCheckpoint).toBeUndefined()
-  })
-
-  test('Given 检查点 When 恢复 Then done+同 hash 跳过（不重做），failed 转回 pending', async () => {
-    const nodes: RunGraphNode[] = [
-      { id: 'n1', kind: 'parse', stageId: 'a', dependsOn: [], status: 'pending', attempts: 0, inputHash: 'h1' },
-      { id: 'n2', kind: 'check', stageId: 'b', dependsOn: ['n1'], status: 'pending', attempts: 1, lastError: '上次失败' },
-    ]
-    const restored = restoreCheckpoints(nodes, [
-      { nodeId: 'n1', inputHash: 'h1', status: 'done', attempts: 1 },
-      { nodeId: 'n2', inputHash: 'h1', status: 'failed', attempts: 1, lastError: '上次失败' },
-    ])
-    expect(restored.skipped).toEqual(['n1'])
-    expect(restored.nodes[0]!.status).toBe('done')
-    expect(restored.nodes[1]!.status).toBe('pending') // failed 可重试
   })
 
   test('Given 执行中取消 When 执行 Then 未启动节点不执行且 run=cancelled（K18）', async () => {

@@ -1249,6 +1249,11 @@ export async function rehydrateHpcJobs(
       }
       upsertHpcJobRow(db, next)
       publishJob(next, sink)
+      // 重水合是重启后唯一的恢复路径：本轮失败也必须排下一轮退避重试，
+      // 否则一次网络瞬断就会让作业永久停止自动刷新。schedulePoll 会清掉旧 timer，可安全重复调用。
+      if (!isTerminal(next.state)) {
+        schedulePoll(labId, row.key, sink, Math.min(MAX_POLL_MS, DEFAULT_POLL_MS * 2))
+      }
     }
   }
 

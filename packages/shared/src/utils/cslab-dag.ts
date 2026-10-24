@@ -5,6 +5,7 @@
  * 1. `pending / verified / dead_end` 是人工事实；`pruned` 是拓扑派生状态，绝不反向污染人工状态；
  * 2. 使用扩展 Kahn 算法给出拓扑序；存在环时立即停止剪枝，避免节点状态丢失；
  * 3. 支持 Conjunctive(AND) / Disjunctive(OR) 门限：上游失效按门限级联折叠下游。
+ * 4. 本模块是纯状态推演（pending/verified/dead_end/pruned）与环路检测，不含节点执行器、checkpoint 与重跑调度；执行/恢复在 cslab-hpc 与 canvas 自动保存层。
  */
 
 import type {

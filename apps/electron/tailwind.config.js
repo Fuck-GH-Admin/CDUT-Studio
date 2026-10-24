@@ -31,6 +31,17 @@ export default {
   ],
   theme: {
     extend: {
+      // ===== 断点：与 src/renderer/lib/breakpoints.ts 的 BREAKPOINTS 同一组数值 =====
+      // 这些值与 Tailwind 默认断点完全一致，显式声明只为让「响应式变体阈值」和
+      // 「JS 里 window.innerWidth 判断的阈值」指向同一个事实源；生成 CSS 不变。
+      // 改这里必须同步改 breakpoints.ts，否则媒体查询与 JS 判断会出现两套阈值。
+      screens: {
+        sm: '640px',
+        md: '768px',
+        lg: '1024px',
+        xl: '1280px',
+        '2xl': '1536px',
+      },
       colors: {
         border: 'hsl(var(--border) / <alpha-value>)',
         input: 'hsl(var(--input))',

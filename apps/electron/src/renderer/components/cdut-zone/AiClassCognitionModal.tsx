@@ -216,7 +216,7 @@ export function AiClassCognitionModal(): React.ReactElement {
               <h3 className="text-sm font-semibold text-foreground">一、课堂知识检索引擎</h3>
               <span className="text-[10px] text-muted-foreground">教材 · 课件 · 资料</span>
             </div>
-            <div className="grid gap-2.5 md:grid-cols-2">
+            <div className="grid grid-cols-2 gap-2.5">
               {studyOptions.map((option) => (
                 <CognitionOptionCard
                   key={option.value}
@@ -235,7 +235,7 @@ export function AiClassCognitionModal(): React.ReactElement {
               <h3 className="text-sm font-semibold text-foreground">二、跨课联想终身记忆引擎</h3>
               <span className="text-[10px] text-muted-foreground">跨学期 · 跨学科历史会话</span>
             </div>
-            <div className="grid gap-2.5 md:grid-cols-2">
+            <div className="grid grid-cols-2 gap-2.5">
               {memoryOptions.map((option) => (
                 <CognitionOptionCard
                   key={option.value}

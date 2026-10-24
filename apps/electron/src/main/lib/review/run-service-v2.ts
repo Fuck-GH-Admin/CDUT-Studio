@@ -2,7 +2,7 @@
  * V2 运行编排服务（M3 收尾，设计 03 §6/§11.1 M3）
  *
  * - startRunV2：创建运行（不可变输入 manifest）→ 执行运行图 → 每节点落盘（检查点持久化）
- * - resumeRunV2：从磁盘检查点恢复，done+同 hash 跳过（A11/A18）
+ * - 续跑：runReviewCaseV2({ resumeRunId }) 从磁盘检查点恢复，done+同 hash 跳过（A11/A18）
  * - cancelRunV2：进程内取消注册表；取消后不启动新节点（K18），落盘 cancelled
  * - 事件经 onEvent 回调（M5 IPC 接线时转发渲染层）
  */
@@ -60,7 +60,8 @@ export async function runReviewCaseV2(
   executors: Record<NodeKind, NodeExecutor>,
   options: StartRunOptions = {},
 ): Promise<ReviewRunV2> {
-  const runId = options.runId ?? options.resumeRunId ?? `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  // 续跑必须产生新运行文件：只给 resumeRunId 时不能拿它当新 runId（saveRunV2 会覆盖旧运行）
+  const runId = options.runId ?? `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const inputHash = computeRunInputHash(caseV2, [], [])
   const nodes = planRunGraph(template)
   for (const node of nodes) {

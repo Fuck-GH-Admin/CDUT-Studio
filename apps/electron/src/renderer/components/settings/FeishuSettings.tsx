@@ -1113,7 +1113,7 @@ function SessionMirrorSection({ bots }: { bots: FeishuBotConfig[] }): React.Reac
     >
       <SettingsCard divided={false}>
         <div className="px-4 py-4 space-y-4">
-          <div className="grid gap-3 md:grid-cols-[180px_1fr] md:items-center">
+          <div className="grid gap-3 grid-cols-[180px_1fr] items-center">
             <div className="text-sm font-medium text-foreground">同步方式</div>
             <Select value={settings.mode} onValueChange={handleModeChange}>
               <SelectTrigger className="h-9">
@@ -1126,7 +1126,7 @@ function SessionMirrorSection({ bots }: { bots: FeishuBotConfig[] }): React.Reac
             </Select>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[180px_1fr] md:items-center">
+          <div className="grid gap-3 grid-cols-[180px_1fr] items-center">
             <div className="text-sm font-medium text-foreground">同步 Bot</div>
             <Select
               value={settings.botId ?? ''}
@@ -1182,6 +1182,61 @@ function SessionMirrorSection({ bots }: { bots: FeishuBotConfig[] }): React.Reac
               </div>
             </div>
           )}
+        </div>
+      </SettingsCard>
+    </SettingsSection>
+  )
+}
+
+// ===== 同步死信 =====
+
+function SyncDeadLetterSection(): React.ReactElement {
+  const [count, setCount] = React.useState<number | null>(null)
+  const [retrying, setRetrying] = React.useState(false)
+
+  const refreshCount = React.useCallback(() => {
+    window.electronAPI.sync.listDeadLetters()
+      .then((envelopes) => setCount(envelopes.length))
+      .catch(() => setCount(null))
+  }, [])
+
+  React.useEffect(() => {
+    refreshCount()
+  }, [refreshCount])
+
+  const handleRetryAll = React.useCallback(async () => {
+    setRetrying(true)
+    try {
+      const result = await window.electronAPI.sync.retryDeadLetters()
+      toast.success(result.retried > 0 ? `已重新入队 ${result.retried} 条死信` : '死信队列已为空')
+      refreshCount()
+    } catch {
+      toast.error('死信重试失败')
+    } finally {
+      setRetrying(false)
+    }
+  }, [refreshCount])
+
+  return (
+    <SettingsSection
+      title="同步死信"
+      description="超过重试上限仍推送失败的团队同步变更会被保存在死信队列中，不会静默丢弃。"
+    >
+      <SettingsCard divided={false}>
+        <div className="flex items-center justify-between gap-4 px-4 py-4">
+          <div className="text-sm text-muted-foreground">
+            {count === null ? '当前死信条数：—' : `当前死信条数：${count}`}
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleRetryAll()}
+            disabled={retrying || !count}
+            className="gap-1.5"
+          >
+            {retrying ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            重试全部
+          </Button>
         </div>
       </SettingsCard>
     </SettingsSection>
@@ -1479,11 +1534,11 @@ function FeishuQuickStart({ bots, botStates, onRegister, onManualAdd, onRefresh,
             </div>
             <Button size="sm" variant="ghost" onClick={onRefresh} className="shrink-0 gap-1.5" aria-label="刷新飞书连接状态">
               <RefreshCw size={14} />
-              <span className="hidden sm:inline">刷新</span>
+              <span className="inline">刷新</span>
             </Button>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-3" aria-label="飞书接入步骤">
+          <div className="grid gap-2 grid-cols-3" aria-label="飞书接入步骤">
             {[
               ['1', '扫码创建', '用飞书扫一扫完成授权'],
               ['2', '自动启动', 'CDUT Studio 自动保存并连接'],
@@ -1690,6 +1745,8 @@ function FeishuConfigTab(): React.ReactElement {
           </SettingsSection>
 
           <SessionMirrorSection bots={bots} />
+
+          <SyncDeadLetterSection />
 
           {/* 手动创建飞书 Bot 引导 */}
           <SettingsSection

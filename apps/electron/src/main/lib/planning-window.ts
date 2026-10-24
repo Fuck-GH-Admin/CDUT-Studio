@@ -7,7 +7,9 @@ import { getSettings, updateSettings } from './settings-service'
 
 const DEFAULT_WIDTH = 1180
 const DEFAULT_HEIGHT = 820
-const MIN_WIDTH = 760
+// 最小宽度必须高于 md 断点（768），否则 planning 窗口里的 md: 变体永远为假。
+// 数值对齐 renderer/lib/breakpoints.ts 的 BREAKPOINTS.md。
+const MIN_WIDTH = 780
 const MIN_HEIGHT = 560
 const PLANNING_WINDOW_TITLE = 'Profer · 规划中心'
 

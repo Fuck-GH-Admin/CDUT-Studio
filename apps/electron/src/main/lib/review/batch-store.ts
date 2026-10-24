@@ -232,7 +232,7 @@ export async function runBatchQueue(batchId: string, options: BatchQueueOptions 
     }
   }
   const final = readBatchStateV2(batchId)!
-  final.status = final.cases.every((entry) => entry.status === 'done') ? 'queued' : 'queued' // 执行完回 queued（等待人工定稿，不自动定稿）
+  final.status = 'queued' // 执行完回 queued（等待人工定稿，不自动定稿）
   saveBatchStateV2(final)
   return final
 }

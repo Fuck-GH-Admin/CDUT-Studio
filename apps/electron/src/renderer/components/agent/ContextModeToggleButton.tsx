@@ -59,7 +59,7 @@ export const ContextModeToggleButton: React.FC<ContextModeToggleButtonProps> = (
                 )}
               >
                 {item.icon}
-                <span className="hidden sm:inline">{item.label}</span>
+                <span className="hidden min-[420px]:inline">{item.label}</span>
               </button>
             )
           })}
