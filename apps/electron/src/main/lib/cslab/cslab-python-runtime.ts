@@ -32,6 +32,7 @@ const PROFILE_MODULES: Record<CsLabToolProfile, string[]> = {
   formula: ['sympy', 'antlr4'],
   'formula-ocr': ['pix2text'],
   instrument: ['h5py', 'yadg', 'eclabfiles'],
+  docling: ['docling'],
 }
 
 const PROFILE_LABELS: Record<CsLabToolProfile, string> = {
@@ -39,6 +40,7 @@ const PROFILE_LABELS: Record<CsLabToolProfile, string> = {
   formula: '公式验算（SymPy + antlr4 LaTeX 解析）',
   'formula-ocr': '公式 OCR（Pix2Text，体积较大）',
   instrument: '仪器增强解析（h5py / yadg / eclabfiles）',
+  docling: '文献结构化蒸馏（Docling，纯 CPU 可运行）',
 }
 
 /** 平台感知的 venv Python 路径（评审加固 11.2）。 */

@@ -26,6 +26,7 @@ import {
   PanelLeftOpen,
   RefreshCw,
   ScanText,
+  Search,
   Server,
   Sparkles,
   Upload,
@@ -97,6 +98,7 @@ import { CsLabFormulaPanel } from './CsLabFormulaPanel'
 import { CsLabTranslatePanel } from './CsLabTranslatePanel'
 import { CsLabLiteratureBrainPanel } from './CsLabLiteratureBrainPanel'
 import { CsLabZoteroPanel } from './CsLabZoteroPanel'
+import { CsLabLiteratureSearchModal } from './literature-search/CsLabLiteratureSearchModal'
 import { CsLabRunTimeline } from './CsLabRunTimeline'
 import { CsLabNotesPanel } from './CsLabNotesPanel'
 import { CsLabToolsPanel } from './CsLabToolsPanel'
@@ -232,6 +234,10 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const [assetDrag, setAssetDrag] = useAtom(cslabAssetDragAtom)
   const [tileTarget, setTileTarget] = useAtom(cslabTileTargetAtom)
   const [drawer, setDrawer] = useAtom(cslabDrawerAtom)
+  const [academicSearchOpen, setAcademicSearchOpen] = React.useState(false)
+  const [academicSearchQuery, setAcademicSearchQuery] = React.useState<string | undefined>(
+    undefined,
+  )
   const [railCollapsed, setRailCollapsed] = useAtom(cslabAssetRailCollapsedAtom)
   const [hpcMfa, setHpcMfa] = useAtom(cslabHpcMfaAtom)
   const [mfaValue, setMfaValue] = React.useState('')
@@ -1980,6 +1986,18 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           </button>
           <button
             type="button"
+            onClick={() => {
+              setAcademicSearchQuery(undefined)
+              setAcademicSearchOpen(true)
+            }}
+            className="inline-flex shrink-0 select-none items-center gap-1.5 whitespace-nowrap rounded-lg border border-cslab-border/70 px-2.5 py-1 text-xs text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            title="跨源学术文献检索"
+          >
+            <Search size={12} className="text-cslab-accent" />
+            <span>学术文献检索</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setDrawer({ open: true, mode: 'zotero', title: 'Zotero 文献同步' })}
             className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
             title={zoteroStatus?.message ?? 'Zotero 文献同步'}
@@ -2243,6 +2261,10 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
                 })
               }}
               onDropAssetOnPane={handleDropAssetOnPane}
+              onSearchLiterature={(query: string) => {
+                setAcademicSearchQuery(query)
+                setAcademicSearchOpen(true)
+              }}
               onCanvasSaved={(paneId, document) => {
                 setPaneCanvases((previous) => ({ ...previous, [paneId]: document }))
                 void refreshAssets()
@@ -2747,6 +2769,33 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
             验证码仅用于本次 SSH 握手，不会写入本地配置。
           </p>
         </div>
+      )}
+
+      {academicSearchOpen && (
+        <CsLabLiteratureSearchModal
+          labId={labId}
+          initialQuery={academicSearchQuery}
+          canInsertCitation={!!paneManuscripts[activePaneId]}
+          onClose={() => setAcademicSearchOpen(false)}
+          onIngested={() => {
+            void refreshAssets()
+          }}
+          onInsertCitation={(citation: string) => {
+            const handle = editorRefs.current[activePaneId]
+            if (!handle) {
+              showToast('info', '请先在激活窗格中打开文稿')
+              return
+            }
+            handle.insertText(citation)
+            showToast('success', '引用已插入当前文稿，请记得保存')
+          }}
+          onCastToPane={(uri) => {
+            void (async () => {
+              const item = await window.electronAPI.cslab.getLiteratureItem({ labId, uri })
+              if (item) await openLiteratureInPane(activePaneId, item)
+            })()
+          }}
+        />
       )}
     </div>
   )

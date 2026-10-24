@@ -10,6 +10,10 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import { resolveCsLabSeminarLabId } from './cslab-session-gate'
 import { searchLabLiterature } from './cslab-graphrag-router'
 import { buildLiteratureGuide, readPaperSection } from './cslab-literature-structure'
+import {
+  ingestAcademicPaper,
+  searchAcademicPapers,
+} from './cslab-academic-search-service'
 
 type PiSdkLike = typeof import('@earendil-works/pi-coding-agent')
 
@@ -40,6 +44,62 @@ export function buildCsLabLiteratureTools(
   if (!labId) return []
 
   const tools: ToolDefinition[] = []
+
+  tools.push(
+    sdk.defineTool({
+      name: 'cslab_academic_search',
+      label: 'CSLab 学术文献检索',
+      description:
+        '跨源联邦检索全球学术文献（OpenAlex / Semantic Scholar / arXiv / Crossref），自动做 DOI/标题/预印本-正刊谱系去重与 RRF 重排，返回外显元数据（TL;DR、方法关键词、引用量、OA 直链）。可选 ingest 把最相关的开放获取 PDF 一键入库为实验室文献资产。适合「帮我调研…方向的文献」类需求。',
+      promptSnippet: 'cslab_academic_search: 多源学术文献检索（可一键入库）',
+      parameters: Type.Object({
+        query: Type.String({ minLength: 1, description: '检索关键词或科学问题' }),
+        topK: Type.Optional(Type.Integer({ minimum: 1, maximum: 30 })),
+        yearFrom: Type.Optional(Type.Integer({ minimum: 1900, maximum: 2100 })),
+        yearTo: Type.Optional(Type.Integer({ minimum: 1900, maximum: 2100 })),
+        openAccessOnly: Type.Optional(Type.Boolean({ description: '仅返回开放获取文献' })),
+        ingest: Type.Optional(
+          Type.Boolean({ description: '把最相关的开放获取论文 PDF 一键入库为实验室文献资产' }),
+        ),
+      }),
+      async execute(_toolCallId: string, params: unknown) {
+        const input = params as {
+          query: string
+          topK?: number
+          yearFrom?: number
+          yearTo?: number
+          openAccessOnly?: boolean
+          ingest?: boolean
+        }
+        try {
+          const result = await searchAcademicPapers({
+            query: input.query,
+            topK: input.topK,
+            filters: {
+              yearFrom: input.yearFrom,
+              yearTo: input.yearTo,
+              openAccessOnly: input.openAccessOnly ?? (input.ingest ? true : undefined),
+            },
+          })
+          if (!input.ingest) return jsonToolResult(result)
+
+          const target = result.papers.find(
+            (paper) => paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi),
+          )
+          if (!target) {
+            return jsonToolResult({
+              ...result,
+              ingest: { ok: false, message: '检索结果中没有可入库的开放获取 PDF' },
+            })
+          }
+          const ingest = await ingestAcademicPaper({ labId, paper: target })
+          return jsonToolResult({ ...result, ingest })
+        } catch (error) {
+          return jsonToolError(error instanceof Error ? error.message : '学术检索失败')
+        }
+      },
+    }) as ToolDefinition,
+  )
 
   tools.push(
     sdk.defineTool({

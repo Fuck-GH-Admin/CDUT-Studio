@@ -302,10 +302,11 @@ export async function ingestFiles(
         // 事务已提交：文件归实体所有，异常清理不再接管
         stagedAbsPath = null
 
-        // 后台解析（限流 ≤2）：标题/摘要/章节/公式/表格回填，并自动重建 GraphRAG 索引。
-        void import('./cslab-literature-structure')
-          .then((module) => module.enrichLiteratureInBackground(labId, litUri))
-          .catch((error) => console.warn('[CSLab] 文献后台解析调度失败:', error))
+        // 静默入库流水线（限流 ≤2）：结构/实证/语义抽取 + Vault 五文件束，
+        // 完成后统一重建 GraphRAG 索引（推迟重建避免与抽取阶段锁竞争）。
+        void import('./cslab-paper-pipeline')
+          .then((module) => module.runPaperIngestionPipeline(labId, litUri))
+          .catch((error) => console.warn('[CSLab] 论文入库流水线调度失败:', error))
 
         emit('done', 'PDF 已只读入笼为文献')
         const litEntity = getEntityByUri(db, litUri)

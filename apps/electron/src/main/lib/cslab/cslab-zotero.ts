@@ -1032,6 +1032,19 @@ export async function syncZoteroLibrary(
         setLabState(labDatabase, 'zotero.dataDir', dataDir)
       })
 
+      // Zotero 同步入库同样触发静默论文流水线（仅限有本地 PDF 的条目；
+      // 流水线内部限流 ≤2、单文献单飞，批量同步不会压垮主进程）。
+      void import('./cslab-paper-pipeline')
+        .then((module) => {
+          for (const item of preparedItems) {
+            if (!item.source.absPath) continue
+            void module.runPaperIngestionPipeline(labId, item.source.uri).catch((error: unknown) =>
+              console.warn('[CSLab] Zotero 论文流水线调度失败:', error),
+            )
+          }
+        })
+        .catch((error) => console.warn('[CSLab] Zotero 论文流水线模块加载失败:', error))
+
       const annotationCount = countZoteroAnnotations(labDatabase, labId)
       const collectionCount = listZoteroCollections(labDatabase, labId).length
       const messageParts: string[] = []

@@ -62,6 +62,8 @@ export interface LiteratureStructureFile {
   sections: LiteratureStructureSection[]
   equations: Array<{ latex: string; tag?: string; page: number }>
   tables: Array<{ page: number; markdown: string; caption?: string }>
+  /** kind === 'figure' 的版面块（bbox 为页面点坐标，供图表抽取配对）。 */
+  figures?: Array<{ page: number; bbox: [number, number, number, number]; caption: string }>
   pages: Array<{ page: number; text: string }>
   markdown: string
   warnings: string[]
@@ -262,6 +264,21 @@ export function buildStructureFromAst(
       caption: block.table?.caption,
     }))
     .filter((item) => item.markdown.length > 0)
+  // 图表块：归一化 bbox 乘页面尺寸还原为点坐标（左上原点），供图表抽取做位置配对。
+  const pageDims = new Map(ast.pages.map((page) => [page.pageNumber, page]))
+  const figures = blocks
+    .filter((block) => block.kind === 'figure')
+    .map((block) => {
+      const dims = pageDims.get(block.pageNumber)
+      const [x0, y0, x1, y1] = block.bbox
+      const width = dims && dims.width > 0 ? dims.width : 1
+      const height = dims && dims.height > 0 ? dims.height : 1
+      return {
+        page: block.pageNumber,
+        bbox: [x0 * width, y0 * height, x1 * width, y1 * height] as [number, number, number, number],
+        caption: cleanText(block.text).slice(0, 500),
+      }
+    })
 
   return {
     version: 1,
@@ -278,6 +295,7 @@ export function buildStructureFromAst(
     sections,
     equations,
     tables,
+    figures,
     pages: buildPages(blocks),
     markdown: ast.markdown.slice(0, MAX_MARKDOWN_CHARS),
     warnings: [],
@@ -350,8 +368,8 @@ function appendParseWarning(raw: string | undefined, warning: string): string {
   return JSON.stringify({ ...current, parseWarning: warning })
 }
 
-/** 解析并回填单篇文献；失败只记录 parseWarning。 */
-async function enrichLiteratureOnce(labId: string, uri: string): Promise<void> {
+/** 解析并回填单篇文献；失败只记录 parseWarning。`deferIndexRebuild` 为 true 时跳过 GraphRAG 重建（由入库流水线统一调度）。 */
+async function enrichLiteratureOnce(labId: string, uri: string, deferIndexRebuild = false): Promise<void> {
   const db = labDb(labId)
   const entity = getEntityByUri(db, uri)
   if (!entity || entity.layerType !== 'lit') return
@@ -392,8 +410,13 @@ async function enrichLiteratureOnce(labId: string, uri: string): Promise<void> {
       kind: 'updated',
       revision: entity.revision,
     })
-    const { scheduleLiteratureIndexRebuild } = await import('./cslab-graphrag-router')
-    scheduleLiteratureIndexRebuild(labId)
+    if (deferIndexRebuild) {
+      // 入库流水线尚未完成 Vault/向量阶段，重建推迟到流水线末尾统一触发，
+      // 杜绝过早重建与后续阶段的重复锁竞争。
+    } else {
+      const { scheduleLiteratureIndexRebuild } = await import('./cslab-graphrag-router')
+      scheduleLiteratureIndexRebuild(labId)
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'PDF 结构解析失败'
     console.warn(`[CSLab] 文献结构解析失败 (${uri}):`, error)
@@ -408,6 +431,7 @@ async function enrichLiteratureOnce(labId: string, uri: string): Promise<void> {
 interface EnrichmentJob {
   labId: string
   uri: string
+  deferIndexRebuild: boolean
   resolve: () => void
   reject: (error: unknown) => void
 }
@@ -420,7 +444,7 @@ function drainEnrichmentQueue(): void {
   while (activeEnrichments < MAX_CONCURRENT_ENRICHMENTS && enrichmentQueue.length > 0) {
     const job = enrichmentQueue.shift()!
     activeEnrichments += 1
-    void enrichLiteratureOnce(job.labId, job.uri)
+    void enrichLiteratureOnce(job.labId, job.uri, job.deferIndexRebuild)
       .then(job.resolve, job.reject)
       .finally(() => {
         activeEnrichments -= 1
@@ -430,13 +454,23 @@ function drainEnrichmentQueue(): void {
 }
 
 /** 批量入笼限流：最多 2 个 PDF 并行解析，其余排队；同一文献单飞。 */
-export function enrichLiteratureInBackground(labId: string, uri: string): Promise<void> {
+export function enrichLiteratureInBackground(
+  labId: string,
+  uri: string,
+  options: { deferIndexRebuild?: boolean } = {},
+): Promise<void> {
   const normalizedLabId = assertLabId(labId)
   const key = `${normalizedLabId}|${uri}`
   const existing = inFlightEnrichments.get(key)
   if (existing) return existing
   const task = new Promise<void>((resolve, reject) => {
-    enrichmentQueue.push({ labId: normalizedLabId, uri, resolve, reject })
+    enrichmentQueue.push({
+      labId: normalizedLabId,
+      uri,
+      deferIndexRebuild: options.deferIndexRebuild === true,
+      resolve,
+      reject,
+    })
     drainEnrichmentQueue()
   })
   inFlightEnrichments.set(key, task)

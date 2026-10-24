@@ -42,6 +42,7 @@ interface LiteratureMetadata {
   collections?: string[]
   pageCount?: number
   keywords?: string[]
+  tldr?: string
   sectionTitles?: string[]
   sectionCount?: number
   structureRelPath?: string
@@ -97,6 +98,7 @@ function toLiteratureItem(
     updatedAt: entity.updatedAt,
     sectionCount: metadata.sectionCount,
     keywords: toStringArray(metadata.keywords),
+    tldr: metadata.tldr,
     hasStructure: typeof metadata.structureRelPath === 'string',
     parseWarning: metadata.parseWarning,
   }

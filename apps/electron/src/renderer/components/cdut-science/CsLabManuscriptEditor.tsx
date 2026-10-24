@@ -69,6 +69,8 @@ interface CsLabManuscriptEditorProps {
   onDirtyChange?: (dirty: boolean) => void
   onTitleChange?: (title: string) => void
   onToast?: (kind: 'info' | 'success' | 'error', text: string) => void
+  /** 划词右键「检索关联学术文献」反向打开学术检索弹窗。 */
+  onSearchLiterature?: (query: string) => void
 }
 
 type RibbonTab = 'home' | 'insert' | 'review' | 'view'
@@ -135,6 +137,7 @@ export function CsLabManuscriptEditor({
   onDirtyChange,
   onTitleChange,
   onToast,
+  onSearchLiterature,
 }: CsLabManuscriptEditorProps): React.ReactElement {
   const [activeTab, setActiveTab] = React.useState<RibbonTab>('home')
   const [title, setTitle] = React.useState(manuscript.title)
@@ -811,6 +814,7 @@ export function CsLabManuscriptEditor({
           onCapsuleClick={onCapsuleClick}
           onMetricsChange={setMetrics}
           onToast={onToast}
+          onSearchLiterature={onSearchLiterature}
         />
       </div>
 

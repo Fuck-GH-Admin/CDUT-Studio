@@ -3,14 +3,18 @@
  *
  * 未搜索时渲染基于已建索引的全景图谱（Leiden 社区着色，文献级共现网络）；
  * 检索命中点击后跳转 PDF 页码并按 bbox 高亮聚焦选框。
+ * 头部支持 2D Leiden Map / 3D Spatial Topology 分段切换（3D 为分层空间拓扑视口）。
  */
 
 import * as React from 'react'
-import { Loader2, Network, Search, X } from 'lucide-react'
+import { Box, Loader2, Network, Search, X } from 'lucide-react'
 import type {
   CsLabLiteratureGraphResult,
   CsLabLiteratureSearchResult,
+  Hierarchical3DGraphData,
 } from '@profer/shared'
+import { cn } from '@/lib/utils'
+import { CsLab3DTopologyViewport } from './CsLab3DTopologyViewport'
 
 interface CsLabLiteratureBrainPanelProps {
   labId: string
@@ -18,6 +22,14 @@ interface CsLabLiteratureBrainPanelProps {
 }
 
 const TEXT_LAYER_HINT = '文献缺少文本层（扫描版 PDF），请导入带 OCR/文本层的 PDF 后再建索引。'
+
+/** 图谱视图模式：2D Leiden 社群图 / 3D 分层空间拓扑。 */
+type TopologyViewMode = '2d' | '3d'
+
+/** 3D 拓扑 IPC 由并行任务接线；方法缺失时降级提示而非崩溃。 */
+interface Literature3DGraphApi {
+  getLiterature3DGraph?: (labId: string, uri?: string) => Promise<Hierarchical3DGraphData | null>
+}
 
 /** 渲染规模软保护：防止数千级 SVG DOM 卡顿渲染主线程。 */
 const MAX_GRAPH_NODES = 250
@@ -112,6 +124,11 @@ export function CsLabLiteratureBrainPanel({
   const [hint, setHint] = React.useState<string | null>(null)
   const [graph, setGraph] = React.useState<CsLabLiteratureGraphResult | null>(null)
   const [graphLoading, setGraphLoading] = React.useState(false)
+  const [viewMode, setViewMode] = React.useState<TopologyViewMode>('2d')
+  const [graph3d, setGraph3d] = React.useState<Hierarchical3DGraphData | null>(null)
+  const [graph3dLoading, setGraph3dLoading] = React.useState(false)
+  const [graph3dLoaded, setGraph3dLoaded] = React.useState(false)
+  const [graph3dError, setGraph3dError] = React.useState<string | null>(null)
 
   const loadGraph = React.useCallback(async (): Promise<void> => {
     setGraphLoading(true)
@@ -130,6 +147,33 @@ export function CsLabLiteratureBrainPanel({
     if (result === null && graph === null && !graphLoading) void loadGraph()
   }, [result, graph, graphLoading, loadGraph])
 
+  /** 加载 3D 分层空间拓扑（IPC 防御：方法缺失时降级提示而非崩溃）。 */
+  const loadGraph3d = React.useCallback(async (): Promise<void> => {
+    const api = window.electronAPI.cslab as unknown as Literature3DGraphApi
+    if (typeof api.getLiterature3DGraph !== 'function') {
+      setGraph3dError('3D 拓扑接口尚未就绪（IPC getLiterature3DGraph 未接线）')
+      return
+    }
+    setGraph3dLoading(true)
+    setGraph3dError(null)
+    try {
+      const payload = await api.getLiterature3DGraph(labId)
+      setGraph3d(payload)
+    } catch (err) {
+      setGraph3d(null)
+      setGraph3dError(err instanceof Error ? err.message : '3D 拓扑加载失败')
+    } finally {
+      setGraph3dLoading(false)
+      setGraph3dLoaded(true)
+    }
+  }, [labId])
+
+  // 3D 模式下按需加载分层拓扑（首次切换 + 索引重建后回填）。
+  React.useEffect(() => {
+    if (viewMode !== '3d' || graph3dLoaded || graph3dLoading || graph3dError) return
+    void loadGraph3d()
+  }, [viewMode, graph3dLoaded, graph3dLoading, graph3dError, loadGraph3d])
+
   const build = async (force: boolean): Promise<void> => {
     setBusy('build')
     setError(null)
@@ -141,8 +185,11 @@ export function CsLabLiteratureBrainPanel({
         if (isTextLayerMessage(payload.message)) setHint(TEXT_LAYER_HINT)
         else setError(payload.message ?? '索引构建失败')
       }
-      // 索引重建后刷新全景图谱数据。
+      // 索引重建后刷新全景图谱数据（2D / 3D 一并回填）。
       setGraph(null)
+      setGraph3d(null)
+      setGraph3dLoaded(false)
+      setGraph3dError(null)
       if (result === null) void loadGraph()
     } catch (err) {
       setError(err instanceof Error ? err.message : '索引构建失败')
@@ -191,6 +238,36 @@ export function CsLabLiteratureBrainPanel({
 
   return (
     <div className="space-y-4">
+      {/* 图谱视图分段切换：2D Leiden 社群图 / 3D 分层空间拓扑 */}
+      <div className="inline-flex items-center gap-0.5 self-start rounded-lg border border-cslab-border bg-cslab-elevated p-0.5">
+        <button
+          type="button"
+          title="Leiden 社群环形布局（2D）"
+          onClick={() => setViewMode('2d')}
+          className={cn(
+            'rounded-md px-2 py-1 text-[10px] transition-colors',
+            viewMode === '2d'
+              ? 'bg-cslab-accent/10 text-cslab-accent'
+              : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+          )}
+        >
+          2D Leiden Map
+        </button>
+        <button
+          type="button"
+          title="分层 3D 空间拓扑（宏观/中观/微观）"
+          onClick={() => setViewMode('3d')}
+          className={cn(
+            'rounded-md px-2 py-1 text-[10px] transition-colors',
+            viewMode === '3d'
+              ? 'bg-cslab-accent/10 text-cslab-accent'
+              : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+          )}
+        >
+          3D Spatial Topology
+        </button>
+      </div>
+
       <div className="flex items-center gap-2 rounded-xl border border-cslab-border bg-cslab-elevated px-2.5 py-1.5">
         <Search size={12} className="shrink-0 text-cslab-muted" />
         <input
@@ -229,7 +306,7 @@ export function CsLabLiteratureBrainPanel({
         </button>
       </div>
 
-      {showGraph && (
+      {viewMode === '2d' && showGraph && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-cslab-muted">
@@ -291,6 +368,47 @@ export function CsLabLiteratureBrainPanel({
           )}
           {!graphLoading && graph && !graph.ok && (
             <p className="text-[10px] leading-relaxed text-cslab-muted">{graph.message}</p>
+          )}
+        </div>
+      )}
+
+      {viewMode === '3d' && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-cslab-muted">
+              <Box size={10} /> 分层 3D 空间拓扑
+            </p>
+            {graph3d && (
+              <span className="text-[9px] text-cslab-muted/80">
+                {graph3d.nodes.length} 节点 · {graph3d.edges.length} 关联
+              </span>
+            )}
+          </div>
+          {!graph3dError && (graph3dLoading || !graph3dLoaded) && (
+            <p className="flex items-center gap-1.5 text-[10px] text-cslab-muted">
+              <Loader2 size={10} className="animate-spin" /> 3D 拓扑加载中…
+            </p>
+          )}
+          {graph3dError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[10px] leading-relaxed text-red-600">
+              <p>{graph3dError}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setGraph3dError(null)
+                  setGraph3dLoaded(false)
+                }}
+                className="mt-1.5 rounded-md border border-dashed border-red-300 px-2 py-1 text-[10px] text-red-600 transition-colors hover:bg-red-100"
+              >
+                重试
+              </button>
+            </div>
+          )}
+          {!graph3dError && graph3dLoaded && graph3d && (
+            <CsLab3DTopologyViewport data={graph3d} height={224} />
+          )}
+          {!graph3dError && graph3dLoaded && graph3d === null && (
+            <p className="text-[10px] leading-relaxed text-cslab-muted">暂无拓扑数据。</p>
           )}
         </div>
       )}

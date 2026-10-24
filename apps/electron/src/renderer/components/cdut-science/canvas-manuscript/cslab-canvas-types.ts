@@ -87,4 +87,8 @@ export interface CsLabCanvasHandle {
   getCommentCount(): number
   clearComments(): void
   focus(): void
+  /** 在当前光标/选区处插入纯文本（文献引用等），并记入撤销历史。 */
+  insertText(text: string): void
+  /** 当前选区纯文本（无选区返回空串），供划词反向检索。 */
+  getSelectedText(): string
 }

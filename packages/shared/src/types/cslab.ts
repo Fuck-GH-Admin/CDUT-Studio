@@ -99,6 +99,16 @@ export const CSLAB_IPC_CHANNELS = {
   SEARCH_LITERATURE: 'cslab:search-literature',
   GET_LITERATURE_GRAPH: 'cslab:get-literature-graph',
 
+  // ===== 跨源学术文献检索（多源联邦） =====
+  ACADEMIC_SEARCH: 'cslab:academic-search',
+  ACADEMIC_FETCH_PREVIEW: 'cslab:academic-fetch-preview',
+  ACADEMIC_INGEST_PAPER: 'cslab:academic-ingest-paper',
+
+  // ===== 论文入库流水线 · 实证抽取 · 3D 拓扑 =====
+  GET_LITERATURE_3D_GRAPH: 'cslab:get-literature-3d-graph',
+  GET_EMPIRICAL_METRICS: 'cslab:get-empirical-metrics',
+  SYNTHESIZE_PAPER_VAULT: 'cslab:synthesize-paper-vault',
+
   // ===== 实验规程与批次 =====
   RUN_LIST_PROTOCOLS: 'cslab:run-list-protocols',
   RUN_CREATE_PROTOCOL: 'cslab:run-create-protocol',
@@ -681,7 +691,7 @@ export interface CsLabPythonCapability {
 
 // ===== 可选 Python 工具运行时（Phase 2） =====
 
-export type CsLabToolProfile = 'plot' | 'formula' | 'formula-ocr' | 'instrument'
+export type CsLabToolProfile = 'plot' | 'formula' | 'formula-ocr' | 'instrument' | 'docling'
 
 export interface CsLabToolProfileStatus {
   installed: boolean
@@ -803,10 +813,114 @@ export interface CsLabLiteratureItem {
   sectionCount?: number
   /** 解析出的关键词。 */
   keywords?: string[]
+  /** 1-2 句核心贡献速读（学术检索入库时外显写入）。 */
+  tldr?: string
   /** 是否已有结构化解析 sidecar。 */
   hasStructure?: boolean
   /** 解析失败时的可读提示。 */
   parseWarning?: string
+  /** 层级学科分类（如 ['Earth Sciences', 'Geophysics', 'Seismic Imaging']）。 */
+  taxonomy?: string[]
+  /** 正式引用列表。 */
+  references?: PaperReference[]
+  /** 实验协议（实证解析产物）。 */
+  protocols?: ExperimentalProtocol[]
+  /** 数值评估指标（实证解析产物）。 */
+  metrics?: EmpiricalMetric[]
+  /** 抽取的图表资产。 */
+  figureAssets?: PaperFigureAsset[]
+  /** 语义概念/方法图谱。 */
+  conceptGraph?: PaperConceptGraph
+  /** 语义增强来源：LLM 结构化输出或确定性 AST 回退。 */
+  enrichmentSource?: 'llm' | 'deterministic'
+}
+
+// ===== 论文入库流水线：实证抽取与语义增强产物 =====
+
+export interface EmpiricalMetric {
+  name: string
+  value: number | string
+  unit?: string
+  baseline?: string | number
+  condition?: string
+  page: number
+}
+
+export interface ExperimentalProtocol {
+  id: string
+  name: string
+  category: 'synthesis' | 'characterization' | 'computation' | 'measurement' | 'general'
+  steps: string[]
+  parameters: Record<string, string | number>
+  instruments?: string[]
+}
+
+export interface PaperFigureAsset {
+  id: string
+  caption: string
+  pageNumber: number
+  /** 已导出位图相对 vault/notes 的路径；vector-unsampled 时缺省。 */
+  relPath?: string
+  bbox?: [number, number, number, number]
+  /** image-xobject：PDF 内嵌位图直提；vector-unsampled：纯矢量图表未采样（不生成占位图）。 */
+  renderSource: 'image-xobject' | 'vector-unsampled'
+}
+
+export interface PaperReference {
+  title: string
+  authors?: string[]
+  year?: string
+  doi?: string
+  venue?: string
+}
+
+export interface PaperConcept {
+  id: string
+  name: string
+  definition?: string
+  relatedConceptIds?: string[]
+}
+
+export interface PaperMethod {
+  id: string
+  name: string
+  role: 'proposed' | 'baseline' | 'general'
+  description?: string
+  dependsOn?: string[]
+}
+
+export interface PaperConceptGraph {
+  concepts: PaperConcept[]
+  methods: PaperMethod[]
+}
+
+// ===== 分层 3D 空间拓扑 =====
+
+export interface Hierarchical3DGraphNode {
+  id: string
+  label: string
+  layer: 'macro' | 'meso' | 'micro'
+  type: 'paper' | 'author' | 'venue' | 'concept' | 'method' | 'protocol' | 'metric' | 'table' | 'figure'
+  /** 2 for macro, 1 for meso, 0 for micro */
+  zLevel: number
+  x?: number
+  y?: number
+  z?: number
+  details?: Record<string, unknown>
+}
+
+export interface Hierarchical3DGraphEdge {
+  source: string
+  target: string
+  relation: string
+  weight?: number
+}
+
+export interface Hierarchical3DGraphData {
+  nodes: Hierarchical3DGraphNode[]
+  edges: Hierarchical3DGraphEdge[]
+  paperUri: string
+  builtAt: number
 }
 
 export interface CsLabZoteroAnnotation {
@@ -1916,4 +2030,127 @@ export interface CsLabPromptLabInfo {
   manuscripts?: readonly { uri: string; title: string; updatedAt: number }[]
   /** 推演画布（仅元数据）。 */
   canvases?: readonly { relPath: string; title: string }[]
+}
+
+// ===== 跨源学术文献检索（多源联邦） =====
+
+/** 学术检索联合路由的上游数据源。 */
+export type CsLabAcademicSource = 'openalex' | 'semantic-scholar' | 'arxiv' | 'crossref'
+
+/** 开放获取状态（语义对齐 Unpaywall / OpenAlex）。 */
+export type CsLabOaStatus =
+  | 'gold'
+  | 'green'
+  | 'bronze'
+  | 'diamond'
+  | 'hybrid'
+  | 'closed'
+  | 'preprint'
+
+export interface CsLabAcademicAuthor {
+  name: string
+  institution?: string
+}
+
+/** 预印本-正刊谱系（Omelette 范式版本对齐）。 */
+export interface CsLabAcademicLineage {
+  isPreprint: boolean
+  /** 已刊版本 DOI（预印本并入正刊主卡片后指向正刊）。 */
+  publishedVersionDoi?: string
+  /** 版本来源标记，如 ['arXiv:2404.13950', 'SIGIR 2024']。 */
+  versionSources: string[]
+}
+
+/** 外显元数据卡片契约（检索结果主卡片）。 */
+export interface CsLabAcademicPaperMetadata {
+  id: string
+  title: string
+  authors: CsLabAcademicAuthor[]
+  year?: number
+  publication?: string
+  doi?: string
+  citationsCount: number
+  isOpenAccess: boolean
+  oaStatus?: CsLabOaStatus
+  /** 合法 OA PDF 直链（预览与入库下载用）。 */
+  openAccessPdfUrl?: string
+  /** DOI / 出版方落地页。 */
+  landingPageUrl?: string
+  abstract: string
+  /** 1-2 句核心贡献速读（S2 TL;DR 优先，Docling/LLM 渐进增强补全）。 */
+  tldr?: string
+  /** 方法学关键词胶囊。 */
+  methodKeywords: string[]
+  /** 学科领域标签。 */
+  fieldsOfStudy?: string[]
+  /** 命中并参与融合的上游源。 */
+  sources: CsLabAcademicSource[]
+  /** 各源原始排名（RRF 可解释性）。 */
+  sourceRanks: Partial<Record<CsLabAcademicSource, number>>
+  lineage: CsLabAcademicLineage
+  /** RRF 融合 + 本地轻量重排后的最终得分。 */
+  score: number
+}
+
+export interface CsLabAcademicSearchFilters {
+  yearFrom?: number
+  yearTo?: number
+  openAccessOnly?: boolean
+  sources?: CsLabAcademicSource[]
+  fieldsOfStudy?: string[]
+  /** 限定出版物 / 会议名。 */
+  publication?: string
+}
+
+export interface CsLabAcademicSearchInput {
+  query: string
+  topK?: number
+  filters?: CsLabAcademicSearchFilters
+  /** 当前配置的 LLM 渠道 / 模型（渲染层传入，供 TL;DR 渐进增强；缺省跳过 LLM 补全）。 */
+  channelId?: string
+  modelId?: string
+}
+
+export interface CsLabAcademicSourceStat {
+  source: CsLabAcademicSource
+  hits: number
+  elapsedMs: number
+  /** 该源降级/失败时的可读原因；成功省略。 */
+  error?: string
+}
+
+export interface CsLabAcademicSearchResult {
+  ok: boolean
+  papers: CsLabAcademicPaperMetadata[]
+  /** 各源命中数与耗时（可解释性面板）。 */
+  sourceStats: CsLabAcademicSourceStat[]
+  message?: string
+}
+
+/** 右侧即时预览载荷。 */
+export interface CsLabAcademicPreviewInput {
+  doi?: string
+  openAccessPdfUrl?: string
+  landingPageUrl?: string
+}
+
+export interface CsLabAcademicPreviewResult {
+  ok: boolean
+  /** PDF 二进制的 dataURL（仅 OA 直链可达时返回）。 */
+  pdfDataUrl?: string
+  message?: string
+}
+
+/** 一键入库：把 OA PDF 下载为实验室文献资产并登记。 */
+export interface CsLabAcademicIngestInput {
+  labId: string
+  paper: CsLabAcademicPaperMetadata
+}
+
+export interface CsLabAcademicIngestResult {
+  ok: boolean
+  uri?: string
+  /** 入库后的实验室 revision（ON_ASSET_CHANGED 事件载荷）。 */
+  revision?: number
+  message: string
 }

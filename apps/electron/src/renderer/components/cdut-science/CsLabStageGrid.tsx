@@ -75,6 +75,8 @@ interface CsLabStageGridProps {
     text: string,
     action?: { label: string; path: string },
   ) => void
+  /** 划词右键「检索关联学术文献」反向打开学术检索弹窗。 */
+  onSearchLiterature: (query: string) => void
 }
 
 const LAYOUT_CLASS: Record<CsLabSplitLayout, string> = {
@@ -121,6 +123,7 @@ export function CsLabStageGrid({
   onDropAssetOnPane,
   onCanvasSaved,
   onToast,
+  onSearchLiterature,
 }: CsLabStageGridProps): React.ReactElement {
   const visiblePanes =
     layout === 'single' ? [activePaneId] : VISIBLE_PANES[layout]
@@ -182,6 +185,7 @@ export function CsLabStageGrid({
             onDropAsset={(payload) => onDropAssetOnPane(paneId, payload)}
             onCanvasSaved={(document, result) => onCanvasSaved(paneId, document, result)}
             onToast={onToast}
+            onSearchLiterature={onSearchLiterature}
           />
         )
       })}

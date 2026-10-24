@@ -1,0 +1,1010 @@
+/**
+ * CSLab 跨源学术文献检索服务（多源联邦）
+ *
+ * 架构落地（API 融合 + 本地轻量重排，零模型权重）：
+ * 1. 动态查询分发器：OpenAlex / Semantic Scholar / arXiv / Crossref 并行聚合，
+ *    单源失败只降级为 sourceStats.error，绝不整体失败；
+ * 2. 谱系去重（Omelette 范式）：DOI 精确归一化 -> 标题模糊聚类 -> 预印本-正刊谱系对齐；
+ * 3. RRF 倒数排名融合 + 本地轻量重排（标题/摘要词重叠、引用量、新近度、OA 加成）；
+ * 4. TL;DR / 方法关键词蒸馏（S2 TL;DR -> Docling -> LLM -> 启发式，见 extractor）；
+ * 5. Unpaywall OA 解析：预览 / 入库时按需懒解析合法 OA PDF 直链。
+ *
+ * 红线：
+ *   - OA 直链只接受 http(s) 协议，入库前必须校验 PDF 魔数（%PDF），绝不入库 HTML 错误页；
+ *   - 入库文件名由论文标题净化生成并走 vault/lit 只读登记，绝不接受渲染进程任意路径；
+ *   - 上游摘要 / 元数据视为不可信文本，仅做展示与受限蒸馏，绝不拼进系统指令。
+ */
+
+import { createHash, randomUUID } from 'node:crypto'
+import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
+import { getProferUserAgent } from '@profer/core'
+import type {
+  CsLabAcademicAuthor,
+  CsLabAcademicIngestInput,
+  CsLabAcademicIngestResult,
+  CsLabAcademicLineage,
+  CsLabAcademicPaperMetadata,
+  CsLabAcademicPreviewInput,
+  CsLabAcademicPreviewResult,
+  CsLabAcademicSearchFilters,
+  CsLabAcademicSearchInput,
+  CsLabAcademicSearchResult,
+  CsLabAcademicSource,
+  CsLabAcademicSourceStat,
+  CsLabOaStatus,
+} from '@profer/shared'
+import { getFetchFn } from '../proxy-fetch'
+import { distillPaperHighlights, extractMethodKeywords } from './cslab-academic-extractor'
+import {
+  findEntityByShaAndLayer,
+  getCsLabDatabase,
+  getEntityByUri,
+  nextLabRevision,
+  upsertEntity,
+  upsertLiteratureSource,
+  withTransaction,
+  type CsLabDatabase,
+  type CsLabEntityRecord,
+} from './cslab-db'
+import { lockFileReadOnly, unlockFile } from './cslab-hash'
+import {
+  assertLabId,
+  resolveLabDir,
+  resolveLabRelativePath,
+  sanitizeFileName,
+} from './cslab-paths'
+import { buildCsLabUri } from './cslab-uri'
+
+// ===== 常量 =====
+
+const REQUEST_TIMEOUT_MS = 8_000
+const DOWNLOAD_TIMEOUT_MS = 45_000
+const MAX_PREVIEW_BYTES = 48 * 1024 * 1024
+const MAX_INGEST_BYTES = 96 * 1024 * 1024
+const RRF_K = 60
+const DEFAULT_TOP_K = 20
+const MAX_TOP_K = 50
+const FETCH_PER_SOURCE = 25
+/** TL;DR LLM 渐进增强的最大并发补全条数（其余走启发式）。 */
+const LLM_ENRICH_LIMIT = 8
+const LLM_ENRICH_CONCURRENCY = 3
+
+const ALL_SOURCES: CsLabAcademicSource[] = [
+  'openalex',
+  'semantic-scholar',
+  'arxiv',
+  'crossref',
+]
+
+/** OpenAlex / Crossref / Unpaywall 礼貌池联系标识（可用环境变量覆盖）。 */
+const CONTACT_EMAIL =
+  process.env.CSLAB_CONTACT_EMAIL?.trim() || 'cdut-studio@users.noreply.github.com'
+
+// ===== 内部检索命中（融合前） =====
+
+interface RawHit {
+  source: CsLabAcademicSource
+  /** 该源内 1-based 排名（RRF 输入）。 */
+  rank: number
+  title: string
+  authors: CsLabAcademicAuthor[]
+  year?: number
+  publication?: string
+  doi?: string
+  arxivId?: string
+  citationsCount: number
+  isOpenAccess: boolean
+  oaStatus?: CsLabOaStatus
+  openAccessPdfUrl?: string
+  landingPageUrl?: string
+  abstract: string
+  tldr?: string
+  fieldsOfStudy?: string[]
+}
+
+// ===== 通用 HTTP =====
+
+function buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    'User-Agent': getProferUserAgent(),
+    Accept: 'application/json, application/atom+xml, */*',
+    ...extra,
+  }
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const fetchFn = getFetchFn()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetchFn(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// ===== 文本归一化 =====
+
+function normalizeDoi(raw?: string | null): string | undefined {
+  if (!raw) return undefined
+  const cleaned = raw
+    .trim()
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//i, '')
+    .replace(/^doi:\s*/i, '')
+    .toLowerCase()
+  return /^10\.\d{4,9}\/\S+$/.test(cleaned) ? cleaned : undefined
+}
+
+function normalizeArxivId(raw?: string | null): string | undefined {
+  if (!raw) return undefined
+  const cleaned = raw
+    .trim()
+    .replace(/^https?:\/\/(export\.)?arxiv\.org\/(abs|pdf)\//i, '')
+    .replace(/\.pdf$/i, '')
+    .replace(/^arxiv:\s*/i, '')
+    .replace(/v\d+$/i, '')
+    .toLowerCase()
+  return /^\d{4}\.\d{4,5}$/.test(cleaned) || /^[a-z-]+(\.[a-z]{2})?\/\d{7}$/.test(cleaned)
+    ? cleaned
+    : undefined
+}
+
+function normalizeTitle(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function titleTokens(normalized: string): Set<string> {
+  return new Set(normalized.split(' ').filter((token) => token.length > 1))
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let intersection = 0
+  for (const token of a) if (b.has(token)) intersection += 1
+  return intersection / (a.size + b.size - intersection)
+}
+
+function isPreprintDoi(doi?: string): boolean {
+  return !!doi && doi.startsWith('10.48550/arxiv.')
+}
+
+// ===== 上游解析器 =====
+
+function reconstructAbstract(inverted?: Record<string, number[]> | null): string {
+  if (!inverted || typeof inverted !== 'object') return ''
+  const positions: Array<[number, string]> = []
+  for (const [word, indices] of Object.entries(inverted)) {
+    if (!Array.isArray(indices)) continue
+    for (const index of indices) {
+      if (typeof index === 'number') positions.push([index, word])
+    }
+  }
+  positions.sort((a, b) => a[0] - b[0])
+  return positions.map(([, word]) => word).join(' ')
+}
+
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&amp;/g, '&')
+}
+
+function stripJats(text: string): string {
+  return decodeXmlEntities(text.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim()
+}
+
+async function fetchOpenAlex(
+  query: string,
+  filters: CsLabAcademicSearchFilters,
+): Promise<RawHit[]> {
+  const url = new URL('https://api.openalex.org/works')
+  url.searchParams.set('search', query)
+  url.searchParams.set('per-page', String(FETCH_PER_SOURCE))
+  url.searchParams.set('mailto', CONTACT_EMAIL)
+  const parts: string[] = []
+  if (filters.yearFrom) parts.push(`from_publication_date:${filters.yearFrom}-01-01`)
+  if (filters.yearTo) parts.push(`to_publication_date:${filters.yearTo}-12-31`)
+  if (filters.openAccessOnly) parts.push('is_oa:true')
+  if (parts.length > 0) url.searchParams.set('filter', parts.join(','))
+
+  const response = await fetchWithTimeout(url.toString())
+  if (!response.ok) throw new Error(`OpenAlex HTTP ${response.status}`)
+  const payload = (await response.json()) as {
+    results?: Array<Record<string, any>>
+  }
+  const results = payload.results ?? []
+  return results.map((work, index): RawHit => {
+    const doi = normalizeDoi(work.doi as string | undefined)
+    const bestOa = (work.best_oa_location ?? {}) as Record<string, any>
+    const primary = (work.primary_location ?? {}) as Record<string, any>
+    const source = (primary.source ?? {}) as Record<string, any>
+    const openAccess = (work.open_access ?? {}) as Record<string, any>
+    return {
+      source: 'openalex',
+      rank: index + 1,
+      title: (work.display_name as string) ?? '',
+      authors: ((work.authorships ?? []) as Array<Record<string, any>>).map((authorship) => ({
+        name: ((authorship.author ?? {}) as Record<string, any>).display_name ?? '',
+        institution: (((authorship.institutions ?? []) as Array<Record<string, any>>)[0]
+          ?.display_name as string) ?? undefined,
+      })),
+      year: typeof work.publication_year === 'number' ? work.publication_year : undefined,
+      publication: (source.display_name as string) ?? undefined,
+      doi,
+      arxivId: isPreprintDoi(doi) ? normalizeArxivId(doi) : undefined,
+      citationsCount: typeof work.cited_by_count === 'number' ? work.cited_by_count : 0,
+      isOpenAccess: openAccess.is_oa === true,
+      oaStatus: (openAccess.oa_status as CsLabOaStatus | undefined) ?? undefined,
+      openAccessPdfUrl:
+        (bestOa.pdf_url as string | undefined) ??
+        ((work.locations ?? []) as Array<Record<string, any>>).find(
+          (location) => typeof location.pdf_url === 'string',
+        )?.pdf_url as string | undefined,
+      landingPageUrl:
+        (bestOa.landing_page_url as string | undefined) ??
+        (primary.landing_page_url as string | undefined),
+      abstract: reconstructAbstract(work.abstract_inverted_index as Record<string, number[]>),
+      fieldsOfStudy: ((work.topics ?? []) as Array<Record<string, any>>)
+        .slice(0, 3)
+        .map((topic) => (topic.display_name as string) ?? '')
+        .filter((name) => name.length > 0),
+    }
+  })
+}
+
+async function fetchSemanticScholar(
+  query: string,
+  filters: CsLabAcademicSearchFilters,
+): Promise<RawHit[]> {
+  const url = new URL('https://api.semanticscholar.org/graph/v1/paper/search')
+  url.searchParams.set('query', query)
+  url.searchParams.set('limit', String(FETCH_PER_SOURCE))
+  url.searchParams.set(
+    'fields',
+    'title,authors,year,venue,externalIds,citationCount,isOpenAccess,openAccessPdf,abstract,tldr,fieldsOfStudy,publicationDate',
+  )
+  if (filters.yearFrom || filters.yearTo) {
+    url.searchParams.set('year', `${filters.yearFrom ?? ''}-${filters.yearTo ?? ''}`)
+  }
+  if (filters.openAccessOnly) url.searchParams.set('openAccessPdf', 'true')
+
+  const apiKey = process.env.SEMANTIC_SCHOLAR_API_KEY?.trim()
+  const response = await fetchWithTimeout(url.toString(), {
+    headers: buildHeaders(apiKey ? { 'x-api-key': apiKey } : {}),
+  })
+  if (!response.ok) throw new Error(`Semantic Scholar HTTP ${response.status}`)
+  const payload = (await response.json()) as { data?: Array<Record<string, any>> }
+  return (payload.data ?? []).map((paper, index): RawHit => {
+    const externalIds = (paper.externalIds ?? {}) as Record<string, any>
+    const doi = normalizeDoi(externalIds.DOI as string | undefined)
+    const arxivId = normalizeArxivId(externalIds.ArXiv as string | undefined)
+    return {
+      source: 'semantic-scholar',
+      rank: index + 1,
+      title: (paper.title as string) ?? '',
+      authors: ((paper.authors ?? []) as Array<Record<string, any>>).map((author) => ({
+        name: (author.name as string) ?? '',
+        institution: ((author.affiliations ?? []) as string[])[0],
+      })),
+      year: typeof paper.year === 'number' ? paper.year : undefined,
+      publication: (paper.venue as string) || undefined,
+      doi,
+      arxivId,
+      citationsCount: typeof paper.citationCount === 'number' ? paper.citationCount : 0,
+      isOpenAccess: paper.isOpenAccess === true,
+      openAccessPdfUrl: ((paper.openAccessPdf ?? {}) as Record<string, any>).url as
+        | string
+        | undefined,
+      landingPageUrl: doi ? `https://doi.org/${doi}` : undefined,
+      abstract: (paper.abstract as string) ?? '',
+      tldr: ((paper.tldr ?? {}) as Record<string, any>).text as string | undefined,
+      fieldsOfStudy: (paper.fieldsOfStudy as string[] | undefined) ?? [],
+    }
+  })
+}
+
+async function fetchArxiv(query: string, _filters: CsLabAcademicSearchFilters): Promise<RawHit[]> {
+  const url =
+    'https://export.arxiv.org/api/query?search_query=all:' +
+    encodeURIComponent(query) +
+    `&start=0&max_results=${FETCH_PER_SOURCE}&sortBy=relevance`
+  const response = await fetchWithTimeout(url, {
+    headers: buildHeaders({ Accept: 'application/atom+xml' }),
+  })
+  if (!response.ok) throw new Error(`arXiv HTTP ${response.status}`)
+  const xml = await response.text()
+
+  const hits: RawHit[] = []
+  const entries = xml.split(/<entry>/).slice(1)
+  for (const [index, entry] of entries.entries()) {
+    const pick = (pattern: RegExp): string | undefined => {
+      const match = entry.match(pattern)
+      return match?.[1] ? decodeXmlEntities(match[1].replace(/\s+/g, ' ').trim()) : undefined
+    }
+    const rawId = pick(/<id>\s*https?:\/\/arxiv\.org\/abs\/([^<\s]+)\s*<\/id>/)
+    const arxivId = normalizeArxivId(rawId)
+    const title = pick(/<title>([\s\S]*?)<\/title>/)
+    if (!arxivId || !title) continue
+    const authors = [...entry.matchAll(/<author>\s*<name>([^<]+)<\/name>/g)]
+      .map((match) => ({ name: decodeXmlEntities((match[1] ?? '').trim()) }))
+      .filter((author) => author.name.length > 0)
+    const published = pick(/<published>(\d{4})-/)
+    const pdfUrl = pick(/<link[^>]*title="pdf"[^>]*href="([^"]+)"/)
+    hits.push({
+      source: 'arxiv',
+      rank: index + 1,
+      title,
+      authors,
+      year: published ? Number(published) : undefined,
+      publication: 'arXiv',
+      doi: pick(/<arxiv:doi[^>]*>([^<]+)<\/arxiv:doi>/) ?? undefined,
+      arxivId,
+      citationsCount: 0,
+      isOpenAccess: true,
+      oaStatus: 'preprint',
+      openAccessPdfUrl: pdfUrl ? decodeXmlEntities(pdfUrl) : `https://arxiv.org/pdf/${arxivId}`,
+      landingPageUrl: `https://arxiv.org/abs/${arxivId}`,
+      abstract: pick(/<summary>([\s\S]*?)<\/summary>/) ?? '',
+    })
+  }
+  return hits
+}
+
+async function fetchCrossref(
+  query: string,
+  filters: CsLabAcademicSearchFilters,
+): Promise<RawHit[]> {
+  const url = new URL('https://api.crossref.org/works')
+  url.searchParams.set('query', query)
+  url.searchParams.set('rows', String(FETCH_PER_SOURCE))
+  url.searchParams.set('mailto', CONTACT_EMAIL)
+  url.searchParams.set(
+    'select',
+    'DOI,title,author,issued,container-title,is-referenced-by-count,abstract,link,URL,type',
+  )
+  const parts: string[] = []
+  if (filters.yearFrom) parts.push(`from-pub-date:${filters.yearFrom}-01-01`)
+  if (filters.yearTo) parts.push(`until-pub-date:${filters.yearTo}-12-31`)
+  if (parts.length > 0) url.searchParams.set('filter', parts.join(','))
+
+  const response = await fetchWithTimeout(url.toString())
+  if (!response.ok) throw new Error(`Crossref HTTP ${response.status}`)
+  const payload = (await response.json()) as {
+    message?: { items?: Array<Record<string, any>> }
+  }
+  return (payload.message?.items ?? []).map((item, index): RawHit => {
+    const doi = normalizeDoi(item.DOI as string | undefined)
+    const issued = ((item.issued ?? {}) as Record<string, any>)['date-parts'] as
+      | number[][]
+      | undefined
+    const links = (item.link ?? []) as Array<Record<string, any>>
+    const pdfLink = links.find((link) => String(link['content-type'] ?? '').includes('pdf'))
+    return {
+      source: 'crossref',
+      rank: index + 1,
+      title: ((item.title ?? []) as string[])[0] ?? '',
+      authors: ((item.author ?? []) as Array<Record<string, any>>).map((author) => ({
+        name: [author.given, author.family].filter(Boolean).join(' ').trim(),
+        institution: ((((author.affiliation ?? []) as Array<Record<string, any>>)[0] ?? {}) as Record<string, any>)
+          .name as string | undefined,
+      })),
+      year: issued?.[0]?.[0],
+      publication: ((item['container-title'] ?? []) as string[])[0] ?? undefined,
+      doi,
+      arxivId: isPreprintDoi(doi) ? normalizeArxivId(doi) : undefined,
+      citationsCount:
+        typeof item['is-referenced-by-count'] === 'number' ? item['is-referenced-by-count'] : 0,
+      isOpenAccess: typeof pdfLink?.URL === 'string',
+      openAccessPdfUrl: pdfLink?.URL as string | undefined,
+      landingPageUrl: (item.URL as string | undefined) ?? (doi ? `https://doi.org/${doi}` : undefined),
+      abstract: typeof item.abstract === 'string' ? stripJats(item.abstract) : '',
+    }
+  })
+}
+
+const SOURCE_FETCHERS: Record<
+  CsLabAcademicSource,
+  (query: string, filters: CsLabAcademicSearchFilters) => Promise<RawHit[]>
+> = {
+  openalex: fetchOpenAlex,
+  'semantic-scholar': fetchSemanticScholar,
+  arxiv: fetchArxiv,
+  crossref: fetchCrossref,
+}
+
+// ===== 谱系去重（Omelette 范式） =====
+
+class UnionFind {
+  private parent: number[] = []
+
+  find(index: number): number {
+    if (this.parent[index] === undefined) this.parent[index] = index
+    if (this.parent[index] !== index) this.parent[index] = this.find(this.parent[index])
+    return this.parent[index]
+  }
+
+  union(a: number, b: number): void {
+    const rootA = this.find(a)
+    const rootB = this.find(b)
+    if (rootA !== rootB) this.parent[rootB] = rootA
+  }
+}
+
+interface ClusterInput {
+  hits: RawHit[]
+  doiKeys: Set<string>
+  titleKey: string
+  tokens: Set<string>
+  arxivId?: string
+}
+
+function clusterHits(hits: RawHit[]): RawHit[][] {
+  const inputs = hits.map<ClusterInput>((hit) => {
+    const titleKey = normalizeTitle(hit.title)
+    return {
+      hits: [hit],
+      doiKeys: new Set([hit.doi].filter((doi): doi is string => !!doi)),
+      titleKey,
+      tokens: titleTokens(titleKey),
+      arxivId: hit.arxivId,
+    }
+  })
+
+  const unionFind = new UnionFind()
+  for (let i = 0; i < inputs.length; i += 1) {
+    for (let j = i + 1; j < inputs.length; j += 1) {
+      const a = inputs[i]
+      const b = inputs[j]
+      if (!a || !b) continue
+      let linked = false
+      // Step 1：DOI 严格归一化匹配。
+      for (const doi of a.doiKeys) {
+        if (b.doiKeys.has(doi)) linked = true
+      }
+      // Step 2：标题模糊聚类（同名或高 Jaccard）。
+      if (!linked && a.titleKey && a.titleKey === b.titleKey) linked = true
+      if (!linked && jaccard(a.tokens, b.tokens) >= 0.85) linked = true
+      // Step 3：谱系对齐——预印本-正刊以更宽松阈值合并为单一主卡片。
+      if (!linked && (a.arxivId || b.arxivId) && jaccard(a.tokens, b.tokens) >= 0.8) linked = true
+      if (!linked && a.arxivId && a.arxivId === b.arxivId) linked = true
+      if (linked) unionFind.union(i, j)
+    }
+  }
+
+  const groups = new Map<number, RawHit[]>()
+  for (let i = 0; i < inputs.length; i += 1) {
+    const input = inputs[i]
+    if (!input) continue
+    const root = unionFind.find(i)
+    const bucket = groups.get(root) ?? []
+    bucket.push(...input.hits)
+    groups.set(root, bucket)
+  }
+  return [...groups.values()]
+}
+
+const OA_STATUS_PRIORITY: Record<CsLabOaStatus, number> = {
+  gold: 5,
+  diamond: 5,
+  green: 4,
+  hybrid: 3,
+  bronze: 2,
+  preprint: 1,
+  closed: 0,
+}
+
+function mergeCluster(hits: RawHit[]): CsLabAcademicPaperMetadata {
+  // 主卡片基准：优先「有正式 DOI 且非 arXiv」的正刊记录，其次引用量最高者。
+  const published = hits.find(
+    (hit) => hit.doi && !isPreprintDoi(hit.doi) && hit.publication !== 'arXiv',
+  )
+  const base =
+    published ??
+    [...hits].sort((a, b) => b.citationsCount - a.citationsCount)[0]
+  if (!base) throw new Error('合并簇为空')
+
+  const pick = <T>(select: (hit: RawHit) => T | undefined): T | undefined => {
+    for (const hit of [base, ...hits]) {
+      const value = select(hit)
+      if (value !== undefined && value !== '' && value !== null) return value
+    }
+    return undefined
+  }
+
+  const arxivHit = hits.find((hit) => hit.arxivId)
+  const publishedDoi = hits.find((hit) => hit.doi && !isPreprintDoi(hit.doi))?.doi
+  const isPreprintOnly = !publishedDoi && !!arxivHit
+
+  const lineage: CsLabAcademicLineage = {
+    isPreprint: isPreprintOnly,
+    publishedVersionDoi:
+      arxivHit && publishedDoi && publishedDoi !== arxivHit.doi ? publishedDoi : undefined,
+    versionSources: [
+      ...(arxivHit?.arxivId ? [`arXiv:${arxivHit.arxivId}`] : []),
+      ...[...new Set(hits.map((hit) => hit.publication).filter((name): name is string => !!name))],
+    ].slice(0, 4),
+  }
+
+  const authors =
+    base.authors.length > 0
+      ? base.authors
+      : [...hits].sort((a, b) => b.authors.length - a.authors.length)[0]?.authors ?? []
+
+  const oaStatus = hits.reduce<CsLabOaStatus | undefined>((best, hit) => {
+    if (!hit.oaStatus) return best
+    if (!best) return hit.oaStatus
+    return OA_STATUS_PRIORITY[hit.oaStatus] > OA_STATUS_PRIORITY[best] ? hit.oaStatus : best
+  }, undefined)
+  const openAccessPdfUrl = pick((hit) =>
+    hit.openAccessPdfUrl && !/^https?:\/\//i.test(hit.openAccessPdfUrl) ? undefined : hit.openAccessPdfUrl,
+  )
+  const doi = publishedDoi ?? base.doi
+  const title = pick((hit) => hit.title) ?? '未命名文献'
+
+  return {
+    id: doi ?? (arxivHit?.arxivId ? `arXiv:${arxivHit.arxivId}` : `title:${createHash('sha256').update(normalizeTitle(title)).digest('hex').slice(0, 12)}`),
+    title,
+    authors,
+    year: pick((hit) => hit.year),
+    publication: pick((hit) =>
+      hit.publication && hit.publication !== 'arXiv' ? hit.publication : undefined,
+    ) ?? (lineage.isPreprint ? 'arXiv' : undefined),
+    doi,
+    citationsCount: Math.max(...hits.map((hit) => hit.citationsCount), 0),
+    isOpenAccess: hits.some((hit) => hit.isOpenAccess) || !!openAccessPdfUrl,
+    oaStatus: oaStatus ?? (lineage.isPreprint ? 'preprint' : undefined),
+    openAccessPdfUrl,
+    landingPageUrl: pick((hit) => hit.landingPageUrl),
+    abstract: [...hits].sort((a, b) => b.abstract.length - a.abstract.length)[0]?.abstract ?? '',
+    tldr: pick((hit) => hit.tldr),
+    methodKeywords: extractMethodKeywords(
+      [...hits].sort((a, b) => b.abstract.length - a.abstract.length)[0]?.abstract ?? '',
+      hits.find((hit) => hit.fieldsOfStudy?.length)?.fieldsOfStudy ?? [],
+    ),
+    fieldsOfStudy: [
+      ...new Set(hits.flatMap((hit) => hit.fieldsOfStudy ?? [])),
+    ].slice(0, 5),
+    sources: [...new Set(hits.map((hit) => hit.source))],
+    sourceRanks: hits.reduce<Partial<Record<CsLabAcademicSource, number>>>((acc, hit) => {
+      acc[hit.source] = Math.min(acc[hit.source] ?? Number.MAX_SAFE_INTEGER, hit.rank)
+      return acc
+    }, {}),
+    lineage,
+    score: 0,
+  }
+}
+
+// ===== RRF 融合 + 本地轻量重排 =====
+
+function normalizeQueryTokens(query: string): Set<string> {
+  const lowered = query.toLowerCase()
+  const latin = lowered.split(/[^\p{L}\p{N}]+/u).filter((token) => token.length > 1)
+  const cjkGrams: string[] = []
+  const cjkRuns = lowered.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]{2,}/gu) ?? []
+  for (const run of cjkRuns) {
+    for (let i = 0; i + 1 < run.length; i += 1) cjkGrams.push(run.slice(i, i + 2))
+  }
+  return new Set([...latin, ...cjkGrams])
+}
+
+function overlapScore(text: string, queryTokens: Set<string>): number {
+  if (queryTokens.size === 0 || !text) return 0
+  const normalized = normalizeTitle(text)
+  let hits = 0
+  for (const token of queryTokens) {
+    if (normalized.includes(token)) hits += 1
+  }
+  return Math.min(hits / queryTokens.size, 1)
+}
+
+function rerankScore(
+  paper: CsLabAcademicPaperMetadata,
+  queryTokens: Set<string>,
+  maxCitations: number,
+): number {
+  const titleScore = overlapScore(paper.title, queryTokens)
+  const abstractScore = overlapScore(paper.abstract.slice(0, 1200), queryTokens)
+  const citationScore = maxCitations > 0 ? Math.log10(1 + paper.citationsCount) / Math.log10(1 + maxCitations) : 0
+  const currentYear = new Date().getFullYear()
+  const recencyScore = paper.year ? Math.max(0, Math.min((paper.year - (currentYear - 10)) / 10, 1)) : 0
+  const oaScore = paper.isOpenAccess ? 1 : 0
+  return titleScore * 0.45 + abstractScore * 0.15 + citationScore * 0.2 + recencyScore * 0.1 + oaScore * 0.1
+}
+
+function fuseAndRank(
+  hits: RawHit[],
+  query: string,
+  filters: CsLabAcademicSearchFilters,
+  topK: number,
+): CsLabAcademicPaperMetadata[] {
+  const clusters = clusterHits(hits)
+  const rrfScores = clusters.map((cluster) =>
+    cluster.reduce((sum, hit) => sum + 1 / (RRF_K + hit.rank), 0),
+  )
+  const maxRrf = Math.max(...rrfScores, 1e-9)
+
+  let papers = clusters.map((cluster, index) => {
+    const paper = mergeCluster(cluster)
+    const rrfNorm = (rrfScores[index] ?? 0) / maxRrf
+    // 0.6*跨源共识 + 0.4*本地轻量重排（可解释、零模型权重）。
+    paper.score = Number((0.6 * rrfNorm).toFixed(4))
+    return paper
+  })
+
+  const queryTokens = normalizeQueryTokens(query)
+  const maxCitations = Math.max(...papers.map((paper) => paper.citationsCount), 0)
+  for (const paper of papers) {
+    paper.score = Number(
+      (paper.score + 0.4 * rerankScore(paper, queryTokens, maxCitations)).toFixed(4),
+    )
+  }
+
+  // 过滤器（服务端 + 本地统一收口）。
+  papers = papers.filter((paper) => {
+    if (filters.yearFrom && (!paper.year || paper.year < filters.yearFrom)) return false
+    if (filters.yearTo && (!paper.year || paper.year > filters.yearTo)) return false
+    if (filters.openAccessOnly && !paper.isOpenAccess) return false
+    if (filters.sources?.length && !paper.sources.some((source) => filters.sources!.includes(source)))
+      return false
+    if (filters.publication?.trim()) {
+      const needle = filters.publication.trim().toLowerCase()
+      if (!(paper.publication ?? '').toLowerCase().includes(needle)) return false
+    }
+    if (filters.fieldsOfStudy?.length) {
+      const paperFields = (paper.fieldsOfStudy ?? []).map((field) => field.toLowerCase())
+      if (!filters.fieldsOfStudy.some((field) => paperFields.includes(field.toLowerCase())))
+        return false
+    }
+    return true
+  })
+
+  return papers
+    .sort((a, b) => b.score - a.score || b.citationsCount - a.citationsCount)
+    .slice(0, topK)
+}
+
+// ===== TL;DR / 关键词渐进增强 =====
+
+async function enrichPapers(
+  papers: CsLabAcademicPaperMetadata[],
+  input: CsLabAcademicSearchInput,
+): Promise<void> {
+  const missing = papers.filter((paper) => !paper.tldr?.trim()).slice(0, LLM_ENRICH_LIMIT)
+  if (missing.length === 0) return
+
+  const queue = [...missing]
+  const workers = Array.from({ length: Math.min(LLM_ENRICH_CONCURRENCY, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const paper = queue.shift()
+      if (!paper) break
+      try {
+        const distilled = await distillPaperHighlights({
+          title: paper.title,
+          abstract: paper.abstract,
+          fieldsOfStudy: paper.fieldsOfStudy,
+          channelId: input.channelId,
+          modelId: input.modelId,
+        })
+        if (distilled.tldr) paper.tldr = distilled.tldr
+        if (distilled.methodKeywords.length > 0) paper.methodKeywords = distilled.methodKeywords
+      } catch {
+        // 蒸馏失败仅降级展示，不阻断检索结果。
+      }
+    }
+  })
+  await Promise.all(workers)
+
+  // 未参与 LLM 蒸馏的条目补确定性启发式速读，保证卡片始终外显。
+  for (const paper of papers) {
+    if (!paper.tldr?.trim() && !missing.includes(paper)) {
+      const distilled = await distillPaperHighlights({
+        title: paper.title,
+        abstract: paper.abstract,
+        fieldsOfStudy: paper.fieldsOfStudy,
+      })
+      paper.tldr = distilled.tldr
+    }
+  }
+}
+
+// ===== Unpaywall OA 解析（懒解析） =====
+
+async function resolveOaViaUnpaywall(
+  doi?: string,
+): Promise<{ openAccessPdfUrl?: string; landingPageUrl?: string; oaStatus?: CsLabOaStatus }> {
+  const normalized = normalizeDoi(doi)
+  if (!normalized) return {}
+  try {
+    const url = `https://api.unpaywall.org/v2/${encodeURIComponent(normalized)}?email=${encodeURIComponent(CONTACT_EMAIL)}`
+    const response = await fetchWithTimeout(url)
+    if (!response.ok) return {}
+    const payload = (await response.json()) as Record<string, any>
+    const best = (payload.best_oa_location ?? {}) as Record<string, any>
+    const pdfUrl = (best.url_for_pdf ?? best.url) as string | undefined
+    return {
+      openAccessPdfUrl: pdfUrl && /^https?:\/\//i.test(pdfUrl) ? pdfUrl : undefined,
+      landingPageUrl: (best.url as string | undefined) ?? undefined,
+      oaStatus: payload.oa_status as CsLabOaStatus | undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+async function downloadPdf(
+  url: string,
+  maxBytes: number,
+): Promise<{ ok: true; buffer: Buffer } | { ok: false; message: string }> {
+  if (!/^https?:\/\//i.test(url)) return { ok: false, message: 'OA 直链协议不合法' }
+  try {
+    const response = await fetchWithTimeout(url, { redirect: 'follow' }, DOWNLOAD_TIMEOUT_MS)
+    if (!response.ok) return { ok: false, message: `PDF 下载失败（HTTP ${response.status}）` }
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length > maxBytes) return { ok: false, message: 'PDF 超出大小上限' }
+    // 魔数校验：绝不把 HTML 错误页当作 PDF 入库/预览。
+    if (buffer.slice(0, 4).toString('latin1') !== '%PDF') {
+      return { ok: false, message: '直链未返回合法 PDF（可能是出版方反爬页面）' }
+    }
+    return { ok: true, buffer }
+  } catch {
+    return { ok: false, message: 'PDF 下载失败，请检查网络后重试' }
+  }
+}
+
+async function resolvePdfUrl(input: {
+  doi?: string
+  openAccessPdfUrl?: string
+}): Promise<string | undefined> {
+  if (input.openAccessPdfUrl && /^https?:\/\//i.test(input.openAccessPdfUrl)) {
+    return input.openAccessPdfUrl
+  }
+  const resolved = await resolveOaViaUnpaywall(input.doi)
+  return resolved.openAccessPdfUrl
+}
+
+// ===== 入库（一键摄入实验室资产库） =====
+
+function labDb(labId: string): CsLabDatabase {
+  return getCsLabDatabase(join(resolveLabDir(labId), 'db', 'central_meta.sqlite'))
+}
+
+function buildLiteratureMetadataJson(paper: CsLabAcademicPaperMetadata): string {
+  return JSON.stringify({
+    authors: paper.authors.map((author) => author.name).filter(Boolean),
+    year: paper.year != null ? String(paper.year) : undefined,
+    doi: paper.doi,
+    publication: paper.publication,
+    abstract: paper.abstract,
+    collections: ['学术检索'],
+    keywords: paper.methodKeywords,
+    tldr: paper.tldr,
+  })
+}
+
+/**
+ * 一键入库：下载合法 OA PDF -> vault/lit 只读登记 -> 后台结构解析 + Docling 渐进增强。
+ * 语义与数据铁笼 PDF 入笼一致（SHA-256 去重、只读锁、实体 + literature_sources 双登记）。
+ */
+export async function ingestAcademicPaper(
+  input: CsLabAcademicIngestInput,
+): Promise<CsLabAcademicIngestResult> {
+  const labId = assertLabId(input.labId)
+  const paper = input.paper
+  if (!paper?.title?.trim()) return { ok: false, message: '缺少论文元数据' }
+
+  const pdfUrl = await resolvePdfUrl(paper)
+  if (!pdfUrl) {
+    return { ok: false, message: '未找到合法开放获取 PDF 直链，无法自动入库' }
+  }
+
+  const downloaded = await downloadPdf(pdfUrl, MAX_INGEST_BYTES)
+  if (!downloaded.ok) return { ok: false, message: downloaded.message }
+  const buffer = downloaded.buffer
+
+  const db = labDb(labId)
+  const sha256 = createHash('sha256').update(buffer).digest('hex')
+  const existing = findEntityByShaAndLayer(db, labId, sha256, 'lit')
+  if (existing) {
+    return {
+      ok: true,
+      uri: existing.uri,
+      revision: existing.revision,
+      message: '相同 PDF 已在库中，已复用既有文献资产',
+    }
+  }
+
+  const timestamp = Date.now()
+  const nonce = randomUUID().slice(0, 6)
+  const safeName = sanitizeFileName(`${paper.title.slice(0, 80) || 'paper'}.pdf`)
+  const litRelPath = `vault/lit/${timestamp}-${nonce}-${safeName}`
+  const litAbsPath = resolveLabRelativePath(labId, litRelPath)
+
+  let staged = true
+  try {
+    await fs.writeFile(litAbsPath, buffer)
+    const locked = await lockFileReadOnly(litAbsPath)
+    const createdAt = Date.now()
+    const litUuid = `lit-${randomUUID().slice(0, 8)}`
+    const litUri = buildCsLabUri(labId, 'lit', litUuid)
+
+    const revision = withTransaction(db, () => {
+      const nextRevision = nextLabRevision(db)
+      const entity: CsLabEntityRecord = {
+        uri: litUri,
+        labId,
+        layerType: 'lit',
+        entityUuid: litUuid,
+        title: paper.title.slice(0, 200),
+        format: 'pdf',
+        relPath: litRelPath,
+        sha256,
+        bytes: buffer.length,
+        revision: nextRevision,
+        locked,
+        createdAt,
+        updatedAt: createdAt,
+      }
+      upsertEntity(db, entity)
+      upsertLiteratureSource(db, {
+        uri: litUri,
+        labId,
+        source: 'vault',
+        relPath: litRelPath,
+        metadataJson: buildLiteratureMetadataJson(paper),
+        sha256,
+        updatedAt: createdAt,
+      })
+      return nextRevision
+    })
+    // 事务已提交：文件归实体所有，异常清理不再接管。
+    staged = false
+
+    // 后台：结构化解析 + GraphRAG 索引重建（沿用既有文献入库流水线）。
+    void import('./cslab-literature-structure')
+      .then((module) => module.enrichLiteratureInBackground(labId, litUri))
+      .catch((error) => console.warn('[CSLab] 学术入库后台解析调度失败:', error))
+
+    // 后台：TL;DR 缺失时 Docling -> LLM -> 启发式渐进增强回填。
+    if (!paper.tldr?.trim()) {
+      void backfillHighlights(labId, litUri, litAbsPath, paper).catch(() => undefined)
+    }
+
+    return { ok: true, uri: litUri, revision, message: 'PDF 已作为文献只读入笼' }
+  } catch (error) {
+    if (staged) {
+      await unlockFile(litAbsPath).catch(() => undefined)
+      await fs.rm(litAbsPath, { force: true }).catch(() => undefined)
+    }
+    return {
+      ok: false,
+      message: `文献入库失败：${error instanceof Error ? error.message : '未知错误'}`,
+    }
+  }
+}
+
+async function backfillHighlights(
+  labId: string,
+  uri: string,
+  pdfPath: string,
+  paper: CsLabAcademicPaperMetadata,
+): Promise<void> {
+  const distilled = await distillPaperHighlights({
+    title: paper.title,
+    abstract: paper.abstract,
+    fieldsOfStudy: paper.fieldsOfStudy,
+    labId,
+    pdfPath,
+  })
+  if (!distilled.tldr && distilled.methodKeywords.length === 0) return
+
+  const db = labDb(labId)
+  const { getLiteratureSource } = await import('./cslab-db')
+  const source = getLiteratureSource(db, uri)
+  if (!source) return
+  let metadata: Record<string, unknown> = {}
+  try {
+    metadata = source.metadataJson ? (JSON.parse(source.metadataJson) as Record<string, unknown>) : {}
+  } catch {
+    metadata = {}
+  }
+  if (distilled.tldr) metadata.tldr = distilled.tldr
+  if (distilled.methodKeywords.length > 0) metadata.keywords = distilled.methodKeywords
+  upsertLiteratureSource(db, { ...source, metadataJson: JSON.stringify(metadata) })
+}
+
+// ===== 对外主入口 =====
+
+/** 跨源联邦检索：并行聚合 -> 谱系去重 -> RRF 融合 -> 本地轻量重排 -> 渐进增强。 */
+export async function searchAcademicPapers(
+  input: CsLabAcademicSearchInput,
+): Promise<CsLabAcademicSearchResult> {
+  const query = input.query?.trim() ?? ''
+  if (!query) {
+    return { ok: false, papers: [], sourceStats: [], message: '请输入检索关键词或科学问题' }
+  }
+  const topK = Math.min(Math.max(input.topK ?? DEFAULT_TOP_K, 1), MAX_TOP_K)
+  const filters = input.filters ?? {}
+  const activeSources = filters.sources?.length
+    ? ALL_SOURCES.filter((source) => filters.sources!.includes(source))
+    : ALL_SOURCES
+
+  const started = Date.now()
+  const settled = await Promise.all(
+    activeSources.map(async (source) => {
+      const sourceStarted = Date.now()
+      try {
+        const hits = await SOURCE_FETCHERS[source](query, filters)
+        return {
+          stat: { source, hits: hits.length, elapsedMs: Date.now() - sourceStarted } as CsLabAcademicSourceStat,
+          hits,
+        }
+      } catch (error) {
+        return {
+          stat: {
+            source,
+            hits: 0,
+            elapsedMs: Date.now() - sourceStarted,
+            error: error instanceof Error ? error.message : '上游不可用',
+          } satisfies CsLabAcademicSourceStat,
+          hits: [] as RawHit[],
+        }
+      }
+    }),
+  )
+
+  const sourceStats = settled.map((item) => item.stat)
+  const allHits = settled.flatMap((item) => item.hits)
+  const anySuccess = sourceStats.some((stat) => !stat.error)
+
+  if (allHits.length === 0) {
+    return {
+      ok: anySuccess,
+      papers: [],
+      sourceStats,
+      message: anySuccess
+        ? '未检索到匹配文献，请尝试更换关键词或放宽筛选条件'
+        : '全部上游数据源暂不可用，请稍后重试',
+    }
+  }
+
+  const papers = fuseAndRank(allHits, query, filters, topK)
+  await enrichPapers(papers, input)
+
+  console.log(
+    `[CSLab] 学术检索 "${query}"：${allHits.length} 条原始命中 -> ${papers.length} 张主卡片，耗时 ${Date.now() - started}ms`,
+  )
+  return { ok: true, papers, sourceStats }
+}
+
+/** 右侧即时预览：按需解析 OA 直链并回传 PDF 字节（dataURL）。 */
+export async function fetchPaperPreview(
+  input: CsLabAcademicPreviewInput,
+): Promise<CsLabAcademicPreviewResult> {
+  const pdfUrl = await resolvePdfUrl(input)
+  if (!pdfUrl) {
+    return {
+      ok: false,
+      message: '该文献暂无合法开放获取 PDF，请点击 DOI 跳转出版方页面查看',
+    }
+  }
+  const downloaded = await downloadPdf(pdfUrl, MAX_PREVIEW_BYTES)
+  if (!downloaded.ok) return { ok: false, message: downloaded.message }
+  return {
+    ok: true,
+    pdfDataUrl: `data:application/pdf;base64,${downloaded.buffer.toString('base64')}`,
+    message: 'PDF 预览已就绪',
+  }
+}

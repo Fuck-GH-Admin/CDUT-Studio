@@ -30,11 +30,12 @@ afterAll(async () => {
 })
 
 describe('CSLab 文献工具集', () => {
-  test('Given 绑定实验室 When 构建工具 Then 检索/精读/导读三件套齐备', async () => {
+  test('Given 绑定实验室 When 构建工具 Then 学术检索/精读/导读工具齐备', async () => {
     const { buildCsLabLiteratureTools } = await import('./cslab-literature-tools')
     const fakeSdk = { defineTool: (def: unknown) => def } as any
     const tools = buildCsLabLiteratureTools(fakeSdk, { sessionId })
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'cslab_academic_search',
       'cslab_paper_guided_reading',
       'cslab_read_paper_section',
       'cslab_search_literature',

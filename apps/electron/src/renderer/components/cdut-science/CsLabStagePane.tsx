@@ -89,6 +89,8 @@ interface CsLabStagePaneProps {
     text: string,
     action?: { label: string; path: string },
   ) => void
+  /** 划词右键「检索关联学术文献」反向打开学术检索弹窗。 */
+  onSearchLiterature?: (query: string) => void
 }
 
 export function CsLabStagePane({
@@ -124,6 +126,7 @@ export function CsLabStagePane({
   onDropAsset,
   onCanvasSaved,
   onToast,
+  onSearchLiterature,
 }: CsLabStagePaneProps): React.ReactElement {
   const [assetOver, setAssetOver] = React.useState(false)
 
@@ -255,6 +258,7 @@ export function CsLabStagePane({
             onDirtyChange={onDirtyChange}
             onTitleChange={onTitleChange}
             onToast={onToast}
+            onSearchLiterature={onSearchLiterature}
           />
         ) : pane.viewType === 'pdf' && literature ? (
           <CsLabPdfViewer

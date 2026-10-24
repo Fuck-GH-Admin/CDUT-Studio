@@ -10,6 +10,7 @@ import type {
   IEditorData,
   IElement,
   IRangeStyle,
+  IRegisterContextMenu,
   ListType,
   TitleLevel,
 } from '@hufe921/canvas-editor'
@@ -66,6 +67,8 @@ interface CsLabCanvasEditorProps {
   onCapsuleClick: (capsuleId: string) => void
   onMetricsChange: (metrics: CsLabCanvasMetrics) => void
   onToast?: (kind: 'info' | 'success' | 'error', text: string) => void
+  /** 划词右键「检索关联学术文献」：携带选中文本反向打开学术检索弹窗。 */
+  onSearchLiterature?: (query: string) => void
 }
 
 function createPageOptions(hostId: string) {
@@ -125,6 +128,7 @@ export function CsLabCanvasEditor({
   onCapsuleClick,
   onMetricsChange,
   onToast,
+  onSearchLiterature,
 }: CsLabCanvasEditorProps): React.ReactElement {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const hostId = React.useMemo(
@@ -147,6 +151,7 @@ export function CsLabCanvasEditor({
     onCapsuleClick,
     onMetricsChange,
     onToast,
+    onSearchLiterature,
   })
   propsRef.current = {
     labId,
@@ -158,6 +163,7 @@ export function CsLabCanvasEditor({
     onCapsuleClick,
     onMetricsChange,
     onToast,
+    onSearchLiterature,
   }
 
   const computeMetrics = React.useCallback((editor: Editor): void => {
@@ -331,10 +337,39 @@ export function CsLabCanvasEditor({
         clearAllComments(editor)
       },
       focus: () => editor.command.executeFocus(),
+      insertText(text: string) {
+        if (!text) return
+        try {
+          editor.command.executeInsertElementList([{ value: text }], { isSubmitHistory: true })
+          editor.command.executeFocus()
+        } catch {
+          propsRef.current.onToast?.('error', '插入失败，请先把光标定位到正文')
+        }
+      },
+      getSelectedText: () => {
+        try {
+          return editor.command.getRangeText()
+        } catch {
+          return ''
+        }
+      },
     }
 
     handleRef.current = handle
     onReady(handle)
+
+    // 划词右键「检索关联学术文献」：携带选中文本反向打开学术检索弹窗。
+    const academicSearchMenu: IRegisterContextMenu = {
+      key: 'cslab-academic-search',
+      name: '检索关联学术文献',
+      when: (context) => context.editorHasSelection && !context.isReadonly,
+      callback: (command) => {
+        const text = command.getRangeText().replace(/\s+/g, ' ').trim()
+        if (!text) return
+        propsRef.current.onSearchLiterature?.(text.slice(0, 120))
+      },
+    }
+    editor.register.contextMenuList([academicSearchMenu])
 
     // 等首屏分页计算完成后再恢复批注与陈旧态，避免控件/分组尚未初始化。
     const restoreTimer = setTimeout(() => {

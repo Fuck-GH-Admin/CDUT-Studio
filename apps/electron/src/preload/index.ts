@@ -10,6 +10,7 @@ import { IPC_CHANNELS, REVIEW_IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANN
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
+import type { EmpiricalMetric, Hierarchical3DGraphData } from '@profer/shared'
 import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
 import { LONGTERM_MEMORY_IPC_CHANNELS, type LongTermMemoryGraph, type LongTermMemoryHit, type LongTermMemoryNode, type LongTermMemoryNodeInput } from '@profer/shared'
 import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetChatStatus, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetTourFillEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
@@ -56,6 +57,12 @@ import {
   type CsLabLiteratureGuide,
   type CsLabLiteratureGraphResult,
   type CsLabLiteratureSearchResult,
+  type CsLabAcademicSearchInput,
+  type CsLabAcademicSearchResult,
+  type CsLabAcademicPreviewInput,
+  type CsLabAcademicPreviewResult,
+  type CsLabAcademicIngestInput,
+  type CsLabAcademicIngestResult,
   type CsLabPlotDigitizeInput,
   type CsLabPlotDigitizeResult,
   type CsLabDigitizedFigureInput,
@@ -1851,6 +1858,20 @@ export interface ElectronAPI {
     }) => Promise<CsLabLiteratureSearchResult>
     /** 文献智脑全景图谱（未搜索时的默认视图） */
     getLiteratureGraph: (labId: string) => Promise<CsLabLiteratureGraphResult>
+
+    /** 论文入库流水线：3D 分层拓扑 / 实证指标 / Vault 合成 */
+    getLiterature3DGraph: (labId: string, uri?: string) => Promise<Hierarchical3DGraphData | null>
+    getEmpiricalMetrics: (labId: string, uri: string) => Promise<EmpiricalMetric[]>
+    synthesizePaperVault: (labId: string, uri: string) => Promise<{ ok: boolean; message: string }>
+
+    /** 跨源学术文献检索（多源联邦） */
+    academicSearch: (input: CsLabAcademicSearchInput) => Promise<CsLabAcademicSearchResult>
+    academicFetchPreview: (
+      input: CsLabAcademicPreviewInput,
+    ) => Promise<CsLabAcademicPreviewResult>
+    academicIngestPaper: (
+      input: CsLabAcademicIngestInput,
+    ) => Promise<CsLabAcademicIngestResult>
 
     /** 实验规程与批次 */
     listProtocols: (labId: string) => Promise<CsLabProtocol[]>
@@ -4345,6 +4366,19 @@ const electronAPI: ElectronAPI = {
     }) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SEARCH_LITERATURE, input),
     getLiteratureGraph: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_GRAPH, labId),
+    getLiterature3DGraph: (labId: string, uri?: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_3D_GRAPH, labId, uri),
+    getEmpiricalMetrics: (labId: string, uri: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_EMPIRICAL_METRICS, labId, uri),
+    synthesizePaperVault: (labId: string, uri: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SYNTHESIZE_PAPER_VAULT, labId, uri),
+
+    academicSearch: (input: CsLabAcademicSearchInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ACADEMIC_SEARCH, input),
+    academicFetchPreview: (input: CsLabAcademicPreviewInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ACADEMIC_FETCH_PREVIEW, input),
+    academicIngestPaper: (input: CsLabAcademicIngestInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ACADEMIC_INGEST_PAPER, input),
 
     listProtocols: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_LIST_PROTOCOLS, labId),
