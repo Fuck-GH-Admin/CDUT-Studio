@@ -2,11 +2,10 @@
  * CsLabStagePane — 单个科研窗格
  *
  * 窗格自身只接收资产拖拽（CSLAB_ASSET_MIME）；单元格拖拽必须继续下沉给
- * TipTap 编辑器处理，否则会抢走胶囊投递。
+ * Canvas 编辑器处理，否则会抢走胶囊投递。
  */
 
 import * as React from 'react'
-import type { Editor } from '@tiptap/core'
 import {
   Atom,
   BookOpen,
@@ -36,6 +35,10 @@ import type { CsLabPaneId, CsLabPaneState, CsLabPdfSelection } from '@/atoms/csl
 import { CsLabDatasetView } from './CsLabDatasetView'
 import { CsLabFigureView } from './CsLabFigureView'
 import { CsLabManuscriptEditor } from './CsLabManuscriptEditor'
+import type {
+  CsLabCanvasHandle,
+  CsLabCanvasSnapshot,
+} from './canvas-manuscript/cslab-canvas-types'
 import { CsLabPdfViewer } from './CsLabPdfViewer'
 import { CsLabDagCanvas } from './CsLabDagCanvas'
 import { CsLabOriginPlotPane } from './CsLabOriginPlotPane'
@@ -68,17 +71,9 @@ interface CsLabStagePaneProps {
   onActivate: () => void
   onClose: () => void
   onMaximize: () => void
-  onEditorReady: (editor: Editor | null) => void
-  onSaveManuscript: (
-    docJson: unknown,
-    title: string,
-    capsules: CsLabCapsule[],
-  ) => Promise<void>
-  onSaveManuscriptAs?: (
-    docJson: unknown,
-    title: string,
-    capsules: CsLabCapsule[],
-  ) => Promise<void>
+  onEditorReady: (handle: CsLabCanvasHandle | null) => void
+  onSaveManuscript: (snapshot: CsLabCanvasSnapshot, title: string) => Promise<void>
+  onSaveManuscriptAs?: (snapshot: CsLabCanvasSnapshot, title: string) => Promise<void>
   onDirtyChange: (dirty: boolean) => void
   onTitleChange: (title: string) => void
   onCapsuleClick: (capsuleId: string) => void

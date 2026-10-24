@@ -3,12 +3,10 @@
  */
 
 import * as React from 'react'
-import type { Editor } from '@tiptap/core'
 import type {
   CsLabAssetSummary,
   CsLabCanvasDocument,
   CsLabCanvasWriteResult,
-  CsLabCapsule,
   CsLabCellRef,
   CsLabLiteratureItem,
   CsLabManuscript,
@@ -25,6 +23,10 @@ import {
 } from '@/atoms/cslab-atoms'
 import { CsLabStagePane } from './CsLabStagePane'
 import type { CsLabAssetDragPayload } from './cslab-dnd'
+import type {
+  CsLabCanvasHandle,
+  CsLabCanvasSnapshot,
+} from './canvas-manuscript/cslab-canvas-types'
 
 interface CsLabStageGridProps {
   layout: CsLabSplitLayout
@@ -44,18 +46,16 @@ interface CsLabStageGridProps {
   onActivatePane: (paneId: CsLabPaneId) => void
   onClosePane: (paneId: CsLabPaneId) => void
   onMaximizePane: (paneId: CsLabPaneId) => void
-  onEditorReady: (paneId: CsLabPaneId, editor: Editor | null) => void
+  onEditorReady: (paneId: CsLabPaneId, handle: CsLabCanvasHandle | null) => void
   onSaveManuscript: (
     paneId: CsLabPaneId,
-    docJson: unknown,
+    snapshot: CsLabCanvasSnapshot,
     title: string,
-    capsules: CsLabCapsule[],
   ) => Promise<void>
   onSaveManuscriptAs?: (
     paneId: CsLabPaneId,
-    docJson: unknown,
+    snapshot: CsLabCanvasSnapshot,
     title: string,
-    capsules: CsLabCapsule[],
   ) => Promise<void>
   onDirtyChange: (paneId: CsLabPaneId, dirty: boolean) => void
   onTitleChange: (paneId: CsLabPaneId, title: string) => void
@@ -160,14 +160,14 @@ export function CsLabStageGrid({
             onActivate={() => onActivatePane(paneId)}
             onClose={() => onClosePane(paneId)}
             onMaximize={() => onMaximizePane(paneId)}
-            onEditorReady={(editor) => onEditorReady(paneId, editor)}
-            onSaveManuscript={(docJson, title, capsules) =>
-              onSaveManuscript(paneId, docJson, title, capsules)
+            onEditorReady={(handle) => onEditorReady(paneId, handle)}
+            onSaveManuscript={(snapshot, title) =>
+              onSaveManuscript(paneId, snapshot, title)
             }
             onSaveManuscriptAs={
               onSaveManuscriptAs
-                ? (docJson: unknown, title: string, capsules: CsLabCapsule[]) =>
-                    onSaveManuscriptAs(paneId, docJson, title, capsules)
+                ? (snapshot: CsLabCanvasSnapshot, title: string) =>
+                    onSaveManuscriptAs(paneId, snapshot, title)
                 : undefined
             }
             onDirtyChange={(dirty) => onDirtyChange(paneId, dirty)}

@@ -301,6 +301,11 @@ export async function ingestFiles(
         // 事务已提交：文件归实体所有，异常清理不再接管
         stagedAbsPath = null
 
+        // 后台解析（限流 ≤2）：标题/摘要/章节/公式/表格回填，并自动重建 GraphRAG 索引。
+        void import('./cslab-literature-structure')
+          .then((module) => module.enrichLiteratureInBackground(labId, litUri))
+          .catch((error) => console.warn('[CSLab] 文献后台解析调度失败:', error))
+
         emit('done', 'PDF 已只读入笼为文献')
         const litEntity = getEntityByUri(db, litUri)
         if (!litEntity) throw new Error('文献实体写入失败')

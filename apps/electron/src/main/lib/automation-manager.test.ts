@@ -1,5 +1,21 @@
-import { describe, expect, test } from 'bun:test'
-import { computeNextRunAt } from './automation-manager'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { advanceNextRunAt, computeNextRunAt } from './automation-manager'
+
+let configRoot = ''
+beforeAll(() => {
+  configRoot = mkdtempSync(join(tmpdir(), 'automation-manager-'))
+  process.env.PROFER_CONFIG_DIR = configRoot
+})
+afterAll(() => {
+  try {
+    rmSync(configRoot, { recursive: true, force: true })
+  } catch {
+    // Windows 下文件句柄可能延迟释放。
+  }
+})
 
 describe('computeNextRunAt 月度调度', () => {
   // 用固定 from 时间戳避免测试与当前时间耦合
@@ -162,5 +178,64 @@ describe('computeNextRunAt 多值调度', () => {
       expect(d.getMonth() + 1).toBe(7)
       expect(d.getDate()).toBe(1)
     })
+  })
+})
+
+describe('interval 槽位对齐（消除累积漂移）', () => {
+  const base = (y: number, m: number, d: number, hh: number, mm: number, ss = 0): number =>
+    new Date(y, m - 1, d, hh, mm, ss, 0).getTime()
+
+  test('Given 10:00 触发、10:00:47 完成 When 推进 Then 下一槽位仍是 10:05', () => {
+    const slot = base(2026, 6, 14, 10, 0)
+    const runAt = slot
+    const now = base(2026, 6, 14, 10, 0, 47)
+    const next = advanceNextRunAt(
+      { scheduleType: 'interval', intervalMinutes: 5, nextRunAt: slot },
+      runAt,
+      now,
+    )
+    expect(new Date(next).getHours()).toBe(10)
+    expect(new Date(next).getMinutes()).toBe(5)
+    expect(new Date(next).getSeconds()).toBe(0)
+  })
+
+  test('Given 应用休眠跨过两个槽位 When 推进 Then 对齐到下一个未来槽位', () => {
+    const slot = base(2026, 6, 14, 10, 0)
+    const now = base(2026, 6, 14, 10, 16, 30)
+    const next = advanceNextRunAt(
+      { scheduleType: 'interval', intervalMinutes: 5, nextRunAt: slot },
+      slot,
+      now,
+    )
+    expect(new Date(next).getHours()).toBe(10)
+    expect(new Date(next).getMinutes()).toBe(20)
+    expect(new Date(next).getSeconds()).toBe(0)
+  })
+})
+
+describe('appendRun 手动运行解耦', () => {
+  test('Given 手动运行 When 记录 Then 不改变周期/次数/失败计数', async () => {
+    const { createAutomation, appendRun, getAutomation } = await import('./automation-manager')
+    const automation = createAutomation({
+      name: '手动运行测试',
+      prompt: 'hello',
+      scheduleType: 'interval',
+      intervalMinutes: 5,
+      channelId: 'channel-1',
+      workspaceId: 'workspace-1',
+      active: true,
+    })
+    const before = getAutomation(automation.id)!
+    appendRun(automation.id, {
+      runAt: Date.now(),
+      sessionId: 'session-x',
+      status: 'success',
+      durationMs: 10,
+    }, { manual: true })
+    const after = getAutomation(automation.id)!
+    expect(after.nextRunAt).toBe(before.nextRunAt)
+    expect(after.runCount).toBe(before.runCount)
+    expect(after.lastRunAt).toBe(before.lastRunAt)
+    expect(after.runHistory[0]?.status).toBe('success')
   })
 })

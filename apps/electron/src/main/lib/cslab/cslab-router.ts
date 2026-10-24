@@ -112,6 +112,7 @@ import {
   attachDocx,
   blocksToDocJson,
   createManuscript,
+  extractCanvasZoneText,
   getLinkedDocxPath,
   getManuscript,
   listManuscripts,
@@ -145,6 +146,7 @@ import {
 import { getZoteroBridgeStatus, writeZoteroBridge } from './cslab-zotero-bridge'
 import { translateSelection } from './cslab-translate'
 import { getLiteratureFilePath, getLiteratureItem } from './cslab-literature'
+import { buildLiteratureGuide } from './cslab-literature-structure'
 import {
   ensureToolEnvironment,
   getToolRuntimeStatus,
@@ -719,6 +721,8 @@ export function registerCsLabIpc(): void {
         uri: asString(record.uri, '文稿 URI'),
         title: asString(record.title, '文稿标题'),
         docJson: record.docJson,
+        canvasData: record.canvasData,
+        comments: record.comments,
         capsules: Array.isArray(record.capsules) ? (record.capsules as CsLabCapsule[]) : [],
       })
 
@@ -750,12 +754,15 @@ export function registerCsLabIpc(): void {
         value: capsule.value,
       }))
 
+      const zoneText = extractCanvasZoneText(manuscript.canvasData)
       const exported = await runOoxmlTask({
         type: 'export',
         input: {
           title: manuscript.title,
           docJson: manuscript.docJson,
           capsules,
+          headerText: zoneText.header || undefined,
+          footerText: zoneText.footer || undefined,
         },
       })
       if (exported.type !== 'export') throw new Error('OOXML 导出结果类型异常')
@@ -899,6 +906,8 @@ export function registerCsLabIpc(): void {
         format: record.format,
         title: asString(record.title, '文稿标题'),
         docJson: record.docJson,
+        canvasData: record.canvasData,
+        comments: record.comments,
         capsules: Array.isArray(record.capsules) ? (record.capsules as CsLabCapsule[]) : [],
       })
     },
@@ -1140,6 +1149,18 @@ export function registerCsLabIpc(): void {
         name,
         pageCount: item?.pageCount,
       }
+    },
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.GET_LITERATURE_GUIDE,
+    async (_event, input: unknown) => {
+      if (!input || typeof input !== 'object') throw new Error('文献导读参数无效')
+      const record = input as { labId?: unknown; literatureUri?: unknown }
+      return buildLiteratureGuide(
+        asString(record.labId, '实验室标识'),
+        asString(record.literatureUri, '文献 URI'),
+      )
     },
   )
 

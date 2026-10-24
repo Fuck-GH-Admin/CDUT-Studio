@@ -128,6 +128,7 @@ import { cdutDemoService } from '../cdut/cdut-demo/demo-service'
 import { buildPiStudyTools } from '../study/study-tools'
 import { buildPiCsLabTools } from './pi-cslab-tools'
 import { buildCsLabScienceTools } from '../cslab/cslab-scientific-tools'
+import { buildCsLabLiteratureTools } from '../cslab/cslab-literature-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -2225,6 +2226,13 @@ export async function buildPiBuiltinTools(
     tools.push(...buildCsLabScienceTools(sdk, { sessionId: ctx.sessionId }))
   } catch (error) {
     console.error('[Pi 桥接] 注入 CSLab 科学引擎工具失败:', error)
+  }
+
+  // 15.2 CSLab 文献智脑工具（文献检索 / 章节精读 / 结构化导读）
+  try {
+    tools.push(...buildCsLabLiteratureTools(sdk, { sessionId: ctx.sessionId }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 CSLab 文献工具失败:', error)
   }
 
   const cloudTools = buildProferCloudTools(sdk, ctx)

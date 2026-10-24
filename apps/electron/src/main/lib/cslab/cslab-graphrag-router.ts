@@ -26,10 +26,14 @@ const EXCERPT_MAX_CHARS = 500
 
 /** 同一实验室只允许一个后台重建任务，避免检索抖动触发重复构建。 */
 const pendingIndexBuilds = new Map<string, Promise<void>>()
+/** 需要重建的实验室（防抖窗口内多次变更合并为一次）。 */
+const dirtyIndexLabs = new Set<string>()
+const indexRebuildTimers = new Map<string, NodeJS.Timeout>()
+const INDEX_REBUILD_DEBOUNCE_MS = 500
 
-/** 后台单飞重建文献索引；失败只记录警告，不影响本次检索。 */
-function scheduleLiteratureIndexRebuild(labId: string): void {
+function startIndexRebuild(labId: string): void {
   if (pendingIndexBuilds.has(labId)) return
+  dirtyIndexLabs.delete(labId)
   const task = buildLabLiteratureIndex(labId)
     .then(() => undefined)
     .catch((error: unknown) => {
@@ -37,8 +41,27 @@ function scheduleLiteratureIndexRebuild(labId: string): void {
     })
     .finally(() => {
       pendingIndexBuilds.delete(labId)
+      // 构建期间又有新变更：再排一轮，保证最终一致。
+      if (dirtyIndexLabs.has(labId)) scheduleLiteratureIndexRebuild(labId)
     })
   pendingIndexBuilds.set(labId, task)
+}
+
+/**
+ * 后台单飞 + 防抖重建文献索引；失败只记录警告，不影响本次检索。
+ *
+ * 批量入笼 PDF 时，500ms 窗口内的多次触发会合并，避免密集争抢 SQLite 锁。
+ */
+export function scheduleLiteratureIndexRebuild(labId: string): void {
+  dirtyIndexLabs.add(labId)
+  if (pendingIndexBuilds.has(labId)) return
+  const existing = indexRebuildTimers.get(labId)
+  if (existing) clearTimeout(existing)
+  const timer = setTimeout(() => {
+    indexRebuildTimers.delete(labId)
+    if (dirtyIndexLabs.has(labId)) startIndexRebuild(labId)
+  }, INDEX_REBUILD_DEBOUNCE_MS)
+  indexRebuildTimers.set(labId, timer)
 }
 
 function buildExcerpt(chunk: LiteratureChunk, queryTerms: Set<string>): string {

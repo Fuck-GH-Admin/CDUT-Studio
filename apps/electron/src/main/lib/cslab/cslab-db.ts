@@ -48,6 +48,8 @@ export interface CsLabEntityRecord {
   relPath?: string
   sha256?: string
   bytes?: number
+  /** 实体级结构化元数据（JSON 字符串）；旧调用可缺省。 */
+  metaJson?: string
   revision: number
   locked: boolean
   unsupported?: string
@@ -333,6 +335,7 @@ function rowToEntity(row: Record<string, unknown>): CsLabEntityRecord {
     relPath: row.rel_path == null ? undefined : String(row.rel_path),
     sha256: row.sha256 == null ? undefined : String(row.sha256),
     bytes: row.bytes == null ? undefined : Number(row.bytes),
+    metaJson: row.meta_json == null ? undefined : String(row.meta_json),
     revision: Number(row.revision),
     locked: Number(row.locked) === 1,
     unsupported: row.unsupported == null ? undefined : String(row.unsupported),
@@ -346,14 +349,15 @@ export function upsertEntity(db: CsLabDatabase, entity: CsLabEntityRecord): void
     .prepare(`
       INSERT INTO entities (
         uri, lab_id, layer_type, entity_uuid, title, format, rel_path, sha256, bytes,
-        revision, locked, unsupported, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        meta_json, revision, locked, unsupported, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(uri) DO UPDATE SET
         title = excluded.title,
         format = excluded.format,
         rel_path = excluded.rel_path,
         sha256 = excluded.sha256,
         bytes = excluded.bytes,
+        meta_json = COALESCE(excluded.meta_json, entities.meta_json),
         revision = excluded.revision,
         locked = excluded.locked,
         unsupported = excluded.unsupported,
@@ -369,12 +373,25 @@ export function upsertEntity(db: CsLabDatabase, entity: CsLabEntityRecord): void
       entity.relPath ?? null,
       entity.sha256 ?? null,
       entity.bytes ?? null,
+      entity.metaJson ?? null,
       entity.revision,
       entity.locked ? 1 : 0,
       entity.unsupported ?? null,
       entity.createdAt,
       entity.updatedAt,
     )
+}
+
+/** 仅更新实体标题与更新时间（文献后台解析回填使用，不触碰其它字段）。 */
+export function updateEntityTitle(
+  db: CsLabDatabase,
+  uri: string,
+  title: string,
+  updatedAt: number = Date.now(),
+): void {
+  db.raw
+    .prepare('UPDATE entities SET title = ?, updated_at = ? WHERE uri = ?')
+    .run(title.slice(0, 300), updatedAt, uri)
 }
 
 export function getEntityByUri(db: CsLabDatabase, uri: string): CsLabEntityRecord | null {

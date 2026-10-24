@@ -7,7 +7,6 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import type { Editor } from '@tiptap/core'
 import {
   ArrowLeft,
   Atom,
@@ -101,10 +100,16 @@ import { CsLabToolsPanel } from './CsLabToolsPanel'
 import { CsLabNetworkSharePanel } from './CsLabNetworkSharePanel'
 import { CsLabHpcPanel } from './CsLabHpcPanel'
 import { useCsLabVault } from './use-cslab-vault'
+import { buildCanvasCapsuleControl } from './canvas-manuscript/cslab-canvas-capsule'
 import {
-  applyUpdatedCapsule,
-  collectCapsulesFromDoc,
-} from './cslab-capsule-node'
+  canvasToTipTapDoc,
+  extractCanvasCapsules,
+  legacyTipTapToCanvasWithComments,
+} from './canvas-manuscript/cslab-canvas-adapter'
+import type {
+  CsLabCanvasHandle,
+  CsLabCanvasSnapshot,
+} from './canvas-manuscript/cslab-canvas-types'
 import {
   CSLAB_CELL_MIME,
   buildCapsuleAttrs,
@@ -197,21 +202,6 @@ function formatTime(timestamp: number): string {
   }
 }
 
-function cloneDocJson(docJson: unknown): { type: string; content: Array<Record<string, unknown>> } {
-  try {
-    const parsed = JSON.parse(JSON.stringify(docJson)) as {
-      type?: string
-      content?: Array<Record<string, unknown>>
-    }
-    return {
-      type: parsed.type ?? 'doc',
-      content: Array.isArray(parsed.content) ? parsed.content : [],
-    }
-  } catch {
-    return { type: 'doc', content: [] }
-  }
-}
-
 export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.ReactElement {
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const isMac = React.useMemo(() => detectIsMac(), [])
@@ -273,7 +263,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const [error, setError] = React.useState<string | null>(null)
 
   const dragDepth = React.useRef(0)
-  const editorRefs = React.useRef<Record<CsLabPaneId, Editor | null>>({
+  const editorRefs = React.useRef<Record<CsLabPaneId, CsLabCanvasHandle | null>>({
     'pane-1': null,
     'pane-2': null,
     'pane-3': null,
@@ -1362,9 +1352,8 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const savePaneManuscript = React.useCallback(
     async (
       paneId: CsLabPaneId,
-      docJson: unknown,
+      snapshot: CsLabCanvasSnapshot,
       title: string,
-      capsules: CsLabCapsule[],
     ): Promise<void> => {
       const manuscript = paneManuscripts[paneId]
       if (!manuscript) return
@@ -1374,8 +1363,10 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           labId,
           uri: manuscript.uri,
           title,
-          docJson,
-          capsules,
+          docJson: snapshot.docJson,
+          canvasData: snapshot.canvasData,
+          comments: snapshot.comments,
+          capsules: snapshot.capsules,
         })
         setPaneManuscripts((previous) => ({ ...previous, [paneId]: saved }))
         setPaneTitles((previous) => ({ ...previous, [paneId]: saved.title }))
@@ -1396,9 +1387,8 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const savePaneManuscriptAs = React.useCallback(
     async (
       paneId: CsLabPaneId,
-      docJson: unknown,
+      snapshot: CsLabCanvasSnapshot,
       title: string,
-      capsules: CsLabCapsule[],
     ): Promise<void> => {
       const manuscript = paneManuscripts[paneId]
       if (!manuscript) return
@@ -1424,8 +1414,10 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           targetPath,
           saveToken,
           title,
-          docJson,
-          capsules,
+          docJson: snapshot.docJson,
+          canvasData: snapshot.canvasData,
+          comments: snapshot.comments,
+          capsules: snapshot.capsules,
         })
         setPaneTitles((previous) => ({ ...previous, [paneId]: title }))
         setDirtyPanes((previous) => ({ ...previous, [paneId]: false }))
@@ -1447,19 +1439,16 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const flushPane = React.useCallback(
     async (paneId: CsLabPaneId): Promise<void> => {
       if (!dirtyPanes[paneId]) return
-      const editor = editorRefs.current[paneId]
+      const handle = editorRefs.current[paneId]
       const manuscript = paneManuscripts[paneId]
-      if (!editor || !manuscript) return
-      const docJson = editor.getJSON()
-      const capsules = collectCapsulesFromDoc(docJson, labId)
+      if (!handle || !manuscript) return
       await savePaneManuscript(
         paneId,
-        docJson,
+        handle.getSnapshot(),
         paneTitles[paneId] || manuscript.title,
-        capsules,
       )
     },
-    [dirtyPanes, labId, paneManuscripts, paneTitles, savePaneManuscript],
+    [dirtyPanes, paneManuscripts, paneTitles, savePaneManuscript],
   )
 
   const createManuscript = React.useCallback(async (): Promise<void> => {
@@ -1547,8 +1536,8 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
         const paneId = CSLAB_PANE_IDS.find((id) =>
           paneManuscripts[id]?.capsules.some((item) => item.id === capsuleId),
         )
-        const editor = paneId ? editorRefs.current[paneId] : null
-        if (editor) applyUpdatedCapsule(editor, capsule)
+        const handle = paneId ? editorRefs.current[paneId] : null
+        if (handle) handle.updateCapsule(capsule)
 
         setStaleCapsules((previous) => {
           const next = new Set(previous)
@@ -1556,14 +1545,11 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           return next
         })
 
-        if (paneId && editor) {
-          const docJson = editor.getJSON()
-          const capsules = collectCapsulesFromDoc(docJson, labId)
+        if (paneId && handle) {
           await savePaneManuscript(
             paneId,
-            docJson,
+            handle.getSnapshot(),
             paneTitles[paneId] || paneManuscripts[paneId]?.title || '未命名文稿',
-            capsules,
           )
         }
 
@@ -1598,27 +1584,15 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
         const existingPane = CSLAB_PANE_IDS.find(
           (id) => paneManuscripts[id]?.uri === summary.uri,
         )
-        const editor = existingPane ? editorRefs.current[existingPane] : null
+        const handle = existingPane ? editorRefs.current[existingPane] : null
         const attrs = buildCapsuleAttrs(cellRef)
 
-        if (existingPane && editor) {
-          const nodeType = editor.state.schema.nodes.scienceCapsule
-          const paragraphType = editor.state.schema.nodes.paragraph
-          if (!nodeType || !paragraphType) throw new Error('编辑器缺少胶囊节点')
-          const paragraph = paragraphType.create(null, nodeType.create(attrs))
-          const transaction = editor.state.tr.insert(
-            editor.state.doc.content.size,
-            paragraph,
-          )
-          editor.view.dispatch(transaction)
-
-          const docJson = editor.getJSON()
-          const capsules = collectCapsulesFromDoc(docJson, labId)
+        if (existingPane && handle) {
+          handle.appendCapsule(attrs)
           await savePaneManuscript(
             existingPane,
-            docJson,
+            handle.getSnapshot(),
             paneTitles[existingPane] || summary.title,
-            capsules,
           )
           focusPane(existingPane)
         } else {
@@ -1628,32 +1602,22 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           })
           if (!manuscript) throw new Error('文稿不存在')
 
-          const doc = cloneDocJson(manuscript.docJson)
-          doc.content.push({
-            type: 'paragraph',
-            content: [{ type: 'scienceCapsule', attrs }],
-          })
-          const capsules: CsLabCapsule[] = [
-            ...manuscript.capsules,
-            {
-              id: attrs.capsuleId,
-              labId,
-              label: attrs.label,
-              value: attrs.value,
-              unit: attrs.unit || undefined,
-              tableUri: attrs.tableUri,
-              column: attrs.column,
-              rowIndex: attrs.rowIndex,
-              revisionAtBind: attrs.revisionAtBind,
-              status: 'fresh',
-              updatedAt: Date.now(),
-            },
-          ]
+          const base = manuscript.canvasData
+            ? { canvasData: manuscript.canvasData, comments: manuscript.comments ?? [] }
+            : legacyTipTapToCanvasWithComments(manuscript.docJson)
+          const canvasData = {
+            ...base.canvasData,
+            main: [...base.canvasData.main, { value: '\n' }, buildCanvasCapsuleControl(attrs)],
+          }
+          const docJson = canvasToTipTapDoc(canvasData, base.comments)
+          const capsules = extractCanvasCapsules(canvasData, labId)
           await window.electronAPI.cslab.saveManuscript({
             labId,
             uri: manuscript.uri,
             title: manuscript.title,
-            docJson: doc,
+            docJson,
+            canvasData,
+            comments: base.comments,
             capsules,
           })
           await refreshAssets()

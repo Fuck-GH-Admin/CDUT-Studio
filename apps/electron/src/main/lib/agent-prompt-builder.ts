@@ -1311,6 +1311,18 @@ function buildCsLabScienceBlock(ctx: SystemPromptContext): string {
     ? info.plots.map((p) => `- [绘图/plot] ${p.title} (plotId: ${p.id}) → ${vaultRoot}/plots/${p.id}.json`).join('\n')
     : '- (当前暂无已保存的出版绘图)'
 
+  const literatureText = info?.literature && info.literature.length > 0
+    ? info.literature
+      .map((item) => `- ${item.title}${item.year ? ` (${item.year})` : ''}${item.doi ? ` DOI:${item.doi}` : ''} · ${item.pageCount ?? '?'} 页 / ${item.sectionCount ?? '?'} 章 · URI: ${item.uri}`)
+      .join('\n')
+    : '- (当前暂无已登记文献；可拖入 PDF 或使用 Zotero 同步)'
+
+  const geoText = info?.geoAssets && info.geoAssets.length > 0
+    ? info.geoAssets
+      .map((item) => `- ${item.title} [${item.format ?? 'geo'}]${item.width && item.height ? ` ${item.width}×${item.height}` : ''}${item.cellsize ? ` · ${item.cellsize}m` : ''} · URI: ${item.uri}`)
+      .join('\n')
+    : '- (当前暂无 DEM/GeoTIFF 栅格；可将 .asc/.tif 拖入铁笼)'
+
   return `<cslab_science>
 You are operating within a CDUT Science (CSLab) laboratory environment. This software natively integrates two professional scientific visualization and analysis engines: the Origin 2D Publication Plotting Engine and the VESTA 3D Crystal & Molecular Structure Engine.
 
@@ -1331,6 +1343,23 @@ You are operating within a CDUT Science (CSLab) laboratory environment. This sof
 ${structuresText}
 - Available Plot Documents:
 ${plotsText}
+- Literature Library (metadata only):
+${literatureText}
+- Geospatial Rasters (DEM / hazard outputs):
+${geoText}
+
+# Literature Intelligence
+- Use \`cslab_search_literature\` for cross-paper retrieval with page anchors; cite the returned literature URI and page.
+- Use \`cslab_read_paper_section\` to read a specific section or page range; do not scan the vault with shell commands.
+- Use \`cslab_paper_guided_reading\` for a structured guide. Base every claim on returned evidence; never invent findings, authors, DOIs, or page numbers that were not returned.
+- If a PDF has no text layer, say so explicitly and ask for an OCR/text-layer copy.
+
+# Geohazard Engine (SKLGP Debris Flow)
+- \`cslab_geohazard_analyze_dem\`: slope/aspect/D8 flow accumulation and suggested source cell from an \`.asc\`/GeoTIFF DEM.
+- \`cslab_geohazard_rainfall_threshold\`: empirical I = α·D^(−β) threshold curve, optionally fitted from local points.
+- \`cslab_geohazard_debris_flow_simulation\`: depth-averaged shallow-water run with Voellmy or Bingham rheology; outputs max depth/speed/arrival grids, time series and hazard metrics.
+- \`cslab_geohazard_render_hazard_map\`: publication-grade hazard classification PNG plus Origin plot export.
+- These are simplified engineering models, NOT certified FLO-2D/Massflow results. Always surface the assumptions, parameters, and the need for field calibration. Never present synthetic demo values as field measurements.
 
 # Dual Engine Architecture (Origin × VESTA)
 
