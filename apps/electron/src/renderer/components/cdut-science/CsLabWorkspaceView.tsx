@@ -42,6 +42,7 @@ import type {
   CsLabManuscriptSummary,
   CsLabMolAsset,
   CsLabPlotUpdatedEvent,
+  CsLabAssetChangedEvent,
   CsLabAssetFocusedEvent,
   CsLabStructureFocusedEvent,
   CsLabStructureSnapshotRequest,
@@ -1047,9 +1048,16 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   ])
 
   useCsLabEvents(labId, {
-    onAssetChanged: React.useCallback(() => {
+    onAssetChanged: React.useCallback((event: CsLabAssetChangedEvent | undefined) => {
       void refreshAssets().catch(() => undefined)
-    }, [refreshAssets]),
+      if (!event?.uri) return
+      const paneId = CSLAB_PANE_IDS.find(
+        (id) => panes[id].viewType === 'manuscript' && panes[id].manuscriptUri === event.uri,
+      )
+      if (!paneId) return
+      const summary = manuscripts.find((item) => item.uri === event.uri)
+      if (summary) void openManuscriptInPane(paneId, summary)
+    }, [manuscripts, openManuscriptInPane, panes, refreshAssets]),
     onZoteroSynced: React.useCallback(() => {
       void refreshAssets().catch(() => undefined)
     }, [refreshAssets]),

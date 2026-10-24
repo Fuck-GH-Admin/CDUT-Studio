@@ -420,7 +420,7 @@ export function buildCsLabAssetTools(
               docJson: appendDoc(manuscript.docJson, input.paragraphs),
               // 关键：不传旧 canvasData，确保前端从最新 docJson 重新编译。
               canvasData: undefined,
-              comments: undefined,
+              comments: manuscript.comments,
               capsules: input.capsules ?? manuscript.capsules,
             })
             broadcastCsLabEvent(CSLAB_IPC_CHANNELS.ON_ASSET_CHANGED, {

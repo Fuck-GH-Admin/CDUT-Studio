@@ -217,13 +217,13 @@ describe('digitizePlot 包装层', () => {
       digitizePlot(
         {
           labId: 'lab-test-01',
-          imageDataUrl: 'data:image/gif;base64,AAAA',
+          imageDataUrl: 'data:text/plain;base64,AAAA',
           mode: 'line',
           calibration: CALIBRATION,
         },
         runner,
       ),
-    ).rejects.toThrow('框选图像格式无效')
+    ).rejects.toThrow('图像 dataURL 格式无效')
 
     await expect(
       digitizePlot(

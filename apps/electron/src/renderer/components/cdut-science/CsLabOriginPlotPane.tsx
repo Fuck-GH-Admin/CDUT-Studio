@@ -402,7 +402,7 @@ export function CsLabOriginPlotPane({
   return (
     <div data-tour="cslab-origin-plot" data-plot-id={pane.plotId} className="relative flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
+        <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-none border-b px-2 py-1.5">
           <select
             value={plotState.presetId}
             onChange={(event) => changePreset(event.target.value as CsLabJournalPresetId)}
@@ -418,7 +418,7 @@ export function CsLabOriginPlotPane({
             type="button"
             onClick={() => setRoiMode((value) => !value)}
             className={cn(
-              'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px]',
+              'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px]',
               roiMode ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
             )}
           >
@@ -427,7 +427,7 @@ export function CsLabOriginPlotPane({
           <button
             type="button"
             onClick={() => void sendSelectionToAgent()}
-            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
             title="把当前选区与绘图上下文发送给科学助理"
           >
             <Sparkles className="h-3 w-3" /> 发送至助理
@@ -435,7 +435,7 @@ export function CsLabOriginPlotPane({
           <button
             type="button"
             onClick={() => openFit()}
-            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
           >
             <Sigma className="h-3 w-3" /> 拟合
           </button>
@@ -443,14 +443,14 @@ export function CsLabOriginPlotPane({
             type="button"
             onClick={() => void handleSave()}
             disabled={saving}
-            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] hover:bg-muted disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />} 保存
           </button>
           <button
             type="button"
             onClick={() => setExportOpen(true)}
-            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
           >
             <Download className="h-3 w-3" /> 导出
           </button>

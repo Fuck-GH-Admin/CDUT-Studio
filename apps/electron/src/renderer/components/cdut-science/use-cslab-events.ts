@@ -7,6 +7,7 @@
 import { useEffect, useRef } from 'react'
 import { useSetAtom } from 'jotai'
 import type {
+  CsLabAssetChangedEvent,
   CsLabCustomToolScan,
   CsLabDagJobsCancelledEvent,
   CsLabHpcJobEvent,
@@ -31,7 +32,7 @@ import {
 } from '@/atoms/cslab-atoms'
 
 export interface CsLabEventHandlers {
-  onAssetChanged?: () => void
+  onAssetChanged?: (event?: CsLabAssetChangedEvent) => void
   onStale?: (capsuleIds: string[]) => void
   onZoteroSynced?: (event: CsLabZoteroSyncedEvent) => void
   onZoteroStatus?: (event: CsLabZoteroStatusEvent) => void
@@ -68,7 +69,7 @@ export function useCsLabEvents(labId: string | null, handlers: CsLabEventHandler
 
     const offAsset = window.electronAPI.cslab.onAssetChanged((event) => {
       if (event.labId !== labId) return
-      handlersRef.current.onAssetChanged?.()
+      handlersRef.current.onAssetChanged?.(event)
     })
 
     const offStale = window.electronAPI.cslab.onCapsuleStale((event) => {

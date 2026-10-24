@@ -411,7 +411,7 @@ export interface CsLabDemoLabResult {
   /** 全部预生成出版图 ID（顺序固定）。 */
   plotIds?: string[]
   stats?: CsLabDemoStats
-  /** 演示实验室类型；旧调用缺省视为 origin-vesta。 */
+  /** 演示实验室类型；当前唯一值为 flagship。 */
   kind?: CsLabDemoKind
   /** 泥石流演示推演指标。 */
   geohazardStats?: CsLabDemoStats

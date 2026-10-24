@@ -416,7 +416,7 @@ export function CsLabFigureView({
             data-tour="cslab-figure-digitize"
             disabled={!image || !naturalSize || busy !== null || tooLarge}
             onClick={() => void handleDigitize()}
-            className="inline-flex items-center gap-1 rounded-md bg-cslab-accent px-2 py-1 text-[10px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-cslab-accent px-2 py-1 text-[10px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === 'digitize' ? (
               <Loader2 size={10} className="animate-spin" />
@@ -430,7 +430,7 @@ export function CsLabFigureView({
             disabled={!image || !naturalSize || busy !== null || tooLarge}
             onClick={handleFormula}
             className={cn(
-              'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+              'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-50',
               formulaMode
                 ? 'border-cslab-accent/50 bg-cslab-accent/10 text-cslab-accent'
                 : 'border-cslab-border text-cslab-muted hover:text-cslab-text',

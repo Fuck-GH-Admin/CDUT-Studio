@@ -3,12 +3,11 @@ import { computeCursorAnchoredScroll, normalizePdfBbox } from './cslab-pdf-geome
 
 describe('PDF 几何', () => {
   test('Given 倒置 bbox When normalizePdfBbox Then 返回正宽高', () => {
-    expect(normalizePdfBbox([0.6, 0.8, 0.2, 0.3])).toEqual({
-      x: 0.2,
-      y: 0.3,
-      width: 0.4,
-      height: 0.5,
-    })
+    const box = normalizePdfBbox([0.6, 0.8, 0.2, 0.3])
+    expect(box.x).toBeCloseTo(0.2, 6)
+    expect(box.y).toBeCloseTo(0.3, 6)
+    expect(box.width).toBeCloseTo(0.4, 6)
+    expect(box.height).toBeCloseTo(0.5, 6)
   })
 
   test('Given 放大 When 光标锚定 Then 光标下的内容保持不动', () => {

@@ -403,11 +403,13 @@ export function CsLabMolstarViewer({
 
         const count = Number(structure.data?.elementCount ?? 0)
         setAtomCount(count)
-        const heavy = count > 500_000
+        // 大型 PDB 使用 Cartoon 保留次级结构纵深；其余大结构退化为点云。
+        const useCartoon = asset.format === 'pdb' && count > 5_000
+        const heavy = count > 20_000
         setPerformanceMode(heavy)
 
         await plugin.builders.structure.representation.addRepresentation(structure, {
-          type: heavy ? 'point' : count > 200_000 ? 'spacefill' : 'ball-and-stick',
+          type: useCartoon ? 'cartoon' : heavy ? 'point' : 'ball-and-stick',
           color: 'element-symbol',
         })
 

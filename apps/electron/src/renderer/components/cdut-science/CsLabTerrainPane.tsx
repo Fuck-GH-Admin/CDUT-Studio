@@ -176,7 +176,6 @@ export function CsLabTerrainPane({
       pointGeometry,
       new THREE.PointsMaterial({ color: '#d98a2b', size: 0.075, transparent: true, opacity: 0.9 }),
     )
-    points.rotation.x = -Math.PI / 2
     group.add(points)
 
     const state = {
@@ -214,7 +213,8 @@ export function CsLabTerrainPane({
       const row = Math.floor(index / sampledWidth)
       const col = index % sampledWidth
       const x = (col / Math.max(1, sampledWidth - 1) - 0.5) * sizeX
-      const z = (row / Math.max(1, sampledHeight - 1) - 0.5) * sizeZ
+      // 网格经过 -90° 旋转后，局部 y 轴映射到世界 -z 轴。
+      const z = -(row / Math.max(1, sampledHeight - 1) - 0.5) * sizeZ
       const y = ((payload.heights[index]! - minHeight) / span) * heightScale
       return [x, y + 0.06, z]
     }
