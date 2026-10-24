@@ -61,6 +61,14 @@ import {
   type CsLabFormulaVerifyInput,
   type CsLabFormulaVerifyResult,
   type CsLabFormulaOcrResult,
+  type CsLabTranslateSelectionInput,
+  type CsLabTranslateSelectionResult,
+  type CsLabToolPreset,
+  type CsLabToolPresetInstallInput,
+  type CsLabToolPresetInstallResult,
+  type CsLabToolPresetReadResult,
+  type CsLabZoteroBridgeWriteInput,
+  type CsLabZoteroBridgeWriteResult,
   type CsLabZoteroSyncedEvent,
   type CsLabZoteroStatusEvent,
   type CsLabProtocol,
@@ -1799,6 +1807,23 @@ export interface ElectronAPI {
     /** 公式识别与验算 */
     ocrFormula: (input: { labId: string; imageDataUrl: string }) => Promise<CsLabFormulaOcrResult>
     verifyFormula: (input: CsLabFormulaVerifyInput) => Promise<CsLabFormulaVerifyResult>
+
+    /** 选区学术翻译（OCR + 隔离补全，防提示词注入） */
+    translateSelection: (
+      input: CsLabTranslateSelectionInput,
+    ) => Promise<CsLabTranslateSelectionResult>
+
+    /** 预置科研算子 */
+    listToolPresets: (labId?: string) => Promise<CsLabToolPreset[]>
+    installToolPresets: (
+      input: CsLabToolPresetInstallInput,
+    ) => Promise<CsLabToolPresetInstallResult>
+    readToolPresetSource: (filename: string) => Promise<CsLabToolPresetReadResult>
+
+    /** Zotero 写回桥接（仅本地 REST 插件 HTTP 通道） */
+    writeZoteroBridge: (
+      input: CsLabZoteroBridgeWriteInput,
+    ) => Promise<CsLabZoteroBridgeWriteResult>
 
     /** 跨文献 GraphRAG */
     buildLiteratureIndex: (input: {
@@ -4269,6 +4294,19 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OCR_FORMULA, input),
     verifyFormula: (input: CsLabFormulaVerifyInput) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VERIFY_FORMULA, input),
+
+    translateSelection: (input: CsLabTranslateSelectionInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TRANSLATE_SELECTION, input),
+
+    listToolPresets: (labId?: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TOOL_PRESET_LIST, labId),
+    installToolPresets: (input: CsLabToolPresetInstallInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TOOL_PRESET_INSTALL, input),
+    readToolPresetSource: (filename: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TOOL_PRESET_READ, { filename }),
+
+    writeZoteroBridge: (input: CsLabZoteroBridgeWriteInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_BRIDGE_WRITE, input),
 
     buildLiteratureIndex: (input: { labId: string; force?: boolean }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.BUILD_LITERATURE_INDEX, input),

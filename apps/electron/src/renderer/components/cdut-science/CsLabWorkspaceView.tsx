@@ -18,12 +18,15 @@ import {
   FlaskConical,
   FolderOpen,
   HardDrive,
+  Languages,
+  LineChart,
   Loader2,
   Lock,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  ScanText,
   Server,
   Sparkles,
   Upload,
@@ -89,6 +92,7 @@ import { CsLabStageGrid } from './CsLabStageGrid'
 import { CsLabTileOverlay } from './CsLabTileOverlay'
 import { CsLabPlotDigitizerPanel } from './CsLabPlotDigitizerPanel'
 import { CsLabFormulaPanel } from './CsLabFormulaPanel'
+import { CsLabTranslatePanel } from './CsLabTranslatePanel'
 import { CsLabLiteratureBrainPanel } from './CsLabLiteratureBrainPanel'
 import { CsLabZoteroPanel } from './CsLabZoteroPanel'
 import { CsLabRunTimeline } from './CsLabRunTimeline'
@@ -1786,17 +1790,19 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
             ? '图表逆向数字化'
             : drawer.mode === 'formula'
               ? '公式识别与验算'
-              : drawer.mode === 'brain'
-                ? '文献智脑'
-                : drawer.mode === 'zotero'
-                  ? 'Zotero 文献同步'
-                  : drawer.mode === 'runs'
-                    ? '实验规程与批次'
-                    : drawer.mode === 'notes'
-                      ? '笔记与推演'
-                      : drawer.mode === 'tools'
-                        ? '科研工具运行时'
-                        : selectedAsset?.title ?? drawer.title ?? '资产详情'
+              : drawer.mode === 'translate'
+                ? '学术翻译'
+                : drawer.mode === 'brain'
+                  ? '文献智脑'
+                  : drawer.mode === 'zotero'
+                    ? 'Zotero 文献同步'
+                    : drawer.mode === 'runs'
+                      ? '实验规程与批次'
+                      : drawer.mode === 'notes'
+                        ? '笔记与推演'
+                        : drawer.mode === 'tools'
+                          ? '自定义科研算子 (Python Workspace)'
+                          : selectedAsset?.title ?? drawer.title ?? '资产详情'
 
   const drawerSubtitle =
     drawer.mode === 'ingest'
@@ -1809,23 +1815,25 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
             ? 'PLOT DIGITIZER'
             : drawer.mode === 'formula'
               ? 'FORMULA VERIFIER'
-              : drawer.mode === 'brain'
-                ? 'CROSS-LITERATURE GRAPHRAG'
-                : drawer.mode === 'zotero'
-                  ? 'ZOTERO READ-ONLY SYNC'
-                  : drawer.mode === 'runs'
-                    ? 'PROTOCOL · RUN TIMELINE'
-                    : drawer.mode === 'notes'
-                      ? 'OBSIDIAN VAULT · JSON CANVAS'
-                      : drawer.mode === 'tools'
-                      ? 'PYTHON TOOL REGISTRY'
-                      : drawer.mode === 'share'
-                        ? 'NETWORK SHARE WATCH'
-                        : drawer.mode === 'hpc'
-                          ? 'HPC CLUSTER BRIDGE'
-                          : selectedAsset
-                            ? `${LAYER_LABELS[selectedAsset.layerType] ?? selectedAsset.layerType} · ${selectedAsset.format ?? 'unknown'}`
-                            : 'ASSET'
+              : drawer.mode === 'translate'
+                ? 'ACADEMIC TRANSLATION'
+                : drawer.mode === 'brain'
+                  ? 'CROSS-LITERATURE GRAPHRAG'
+                  : drawer.mode === 'zotero'
+                    ? 'ZOTERO READ-ONLY SYNC'
+                    : drawer.mode === 'runs'
+                      ? 'PROTOCOL · RUN TIMELINE'
+                      : drawer.mode === 'notes'
+                        ? 'OBSIDIAN VAULT · JSON CANVAS'
+                        : drawer.mode === 'tools'
+                        ? 'PYTHON TOOL REGISTRY'
+                        : drawer.mode === 'share'
+                          ? 'NETWORK SHARE WATCH'
+                          : drawer.mode === 'hpc'
+                            ? 'HPC CLUSTER BRIDGE'
+                            : selectedAsset
+                              ? `${LAYER_LABELS[selectedAsset.layerType] ?? selectedAsset.layerType} · ${selectedAsset.format ?? 'unknown'}`
+                              : 'ASSET'
 
   return (
     <div
@@ -1966,10 +1974,10 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           </button>
           <button
             type="button"
-            title="科研工具运行时"
+            title="自定义科研算子 (Python Workspace)"
             onClick={() => {
               setToolSeed(null)
-              setDrawer({ open: true, mode: 'tools', title: '科研工具运行时' })
+              setDrawer({ open: true, mode: 'tools', title: '自定义科研算子 (Python Workspace)' })
             }}
             className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
           >
@@ -2205,6 +2213,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           wide={
             drawer.mode === 'plot' ||
             drawer.mode === 'formula' ||
+            drawer.mode === 'translate' ||
             drawer.mode === 'runs' ||
             drawer.mode === 'notes' ||
             drawer.mode === 'tools' ||
@@ -2292,7 +2301,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
                 />
               </div>
               <p className="text-[11px] leading-relaxed text-cslab-muted">
-                第 {drawer.selection.pageIndex + 1} 页 · 选择后续工序：
+                第 {drawer.selection.pageIndex + 1} 页 · 选择后续工序（三大工序地位均等）：
               </p>
               <div className="grid grid-cols-1 gap-2">
                 <button
@@ -2300,18 +2309,39 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
                   onClick={() =>
                     setDrawer((previous) => ({ ...previous, open: true, mode: 'plot' }))
                   }
-                  className="rounded-lg bg-cslab-accent px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-cslab-accentHover"
+                  className="flex items-center gap-2.5 rounded-lg border border-cslab-border bg-cslab-elevated px-3 py-2.5 text-left transition-colors hover:border-cslab-accent/40 hover:bg-cslab-surface"
                 >
-                  图表逆向数字化
+                  <LineChart size={14} className="shrink-0 text-cslab-accent" />
+                  <span className="min-w-0">
+                    <span className="block text-xs font-medium text-cslab-text">图表逆向数字化</span>
+                    <span className="block text-[9px] text-cslab-muted">框选图表提取数据序列</span>
+                  </span>
                 </button>
                 <button
                   type="button"
                   onClick={() =>
                     setDrawer((previous) => ({ ...previous, open: true, mode: 'formula' }))
                   }
-                  className="rounded-lg border border-cslab-border px-3 py-2 text-xs text-cslab-text transition-colors hover:bg-cslab-surface"
+                  className="flex items-center gap-2.5 rounded-lg border border-cslab-border bg-cslab-elevated px-3 py-2.5 text-left transition-colors hover:border-cslab-accent/40 hover:bg-cslab-surface"
                 >
-                  公式识别与验算
+                  <ScanText size={14} className="shrink-0 text-cslab-accent" />
+                  <span className="min-w-0">
+                    <span className="block text-xs font-medium text-cslab-text">公式识别与验算</span>
+                    <span className="block text-[9px] text-cslab-muted">OCR 提取 LaTeX 并 SymPy 验算</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDrawer((previous) => ({ ...previous, open: true, mode: 'translate' }))
+                  }
+                  className="flex items-center gap-2.5 rounded-lg border border-cslab-border bg-cslab-elevated px-3 py-2.5 text-left transition-colors hover:border-cslab-accent/40 hover:bg-cslab-surface"
+                >
+                  <Languages size={14} className="shrink-0 text-cslab-accent" />
+                  <span className="min-w-0">
+                    <span className="block text-xs font-medium text-cslab-text">翻译为简体中文</span>
+                    <span className="block text-[9px] text-cslab-muted">隔离通道学术翻译 · 防提示词注入</span>
+                  </span>
                 </button>
               </div>
             </div>
@@ -2329,6 +2359,10 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
 
           {drawer.mode === 'formula' && (
             <CsLabFormulaPanel labId={labId} selection={drawer.selection} />
+          )}
+
+          {drawer.mode === 'translate' && (
+            <CsLabTranslatePanel labId={labId} selection={drawer.selection} />
           )}
 
           {drawer.mode === 'brain' && (

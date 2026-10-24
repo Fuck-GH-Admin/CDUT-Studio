@@ -12,12 +12,19 @@ import {
   Check,
   FlaskConical,
   Loader2,
+  PackagePlus,
   Play,
   RefreshCw,
   Unlink,
   Wrench,
+  X,
 } from 'lucide-react'
-import type { AgentSessionMeta, CsLabCustomTool, CsLabToolProfile } from '@profer/shared'
+import type {
+  AgentSessionMeta,
+  CsLabCustomTool,
+  CsLabToolPreset,
+  CsLabToolProfile,
+} from '@profer/shared'
 import { cn } from '@/lib/utils'
 import {
   cslabCustomToolsAtom,
@@ -94,6 +101,10 @@ export function CsLabToolsPanel({
   const [sessions, setSessions] = React.useState<AgentSessionMeta[]>([])
   const [sessionId, setSessionId] = React.useState('')
   const [message, setMessage] = React.useState<string | null>(null)
+  const [presets, setPresets] = React.useState<CsLabToolPreset[]>([])
+  const [installingPreset, setInstallingPreset] = React.useState<string | null>(null)
+  const [sourceView, setSourceView] = React.useState<{ filename: string; source: string } | null>(null)
+  const [showPresets, setShowPresets] = React.useState(false)
   const seedAppliedRef = React.useRef('')
 
   React.useEffect(() => {
@@ -155,6 +166,12 @@ export function CsLabToolsPanel({
       } catch {
         if (!cancelled) setSessions([])
       }
+      try {
+        const presetList = await window.electronAPI.cslab.listToolPresets(labId)
+        if (!cancelled) setPresets(presetList)
+      } catch {
+        if (!cancelled) setPresets([])
+      }
     })()
 
     const off = window.electronAPI.cslab.onToolsChanged((event) => {
@@ -169,6 +186,37 @@ export function CsLabToolsPanel({
     // 仅随实验室切换重置。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [labId])
+
+  const installPreset = async (filename?: string): Promise<void> => {
+    setInstallingPreset(filename ?? 'all')
+    try {
+      const result = await window.electronAPI.cslab.installToolPresets({
+        labId,
+        filenames: filename ? [filename] : undefined,
+      })
+      onToast(result.ok ? 'success' : 'error', result.message)
+      const presetList = await window.electronAPI.cslab.listToolPresets(labId)
+      setPresets(presetList)
+      if (result.installed.length > 0) await refreshTools(true)
+    } catch (error) {
+      onToast('error', error instanceof Error ? error.message : '预置算子安装失败')
+    } finally {
+      setInstallingPreset(null)
+    }
+  }
+
+  const viewPresetSource = async (filename: string): Promise<void> => {
+    try {
+      const result = await window.electronAPI.cslab.readToolPresetSource(filename)
+      if (result.ok && result.source) {
+        setSourceView({ filename: result.filename ?? filename, source: result.source })
+      } else {
+        onToast('error', result.message ?? '源码读取失败')
+      }
+    } catch (error) {
+      onToast('error', error instanceof Error ? error.message : '源码读取失败')
+    }
+  }
 
   const ensureUv = async (): Promise<void> => {
     setBusy('uv')
@@ -336,11 +384,12 @@ export function CsLabToolsPanel({
 
       <section className="space-y-1">
         {(scan?.tools ?? []).length === 0 ? (
-          <div className="rounded-xl border border-dashed border-cslab-border px-4 py-6 text-center">
+          <div className="rounded-xl border border-dashed border-cslab-border px-4 py-5 text-center">
             <FlaskConical size={16} className="mx-auto text-cslab-muted/60" />
-            <p className="mt-1.5 font-serif text-sm text-cslab-text">还没有可装配的科研工具</p>
+            <p className="mt-1.5 font-serif text-sm text-cslab-text">自定义科研算子 (Python Workspace)</p>
             <p className="mt-1 text-[10px] leading-relaxed text-cslab-muted">
-              在实验室目录 runtime/tools 放入 .py 文件，函数需带类型注解与 docstring。
+              在实验室目录 runtime/tools 放入 .py 文件（函数需带类型注解与 docstring），
+              或直接安装下方的地质灾害预置算子。
             </p>
           </div>
         ) : (
@@ -377,6 +426,103 @@ export function CsLabToolsPanel({
           ))
         )}
       </section>
+
+      <section className="rounded-xl border border-cslab-border bg-cslab-elevated/70 p-3">
+        <div className="flex items-center gap-2">
+          <PackagePlus size={11} className="text-cslab-muted" />
+          <span className="text-[10px] uppercase tracking-[0.14em] text-cslab-muted">
+            预置算子库 · 地质灾害 / 泥石流
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowPresets((value) => !value)}
+            className="ml-auto text-[9px] text-cslab-muted hover:text-cslab-text"
+          >
+            {showPresets || (scan?.tools ?? []).length === 0 ? '收起' : '展开'}
+          </button>
+        </div>
+        {(showPresets || (scan?.tools ?? []).length === 0) && (
+          <div className="mt-2 space-y-1.5">
+            {presets.length === 0 && (
+              <p className="text-[10px] text-cslab-muted">预置算子库不可用（资源包缺失）</p>
+            )}
+            {presets.map((preset) => (
+              <div
+                key={preset.filename}
+                className="rounded-lg border border-cslab-border bg-cslab-bg px-2.5 py-2"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-medium text-cslab-text">{preset.title}</span>
+                  {preset.installed && (
+                    <span className="rounded-full border border-[#6E8B6A]/40 px-1.5 text-[8px] text-[#5C7358]">
+                      已安装
+                    </span>
+                  )}
+                  <span className="ml-auto rounded-full border border-cslab-border px-1.5 text-[8px] text-cslab-muted">
+                    {preset.dependency}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-cslab-muted">
+                  {preset.description}
+                </p>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={preset.installed || installingPreset !== null}
+                    onClick={() => void installPreset(preset.filename)}
+                    className="inline-flex items-center gap-1 rounded-md bg-cslab-accent px-2 py-0.5 text-[9px] font-medium text-white hover:bg-cslab-accentHover disabled:opacity-40"
+                  >
+                    {installingPreset === preset.filename ? (
+                      <Loader2 size={9} className="animate-spin" />
+                    ) : (
+                      <PackagePlus size={9} />
+                    )}
+                    {preset.installed ? '已安装' : '安装到本实验室'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void viewPresetSource(preset.filename)}
+                    className="rounded-md border border-cslab-border px-2 py-0.5 text-[9px] text-cslab-muted hover:text-cslab-text"
+                  >
+                    查看源码
+                  </button>
+                </div>
+              </div>
+            ))}
+            {presets.length > 0 && presets.some((preset) => !preset.installed) && (
+              <button
+                type="button"
+                disabled={installingPreset !== null}
+                onClick={() => void installPreset()}
+                className="w-full rounded-lg border border-dashed border-cslab-border px-2 py-1.5 text-[10px] text-cslab-muted hover:border-cslab-accent/40 hover:text-cslab-accent disabled:opacity-40"
+              >
+                {installingPreset === 'all' ? '安装中…' : '一键安装全部预置算子'}
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+
+      {sourceView && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+          <div className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-cslab-border bg-cslab-elevated shadow-subtle">
+            <div className="flex items-center gap-2 border-b border-cslab-border px-4 py-2.5">
+              <span className="font-mono text-[11px] text-cslab-text">{sourceView.filename}</span>
+              <span className="text-[9px] text-cslab-muted">预置算子源码</span>
+              <button
+                type="button"
+                onClick={() => setSourceView(null)}
+                className="ml-auto rounded p-1 text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text"
+              >
+                <X size={12} />
+              </button>
+            </div>
+            <pre className="flex-1 overflow-auto bg-cslab-bg p-4 font-mono text-[10px] leading-relaxed text-cslab-text">
+              {sourceView.source}
+            </pre>
+          </div>
+        </div>
+      )}
 
       {selectedToolMeta && !selectedToolMeta.unsupportedReason && (
         <section className="rounded-xl border border-cslab-border bg-cslab-elevated/70 p-3">

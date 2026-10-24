@@ -34,6 +34,8 @@ import type {
   CsLabDocxSyncResult,
   CsLabIngestResult,
   CsLabFormulaVerifyInput,
+  CsLabTranslateSelectionInput,
+  CsLabZoteroBridgeWriteInput,
   CsLabLiteratureSearchInput,
   CsLabPlotDigitizeInput,
   CsLabDigitizedFigureInput,
@@ -140,7 +142,8 @@ import {
   stopZoteroWatcher,
   syncZoteroLibrary,
 } from './cslab-zotero'
-import { getZoteroBridgeStatus } from './cslab-zotero-bridge'
+import { getZoteroBridgeStatus, writeZoteroBridge } from './cslab-zotero-bridge'
+import { translateSelection } from './cslab-translate'
 import { getLiteratureFilePath, getLiteratureItem } from './cslab-literature'
 import {
   ensureToolEnvironment,
@@ -183,6 +186,9 @@ import {
 } from './cslab-vault-index'
 import {
   getLabToolScan,
+  installToolPresets,
+  listToolPresets,
+  readToolPresetSource,
   runLabTool,
   scanLabTools,
   startLabToolWatcher,
@@ -1191,6 +1197,52 @@ export function registerCsLabIpc(): void {
         record.symbolDimensions && typeof record.symbolDimensions === 'object'
           ? (record.symbolDimensions as Record<string, string>)
           : undefined,
+    })
+  })
+
+  // ===== 选区学术翻译（OCR + 隔离补全，防提示词注入） =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.TRANSLATE_SELECTION, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('翻译参数无效')
+    const record = input as Partial<CsLabTranslateSelectionInput>
+    // 业务级失败（OCR 缺依赖 / 渠道未配置）以结果对象返回，不抛 IPC 异常。
+    return translateSelection({
+      labId: asString(record.labId, '实验室标识'),
+      imageDataUrl: asString(record.imageDataUrl, '框选图像'),
+      channelId: asString(record.channelId, '模型渠道'),
+      modelId: asString(record.modelId, '模型标识'),
+    })
+  })
+
+  // ===== 预置科研算子 =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.TOOL_PRESET_LIST, async () => listToolPresets())
+
+  ipcMain.handle(CSLAB_IPC_CHANNELS.TOOL_PRESET_INSTALL, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('算子安装参数无效')
+    const record = input as { labId?: unknown; filenames?: unknown }
+    return installToolPresets(
+      asString(record.labId, '实验室标识'),
+      Array.isArray(record.filenames)
+        ? record.filenames.filter((item): item is string => typeof item === 'string')
+        : undefined,
+    )
+  })
+
+  ipcMain.handle(CSLAB_IPC_CHANNELS.TOOL_PRESET_READ, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('算子读取参数无效')
+    const record = input as { filename?: unknown }
+    return readToolPresetSource(asString(record.filename, '算子文件名'))
+  })
+
+  // ===== Zotero 写回桥接（仅 HTTP 通道，无任何 sqlite 写路径） =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.ZOTERO_BRIDGE_WRITE, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('写回参数无效')
+    const record = input as Partial<CsLabZoteroBridgeWriteInput>
+    return writeZoteroBridge({
+      op: (typeof record.op === 'string' ? record.op : '') as CsLabZoteroBridgeWriteInput['op'],
+      payload:
+        record.payload && typeof record.payload === 'object'
+          ? (record.payload as Record<string, unknown>)
+          : {},
     })
   })
 

@@ -13,6 +13,7 @@ import type {
   CsLabFormulaOcrResult,
   CsLabFormulaVerifyInput,
   CsLabFormulaVerifyResult,
+  CsLabSelectionOcrResult,
 } from '@profer/shared'
 import { assertLabId } from './cslab-paths'
 import {
@@ -142,6 +143,54 @@ export async function ocrFormula(
       ok: false,
       engine: 'pix2text',
       message: error instanceof Error ? error.message : '公式识别失败',
+    }
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+interface RawOcrTextPayload {
+  ok?: boolean
+  engine?: string
+  text?: string
+  message?: string
+}
+
+/**
+ * 选区纯文本 OCR（学术翻译前置）：Pix2Text 整页逐行识别。
+ * missingDependency=true 表示 Pix2Text 未安装（engine=pix2text-missing），
+ * 面板应展示一键安装引导而非视为识别失败。
+ */
+export async function ocrSelectionText(
+  labIdInput: string,
+  imageDataUrl: string,
+  runner: CsLabPythonRunner = defaultCsLabPythonRunner,
+): Promise<CsLabSelectionOcrResult> {
+  const labId = assertLabId(labIdInput)
+  const image = parseDataUrl(imageDataUrl)
+  const tempDir = await fs.mkdtemp(join(tmpdir(), 'cslab-ocr-text-'))
+  const imagePath = join(tempDir, `selection-${randomUUID().slice(0, 8)}.${image.extension}`)
+
+  try {
+    await fs.writeFile(imagePath, image.buffer)
+    const stdout = await runner.runPython(
+      labId,
+      'cslab-formula-verifier.py',
+      ['--mode', 'ocr-text', '--image', imagePath],
+      { timeoutMs: 180_000 },
+    )
+    const payload = JSON.parse(stdout.trim()) as RawOcrTextPayload
+    const missingDependency = payload.engine === 'pix2text-missing'
+    return {
+      ok: payload.ok === true,
+      text: payload.text,
+      missingDependency: missingDependency || undefined,
+      message: payload.message,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : '文本识别失败',
     }
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)

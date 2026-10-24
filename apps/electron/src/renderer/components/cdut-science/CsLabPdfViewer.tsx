@@ -8,7 +8,17 @@
  */
 
 import * as React from 'react'
-import { BookOpen, ChevronLeft, ChevronRight, Highlighter, Loader2, Minus, Plus } from 'lucide-react'
+import {
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  Hand,
+  Highlighter,
+  Loader2,
+  Minus,
+  MousePointer2,
+  Plus,
+} from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
@@ -73,6 +83,10 @@ export function CsLabPdfViewer({
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [workerFallback, setWorkerFallback] = React.useState(false)
+  /** 指针模式：scroll 只读浏览（默认，滚轮翻页）；hand 抓手平移画布。 */
+  const [pointerMode, setPointerMode] = React.useState<'scroll' | 'hand'>('scroll')
+  const [panning, setPanning] = React.useState(false)
+  const panRef = React.useRef<{ pointerId: number; startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null)
 
   // ===== 文档加载（Worker 失败自动降级） =====
   React.useEffect(() => {
@@ -183,6 +197,50 @@ export function CsLabPdfViewer({
     pageRefs.current.get(next)?.scrollIntoView({ block: 'start', behavior: 'auto' })
   }
 
+  // ===== 外层容器：抓手平移 + Ctrl+滚轮缩放（全模式一致） =====
+  const handleContainerPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (pointerMode !== 'hand' || event.button !== 0) return
+    const el = event.currentTarget
+    panRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: el.scrollLeft,
+      scrollTop: el.scrollTop,
+    }
+    setPanning(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handleContainerPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const pan = panRef.current
+    if (!pan || pan.pointerId !== event.pointerId) return
+    const el = event.currentTarget
+    el.scrollLeft = pan.scrollLeft - (event.clientX - pan.startX)
+    el.scrollTop = pan.scrollTop - (event.clientY - pan.startY)
+  }
+
+  const handleContainerPointerUp = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (panRef.current?.pointerId === event.pointerId) {
+      panRef.current = null
+      setPanning(false)
+    }
+  }
+
+  // Ctrl+滚轮缩放：wheel 在 React 根节点为 passive，需原生非 passive 监听才能 preventDefault。
+  React.useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.ctrlKey && !event.metaKey) return
+      // 普通滚轮保持原生滚动翻页；Ctrl+滚轮在所有模式下统一缩放。
+      event.preventDefault()
+      setScale((value) => Math.max(0.4, Math.min(3, value + (event.deltaY > 0 ? -0.1 : 0.1))))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-cslab-bg">
       <div
@@ -242,6 +300,35 @@ export function CsLabPdfViewer({
         >
           <Highlighter size={12} />
         </button>
+        <span className="mx-0.5 h-4 w-px shrink-0 bg-cslab-border" />
+        <button
+          type="button"
+          onClick={() => setPointerMode('scroll')}
+          className={cn(
+            'rounded p-1 transition-colors',
+            pointerMode === 'scroll'
+              ? 'bg-cslab-surface text-cslab-accent'
+              : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+          )}
+          aria-label="浏览模式"
+          title="浏览模式：滚轮翻页，按住 Ctrl 拖动框选"
+        >
+          <MousePointer2 size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setPointerMode('hand')}
+          className={cn(
+            'rounded p-1 transition-colors',
+            pointerMode === 'hand'
+              ? 'bg-cslab-surface text-cslab-accent'
+              : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+          )}
+          aria-label="抓手模式"
+          title="抓手模式：按住拖动平移画布；Ctrl+滚轮缩放"
+        >
+          <Hand size={12} />
+        </button>
       </div>
 
       {workerFallback && (
@@ -253,7 +340,15 @@ export function CsLabPdfViewer({
       <div
         ref={scrollRef}
         data-cslab-pdf-scroll
-        className="min-h-0 flex-1 overflow-auto bg-cslab-surface px-5 py-4"
+        onPointerDown={handleContainerPointerDown}
+        onPointerMove={handleContainerPointerMove}
+        onPointerUp={handleContainerPointerUp}
+        onPointerCancel={handleContainerPointerUp}
+        className={cn(
+          'min-h-0 flex-1 overflow-auto bg-cslab-surface px-5 py-4',
+          pointerMode === 'hand' && !panning && 'cursor-grab',
+          pointerMode === 'hand' && panning && 'cursor-grabbing',
+        )}
       >
         {loading && (
           <div className="flex h-full items-center justify-center gap-2 text-[11px] text-cslab-muted">
@@ -326,6 +421,21 @@ function PdfPageView({
   const [dimensions, setDimensions] = React.useState<PageDimensions | null>(null)
   const [visible, setVisible] = React.useState(false)
   const [selection, setSelection] = React.useState<SelectionRect | null>(null)
+  /** 按住 Ctrl（或 Cmd）时显示十字光标 —— 框选的唯一起动条件。 */
+  const [ctrlHeld, setCtrlHeld] = React.useState(false)
+
+  React.useEffect(() => {
+    const update = (event: KeyboardEvent): void => setCtrlHeld(event.ctrlKey || event.metaKey)
+    const clear = (): void => setCtrlHeld(false)
+    window.addEventListener('keydown', update)
+    window.addEventListener('keyup', update)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('keydown', update)
+      window.removeEventListener('keyup', update)
+      window.removeEventListener('blur', clear)
+    }
+  }, [])
 
   React.useEffect(() => {
     registerRef(pageNumber, wrapperRef.current)
@@ -411,6 +521,9 @@ function PdfPageView({
   )
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
+    // 仅 Ctrl/Cmd + 左键启动框选；普通拖动完全放行（浏览/抓手模式由外层容器接管）。
+    if (!event.ctrlKey && !event.metaKey) return
+    if (event.button !== 0) return
     if (!canvasRef.current || canvasRef.current.width === 0) return
     const overlay = overlayRef.current
     if (!overlay) return
@@ -419,13 +532,15 @@ function PdfPageView({
     const initial = { x: dragRef.current.x, y: dragRef.current.y, width: 0, height: 0 }
     selectionRef.current = initial
     setSelection(initial)
-    overlay.setPointerCapture(event.pointerId)
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (!dragRef.current) return
     const start = dragRef.current
     const overlay = overlayRef.current
-    if (!start || !overlay) return
+    if (!overlay) return
     const rect = overlay.getBoundingClientRect()
     const currentX = Math.max(0, Math.min(rect.width, event.clientX - rect.left))
     const currentY = Math.max(0, Math.min(rect.height, event.clientY - rect.top))
@@ -497,22 +612,22 @@ function PdfPageView({
   return (
     <div
       ref={wrapperRef}
-      className="relative shrink-0 rounded-sm bg-cslab-elevated shadow-subtle"
+      className={cn(
+        'relative shrink-0 rounded-sm bg-cslab-elevated shadow-subtle',
+        ctrlHeld && 'cursor-crosshair',
+      )}
       style={{ width, height }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishSelection}
+      onPointerCancel={() => {
+        dragRef.current = null
+        selectionRef.current = null
+        setSelection(null)
+      }}
     >
       <canvas ref={canvasRef} className="block h-full w-full select-none" />
-      <div
-        ref={overlayRef}
-        className="absolute inset-0 cursor-crosshair"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={finishSelection}
-        onPointerCancel={() => {
-          dragRef.current = null
-          selectionRef.current = null
-          setSelection(null)
-        }}
-      >
+      <div ref={overlayRef} className="pointer-events-none absolute inset-0">
         {pageAnnotations.map((annotation) => {
           const rects = annotation.position?.rects ?? annotation.rects
           const rotation = annotation.position?.rotation ?? 0

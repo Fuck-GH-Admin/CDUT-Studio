@@ -75,6 +75,18 @@ export function resolveCsLabScript(name: string): string | undefined {
   return candidates.find((candidate) => existsSync(candidate))
 }
 
+/** 定位随包 cslab 资源子目录（如 tools-preset 预置算子库）。 */
+export function resolveCsLabResourceDir(subdir: string): string | undefined {
+  const candidates: string[] = []
+  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath
+  if (resourcesPath) candidates.push(join(resourcesPath, 'cslab', subdir))
+  candidates.push(join(__dirname, '..', 'resources', 'cslab', subdir))
+  candidates.push(join(__dirname, '..', '..', 'resources', 'cslab', subdir))
+  candidates.push(join(process.cwd(), 'resources', 'cslab', subdir))
+  candidates.push(join(process.cwd(), 'apps', 'electron', 'resources', 'cslab', subdir))
+  return candidates.find((candidate) => existsSync(candidate))
+}
+
 function resolveRequirementsPath(profile: CsLabToolProfile): string | undefined {
   const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath
   const candidates: string[] = []

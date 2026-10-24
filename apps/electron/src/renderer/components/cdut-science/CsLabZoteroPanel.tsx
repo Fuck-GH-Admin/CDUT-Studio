@@ -79,7 +79,11 @@ export function CsLabZoteroPanel({ labId, onChanged }: CsLabZoteroPanelProps): R
     setMessage(null)
     try {
       const result = await window.electronAPI.cslab.syncZotero({ labId, forceFull })
-      setMessage(result.message)
+      setMessage(
+        result.lastVersion > 0
+          ? `${result.message} · 当前游标 version=${result.lastVersion}`
+          : result.message,
+      )
       await refresh()
       if (result.ok) onChanged()
     } catch (err) {
@@ -189,6 +193,7 @@ export function CsLabZoteroPanel({ labId, onChanged }: CsLabZoteroPanelProps): R
         disabled={busy !== null}
         onClick={() => void sync(true)}
         className="w-full rounded-lg border border-dashed border-cslab-border px-2 py-1.5 text-[10px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text disabled:opacity-50"
+        title="游标归零全量重放：用于回收被物理删除/清空的 Zotero 条目（增量游标无法感知库级重建）"
       >
         强制全量重建索引游标
       </button>
@@ -205,9 +210,30 @@ export function CsLabZoteroPanel({ labId, onChanged }: CsLabZoteroPanelProps): R
       )}
 
       <div className="rounded-xl border border-cslab-border p-3">
-        <p className="text-[10px] uppercase tracking-[0.14em] text-cslab-muted">写回桥接（预留）</p>
-        <p className="mt-1 text-[10px] leading-relaxed text-cslab-muted">
-          {status?.bridge.message ?? '本阶段仅只读同步，绝不写入 zotero.sqlite'}
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] uppercase tracking-[0.14em] text-cslab-muted">写回桥接</p>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void refresh()}
+            className="rounded px-1.5 py-0.5 text-[9px] text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text"
+          >
+            测试连通
+          </button>
+        </div>
+        <p className="mt-1 text-[10px] leading-relaxed text-cslab-text">
+          {status?.bridge.message ?? '未探测'}
+        </p>
+        {status?.bridge.endpoint && (
+          <p className="mt-0.5 break-all font-mono text-[9px] text-cslab-muted">
+            {status.bridge.endpoint}
+          </p>
+        )}
+        <p className="mt-1.5 text-[9px] leading-relaxed text-cslab-muted">
+          工作模式：默认只读同步，绝不写入 zotero.sqlite。写回批注/标签/收藏夹需在 Zotero
+          安装「本地 REST」插件（默认端口 23119），并在配置文件
+          zotero-bridge.json 中启用 {`{ "enabled": true, "port": 23119, "token?": "..." }`}；
+          所有写回经 HTTP 通道携带版本头完成，杜绝直写数据库。
         </p>
       </div>
 

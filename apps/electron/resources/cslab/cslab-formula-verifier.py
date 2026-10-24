@@ -227,10 +227,11 @@ def ocr(image_path):
     try:
         from pix2text import Pix2Text
     except Exception:
+        # engine 值显式区分「依赖未装」，供翻译面板渲染一键安装引导。
         return {
             "ok": False,
-            "engine": "pix2text",
-            "message": "未安装 Pix2Text（可一键安装 formula-ocr 依赖）",
+            "engine": "pix2text-missing",
+            "message": "未安装 Pix2Text（可一键安装学术 OCR 引擎）",
         }
 
     try:
@@ -259,9 +260,56 @@ def ocr(image_path):
         }
 
 
+def ocr_text(image_path):
+    """整页纯文本 OCR：逐行识别并拼接（行内公式保留 $...$），供学术翻译使用。"""
+    started = time.time()
+    try:
+        from pix2text import Pix2Text
+    except Exception:
+        return {
+            "ok": False,
+            "engine": "pix2text-missing",
+            "message": "未安装 Pix2Text（可一键安装学术 OCR 引擎）",
+        }
+
+    try:
+        recognizer = Pix2Text.from_config()
+        result = recognizer.recognize(image_path)
+        lines = []
+        if isinstance(result, list):
+            for item in result:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("latex")
+                    if isinstance(text, str) and text.strip():
+                        lines.append(text.strip())
+                elif isinstance(item, str) and item.strip():
+                    lines.append(item.strip())
+        elif isinstance(result, dict):
+            text = result.get("text") or result.get("latex")
+            if isinstance(text, str) and text.strip():
+                lines.append(text.strip())
+        elif isinstance(result, str) and result.strip():
+            lines.append(result.strip())
+        joined = "\n".join(lines).strip()
+        if not joined:
+            return {"ok": False, "engine": "pix2text", "message": "未识别出文本"}
+        return {
+            "ok": True,
+            "engine": "pix2text",
+            "text": joined,
+            "elapsedMs": int((time.time() - started) * 1000),
+        }
+    except Exception as error:
+        return {
+            "ok": False,
+            "engine": "pix2text",
+            "message": f"文本识别失败：{error}",
+        }
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["verify", "ocr"], required=True)
+    parser.add_argument("--mode", choices=["verify", "ocr", "ocr-text"], required=True)
     parser.add_argument("--lhs", default="")
     parser.add_argument("--rhs", default="")
     parser.add_argument("--symbols", default="{}")
@@ -273,6 +321,13 @@ def main():
             emit({"ok": False, "engine": "pix2text", "message": "缺少 --image 参数"})
             return
         emit(ocr(args.image))
+        return
+
+    if args.mode == "ocr-text":
+        if not args.image:
+            emit({"ok": False, "engine": "pix2text", "message": "缺少 --image 参数"})
+            return
+        emit(ocr_text(args.image))
         return
 
     try:

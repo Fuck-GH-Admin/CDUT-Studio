@@ -139,6 +139,29 @@ export function CsLabNotesPanel({
 
   return (
     <div className="space-y-3">
+      <details className="rounded-xl border border-cslab-accent/25 bg-cslab-accent/5 px-3 py-2" open>
+        <summary className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-cslab-accent">
+          <BookOpen size={11} /> Obsidian 双向互通
+        </summary>
+        <ul className="mt-1.5 list-disc space-y-1 pl-4 text-[9px] leading-relaxed text-cslab-muted">
+          <li>
+            本实验室 <span className="font-mono">vault/notes/</span>{' '}
+            即标准 Obsidian Vault，可在 Obsidian 中直接「Open folder as vault」打开。
+          </li>
+          <li>
+            推演画布严格遵循 JSON Canvas 规范（.canvas）：节点、正文、颜色、几何位置在
+            Obsidian 中无损呈现与编辑。
+          </li>
+          <li>
+            推演元数据（假说/验证状态/门限）隔离存储在 <span className="font-mono">cdut_science</span>{' '}
+            命名空间；双向编辑自动合并，冲突时生成 <span className="font-mono">_conflict_*.canvas</span>{' '}
+            副本，绝不丢弃任何内容。
+          </li>
+          <li>
+            支持 <span className="font-mono">[[双链]]</span> 语法与反向链接检索（见下方反链面板）。
+          </li>
+        </ul>
+      </details>
       <div className="flex items-center gap-2 rounded-xl border border-cslab-border bg-cslab-elevated px-2.5 py-1.5">
         <Search size={12} className="shrink-0 text-cslab-muted" />
         <input

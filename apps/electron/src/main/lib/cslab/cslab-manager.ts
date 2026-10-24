@@ -33,7 +33,7 @@ import { closeHpcDatabase } from './cslab-hpc-db'
 import { closeShareDatabase } from './cslab-share-db'
 import { closeCsLabVaultCache } from './cslab-vault-cache'
 import { stopVaultWatcher } from './cslab-canvas-sync'
-import { stopLabToolWatcher } from './cslab-tool-registry'
+import { stopLabToolWatcher, installToolPresets } from './cslab-tool-registry'
 import { stopShareWatcher } from './cslab-share-watcher'
 import { stopZoteroWatcher } from './cslab-zotero'
 import { listAgentSessions, updateAgentSessionMeta } from '../agent-session-manager'
@@ -89,6 +89,8 @@ export function createLab(input: CsLabCreateLabInput): CsLabLab {
   writeLabManifest(labDir, manifest)
   // 立即初始化 SQLite，保证首屏快照与后续摄取无需再做懒建表。
   getCsLabDatabase(join(labDir, 'db', 'central_meta.sqlite'))
+  // best-effort 预装泥石流等方向预置算子：失败静默，绝不阻断建室。
+  void installToolPresets(labId).catch(() => undefined)
   return manifest
 }
 

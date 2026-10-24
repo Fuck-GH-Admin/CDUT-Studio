@@ -241,6 +241,7 @@ export type CsLabDrawerMode =
   | 'selection'
   | 'plot'
   | 'formula'
+  | 'translate'
   | 'brain'
   | 'zotero'
   | 'runs'
@@ -269,7 +270,7 @@ export interface CsLabDrawerState {
   capsuleId?: string
   /** 资产详情抽屉所指向的资产 URI（不再依赖单一 activeAssetUri）。 */
   assetUri?: string
-  /** PDF 框选载荷（selection/plot/formula 模式共用）。 */
+  /** PDF 框选载荷（selection/plot/formula/translate 模式共用）。 */
   selection?: CsLabPdfSelection
 }
 

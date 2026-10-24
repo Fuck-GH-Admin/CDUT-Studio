@@ -350,6 +350,22 @@ function hasTable(db: SqliteDatabase, table: string): boolean {
   return !!row?.name
 }
 
+/**
+ * 删除判定适配：
+ * - 真实 Zotero 6/7 的 items 表没有 deleted 列，删除项记录在独立的 deletedItems 表；
+ * - 旧测试 mock（items 带 deleted 列且无 deletedItems 表）走降级路径。
+ */
+function usesDeletedItemsTable(db: SqliteDatabase): boolean {
+  return hasTable(db, 'deletedItems')
+}
+
+function notDeletedPredicate(alias: string, db: SqliteDatabase): string {
+  if (usesDeletedItemsTable(db)) {
+    return `NOT EXISTS (SELECT 1 FROM deletedItems di WHERE di.itemID = ${alias}.itemID)`
+  }
+  return `${alias}.deleted = 0`
+}
+
 const REQUIRED_TABLES = [
   'items',
   'itemTypes',
@@ -409,6 +425,7 @@ function readCollections(db: SqliteDatabase, labId: string): ZoteroCollectionRow
 }
 
 function readItemDeltas(db: SqliteDatabase, cursor: number): ZoteroItemRow[] {
+  const notDeleted = notDeletedPredicate('i', db)
   const sql = `
     SELECT
       i.itemID AS itemID,
@@ -427,7 +444,7 @@ function readItemDeltas(db: SqliteDatabase, cursor: number): ZoteroItemRow[] {
     LEFT JOIN itemData d ON d.itemID = i.itemID
     LEFT JOIN itemDataValues v ON v.valueID = d.valueID
     LEFT JOIN fields f ON f.fieldID = d.fieldID
-    WHERE i.deleted = 0
+    WHERE ${notDeleted}
       AND i.version > ?
       AND it.typeName NOT IN ('attachment', 'note', 'annotation')
     GROUP BY i.itemID
@@ -451,7 +468,16 @@ function readItemDeltas(db: SqliteDatabase, cursor: number): ZoteroItemRow[] {
 }
 
 function readDeletedDeltas(db: SqliteDatabase, cursor: number): ZoteroItemRow[] {
-  const sql = `
+  // 真实架构：删除项在 deletedItems 表；旧 mock：items.deleted 列。
+  const sql = usesDeletedItemsTable(db)
+    ? `
+    SELECT i.itemID AS itemID, i.key AS key, i.version AS version
+    FROM deletedItems d
+    JOIN items i ON i.itemID = d.itemID
+    WHERE i.version > ?
+    ORDER BY i.version ASC
+  `
+    : `
     SELECT i.itemID AS itemID, i.key AS key, i.version AS version
     FROM items i
     WHERE i.deleted = 1 AND i.version > ?
@@ -494,7 +520,7 @@ function readAttachments(db: SqliteDatabase, itemIds: number[]): Map<number, Zot
       JOIN items ai ON ai.itemID = ia.itemID
       WHERE ia.parentItemID IN (${placeholders})
         AND ${pdfFilter}
-        AND ai.deleted = 0
+        AND ${notDeletedPredicate('ai', db)}
       ORDER BY ia.parentItemID ASC, ia.itemID ASC
     `
     const rows = db.prepare(sql).all(...chunk) as Array<Record<string, unknown>>
@@ -574,17 +600,20 @@ function readItemCollections(
 }
 
 function readAnnotationDeltas(db: SqliteDatabase, cursor: number): ZoteroAnnotationRow[] {
-  if (!hasTable(db, 'annotations')) return []
-  const columns = tableColumns(db, 'annotations')
+  // 表名探测：真实 Zotero 7 为 itemAnnotations；旧 mock 为 annotations。
+  const tableName = hasTable(db, 'itemAnnotations') ? 'itemAnnotations' : 'annotations'
+  if (!hasTable(db, tableName)) return []
+  const columns = tableColumns(db, tableName)
+  // 列名双向容错：真实 itemAnnotations 列名优先，旧 annotations 列名回退。
   const pick = (...names: string[]): string | undefined => names.find((name) => columns.includes(name))
-  const positionColumn = pick('position', 'annotationPosition')
-  const typeColumn = pick('type', 'annotationType')
-  const textColumn = pick('text')
-  const commentColumn = pick('comment')
-  const colorColumn = pick('color')
-  const sortColumn = pick('sortIndex')
+  const positionColumn = pick('annotationPosition', 'position')
+  const typeColumn = pick('annotationType', 'type')
+  const textColumn = pick('annotationText', 'text')
+  const commentColumn = pick('annotationComment', 'comment')
+  const colorColumn = pick('annotationColor', 'color')
+  const sortColumn = pick('annotationSortIndex', 'sortIndex')
   const authorColumn = pick('authorName')
-  const modifiedColumn = pick('annotationModificationTime', 'modificationTime')
+  const modifiedColumn = pick('annotationModificationTime', 'modificationTime', 'dateModified')
   if (!positionColumn) return []
 
   const expr = (column: string | undefined, alias: string): string =>
@@ -603,10 +632,10 @@ function readAnnotationDeltas(db: SqliteDatabase, cursor: number): ZoteroAnnotat
       ${expr(authorColumn, 'author')},
       ${modifiedColumn ? `a.${modifiedColumn} AS modificationTime` : 'NULL AS modificationTime'},
       i.version AS version
-    FROM annotations a
+    FROM ${tableName} a
     JOIN items i ON i.itemID = a.itemID
     LEFT JOIN items p ON p.itemID = a.parentItemID
-    WHERE i.version > ? AND i.deleted = 0
+    WHERE i.version > ? AND ${notDeletedPredicate('i', db)}
     ORDER BY i.version ASC
   `
   const rows = db.prepare(sql).all(cursor) as Array<Record<string, unknown>>
@@ -620,10 +649,21 @@ function readAnnotationDeltas(db: SqliteDatabase, cursor: number): ZoteroAnnotat
     sortIndex: row.sortIndex == null ? undefined : String(row.sortIndex),
     position: String(row.position ?? ''),
     author: row.author == null ? undefined : String(row.author),
-    modificationTime:
-      row.modificationTime == null ? undefined : Number(row.modificationTime),
+    modificationTime: normalizeModificationTime(row.modificationTime),
     version: Number(row.version ?? 0),
   }))
+}
+
+/** 时间列兼容：真实库 dateModified 为 ISO 字符串，旧 mock 为毫秒数值。 */
+function normalizeModificationTime(value: unknown): number | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const text = String(value).trim()
+  if (!text) return undefined
+  const numeric = Number(text)
+  if (Number.isFinite(numeric) && text === String(numeric)) return numeric
+  const parsed = Date.parse(text)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function readMaxVersion(db: SqliteDatabase): number {
