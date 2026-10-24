@@ -10,13 +10,15 @@
  * 因此样式只使用官方 IControl 支持的 existValueBackgroundColor / activeBackgroundColor。
  */
 
-import type { IControl, IElement } from '@hufe921/canvas-editor'
+import type { IElement } from '@hufe921/canvas-editor'
 import {
   CsCanvasControlComponent,
   CsCanvasControlType,
   CsCanvasElementType,
 } from './cslab-canvas-enums'
 import type { CsLabCapsuleAttrs } from './cslab-canvas-types'
+
+type CanvasControl = NonNullable<IElement['control']>
 
 export const CAPSULE_EXTENSION_KIND = 'cslab-capsule'
 
@@ -35,7 +37,7 @@ export interface CsLabCapsuleExtension {
 
 export interface CsLabCapsuleControlPatch {
   conceptId: string
-  properties: Partial<Omit<IControl, 'value'>>
+  properties: Partial<Omit<CanvasControl, 'value'>>
 }
 
 export function capsuleElementId(capsuleId: string): string {
@@ -75,7 +77,7 @@ export function buildCanvasCapsuleControl(
     value: '',
     color: tone.color,
     control: {
-      type: CsCanvasControlType.TEXT as unknown as IControl['type'],
+      type: CsCanvasControlType.TEXT as unknown as CanvasControl['type'],
       value: [{ value: capsuleDisplayText(attrs) }],
       conceptId: capsuleConceptId(attrs.capsuleId),
       placeholder: capsuleDisplayText(attrs),

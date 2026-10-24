@@ -1,15 +1,11 @@
 /**
  * CSLab 演示实验室生成器
  *
- * 一键创建「演示实验室 · Origin × VESTA」，并只读入笼内置演示数据：
- * - 金红石 TiO2 / SrTiO3 钙钛矿 CIF（VESTA 空间群与 PXRD）；
- * - 硅金刚石 POSCAR 与 NIST SRM 640 标样对标表；
- * - 金 FCC 纳米颗粒 PDB；
- * - 合成差分电荷密度 Cube、CHGCAR 与 LOCPOT 体数据（等值面）；
- * - 金红石 Cu/Co Kα XRD 与 Raman 数据表（Origin 绘图与拟合）；
- * - 数字化演示 PNG（图表逆向数字化标定）。
+ * 两间官方演示实验室：
+ * - Origin × VESTA：晶体学 / PXRD / 拉曼 / 体数据 / 出版图版；
+ * - SKLGP 泥石流：DEM / I-D 曲线 / Voellmy 推演 / 危险性图版。
  *
- * 同时预生成 4 套 Nature 单栏出版图：双靶 XRD、NIST 对标、拉曼分峰、双 Y 轴图版。
+ * 首次读取实验室列表时由 router 静默 ensure，不再需要顶栏独立入口。
  */
 
 import { promises as fs } from 'node:fs'
@@ -18,11 +14,13 @@ import { basename, join } from 'node:path'
 import { app } from 'electron'
 import type {
   CsLabAssetSummary,
+  CsLabDemoKind,
   CsLabDemoLabResult,
   CsLabLab,
   CsLabTableSeries,
 } from '@profer/shared'
-import { createLab, listLabs } from './cslab-manager'
+import { createLab, deleteLab, getLab, listLabs } from './cslab-manager'
+import { updateLabManifest } from './cslab-paths'
 import { ingestFiles, listAssets } from './cslab-iron-cage'
 import { getTableSeries } from './cslab-mol'
 import { buildDemoPlates } from './cslab-demo-plates'
@@ -31,7 +29,10 @@ import { copyFileWithHash, lockFileReadOnly } from './cslab-hash'
 import { resolveLabDir, resolveLabRelativePath, sanitizeFileName } from './cslab-paths'
 import { buildCsLabUri } from './cslab-uri'
 
-const DEMO_LAB_NAME = '演示实验室 · Origin × VESTA'
+export const DEMO_LAB_NAMES: Record<CsLabDemoKind, string> = {
+  'origin-vesta': '演示实验室 · Origin × VESTA',
+  'sklgp-geohazard': '演示实验室 · 成都理工大学 SKLGP 泥石流动力学推演',
+}
 
 const DEMO_DATA_FILES = [
   'rutile-tio2.cif',
@@ -55,13 +56,24 @@ const DEMO_FILES = [...DEMO_DATA_FILES, ...DEMO_FIGURE_FILES] as const
 
 const DEMO_DATA_SET = new Set<string>(DEMO_DATA_FILES)
 
-function resolveDemoDir(override?: string): string {
+function resolveResourcesDemoDir(subdir: string, envValue?: string, override?: string): string {
   if (override) return override
-  const fromEnv = process.env.CSLAB_DEMO_DIR
-  if (fromEnv) return fromEnv
-  if (app?.isPackaged) return join(process.resourcesPath, 'cslab', 'demo')
+  if (envValue) return envValue
+  if (app?.isPackaged) return join(process.resourcesPath, 'cslab', subdir)
   const appPath = typeof app?.getAppPath === 'function' ? app.getAppPath() : process.cwd()
-  return join(appPath, 'resources', 'cslab', 'demo')
+  return join(appPath, 'resources', 'cslab', subdir)
+}
+
+function resolveDemoDir(override?: string): string {
+  return resolveResourcesDemoDir('demo', process.env.CSLAB_DEMO_DIR, override)
+}
+
+export function resolveGeohazardDemoDir(override?: string): string {
+  return resolveResourcesDemoDir(
+    'demo-geohazard',
+    process.env.CSLAB_GEOHAZARD_DEMO_DIR,
+    override,
+  )
 }
 
 async function assertDemoFiles(demoDir: string): Promise<string[]> {
@@ -84,9 +96,6 @@ async function assertDemoFiles(demoDir: string): Promise<string[]> {
 
 /**
  * 将演示 PNG 登记为 `fig` 资产（按标题幂等）。
- *
- * 图像不走仪器格式解析：`sniffFormat` 对 `.png` 会返回 unknown，
- * 直接交给 ingestFiles 会被标记 unsupported 并中断演示实验室创建。
  */
 async function ensureDemoFigure(
   labId: string,
@@ -132,21 +141,21 @@ async function ensureDemoFigure(
   return listAssets(labId).find((asset) => asset.uri === uri) ?? null
 }
 
-/** 创建或复用演示实验室，并预生成 4 套出版图。 */
-export async function createDemoLab(options: { demoDir?: string } = {}): Promise<CsLabDemoLabResult> {
-  const demoDir = resolveDemoDir(options.demoDir)
+/** 创建或复用 Origin × VESTA 演示实验室，并预生成 4 套出版图。 */
+async function createOriginVestaDemoLab(demoDir: string): Promise<CsLabDemoLabResult> {
   const paths = await assertDemoFiles(demoDir)
   const dataPaths = paths.filter((path) => DEMO_DATA_SET.has(basename(path)))
   const figurePaths = paths.filter((path) => !DEMO_DATA_SET.has(basename(path)))
 
-  const existing = listLabs().find((lab) => lab.name === DEMO_LAB_NAME)
+  const existing = findDemoLab('origin-vesta')
   const lab: CsLabLab = existing
     ? existing
     : createLab({
-        name: DEMO_LAB_NAME,
+        name: DEMO_LAB_NAMES['origin-vesta'],
         description:
           '内置演示沙箱：金红石/SrTiO3 晶体学、硅 POSCAR 与 NIST 对标、Au 纳米颗粒、Cube/CHGCAR/LOCPOT 体数据，以及 Cu/Co Kα XRD、Raman 与数字化演示图。',
         tags: ['演示', 'Origin 绘图', 'VESTA 晶体学', 'PXRD', '等值面', '拉曼分峰'],
+        demoKind: 'origin-vesta',
       })
 
   const ingestResults = await ingestFiles(lab.id, dataPaths)
@@ -182,12 +191,83 @@ export async function createDemoLab(options: { demoDir?: string } = {}): Promise
   })
 
   const assets = await listAssets(lab.id)
-  return { lab, assets, plotId: plotIds[0], plotIds, stats }
+  return { lab, assets, plotId: plotIds[0], plotIds, stats, kind: 'origin-vesta' }
 }
 
-/** 供 UI 判断是否已存在演示实验室。 */
-export function findDemoLab(): CsLabLab | undefined {
-  return listLabs().find((lab) => lab.name === DEMO_LAB_NAME)
+/** 创建/复用任意官方演示实验室。 */
+export async function createDemoLab(
+  options: { demoDir?: string; kind?: CsLabDemoKind } = {},
+): Promise<CsLabDemoLabResult> {
+  const kind = options.kind ?? 'origin-vesta'
+  if (kind === 'sklgp-geohazard') {
+    const { createSkLgpGeohazardDemoLab } = await import('./cslab-demo-geohazard')
+    return createSkLgpGeohazardDemoLab(options.demoDir)
+  }
+  return createOriginVestaDemoLab(resolveDemoDir(options.demoDir))
+}
+
+/** 按类型查找演示实验室；旧 Origin 实验室按名称回填 demoKind。 */
+export function findDemoLab(kind?: CsLabDemoKind): CsLabLab | undefined {
+  const labs = listLabs()
+  if (kind) {
+    const direct = labs.find((lab) => lab.demoKind === kind)
+    if (direct) return direct
+    const legacy = labs.find((lab) => lab.name === DEMO_LAB_NAMES[kind])
+    if (legacy) {
+      try {
+        return updateLabManifest(legacy.id, { demoKind: kind })
+      } catch {
+        return legacy
+      }
+    }
+    return undefined
+  }
+  return labs.find((lab) => lab.demoKind === 'origin-vesta')
+}
+
+let ensurePromise: Promise<{ created: CsLabDemoKind[] }> | null = null
+
+/** 静默注册两间演示实验室；单间失败只告警，不阻断列表。 */
+export function ensureDemoLabs(options: {
+  originDemoDir?: string
+  geohazardDemoDir?: string
+} = {}): Promise<{ created: CsLabDemoKind[] }> {
+  if (ensurePromise) return ensurePromise
+  ensurePromise = (async () => {
+    const created: CsLabDemoKind[] = []
+    try {
+      if (!findDemoLab('origin-vesta')) {
+        await createDemoLab({ kind: 'origin-vesta', demoDir: options.originDemoDir })
+        created.push('origin-vesta')
+      }
+    } catch (error) {
+      console.warn('[CSLab] Origin × VESTA 演示实验室注册失败:', error)
+    }
+    try {
+      if (!findDemoLab('sklgp-geohazard')) {
+        await createDemoLab({
+          kind: 'sklgp-geohazard',
+          demoDir: options.geohazardDemoDir,
+        })
+        created.push('sklgp-geohazard')
+      }
+    } catch (error) {
+      console.warn('[CSLab] SKLGP 泥石流演示实验室注册失败:', error)
+    }
+    return { created }
+  })().finally(() => {
+    ensurePromise = null
+  })
+  return ensurePromise
+}
+
+/** 重置演示实验室：删除沙箱并用官方样本重建（labId 会变化）。 */
+export async function resetDemoLab(labId: string): Promise<CsLabDemoLabResult> {
+  const lab = getLab(labId)
+  if (!lab) throw new Error('实验室不存在或清单损坏')
+  if (!lab.demoKind) throw new Error('只有官方演示实验室支持恢复初始数据')
+  await deleteLab(labId)
+  return createDemoLab({ kind: lab.demoKind })
 }
 
 /** 供测试与 UI 展示演示数据清单。 */

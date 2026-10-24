@@ -18,8 +18,8 @@ import {
   Pin,
   PinOff,
   Plus,
+  RotateCcw,
   Search,
-  Sparkles,
   Trash2,
   X,
 } from 'lucide-react'
@@ -39,6 +39,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@profer/ui/primitives/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@profer/ui/primitives/alert-dialog'
 import { cn } from '@/lib/utils'
 import { resolveWindowControlsRightInset } from '@/lib/window-controls-layout'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -95,9 +105,10 @@ export function CsLabPreparationView(): React.ReactElement {
   const [actionBusyId, setActionBusyId] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [createOpen, setCreateOpen] = React.useState(false)
-  const [demoLoading, setDemoLoading] = React.useState(false)
   const [renameTarget, setRenameTarget] = React.useState<CsLabLab | null>(null)
   const [deleteTarget, setDeleteTarget] = React.useState<CsLabLab | null>(null)
+  const [resetTarget, setResetTarget] = React.useState<CsLabLab | null>(null)
+  const [resetting, setResetting] = React.useState(false)
 
   const refresh = React.useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -166,17 +177,24 @@ export function CsLabPreparationView(): React.ReactElement {
     await handleOpen(lab)
   }
 
-  const handleCreateDemo = async (): Promise<void> => {
-    if (demoLoading) return
-    setDemoLoading(true)
+  const handleResetDemo = async (): Promise<void> => {
+    if (!resetTarget || resetting) return
+    setResetting(true)
     setError(null)
     try {
-      const result = await window.electronAPI.cslab.createDemoLab()
-      await handleCreated(result.lab)
+      const result = await window.electronAPI.cslab.resetDemoLab(resetTarget.id)
+      setResetTarget(null)
+      await refresh()
+      if (activeLabId === resetTarget.id) {
+        setActiveLabId(null)
+        setSnapshot(null)
+        setAssets([])
+      }
+      setLabs((previous) => sortLabs([...previous.filter((lab) => lab.id !== result.lab.id), result.lab]))
     } catch (err) {
-      setError(err instanceof Error ? err.message : '演示实验室创建失败')
+      setError(err instanceof Error ? err.message : '演示数据恢复失败')
     } finally {
-      setDemoLoading(false)
+      setResetting(false)
     }
   }
 
@@ -258,6 +276,15 @@ export function CsLabPreparationView(): React.ReactElement {
         {lab.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
         {lab.archived ? '解除归档' : '归档实验室'}
       </MenuItem>
+      {lab.demoKind && (
+        <MenuItem
+          className="text-xs py-1 [&>svg]:size-3.5"
+          onSelect={() => setResetTarget(lab)}
+        >
+          <RotateCcw size={14} />
+          恢复初始演示数据
+        </MenuItem>
+      )}
       <MenuSeparator className="my-0.5" />
       <MenuItem
         className="text-xs py-1 [&>svg]:size-3.5 text-destructive focus:text-destructive"
@@ -385,16 +412,6 @@ export function CsLabPreparationView(): React.ReactElement {
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                data-tour="cslab-demo-lab"
-                onClick={() => void handleCreateDemo()}
-                disabled={demoLoading || !!openingId}
-                className="inline-flex items-center gap-1 rounded-full border border-cslab-border px-2.5 py-1 text-[11px] font-medium text-cslab-muted transition-colors hover:border-cslab-accent/40 hover:text-cslab-accent disabled:cursor-wait disabled:opacity-60"
-              >
-                {demoLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                演示实验室
-              </button>
-              <button
-                type="button"
                 onClick={() => setCreateOpen(true)}
                 className="inline-flex items-center gap-1 rounded-full bg-cslab-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-cslab-accentHover"
               >
@@ -429,15 +446,6 @@ export function CsLabPreparationView(): React.ReactElement {
                     <Plus size={13} />
                     新建实验室
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleCreateDemo()}
-                    disabled={demoLoading}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-cslab-border px-3.5 py-1.5 text-xs font-medium text-cslab-muted transition-colors hover:border-cslab-accent/40 hover:text-cslab-accent disabled:opacity-60"
-                  >
-                    {demoLoading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                    一键创建演示实验室
-                  </button>
                 </div>
               )}
             </div>
@@ -453,7 +461,8 @@ export function CsLabPreparationView(): React.ReactElement {
                         <div
                           role="button"
                           tabIndex={0}
-                          data-tour={`cslab-lab-${lab.id}`}
+                          data-tour={lab.demoKind === 'origin-vesta' ? 'cslab-demo-lab' : `cslab-lab-${lab.id}`}
+                          data-demo-kind={lab.demoKind}
                           aria-disabled={!!openingId || undefined}
                           onClick={() => {
                             if (!openingId) void handleOpen(lab)
@@ -485,6 +494,11 @@ export function CsLabPreparationView(): React.ReactElement {
                                 <span className="text-[10px] uppercase tracking-[0.12em] text-cslab-muted">
                                   {lab.code}
                                 </span>
+                                {lab.demoKind && (
+                                  <span className="rounded-full border border-cslab-accent/40 bg-cslab-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-cslab-accent">
+                                    演示
+                                  </span>
+                                )}
                                 {lab.archived && (
                                   <span className="rounded-full border border-cslab-border px-1.5 py-0.5 text-[10px] text-cslab-muted">
                                     已归档
@@ -579,6 +593,30 @@ export function CsLabPreparationView(): React.ReactElement {
         onClose={() => setDeleteTarget(null)}
         onDeleted={handleDeleted}
       />
+      <AlertDialog open={!!resetTarget} onOpenChange={(open) => { if (!open) setResetTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>恢复初始演示数据？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将清理「{resetTarget?.name}」的沙箱并重新写入官方演示样本，实验室会产生新的 ID，
+              已绑定该实验室的历史会话将被解绑。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resetting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={resetting}
+              onClick={(event) => {
+                event.preventDefault()
+                void handleResetDemo()
+              }}
+            >
+              {resetting ? <Loader2 size={12} className="mr-1 animate-spin" /> : null}
+              确认恢复
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

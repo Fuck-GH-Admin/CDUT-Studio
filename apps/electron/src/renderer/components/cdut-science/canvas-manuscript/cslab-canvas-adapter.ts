@@ -512,11 +512,20 @@ export function canvasToTipTapDoc(
     }
     const first = line[0]
     if (first?.type === CsCanvasElementType.TITLE) {
-      const level = TITLE_LEVEL_TO_HEADING[String(first.level ?? 'first')] ?? 1
+      const titleElement = line.find((element) => element.type === CsCanvasElementType.TITLE)
+      const level =
+        TITLE_LEVEL_TO_HEADING[String(titleElement?.level ?? 'first')] ?? 1
       blocks.push({
         type: 'heading',
         attrs: { level },
-        content: makeInlineNodes(flattenValueList(first)),
+        content: makeInlineNodes(
+          line.flatMap((element) =>
+            element.type === CsCanvasElementType.TITLE ||
+            element.type === CsCanvasElementType.LIST
+              ? flattenValueList(element)
+              : [element],
+          ),
+        ),
       })
       line = []
       return
@@ -526,7 +535,19 @@ export function canvasToTipTapDoc(
         first.listType === CsCanvasListType.OL ? 'orderedList' : 'bulletList'
       const item = {
         type: 'listItem',
-        content: [{ type: 'paragraph', content: makeInlineNodes(flattenValueList(first)) }],
+        content: [
+          {
+            type: 'paragraph',
+            content: makeInlineNodes(
+              line.flatMap((element) =>
+                element.type === CsCanvasElementType.TITLE ||
+                element.type === CsCanvasElementType.LIST
+                  ? flattenValueList(element)
+                  : [element],
+              ),
+            ),
+          },
+        ],
       }
       const previous = blocks[blocks.length - 1]
       if (previous && previous.type === listType) {
@@ -558,6 +579,7 @@ export function canvasToTipTapDoc(
 
   while (blocks.length > 0) {
     const last = blocks[blocks.length - 1]
+    if (!last) break
     const content = last.content as Array<Record<string, unknown>> | undefined
     if (last.type === 'paragraph' && (!content || content.length === 0)) {
       blocks.pop()

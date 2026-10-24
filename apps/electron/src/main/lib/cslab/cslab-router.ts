@@ -65,7 +65,7 @@ import type {
   AgentSessionMeta,
 } from '@profer/shared'
 import { AGENT_IPC_CHANNELS } from '@profer/shared'
-import { createDemoLab } from './cslab-demo'
+import { createDemoLab, ensureDemoLabs, resetDemoLab } from './cslab-demo'
 import {
   analyzeCrystalAsset,
   exportFigure,
@@ -433,11 +433,31 @@ export function registerCsLabIpc(): void {
   ipcMain.handle(CSLAB_IPC_CHANNELS.PING, async () => csLabService.ping())
 
   // ===== 实验室沙箱 =====
-  ipcMain.handle(CSLAB_IPC_CHANNELS.LIST_LABS, async (): Promise<CsLabLab[]> => listLabs())
+  ipcMain.handle(CSLAB_IPC_CHANNELS.LIST_LABS, async (): Promise<CsLabLab[]> => {
+    // 首次进入列表时静默注册官方演示实验室；失败不阻断正常列表。
+    try {
+      await ensureDemoLabs()
+    } catch (error) {
+      console.warn('[CSLab] 演示实验室自动注册失败:', error)
+    }
+    return listLabs()
+  })
 
   ipcMain.handle(
     CSLAB_IPC_CHANNELS.CREATE_DEMO_LAB,
-    async (): Promise<CsLabDemoLabResult> => createDemoLab(),
+    async (_event, kind?: unknown): Promise<CsLabDemoLabResult> => {
+      const normalized = kind === 'sklgp-geohazard' || kind === 'origin-vesta'
+        ? kind
+        : undefined
+      return createDemoLab({ kind: normalized })
+    },
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.RESET_DEMO_LAB,
+    async (_event, labId: unknown): Promise<CsLabDemoLabResult> => {
+      return resetDemoLab(asString(labId, '实验室标识'))
+    },
   )
 
   ipcMain.handle(

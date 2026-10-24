@@ -129,6 +129,7 @@ import { buildPiStudyTools } from '../study/study-tools'
 import { buildPiCsLabTools } from './pi-cslab-tools'
 import { buildCsLabScienceTools } from '../cslab/cslab-scientific-tools'
 import { buildCsLabLiteratureTools } from '../cslab/cslab-literature-tools'
+import { buildCsLabGeohazardTools } from '../cslab/cslab-geohazard-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -2233,6 +2234,13 @@ export async function buildPiBuiltinTools(
     tools.push(...buildCsLabLiteratureTools(sdk, { sessionId: ctx.sessionId }))
   } catch (error) {
     console.error('[Pi 桥接] 注入 CSLab 文献工具失败:', error)
+  }
+
+  // 15.3 CSLab 地质灾害工具（DEM / I-D / 泥石流推演 / 危险性图版）
+  try {
+    tools.push(...buildCsLabGeohazardTools(sdk, { sessionId: ctx.sessionId }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 CSLab 地质灾害工具失败:', error)
   }
 
   const cloudTools = buildProferCloudTools(sdk, ctx)

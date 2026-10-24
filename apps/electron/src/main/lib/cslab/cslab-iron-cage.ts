@@ -317,6 +317,80 @@ export async function ingestFiles(
         continue
       }
 
+      // DEM / GeoTIFF：只读入笼为 geo 资产，不进入仪器数据解析流水线。
+      if (extension === '.asc' || extension === '.tif' || extension === '.tiff') {
+        emit('copy')
+        const geoRelPath = `vault/geo/${timestamp}-${nonce}-${safeName}`
+        const geoAbsPath = resolveLabRelativePath(labId, geoRelPath)
+        stagedAbsPath = geoAbsPath
+        const geoDigest = await copyFileWithHash(sourcePath, geoAbsPath)
+
+        emit('hash')
+        const existingGeo = findEntityByShaAndLayer(db, labId, geoDigest.sha256, 'geo')
+        if (existingGeo) {
+          await unlockFile(geoAbsPath).catch(() => undefined)
+          await fs.rm(geoAbsPath, { force: true })
+          stagedAbsPath = null
+          emit('done', '检测到相同 SHA-256，复用既有地理栅格资产')
+          results.push({
+            asset: toAssetSummary(existingGeo),
+            status: 'ok',
+            message: '相同 DEM/GeoTIFF 已存在，已复用既有资产',
+          })
+          continue
+        }
+
+        const geoLocked = await lockFileReadOnly(geoAbsPath)
+        const geoCreatedAt = Date.now()
+        const geoUuid = `geo-${randomUUID().slice(0, 8)}`
+        const geoUri = buildCsLabUri(labId, 'geo', geoUuid)
+        let metaJson: string | undefined
+        let unsupported: string | undefined
+        try {
+          const buffer = await fs.readFile(geoAbsPath)
+          const { parseGeoRasterBuffer } = await import('./cslab-geohazard')
+          const raster = await parseGeoRasterBuffer(buffer, fileName)
+          metaJson = JSON.stringify(raster.meta)
+        } catch (error) {
+          unsupported = error instanceof Error ? error.message : '地理栅格解析失败'
+        }
+
+        withTransaction(db, () => {
+          const nextRevision = nextLabRevision(db)
+          upsertEntity(db, {
+            uri: geoUri,
+            labId,
+            layerType: 'geo',
+            entityUuid: geoUuid,
+            title: fileName,
+            format: extension === '.asc' ? 'esri-ascii-grid' : 'geotiff',
+            relPath: geoRelPath,
+            sha256: geoDigest.sha256,
+            bytes: geoDigest.bytes,
+            metaJson,
+            revision: nextRevision,
+            locked: geoLocked,
+            unsupported,
+            createdAt: geoCreatedAt,
+            updatedAt: geoCreatedAt,
+          })
+          return nextRevision
+        })
+        stagedAbsPath = null
+
+        const geoEntity = getEntityByUri(db, geoUri)
+        if (!geoEntity) throw new Error('地理栅格实体写入失败')
+        results.push({
+          asset: toAssetSummary(geoEntity),
+          status: unsupported ? 'unsupported' : 'ok',
+          message: unsupported
+            ? `DEM/GeoTIFF 已入笼，但解析失败：${unsupported}`
+            : 'DEM/GeoTIFF 已作为地理栅格只读入笼',
+        })
+        emit('done', unsupported ? '地理栅格已入笼（解析失败）' : 'DEM/GeoTIFF 已只读入笼')
+        continue
+      }
+
       // 分子/晶体结构或体数据：只读入笼为 mol 资产，不进入仪器数据解析流水线。
       if (getMolFormat(fileName) || getVolumeFormat(fileName)) {
         emit('copy')

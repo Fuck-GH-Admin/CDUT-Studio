@@ -67,20 +67,24 @@ interface CsLabCanvasEditorProps {
   onToast?: (kind: 'info' | 'success' | 'error', text: string) => void
 }
 
-const PAGE_OPTIONS = {
-  width: 794,
-  height: 1123,
-  pageMode: PageMode.PAGING,
-  pageGap: 20,
-  margins: [96, 96, 96, 96] as [number, number, number, number],
-  scale: 1,
-  header: { top: 30, editable: true },
-  footer: { bottom: 30, editable: true },
-  pageNumber: { disabled: true },
-  ruler: { disabled: false },
-  control: { borderColor: '#3B82F6', borderWidth: 1 },
-  defaultSize: 16,
-  historyMaxRecordCount: 100,
+function createPageOptions(hostId: string) {
+  return {
+    width: 794,
+    height: 1123,
+    pageMode: PageMode.PAGING,
+    pageGap: 20,
+    margins: [96, 96, 96, 96] as [number, number, number, number],
+    scale: 1,
+    header: { top: 30, editable: true },
+    footer: { bottom: 30, editable: true },
+    pageNumber: { disabled: true },
+    ruler: { disabled: false },
+    control: { borderColor: '#3B82F6', borderWidth: 1 },
+    defaultSize: 16,
+    historyMaxRecordCount: 100,
+    // 每个窗格独立的滚动容器，避免多实例下 document.querySelector 命中首个编辑器。
+    scrollContainerSelector: `#${hostId}`,
+  }
 }
 
 function normalizeRangeStyle(payload: IRangeStyle): CsLabRangeStyle {
@@ -98,7 +102,7 @@ function normalizeRangeStyle(payload: IRangeStyle): CsLabRangeStyle {
     italic: !!payload.italic,
     underline: !!payload.underline,
     strikeout: !!payload.strikeout,
-    level,
+    level: level as CsLabRangeStyle['level'],
     listType: payload.listType === 'ul' || payload.listType === 'ol' ? payload.listType : null,
     undo: !!payload.undo,
     redo: !!payload.redo,
@@ -121,9 +125,14 @@ export function CsLabCanvasEditor({
   onToast,
 }: CsLabCanvasEditorProps): React.ReactElement {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
+  const hostId = React.useMemo(
+    () => `cslab-canvas-${Math.random().toString(36).slice(2, 10)}`,
+    [],
+  )
   const editorRef = React.useRef<Editor | null>(null)
   const handleRef = React.useRef<CsLabCanvasHandle | null>(null)
   const zoneRef = React.useRef<string>(CsCanvasZone.MAIN)
+  const initializingRef = React.useRef(true)
   const pageRef = React.useRef({ current: 1, total: 1 })
   const metricsTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const propsRef = React.useRef({
@@ -197,7 +206,7 @@ export function CsLabCanvasEditor({
         : {}),
     }
 
-    const editor = new Editor(host, data, PAGE_OPTIONS)
+    const editor = new Editor(host, data, createPageOptions(hostId))
     editorRef.current = editor
 
     editor.use(commentPlugin, {
@@ -209,15 +218,12 @@ export function CsLabCanvasEditor({
       locale: 'zhCN',
     })
 
-    if (initialComments.length > 0) {
-      const comments: IComment[] = initialComments.map((comment) => ({
-        id: comment.id,
-        content: comment.content,
-        createdAt: comment.createdAt,
-        user: comment.user ?? CSLAB_COMMENT_AUTHOR,
-      }))
-      editor.command.executeSetCommentList(comments)
-    }
+    const savedComments: IComment[] = initialComments.map((comment) => ({
+      id: comment.id,
+      content: comment.content,
+      createdAt: comment.createdAt,
+      user: comment.user ?? CSLAB_COMMENT_AUTHOR,
+    }))
 
     const handle: CsLabCanvasHandle = {
       getSnapshot() {
@@ -252,7 +258,7 @@ export function CsLabCanvasEditor({
       strikeout: () => editor.command.executeStrikeout(),
       title: (level) => editor.command.executeTitle(level as unknown as TitleLevel | null),
       list: (type) => editor.command.executeList(type as unknown as ListType),
-      separator: () => editor.command.executeSeparator(),
+      separator: () => editor.command.executeSeparator([]),
       pageBreak: () => editor.command.executePageBreak(),
       undo: () => editor.command.executeUndo(),
       redo: () => editor.command.executeRedo(),
@@ -303,10 +309,14 @@ export function CsLabCanvasEditor({
         if (patches.length > 0) editor.command.executeSetControlPropertiesList(patches)
       },
       appendCapsule(attrs: CsLabCapsuleAttrs) {
-        editor.command.executeAppendElementList(
-          [{ value: '\n' }, buildCanvasCapsuleControl(attrs), { value: ' ' }],
-          { isSubmitHistory: true },
-        )
+        const main = (editor.command.getValue().data.main ?? []) as IElement[]
+        const endIndex = Math.max(0, main.length - 1)
+        editor.command.executeSetRange(endIndex, endIndex)
+        editor.command.executeInsertElementList([{ value: '\n' }], {
+          isSubmitHistory: true,
+        })
+        editor.command.executeInsertControl(buildCanvasCapsuleControl(attrs))
+        editor.command.executeInsertElementList([{ value: ' ' }])
         editor.command.executeFocus()
       },
       applyReview(items: CsLabReviewCommentInput[]) {
@@ -320,11 +330,20 @@ export function CsLabCanvasEditor({
     }
 
     handleRef.current = handle
-    handle.markCapsulesStale(propsRef.current.staleCapsuleIds)
     onReady(handle)
 
+    // 等首屏分页计算完成后再恢复批注与陈旧态，避免控件/分组尚未初始化。
+    const restoreTimer = setTimeout(() => {
+      if (savedComments.length > 0) {
+        editor.command.executeSetCommentList(savedComments)
+      }
+      handle.markCapsulesStale(propsRef.current.staleCapsuleIds)
+      // 初始化期间的程序化变更不应把刚打开的文稿标记为“未保存”。
+      initializingRef.current = false
+    }, 60)
+
     const onContentChange = (): void => {
-      propsRef.current.onDirtyChange(true)
+      if (!initializingRef.current) propsRef.current.onDirtyChange(true)
       scheduleMetrics(editor)
     }
     const onRangeStyle = (payload: IRangeStyle): void => {
@@ -354,7 +373,9 @@ export function CsLabCanvasEditor({
 
     const onMouseDown = (event: MouseEvent): void => {
       try {
-        const context = editor.command.getPositionContextByEvent(event)
+        const context = editor.command.getPositionContextByEvent(event, {
+          isMustDirectHit: false,
+        })
         const extension = capsuleExtensionOf(context?.element)
         if (extension) propsRef.current.onCapsuleClick(extension.capsuleId)
       } catch {
@@ -392,10 +413,10 @@ export function CsLabCanvasEditor({
         target.dispatchEvent(new MouseEvent('mouseup', init))
       }
       try {
-        editor.command.executeInsertElementList(
-          [buildCanvasCapsuleControl(buildCapsuleAttrs(cellRef)), { value: ' ' }],
-          { isSubmitHistory: true },
+        editor.command.executeInsertControl(
+          buildCanvasCapsuleControl(buildCapsuleAttrs(cellRef)),
         )
+        editor.command.executeInsertElementList([{ value: ' ' }])
       } catch {
         propsRef.current.onToast?.('error', '胶囊插入失败，请把光标放在正文后重试')
       }
@@ -410,6 +431,7 @@ export function CsLabCanvasEditor({
 
     return () => {
       onReady(null)
+      clearTimeout(restoreTimer)
       handleRef.current = null
       editorRef.current = null
       if (metricsTimer.current) {
@@ -444,5 +466,5 @@ export function CsLabCanvasEditor({
     handleRef.current?.toggleRuler(showRuler)
   }, [showRuler])
 
-  return <div ref={hostRef} className="cslab-canvas-host relative h-full w-full" />
+  return <div ref={hostRef} id={hostId} className="cslab-canvas-host relative h-full w-full" />
 }

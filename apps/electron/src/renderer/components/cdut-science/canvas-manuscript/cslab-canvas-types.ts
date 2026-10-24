@@ -51,7 +51,7 @@ export interface CsLabRangeStyle {
   italic: boolean
   underline: boolean
   strikeout: boolean
-  level: Exclude<CsLabTitleLevel, null>
+  level: CsLabTitleLevel
   listType: 'ul' | 'ol' | null
   undo: boolean
   redo: boolean

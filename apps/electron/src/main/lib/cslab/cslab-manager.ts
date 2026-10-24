@@ -53,6 +53,7 @@ const ALL_LAYER_TYPES: CsLabLayerType[] = [
   'mol',
   'doc',
   'capsule',
+  'geo',
 ]
 
 export function listLabs(): CsLabLab[] {
@@ -84,6 +85,7 @@ export function createLab(input: CsLabCreateLabInput): CsLabLab {
     rootPath: labDir,
     createdAt: now,
     updatedAt: now,
+    ...(input.demoKind ? { demoKind: input.demoKind } : {}),
   }
 
   writeLabManifest(labDir, manifest)

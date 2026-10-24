@@ -27,7 +27,7 @@ const LAB_ID_RE = /^[a-z0-9][a-z0-9-]{2,63}$/
 const MANIFEST_NAME = 'lab.manifest.json'
 const INDEX_NAME = 'index.json'
 
-export const VAULT_SUBDIRS = ['lit', 'notes', 'raw', 'tables', 'figures', 'manuscripts'] as const
+export const VAULT_SUBDIRS = ['lit', 'notes', 'raw', 'tables', 'figures', 'manuscripts', 'geo'] as const
 export const RUNTIME_SUBDIRS = ['tools', 'logs'] as const
 
 interface LabIndexEntry {
@@ -197,6 +197,10 @@ export function readLabManifest(labDir: string): CsLabLab | null {
         parsed.statusBeforeArchive === '调试中' ||
         parsed.statusBeforeArchive === '筹建中'
           ? parsed.statusBeforeArchive
+          : undefined,
+      demoKind:
+        parsed.demoKind === 'origin-vesta' || parsed.demoKind === 'sklgp-geohazard'
+          ? parsed.demoKind
           : undefined,
     }
   } catch {

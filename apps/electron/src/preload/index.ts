@@ -53,6 +53,7 @@ import {
   type CsLabZoteroBridgeStatus,
   type CsLabZoteroAnnotation,
   type CsLabLiteratureItem,
+  type CsLabLiteratureGuide,
   type CsLabLiteratureGraphResult,
   type CsLabLiteratureSearchResult,
   type CsLabPlotDigitizeInput,
@@ -1725,7 +1726,9 @@ export interface ElectronAPI {
     /** 实验室沙箱 */
     listLabs: () => Promise<CsLabLab[]>
     createLab: (input: CsLabCreateLabInput) => Promise<CsLabLab>
-    createDemoLab: () => Promise<CsLabDemoLabResult>
+    createDemoLab: (kind?: 'origin-vesta' | 'sklgp-geohazard') => Promise<CsLabDemoLabResult>
+    /** 重置演示实验室（清理沙箱并重建官方样本）。 */
+    resetDemoLab: (labId: string) => Promise<CsLabDemoLabResult>
     openLab: (labId: string) => Promise<CsLabLabSnapshot>
     getLabSnapshot: (labId: string) => Promise<CsLabLabSnapshot>
     renameLab: (input: { labId: string; name: string }) => Promise<CsLabLab>
@@ -1800,6 +1803,11 @@ export interface ElectronAPI {
       labId: string
       uri: string
     }) => Promise<{ url: string; name: string; pageCount?: number }>
+    /** 结构化智能导读（首次点击可能触发同步解析）。 */
+    getLiteratureGuide: (input: {
+      labId: string
+      literatureUri: string
+    }) => Promise<CsLabLiteratureGuide>
 
     /** 图表逆向数字化 */
     digitizePlot: (input: CsLabPlotDigitizeInput) => Promise<CsLabPlotDigitizeResult>
@@ -4213,7 +4221,10 @@ const electronAPI: ElectronAPI = {
     listLabs: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.LIST_LABS),
     createLab: (input: CsLabCreateLabInput) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CREATE_LAB, input),
-    createDemoLab: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CREATE_DEMO_LAB),
+    createDemoLab: (kind?: 'origin-vesta' | 'sklgp-geohazard') =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CREATE_DEMO_LAB, kind),
+    resetDemoLab: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RESET_DEMO_LAB, labId),
     openLab: (labId: string) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OPEN_LAB, labId),
     getLabSnapshot: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LAB_SNAPSHOT, labId),
@@ -4293,6 +4304,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_ITEM, input),
     getLiteratureUrl: (input: { labId: string; uri: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_URL, input),
+    getLiteratureGuide: (input: { labId: string; literatureUri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_GUIDE, input),
 
     digitizePlot: (input: CsLabPlotDigitizeInput) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.DIGITIZE_PLOT, input),

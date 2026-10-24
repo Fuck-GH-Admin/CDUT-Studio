@@ -3,7 +3,14 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CsLabLab, CsLabManuscript } from '@profer/shared'
@@ -186,5 +193,84 @@ describe('文稿保存与另存为', () => {
     expect(docxRes.success).toBe(true)
     expect(docxRes.format).toBe('docx')
     expect(existsSync(docxTarget)).toBe(true)
+  })
+})
+
+describe('Sidecar v2（Canvas 双写）', () => {
+  test('新建文稿为纯空白纸面（不再预置 H1 标题）', async () => {
+    const { createManuscript } = await import('./cslab-manuscript')
+    const created = await createManuscript(lab.id, '空白新稿')
+    const docJson = created.docJson as { content: Array<Record<string, unknown>> }
+    expect(docJson.content[0]?.type).toBe('paragraph')
+    expect(created.canvasData).toEqual({ main: [] })
+    expect(created.comments).toEqual([])
+  })
+
+  test('canvasData 与 comments 随文稿保存并原样读回', async () => {
+    const { createManuscript, saveManuscript, getManuscript } = await import(
+      './cslab-manuscript'
+    )
+    const created = await createManuscript(lab.id, 'Canvas 双写')
+    const canvasData = {
+      header: [{ value: '成都理工大学' }],
+      main: [{ value: '实' }, { value: '验' }, { value: '\n' }],
+      footer: [{ value: '第 1 页' }],
+    }
+    const comments = [
+      {
+        id: 'group-1',
+        content: '【方法论审稿人】建议补做平行实验',
+        createdAt: new Date(0).toISOString(),
+        user: 'CDUT Science',
+      },
+    ]
+
+    await saveManuscript({
+      labId: lab.id,
+      uri: created.uri,
+      title: 'Canvas 双写',
+      docJson: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: '实验' }] }],
+      },
+      canvasData,
+      comments,
+      capsules: [],
+    })
+
+    const loaded = await getManuscript(lab.id, created.uri)
+    expect(loaded?.canvasData).toEqual(canvasData)
+    expect(loaded?.comments).toEqual(comments)
+  })
+
+  test('v1 sidecar 不返回 canvasData，交由渲染层即时升级', async () => {
+    const { createManuscript, getManuscript } = await import('./cslab-manuscript')
+    const { resolveLabDir } = await import('./cslab-paths')
+    const created = await createManuscript(lab.id, '旧稿升级')
+    const uuid = created.uri.split('/').pop()!
+
+    writeFileSync(
+      join(resolveLabDir(lab.id), 'vault', 'manuscripts', `${uuid}.json`),
+      JSON.stringify(
+        {
+          version: 1,
+          title: '旧稿升级',
+          docJson: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '旧正文' }] }],
+          },
+          capsules: [],
+          updatedAt: Date.now(),
+        },
+        null,
+        2,
+      ),
+    )
+
+    const loaded = await getManuscript(lab.id, created.uri)
+    expect(loaded?.docJson).toMatchObject({
+      type: 'doc',
+    })
+    expect(loaded?.canvasData).toBeUndefined()
   })
 })

@@ -43,7 +43,8 @@ export function dataBounds(
     const values = key === 'x' ? series.x : series.y
     for (const value of values) {
       if (!Number.isFinite(value)) continue
-      if (axis.scale !== 'linear' && value <= 0 && key === 'y') continue
+      // 对数/倒数等非线性轴不允许非正值进入范围，否则 log 会直接产生 NaN/-Infinity。
+      if (axis.scale !== 'linear' && value <= 0) continue
       if (value < min) min = value
       if (value > max) max = value
     }

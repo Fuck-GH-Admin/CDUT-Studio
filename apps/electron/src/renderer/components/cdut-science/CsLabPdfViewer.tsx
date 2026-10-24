@@ -19,6 +19,7 @@ import {
   Minus,
   MousePointer2,
   Plus,
+  Sparkles,
 } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
@@ -31,6 +32,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { CsLabPdfSelection } from '@/atoms/cslab-atoms'
 import { detectIsWindows } from '@profer/ui'
+import { CsLabLiteratureGuidePanel } from './CsLabLiteratureGuidePanel'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc
 
@@ -94,18 +96,22 @@ export function CsLabPdfViewer({
   /** 「在对话中研讨」发送状态与一次性提示。 */
   const [discussing, setDiscussing] = React.useState(false)
   const [notice, setNotice] = React.useState<string | null>(null)
+  const [showGuide, setShowGuide] = React.useState(false)
 
   /** 把导读提示词预填到实验室研讨助理输入框（不自动发送）。 */
-  const discussInAgentWindow = async (): Promise<void> => {
+  const discussInAgentWindow = async (sectionTitle?: string, page?: number): Promise<void> => {
     setDiscussing(true)
     setNotice(null)
     try {
+      const focus = sectionTitle
+        ? `当前聚焦章节：「${sectionTitle}」${page ? `（第 ${page} 页）` : ''}。`
+        : ''
       const result = await window.electronAPI.cslab.sendToAgentWindow({
         labId,
         source: 'asset',
         assetUri: literature.uri,
         prompt: [
-          `我正在研读《${literature.title}》。请优先基于客户端内核文档引擎已预解析的全文证据（<attached_documents> 的 clean_markdown 与自动注入的 <document_evidence>）直接作答：`,
+          `我正在研读《${literature.title}》。${focus}请优先基于客户端内核文档引擎已预解析的全文证据（<attached_documents> 的 clean_markdown 与自动注入的 <document_evidence>）直接作答：`,
           '1. 先给全文结构、核心贡献与关键公式导引（全局导读）；',
           '2. 仅在我针对具体段落追问时，再局部精读对应章节。',
           '禁止逐页翻阅 PDF、扫描文件系统或重复调用文档解析。',
@@ -236,6 +242,11 @@ export function CsLabPdfViewer({
     const next = Math.max(1, Math.min(pageCount, currentPage + delta))
     pageRefs.current.get(next)?.scrollIntoView({ block: 'start', behavior: 'auto' })
   }
+
+  const goToPageAbsolute = React.useCallback((page: number): void => {
+    const next = Math.max(1, Math.min(pageCount || page, page))
+    pageRefs.current.get(next)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }, [pageCount])
 
   // ===== 外层容器：抓手平移 + Ctrl+滚轮缩放（全模式一致） =====
   const handleContainerPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -375,6 +386,21 @@ export function CsLabPdfViewer({
         <span className="mx-0.5 h-4 w-px shrink-0 bg-cslab-border" />
         <button
           type="button"
+          onClick={() => setShowGuide((value) => !value)}
+          className={cn(
+            'inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] transition-colors',
+            showGuide
+              ? 'bg-cslab-surface text-cslab-accent'
+              : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+          )}
+          aria-pressed={showGuide}
+          title="打开结构化智能导读"
+        >
+          <Sparkles size={11} />
+          智能导读
+        </button>
+        <button
+          type="button"
           disabled={discussing}
           onClick={() => void discussInAgentWindow()}
           className={cn(
@@ -400,6 +426,7 @@ export function CsLabPdfViewer({
         </p>
       )}
 
+      <div className="flex min-h-0 flex-1">
       <div
         ref={scrollRef}
         data-cslab-pdf-scroll
@@ -408,7 +435,7 @@ export function CsLabPdfViewer({
         onPointerUp={handleContainerPointerUp}
         onPointerCancel={handleContainerPointerUp}
         className={cn(
-          'min-h-0 flex-1 overflow-auto bg-cslab-surface px-5 py-4',
+          'min-h-0 min-w-0 flex-1 overflow-auto bg-cslab-surface px-5 py-4',
           pointerMode === 'hand' && !panning && 'cursor-grab',
           pointerMode === 'hand' && panning && 'cursor-grabbing',
         )}
@@ -442,6 +469,16 @@ export function CsLabPdfViewer({
             ))}
           </div>
         )}
+      </div>
+      {showGuide && (
+        <CsLabLiteratureGuidePanel
+          labId={labId}
+          literature={literature}
+          onJumpToPage={goToPageAbsolute}
+          onDiscuss={(sectionTitle, page) => void discussInAgentWindow(sectionTitle, page)}
+          onClose={() => setShowGuide(false)}
+        />
+      )}
       </div>
     </div>
   )

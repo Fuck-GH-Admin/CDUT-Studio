@@ -16,6 +16,7 @@ import {
   Image as ImageIcon,
   Loader2,
   Lock,
+  Mountain,
   PanelLeftClose,
   PenLine,
   Plus,
@@ -72,6 +73,7 @@ const GROUPS: AssetGroup[] = [
   { id: 'note', label: '笔记与节点', layerTypes: ['note', 'node'], icon: PenLine },
   { id: 'run', label: '实验规程', layerTypes: ['proto', 'run'], icon: FlaskConical },
   { id: 'data', label: '数据铁笼', layerTypes: ['raw', 'table'], icon: Database },
+  { id: 'geo', label: '地理灾害', layerTypes: ['geo'], icon: Mountain },
   { id: 'figure', label: '科研图表', layerTypes: ['fig'], icon: ImageIcon },
 ]
 
