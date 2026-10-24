@@ -190,29 +190,37 @@ export interface DocumentLayoutAST {
   readingOrderedBlocks: DocumentLayoutBlock[]  // 全文展平的线性阅读序列
   outline: Array<{ title: string; level: number; blockId: string; page: number }>
   markdown: string               // 序列化后的高保真学术 Markdown 文本
-  metrics: {
-    totalExtractionMs: number
-    alignmentMs: number
-    maxRegretSortMs: number
-    tableParseMs: number
-    trapDocFilteredCount: number
-    /** 视觉公式识别的实际调用次数 */
-    formulaOcrCalls: number
-    /** 因未达复杂度阈值或超出配额而跳过视觉识别的公式数 */
-    formulaOcrSkipped: number
-    /** 走整页 OCR 重构的降级页数 */
-    ocrRecognizedPages: number
-    /** 检测到降级但 OCR 端口不可用的页数（如实记录，绝不伪造） */
-    ocrUnavailablePages: number
-    /** 扫描到的原生 MathML/TeX 关联标签数 */
-    nativeMathTagCount: number
-    /** 公式来源分账 */
-    mathFromNative: number
-    mathFromGeometric: number
-    mathFromPix2Text: number
-    /** 水平分带总数（供诊断分栏拓扑） */
-    bandCount: number
-  }
+  metrics: DocumentMetrics
+}
+
+/**
+ * 解析耗时与来源分账指标。
+ *
+ * 后半段（公式 / OCR / 分带）由 `@profer/core/pdf-engine` 必填；
+ * 其他产出方（如 office-engine）不适用，故声明为可选。
+ */
+export interface DocumentMetrics {
+  totalExtractionMs: number
+  alignmentMs: number
+  maxRegretSortMs: number
+  tableParseMs: number
+  trapDocFilteredCount: number
+  /** 视觉公式识别的实际调用次数 */
+  formulaOcrCalls?: number
+  /** 因未达复杂度阈值或超出配额而跳过视觉识别的公式数 */
+  formulaOcrSkipped?: number
+  /** 走整页 OCR 重构的降级页数 */
+  ocrRecognizedPages?: number
+  /** 检测到降级但 OCR 端口不可用的页数（如实记录，绝不伪造） */
+  ocrUnavailablePages?: number
+  /** 扫描到的原生 MathML/TeX 关联标签数 */
+  nativeMathTagCount?: number
+  /** 公式来源分账 */
+  mathFromNative?: number
+  mathFromGeometric?: number
+  mathFromPix2Text?: number
+  /** 水平分带总数（供诊断分栏拓扑） */
+  bandCount?: number
 }
 
 // ===== 坐标换算工具（纯函数，引擎与服务层共用） =====

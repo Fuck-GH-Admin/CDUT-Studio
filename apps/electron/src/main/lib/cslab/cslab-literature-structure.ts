@@ -28,7 +28,8 @@ import {
   updateEntityTitle,
 } from './cslab-db'
 import { assertLabId, resolveLabDir, resolveLabRelativePath } from './cslab-paths'
-import { readLiteratureBuffer } from './cslab-literature'
+import { getLiteratureFilePathFromSource, readLiteratureBuffer } from './cslab-literature'
+import { resolvePdfParseAccuracy } from '../settings-service'
 import { broadcastCsLabEvent } from './cslab-events'
 import { CSLAB_IPC_CHANNELS } from './cslab-types'
 
@@ -387,10 +388,14 @@ async function enrichLiteratureOnce(labId: string, uri: string, deferIndexRebuil
   }
 
   try {
-    const { parsePdfDocument } = await import('@profer/core/pdf-engine')
+    const { parsePdfDocument, resolveFormulaMode } = await import('@profer/core/pdf-engine')
+    // 从来源记录解析磁盘路径供识别调度；无磁盘路径时视觉识别路径自动跳过（core 已有降级行为）
+    const pdfPath = getLiteratureFilePathFromSource(labId, source) ?? undefined
     const ast = await parsePdfDocument(buffer, {
       fileName: entity.title,
       maxPages: MAX_PAGES,
+      pdfPath,
+      formulaMode: resolveFormulaMode(resolvePdfParseAccuracy()),
     })
     const structure = buildStructureFromAst(uri, ast, entity.title, entity.sha256)
     if (structure.warnings.length === 0 && ast.pageCount > MAX_PAGES) {

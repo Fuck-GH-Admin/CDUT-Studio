@@ -11,8 +11,11 @@ verify 输出：
 
 import argparse
 import json
+import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 
 
@@ -307,14 +310,233 @@ def ocr_text(image_path):
         }
 
 
+def _load_pix2text():
+    """加载 Pix2Text；未安装时返回 None（调用方如实报告 pix2text-missing）。"""
+    try:
+        from pix2text import Pix2Text
+    except Exception:
+        return None
+    return Pix2Text
+
+
+def _render_pdf_page(pdf_path, page_no):
+    """把指定页渲染为 PIL 图像。
+
+    渲染统一放在 Python 端完成：Node/Electron 主进程不引入 canvas 依赖。
+    依次尝试 pypdfium2（pix2text 自带）与 PyMuPDF，两者都不可用时返回 None。
+    返回 (image, page_width_pts, page_height_pts)。
+    """
+    try:
+        import pypdfium2 as pdfium
+    except Exception:
+        pdfium = None
+    if pdfium is not None:
+        try:
+            doc = pdfium.PdfDocument(pdf_path)
+            index = max(0, min(len(doc) - 1, page_no - 1))
+            page = doc[index]
+            bitmap = page.render(scale=200 / 72.0)
+            image = bitmap.to_pil()
+            width, height = page.get_size()
+            doc.close()
+            return image, float(width), float(height)
+        except Exception:
+            pass
+
+    try:
+        import io
+
+        import fitz  # PyMuPDF
+        from PIL import Image
+
+        doc = fitz.open(pdf_path)
+        index = max(0, min(doc.page_count - 1, page_no - 1))
+        page = doc[index]
+        pix = page.get_pixmap(dpi=200)
+        image = Image.open(io.BytesIO(pix.tobytes("png")))
+        rect = page.rect
+        doc.close()
+        return image, float(rect.width), float(rect.height)
+    except Exception:
+        pass
+
+    return None
+
+
+def _flatten_recognize_result(result):
+    """把 Pix2Text.recognize 的返回摊平为 [{text, box}] 列表。"""
+    items = []
+
+    def take(entry):
+        if isinstance(entry, dict):
+            text = entry.get("text") or entry.get("latex")
+            if isinstance(text, str) and text.strip():
+                box = entry.get("box") or entry.get("position")
+                items.append({"text": text.strip(), "box": box})
+            for key in ("children", "lines", "regions", "content"):
+                nested = entry.get(key)
+                if isinstance(nested, (list, tuple)):
+                    for child in nested:
+                        take(child)
+        elif isinstance(entry, (list, tuple)):
+            for child in entry:
+                take(child)
+        elif isinstance(entry, str) and entry.strip():
+            items.append({"text": entry.strip(), "box": None})
+
+    take(result)
+    return items
+
+
+def _box_to_rect(box, fallback):
+    """把 Pix2Text 的 box（[[x,y]x4] 或 [x0,y0,x1,y1]）转成 {x,y,w,h} 像素矩形。"""
+    try:
+        if isinstance(box, (list, tuple)) and len(box) == 4:
+            flat = []
+            for item in box:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    flat.append((float(item[0]), float(item[1])))
+                elif isinstance(item, (int, float)):
+                    flat.append(float(item))
+            if len(flat) == 4 and all(isinstance(p, tuple) for p in flat):
+                xs = [p[0] for p in flat]
+                ys = [p[1] for p in flat]
+                x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+                return {"x": x0, "y": y0, "w": max(1.0, x1 - x0), "h": max(1.0, y1 - y0)}
+            if len(flat) == 4 and all(isinstance(p, float) for p in flat):
+                x0, y0, x1, y1 = flat
+                return {"x": x0, "y": y0, "w": max(1.0, x1 - x0), "h": max(1.0, y1 - y0)}
+    except Exception:
+        pass
+    return fallback
+
+
+def ocr_pdf_region(pdf_path, page_no, bbox, kind):
+    """对 PDF 指定页的归一化区域做视觉识别。
+
+    kind='formula' 返回端到端 LaTeX；kind='text' 返回带像素坐标的字块，
+    坐标相对裁剪图（Node 侧的 transformToNormalizedBBox 据此映射回页面归一化坐标）。
+    """
+    started = time.time()
+    Pix2Text = _load_pix2text()
+    if Pix2Text is None:
+        return {
+            "ok": False,
+            "engine": "pix2text-missing",
+            "message": "未安装 Pix2Text（可一键安装学术 OCR 引擎）",
+        }
+
+    rendered = _render_pdf_page(pdf_path, page_no)
+    if rendered is None:
+        return {
+            "ok": False,
+            "engine": "pix2text",
+            "message": "无法渲染 PDF 页面（缺少 pypdfium2 / PyMuPDF）",
+        }
+
+    image, _page_w, _page_h = rendered
+    width, height = image.size
+    try:
+        x0, y0, x1, y1 = [float(v) for v in bbox]
+    except Exception:
+        x0, y0, x1, y1 = 0.0, 0.0, 1.0, 1.0
+
+    left = int(max(0.0, min(1.0, x0)) * width)
+    top = int(max(0.0, min(1.0, y0)) * height)
+    right = int(max(0.0, min(1.0, x1)) * width)
+    bottom = int(max(0.0, min(1.0, y1)) * height)
+    if right - left < 2 or bottom - top < 2:
+        left, top, right, bottom = 0, 0, width, height
+    crop = image.crop((left, top, right, bottom))
+
+    temp_dir = tempfile.mkdtemp(prefix="cslab-ocr-pdf-")
+    try:
+        image_path = os.path.join(temp_dir, "region.png")
+        crop.save(image_path)
+        recognizer = Pix2Text.from_config()
+
+        if kind == "formula":
+            result = recognizer.recognize_formula(image_path)
+            if isinstance(result, dict):
+                latex = result.get("text") or result.get("latex")
+            elif isinstance(result, list) and result:
+                first = result[0]
+                latex = first.get("text") if isinstance(first, dict) else str(first)
+            else:
+                latex = str(result)
+            if not latex:
+                return {
+                    "ok": False,
+                    "engine": "pix2text",
+                    "message": "未识别出公式",
+                    "elapsedMs": int((time.time() - started) * 1000),
+                }
+            return {
+                "ok": True,
+                "engine": "pix2text",
+                "latex": latex,
+                "elapsedMs": int((time.time() - started) * 1000),
+            }
+
+        result = recognizer.recognize(image_path)
+        items = _flatten_recognize_result(result)
+        crop_w, crop_h = crop.size
+        blocks = []
+        for index, item in enumerate(items):
+            fallback = {
+                "x": 0.0,
+                "y": crop_h * index / max(1, len(items)),
+                "w": float(crop_w),
+                "h": float(crop_h) / max(1, len(items)),
+            }
+            blocks.append(
+                {
+                    "text": item["text"],
+                    "rect": _box_to_rect(item["box"], fallback),
+                    "confidence": 0.9,
+                }
+            )
+        return {
+            "ok": True,
+            "engine": "pix2text",
+            "blocks": blocks,
+            "imageWidth": crop_w,
+            "imageHeight": crop_h,
+            "elapsedMs": int((time.time() - started) * 1000),
+        }
+    except Exception as error:
+        return {
+            "ok": False,
+            "engine": "pix2text",
+            "message": f"区域识别失败：{error}",
+            "elapsedMs": int((time.time() - started) * 1000),
+        }
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["verify", "ocr", "ocr-text"], required=True)
+    parser.add_argument("--mode", choices=["verify", "ocr", "ocr-text", "ocr-pdf"], required=True)
     parser.add_argument("--lhs", default="")
     parser.add_argument("--rhs", default="")
     parser.add_argument("--symbols", default="{}")
     parser.add_argument("--image", default="")
+    parser.add_argument("--pdf", default="")
+    parser.add_argument("--page", type=int, default=1)
+    parser.add_argument("--bbox", default="0,0,1,1")
+    parser.add_argument("--kind", choices=["text", "formula"], default="text")
     args = parser.parse_args()
+
+    if args.mode == "ocr-pdf":
+        if not args.pdf:
+            emit({"ok": False, "engine": "pix2text", "message": "缺少 --pdf 参数"})
+            return
+        bbox = [float(v) for v in args.bbox.split(",")[:4]] if args.bbox else [0.0, 0.0, 1.0, 1.0]
+        if len(bbox) != 4:
+            bbox = [0.0, 0.0, 1.0, 1.0]
+        emit(ocr_pdf_region(args.pdf, args.page, bbox, args.kind))
+        return
 
     if args.mode == "ocr":
         if not args.image:

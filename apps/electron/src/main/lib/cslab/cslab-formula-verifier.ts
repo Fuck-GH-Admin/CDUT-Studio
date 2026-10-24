@@ -196,3 +196,151 @@ export async function ocrSelectionText(
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
   }
 }
+
+// ===== PDF 区域 OCR（--mode ocr-pdf）：文本字块与公式 LaTeX 识别 =====
+
+/** PDF 区域 OCR 字块（rect 为相对裁剪图的像素坐标） */
+export interface CsLabPdfOcrBlock {
+  text: string
+  rect: { x: number; y: number; w: number; h: number }
+  confidence: number
+}
+
+export interface CsLabPdfOcrTextResult {
+  ok: boolean
+  blocks: CsLabPdfOcrBlock[]
+  imageWidth: number
+  imageHeight: number
+  missingDependency?: boolean
+  message?: string
+}
+
+/** PDF 区域 OCR 输入：1-based 页码 + 归一化 bbox [x0, y0, x1, y1] */
+interface CsLabPdfOcrInput {
+  pdfPath: string
+  page: number
+  bbox: [number, number, number, number]
+}
+
+interface RawPdfOcrTextPayload {
+  ok?: boolean
+  engine?: string
+  blocks?: unknown
+  imageWidth?: unknown
+  imageHeight?: unknown
+  message?: string
+}
+
+interface RawPdfOcrFormulaPayload {
+  ok?: boolean
+  engine?: string
+  latex?: string
+  message?: string
+}
+
+function toFiniteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/** 组装 --mode ocr-pdf 的公共参数（页码 + 归一化 bbox + 识别类型） */
+function buildPdfOcrArgs(kind: 'text' | 'formula', input: CsLabPdfOcrInput): string[] {
+  return [
+    '--mode',
+    'ocr-pdf',
+    '--pdf',
+    input.pdfPath,
+    '--page',
+    String(input.page),
+    '--bbox',
+    input.bbox.join(','),
+    '--kind',
+    kind,
+  ]
+}
+
+/**
+ * 对 PDF 指定页的归一化区域做整页/区域文本 OCR。
+ * 失败只返回 ok:false 并带回 message，绝不抛出（解析主流程不得被识别失败拖垮）。
+ */
+export async function ocrPdfRegionText(
+  labIdInput: string,
+  input: CsLabPdfOcrInput,
+  runner: CsLabPythonRunner = defaultCsLabPythonRunner,
+): Promise<CsLabPdfOcrTextResult> {
+  try {
+    const labId = assertLabId(labIdInput)
+    const stdout = await runner.runPython(
+      labId,
+      'cslab-formula-verifier.py',
+      buildPdfOcrArgs('text', input),
+      // OCR 首次可能加载模型，给予更宽裕的超时。
+      { timeoutMs: 180_000 },
+    )
+    const payload = JSON.parse(stdout.trim()) as RawPdfOcrTextPayload
+    const blocks = Array.isArray(payload.blocks)
+      ? payload.blocks.flatMap((item): CsLabPdfOcrBlock[] => {
+          const block = item as Partial<CsLabPdfOcrBlock> | null
+          if (!block || typeof block.text !== 'string' || !block.rect) return []
+          const rect = block.rect
+          return [
+            {
+              text: block.text,
+              rect: {
+                x: toFiniteNumber(rect.x),
+                y: toFiniteNumber(rect.y),
+                w: toFiniteNumber(rect.w),
+                h: toFiniteNumber(rect.h),
+              },
+              confidence: toFiniteNumber(block.confidence),
+            },
+          ]
+        })
+      : []
+    return {
+      ok: payload.ok === true,
+      blocks,
+      imageWidth: toFiniteNumber(payload.imageWidth),
+      imageHeight: toFiniteNumber(payload.imageHeight),
+      missingDependency: payload.engine === 'pix2text-missing' || undefined,
+      message: payload.message,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      blocks: [],
+      imageWidth: 0,
+      imageHeight: 0,
+      message: error instanceof Error ? error.message : '文本识别失败',
+    }
+  }
+}
+
+/** 对 PDF 指定页的归一化区域做公式识别，返回端到端 LaTeX */
+export async function ocrPdfFormula(
+  labIdInput: string,
+  input: CsLabPdfOcrInput,
+  runner: CsLabPythonRunner = defaultCsLabPythonRunner,
+): Promise<{ ok: boolean; latex?: string; missingDependency?: boolean; message?: string }> {
+  try {
+    const labId = assertLabId(labIdInput)
+    const stdout = await runner.runPython(
+      labId,
+      'cslab-formula-verifier.py',
+      buildPdfOcrArgs('formula', input),
+      // 公式识别首次同样可能加载模型，给予更宽裕的超时。
+      { timeoutMs: 180_000 },
+    )
+    const payload = JSON.parse(stdout.trim()) as RawPdfOcrFormulaPayload
+    return {
+      ok: payload.ok === true,
+      latex: payload.latex,
+      missingDependency: payload.engine === 'pix2text-missing' || undefined,
+      message: payload.message,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : '公式识别失败',
+    }
+  }
+}

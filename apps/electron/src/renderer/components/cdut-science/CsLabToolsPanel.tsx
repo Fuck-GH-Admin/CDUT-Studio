@@ -11,6 +11,7 @@ import {
   Boxes,
   Check,
   FlaskConical,
+  Gauge,
   Loader2,
   PackagePlus,
   Play,
@@ -24,6 +25,12 @@ import type {
   CsLabCustomTool,
   CsLabToolPreset,
   CsLabToolProfile,
+  PdfParseAccuracy,
+} from '@profer/shared'
+import {
+  PDF_PARSE_ACCURACY_DEFAULT,
+  PDF_PARSE_ACCURACY_HINT,
+  PDF_PARSE_ACCURACY_OPTIONS,
 } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import {
@@ -105,7 +112,28 @@ export function CsLabToolsPanel({
   const [installingPreset, setInstallingPreset] = React.useState<string | null>(null)
   const [sourceView, setSourceView] = React.useState<{ filename: string; source: string } | null>(null)
   const [showPresets, setShowPresets] = React.useState(false)
+  const [accuracy, setAccuracy] = React.useState<PdfParseAccuracy>(PDF_PARSE_ACCURACY_DEFAULT)
   const seedAppliedRef = React.useRef('')
+
+  // 初始化论文解析准度：缺失或非法值一律回落默认档（与主进程解析侧同一套判定）
+  React.useEffect(() => {
+    let cancelled = false
+    void window.electronAPI
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) return
+        const value = settings.pdfParseAccuracy
+        setAccuracy(
+          PDF_PARSE_ACCURACY_OPTIONS.some((option) => option.value === value)
+            ? (value as PdfParseAccuracy)
+            : PDF_PARSE_ACCURACY_DEFAULT,
+        )
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   React.useEffect(() => {
     if (!initialPath) {
@@ -303,6 +331,19 @@ export function CsLabToolsPanel({
     }
   }
 
+  /** 切换论文解析准度并经 settings 更新通道落盘 */
+  const changeAccuracy = async (value: PdfParseAccuracy): Promise<void> => {
+    if (value === accuracy) return
+    setAccuracy(value)
+    try {
+      await window.electronAPI.updateSettings({ pdfParseAccuracy: value })
+      const option = PDF_PARSE_ACCURACY_OPTIONS.find((item) => item.value === value)
+      onToast('success', `论文解析准度已改为「${option?.label ?? value}」`)
+    } catch (error) {
+      onToast('error', error instanceof Error ? error.message : '论文解析准度保存失败')
+    }
+  }
+
   const currentSession = sessions.find((session) => session.id === sessionId)
   const selectedToolMeta = scan?.tools.find((tool) => tool.name === selectedTool)
 
@@ -380,6 +421,34 @@ export function CsLabToolsPanel({
           </p>
         )}
         {runtime?.note && <p className="mt-1 text-[10px] leading-relaxed text-cslab-muted">{runtime.note}</p>}
+      </section>
+
+      <section className="rounded-xl border border-cslab-border bg-cslab-elevated/70 p-3">
+        <div className="flex items-center gap-2">
+          <Gauge size={11} className="text-cslab-muted" />
+          <span className="text-[10px] uppercase tracking-[0.14em] text-cslab-muted">论文解析准度</span>
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-1.5">
+          {PDF_PARSE_ACCURACY_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => void changeAccuracy(option.value)}
+              className={cn(
+                'rounded-lg border px-2 py-1.5 text-left transition-colors',
+                accuracy === option.value
+                  ? 'border-cslab-accent/40 bg-cslab-surface'
+                  : 'border-cslab-border hover:bg-cslab-surface/70',
+              )}
+            >
+              <span className="block text-[10px] font-medium text-cslab-text">{option.label}</span>
+              <span className="mt-0.5 block text-[9px] leading-relaxed text-cslab-muted">
+                {option.description}
+              </span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-1.5 text-[10px] leading-relaxed text-cslab-muted">{PDF_PARSE_ACCURACY_HINT}</p>
       </section>
 
       <section className="space-y-1">

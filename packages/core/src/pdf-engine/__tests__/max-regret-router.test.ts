@@ -160,16 +160,16 @@ describe('三栏版面', () => {
 describe('水平分带拓扑', () => {
   test('上双栏 → 中通栏大图 → 下双栏：分 3 带隔离，绝不跳步', () => {
     const nodes = [
-      node('T1', 'Top left body.', [0.08, 0.10, 0.45, 0.18]),
-      node('T2', 'Top left body two.', [0.08, 0.20, 0.45, 0.28]),
-      node('T3', 'Top right body.', [0.55, 0.10, 0.92, 0.18]),
-      node('T4', 'Top right body two.', [0.55, 0.20, 0.92, 0.28]),
+      node('T1', 'Top left body.', [0.08, 0.06, 0.45, 0.12]),
+      node('T2', 'Top left body two.', [0.08, 0.16, 0.45, 0.22]),
+      node('T3', 'Top right body.', [0.55, 0.06, 0.92, 0.12]),
+      node('T4', 'Top right body two.', [0.55, 0.16, 0.92, 0.22]),
       // 跨栏浮动大图（占位块，文本极短）
-      node('FIG', 'Figure 3', [0.08, 0.38, 0.92, 0.62]),
-      node('B1', 'Bottom left body.', [0.08, 0.72, 0.45, 0.80]),
-      node('B2', 'Bottom left body two.', [0.08, 0.82, 0.45, 0.90]),
-      node('B3', 'Bottom right body.', [0.55, 0.72, 0.92, 0.80]),
-      node('B4', 'Bottom right body two.', [0.55, 0.82, 0.92, 0.90]),
+      node('FIG', 'Figure 3', [0.08, 0.40, 0.92, 0.60]),
+      node('B1', 'Bottom left body.', [0.08, 0.72, 0.45, 0.78]),
+      node('B2', 'Bottom left body two.', [0.08, 0.82, 0.45, 0.88]),
+      node('B3', 'Bottom right body.', [0.55, 0.72, 0.92, 0.78]),
+      node('B4', 'Bottom right body two.', [0.55, 0.82, 0.92, 0.88]),
     ]
 
     const bands = decomposeHorizontalBands(nodes)
@@ -180,25 +180,37 @@ describe('水平分带拓扑', () => {
     expect(bands[2]!.nodeIds).toEqual(['B1', 'B2', 'B3', 'B4'])
     // 带序严格自顶向下
     expect(bands.map((band) => band.y0)).toEqual([...bands.map((band) => band.y0)].sort((a, b) => a - b))
-    // 上下带各自是双栏
+    // 上下带各自是双栏，浮动图自成带
     expect(bands[0]!.columnCount).toBe(2)
-    expect(bands[2]!.columnCount).toBe(2)
-    // 浮动图自成带
     expect(bands[1]!.columnCount).toBe(1)
+    expect(bands[2]!.columnCount).toBe(2)
   })
 
   test('跨栏大图下方正文绝不提前吸附到右栏顶部', () => {
     const nodes = [
-      node('T1', 'Top left body.', [0.08, 0.10, 0.45, 0.18]),
-      node('T2', 'Top right body.', [0.55, 0.10, 0.92, 0.18]),
-      node('FIG', 'Figure 3', [0.08, 0.38, 0.92, 0.62]),
-      node('B1', 'Bottom left body.', [0.08, 0.72, 0.45, 0.80]),
-      node('B2', 'Bottom right body.', [0.55, 0.72, 0.92, 0.80]),
+      node('T1', 'Top left body.', [0.08, 0.06, 0.45, 0.12]),
+      node('T2', 'Top left body two.', [0.08, 0.16, 0.45, 0.22]),
+      node('T3', 'Top right body.', [0.55, 0.06, 0.92, 0.12]),
+      node('T4', 'Top right body two.', [0.55, 0.16, 0.92, 0.22]),
+      node('FIG', 'Figure 3', [0.08, 0.40, 0.92, 0.60]),
+      node('B1', 'Bottom left body.', [0.08, 0.72, 0.45, 0.78]),
+      node('B2', 'Bottom left body two.', [0.08, 0.82, 0.45, 0.88]),
+      node('B3', 'Bottom right body.', [0.55, 0.72, 0.92, 0.78]),
+      node('B4', 'Bottom right body two.', [0.55, 0.82, 0.92, 0.88]),
     ]
 
-    const { ordered } = analyzePageTopology(nodes)
+    const { ordered, bands } = analyzePageTopology(nodes)
 
-    expect(ordered.map((item) => item.id)).toEqual(['T1', 'T2', 'FIG', 'B1', 'B2'])
+    // 每带内「整栏读完再换栏」，带间严格自顶向下，绝不跨带回跳
+    expect(ordered.map((item) => item.id)).toEqual([
+      'T1', 'T2', 'T3', 'T4',
+      'FIG',
+      'B1', 'B2', 'B3', 'B4',
+    ])
+    expect(ordered.map((item) => item.readingOrderIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+    expect(bands).toHaveLength(3)
+    // 跨栏浮动块的 columnCount 记为 1 → 聚光灯锚点渲染为「通栏」
+    expect(ordered.find((item) => item.id === 'FIG')!.columnCount).toBe(1)
   })
 
   test('页眉页脚绝不进入分带与投影聚类', () => {
@@ -228,7 +240,8 @@ describe('水平分带拓扑', () => {
     expect(bands[0]!.columnCount).toBe(2)
 
     const { ordered } = analyzePageTopology(nodes)
-    expect(ordered.map((item) => item.id)).toEqual(['T1', 'T2', 'B1', 'B2'])
+    // 整栏读完再换栏：左栏 T1→B1，再进右栏 T2→B2
+    expect(ordered.map((item) => item.id)).toEqual(['T1', 'B1', 'T2', 'B2'])
     // 页眉/页脚不进入主阅读流
     expect(ordered.some((item) => item.id === 'H' || item.id === 'F')).toBe(false)
   })

@@ -98,6 +98,8 @@ export interface PdfGeometryExtractResult {
   pages: PdfPageGeometry[]
   pageCount: number
   extractMs: number
+  /** 原始对象扫描出的内嵌 MathML/TeX 标签（多数论文为空） */
+  nativeMathTags?: NativeMathTag[]
 }
 
 /**
@@ -163,6 +165,13 @@ export const FORMULA_MODE_DEFAULT: FormulaModeConfig = {
 /** 引擎配置 */
 export interface PdfEngineOptions {
   fileName?: string
+  /**
+   * 源文档在磁盘上的绝对路径。
+   *
+   * 页面栅格化与公式识别统一由 OCR 端口实现方（本地学术 OCR 引擎自带 PDF 渲染能力）
+   * 完成，因此需要文件路径；未提供时视觉识别路径自动跳过，几何解析照常进行。
+   */
+  pdfPath?: string
   /** 最大解析页数（防止超长文档阻塞主线程），默认不限制 */
   maxPages?: number
   /** 是否启用专用 OCR 信道桥接（需注入 ocrPorts 才真正生效） */

@@ -31,7 +31,13 @@ import {
   parseOfficeBuffer,
   serializeOfficePageToMarkdown,
 } from '@profer/core/office-engine'
+import type { FormulaOcrPort, PdfOcrPorts, PdfRegionOcrPort } from '@profer/core/pdf-engine'
+import type { DocumentMetrics } from '@profer/shared'
 import { resolveAuthorizedFile, type PreviewInspectionContext } from './preview-inspection-service'
+import { resolvePdfParseAccuracy } from './settings-service'
+import { assertLabId, listLabManifests } from './cslab/cslab-paths'
+import { getToolRuntimeStatus } from './cslab/cslab-python-runtime'
+import { ocrPdfFormula, ocrPdfRegionText } from './cslab/cslab-formula-verifier'
 
 /** Office 双态索引 Schema 版本号：当 DOCX 分页或 XLSX 行坐标格式升级时自动触发旧索引静默重建 */
 export const OFFICE_INDEX_SCHEMA_VERSION = 'v2'
@@ -190,7 +196,8 @@ export interface ParseDocumentResult {
   pageCount?: number
   columnCounts?: number[]
   outline?: Array<{ title: string; level: number; page: number; blockId?: string }>
-  metrics?: Record<string, number>
+  /** 解析耗时与来源分账指标（PDF 引擎完整分账，其余产出方可选） */
+  metrics?: DocumentMetrics
   pages?: DocumentPageSlice[]
   materialized?: MaterializedDocumentIndex
 }
@@ -509,6 +516,97 @@ export function materializeToWorkspace(
 }
 
 /**
+ * 解析 OCR 端口绑定的实验室标识。
+ *
+ * 优先取上游 context 显式携带的 labId（PreviewInspectionContext 未声明该字段，按可选读取），
+ * 否则回落到 CSLab 首个可用实验室；一个都取不到时返回 undefined（视觉识别路径自动跳过）。
+ */
+function resolveOcrLabId(context: PreviewInspectionContext): string | undefined {
+  try {
+    const candidate = (context as { labId?: unknown }).labId
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return assertLabId(candidate.trim())
+    }
+  } catch {
+    // 上游 labId 非法时继续回落首个可用实验室
+  }
+  try {
+    const first = listLabManifests().find((lab) => !lab.archived)
+    return first ? assertLabId(first.id) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 构造不可用的 OCR 端口：如实标注原因，绝不伪造识别结果。 */
+function buildUnavailableOcrPorts(reason: string): PdfOcrPorts {
+  return {
+    region: {
+      available: false,
+      unavailableReason: reason,
+      recognizeRegion: async () => ({ blocks: [], imageWidth: 0, imageHeight: 0 }),
+    },
+    formula: {
+      available: false,
+      unavailableReason: reason,
+      recognizeFormula: async () => ({ ok: false, message: reason }),
+    },
+  }
+}
+
+/**
+ * 构造 PDF 解析的本地学术 OCR 端口（按区域文本识别 + 公式识别）。
+ *
+ * available = 能拿到 labId 且该实验室 formula-ocr 能力已安装；
+ * 整个探测全程 try/catch 兜底，任何异常都回落 available:false，绝不让解析主流程崩溃。
+ */
+async function createPdfOcrPorts(context: PreviewInspectionContext): Promise<PdfOcrPorts> {
+  try {
+    const labId = resolveOcrLabId(context)
+    if (!labId) return buildUnavailableOcrPorts('未检测到实验室，无法启用本地学术 OCR 引擎')
+    const status = await getToolRuntimeStatus(labId)
+    if (status.profiles['formula-ocr']?.installed !== true) {
+      return buildUnavailableOcrPorts('未检测到本地学术 OCR 引擎，视觉识别路径自动跳过')
+    }
+
+    const region: PdfRegionOcrPort = {
+      available: true,
+      async recognizeRegion({ pdfPath, pageNumber, regionBBox, kind }) {
+        if (kind === 'formula') {
+          const result = await ocrPdfFormula(labId, { pdfPath, page: pageNumber, bbox: regionBBox })
+          // 公式结果无字块坐标：用单位矩形占满整个识别区域（归一化变换后恰好映射回 regionBBox）
+          return {
+            blocks:
+              result.ok && result.latex
+                ? [{ text: result.latex, rect: { x: 0, y: 0, w: 1, h: 1 }, confidence: 1 }]
+                : [],
+            imageWidth: 1,
+            imageHeight: 1,
+          }
+        }
+        const result = await ocrPdfRegionText(labId, { pdfPath, page: pageNumber, bbox: regionBBox })
+        return {
+          blocks: result.blocks,
+          imageWidth: result.imageWidth,
+          imageHeight: result.imageHeight,
+        }
+      },
+    }
+    const formula: FormulaOcrPort = {
+      available: true,
+      async recognizeFormula({ pdfPath, pageNumber, regionBBox }) {
+        return ocrPdfFormula(labId, { pdfPath, page: pageNumber, bbox: regionBBox })
+      },
+    }
+    return { region, formula }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    console.warn('[文档解析] 学术 OCR 端口探测失败，已跳过视觉识别路径:', reason)
+    return buildUnavailableOcrPorts(`本地学术 OCR 引擎探测失败：${reason}`)
+  }
+}
+
+/**
  * 执行文档内容解析（含双态落盘）。
  *
  * @throws 路径未授权、文件不存在、格式不支持或解析失败时抛错
@@ -539,10 +637,19 @@ export async function executeParseDocumentTool(
   if (ext === '.pdf') {
     const {
       parsePdfDocument,
+      resolveFormulaMode,
       serializeLayoutToMarkdown,
       stripDocumentTopologyAnchors,
     } = await import('@profer/core/pdf-engine')
-    const ast = await parsePdfDocument(new Uint8Array(buffer), { fileName: basename(resolved) })
+    // 用户准度偏好 → 公式解析档位；OCR 端口按实验室运行时探测注入，探测失败自动降级纯几何解析
+    const formulaMode = resolveFormulaMode(resolvePdfParseAccuracy())
+    const ocrPorts = await createPdfOcrPorts(context)
+    const ast = await parsePdfDocument(new Uint8Array(buffer), {
+      fileName: basename(resolved),
+      pdfPath: resolved,
+      formulaMode,
+      ocrPorts,
+    })
     const { text, truncated } = truncate(ast.markdown)
     const cleanFull = stripDocumentTopologyAnchors(ast.markdown)
     const { text: cleanText } = truncate(cleanFull)

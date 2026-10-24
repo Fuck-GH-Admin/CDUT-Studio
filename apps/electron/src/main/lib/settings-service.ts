@@ -8,7 +8,8 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getSettingsPath } from './config-paths'
 import { DEFAULT_AGENT_RUNTIME, DEFAULT_INTERFACE_VARIANT, DEFAULT_THEME_MODE } from '../../types'
-import { normalizeAgentRuntime } from '@profer/shared'
+import { normalizeAgentRuntime, PDF_PARSE_ACCURACY_DEFAULT } from '@profer/shared'
+import type { PdfParseAccuracy } from '@profer/shared'
 import type { AppSettings } from '../../types'
 
 /** 内存缓存：避免启动时多次 IPC 调用反复读磁盘 */
@@ -123,4 +124,14 @@ export function updateSettings(updates: Partial<AppSettings>): AppSettings {
 /** 清除内存缓存（测试用） */
 export function clearSettingsCache(): void {
   _settingsCache = null
+}
+
+/**
+ * 解析当前的论文解析准度偏好（与 getSettings 同源，含内存缓存）。
+ *
+ * 字段缺失或非法值一律回落默认档，绝不让脏数据影响解析主流程。
+ */
+export function resolvePdfParseAccuracy(): PdfParseAccuracy {
+  const raw = getSettings().pdfParseAccuracy
+  return raw === 'fast' || raw === 'balanced' || raw === 'thorough' ? raw : PDF_PARSE_ACCURACY_DEFAULT
 }
