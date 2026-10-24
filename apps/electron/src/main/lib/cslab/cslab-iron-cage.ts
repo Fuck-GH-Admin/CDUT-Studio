@@ -87,6 +87,7 @@ function toAssetSummary(entity: CsLabEntityRecord): CsLabAssetSummary {
     relPath: entity.relPath,
     sha256: entity.sha256,
     bytes: entity.bytes,
+    metaJson: entity.metaJson,
     revision: entity.revision,
     locked: entity.locked,
     createdAt: entity.createdAt,

@@ -67,8 +67,8 @@ describe('实验室沙箱', () => {
 
   test('Given 演示类型 When 创建并读取 Then demoKind 持久化', async () => {
     const { createLab, getLab } = await import('./cslab-manager')
-    const lab = createLab({ name: 'SKLGP 类型往返测试', demoKind: 'sklgp-geohazard' })
-    expect(getLab(lab.id)?.demoKind).toBe('sklgp-geohazard')
+    const lab = createLab({ name: '旗舰类型往返测试', demoKind: 'flagship' })
+    expect(getLab(lab.id)?.demoKind).toBe('flagship')
   })
 })
 

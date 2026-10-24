@@ -20,7 +20,6 @@ import { useEnterCdutAiClass } from '@/hooks/useEnterCdutAiClass'
 import {
   DEMO_CSLAB_PASSWORD,
   DEMO_CDUT_ACCOUNT,
-  DEMO_GARNET_FILE_NAME,
   PROMPT_CALCULUS,
   PROMPT_HONGLOU_Q1,
   PROMPT_HONGLOU_Q2,
@@ -240,7 +239,7 @@ export function useCoachTourRunner(
           return
         case 'open-digitizer-figure':
           await sendCsLabCommand(
-            { kind: 'open-asset-by-title', title: 'demo-digitizer-spectrum.png' },
+            { kind: 'open-asset-by-title', title: 'standard_calibration_curve.png' },
             3,
             3000,
             demoLabIdRef.current,
@@ -248,7 +247,7 @@ export function useCoachTourRunner(
           return
         case 'open-mol-gold':
           await sendCsLabCommand(
-            { kind: 'open-asset-by-title', title: 'gold-fcc-nanoparticle.pdb' },
+            { kind: 'open-asset-by-title', title: 'b_dna_double_helix.pdb' },
             3,
             3000,
             demoLabIdRef.current,
@@ -256,7 +255,7 @@ export function useCoachTourRunner(
           return
         case 'open-mol-srtio3':
           await sendCsLabCommand(
-            { kind: 'open-asset-by-title', title: 'srtio3-perovskite.cif' },
+            { kind: 'open-asset-by-title', title: 'perovskite_cubic.cif' },
             3,
             3000,
             demoLabIdRef.current,
@@ -264,7 +263,7 @@ export function useCoachTourRunner(
           return
         case 'open-mol-garnet':
           await sendCsLabCommand(
-            { kind: 'open-asset-by-title', title: DEMO_GARNET_FILE_NAME },
+            { kind: 'open-asset-by-title', title: 'rutile_tio2.cif' },
             3,
             3000,
             demoLabIdRef.current,
@@ -272,7 +271,7 @@ export function useCoachTourRunner(
           return
         case 'open-publication-plot':
           await sendCsLabCommand(
-            { kind: 'open-plot', plotId: 'demo-nature-publication' },
+            { kind: 'open-plot', plotId: 'flagship-xrd-dual' },
             3,
             3000,
             demoLabIdRef.current,

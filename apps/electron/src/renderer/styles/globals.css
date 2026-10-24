@@ -3081,3 +3081,41 @@
 .animate-branch-tree-panel-in {
   animation: branch-tree-panel-in 150ms ease-out;
 }
+
+/* ===== CSLab 顶栏按钮抗缩放 ===== */
+.cslab-toolbar-actions {
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.cslab-toolbar-actions::-webkit-scrollbar {
+  display: none;
+}
+.cslab-toolbar-actions > button > svg {
+  flex-shrink: 0;
+}
+
+/* ===== CSLab PDF 文本层（pdf.js TextLayer） =====
+ * 文本透明但可原生选中；布局由 pdf.js 以绝对定位注入 span。 */
+.cslab-pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+}
+.cslab-pdf-text-layer span,
+.cslab-pdf-text-layer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.cslab-pdf-text-layer span::selection {
+  background: rgba(47, 111, 237, 0.28);
+}
+.cslab-pdf-text-layer span::-moz-selection {
+  background: rgba(47, 111, 237, 0.28);
+}

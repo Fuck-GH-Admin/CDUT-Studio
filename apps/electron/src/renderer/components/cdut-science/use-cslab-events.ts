@@ -12,6 +12,7 @@ import type {
   CsLabHpcJobEvent,
   CsLabHpcMfaRequest,
   CsLabPlotUpdatedEvent,
+  CsLabAssetFocusedEvent,
   CsLabStructureFocusedEvent,
   CsLabStructureSnapshotRequest,
   CsLabShareStatusEvent,
@@ -42,6 +43,7 @@ export interface CsLabEventHandlers {
   onHpcMfa?: (event: CsLabHpcMfaRequest) => void
   onPlotUpdated?: (event: CsLabPlotUpdatedEvent) => void
   onStructureFocused?: (event: CsLabStructureFocusedEvent) => void
+  onAssetFocused?: (event: CsLabAssetFocusedEvent) => void
   onRequestStructureSnapshot?: (event: CsLabStructureSnapshotRequest) => void
 }
 
@@ -143,6 +145,11 @@ export function useCsLabEvents(labId: string | null, handlers: CsLabEventHandler
       handlersRef.current.onStructureFocused?.(event)
     })
 
+    const offAssetFocused = window.electronAPI.cslab.onAssetFocused((event) => {
+      if (event.labId !== labId) return
+      handlersRef.current.onAssetFocused?.(event)
+    })
+
     // 独立科学助理窗口没有 StageGrid：必须静默忽略截图请求，
     // 否则回传 error 会误杀主工作台正在处理的合法请求。
     const isScienceAgentWindow =
@@ -169,6 +176,7 @@ export function useCsLabEvents(labId: string | null, handlers: CsLabEventHandler
       offHpcMfa()
       offPlotUpdated()
       offStructureFocused?.()
+      offAssetFocused()
       offRequestSnapshot()
     }
   }, [labId, setProgress, setStale, setToolProgress, setZoteroStatus, setShareStatus, setHpcJobs, setHpcMfa])

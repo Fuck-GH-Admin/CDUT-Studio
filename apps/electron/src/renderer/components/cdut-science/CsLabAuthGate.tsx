@@ -14,6 +14,8 @@ import { useAtom } from 'jotai'
 import { AlertTriangle, Eye, EyeOff, KeyRound, ShieldCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cslabAuthAtom } from '@/atoms/cslab-atoms'
+import CDUTStudioLogo from '@/assets/models/CDUT_Studio.png'
+import { CdutMark } from '@/components/shared/CdutLogo'
 
 const MIN_PASSWORD_LENGTH = 6
 
@@ -220,6 +222,17 @@ export function CsLabAuthGate(): React.ReactElement {
         <p className="mt-5 border-t border-cslab-border/70 pt-4 text-[11px] leading-relaxed text-cslab-muted">
           访问密码仅保存在本机，由操作系统安全存储或本地 AES-256-GCM 加密，绝不明文写入磁盘。
         </p>
+      </div>
+
+      <div className="mt-5 flex items-center justify-center gap-3" data-tour="cslab-brand-row">
+        <img
+          src={CDUTStudioLogo}
+          alt="CDUT Studio"
+          draggable={false}
+          className="h-7 w-auto object-contain opacity-90"
+        />
+        <span className="h-5 w-px bg-cslab-border" aria-hidden="true" />
+        <CdutMark className="h-7 w-auto" alt="成都理工大学校徽" />
       </div>
     </div>
   )

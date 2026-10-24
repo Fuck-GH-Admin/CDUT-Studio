@@ -126,6 +126,117 @@ export function buildTextPdf(pages: string[][]): Buffer {
   return Buffer.from(pdf, 'latin1')
 }
 
+export interface TwoColumnPdfSection {
+  heading: string
+  paragraphs: string[]
+}
+
+export interface TwoColumnPdfInput {
+  title: string
+  subtitle?: string
+  sections: TwoColumnPdfSection[]
+}
+
+/**
+ * A4 双栏演示 PDF（Helvetica，ASCII 公式）。
+ *
+ * 仅用于旗舰演示实验室的文献阅读链路；不嵌入字体、不支持中文。
+ */
+export function buildTwoColumnTextPdf(input: TwoColumnPdfInput): Buffer {
+  const leftX = 50
+  const rightX = 307
+  const columnWidthChars = 46
+  const bottomY = 58
+  const topY = 770
+  const pages: string[][] = []
+  let ops: string[] = []
+  let column: 0 | 1 = 0
+  let y = topY
+
+  const flushPage = (): void => {
+    if (ops.length > 0) pages.push(ops)
+    ops = []
+    column = 0
+    y = topY
+  }
+  const ensurePage = (): void => {
+    if (ops.length === 0) {
+      ops.push(`BT /F2 16 Tf 1 0 0 1 ${leftX} 800 Tm (${escapePdfText(input.title)}) Tj ET`)
+      if (input.subtitle) {
+        ops.push(`BT /F1 9 Tf 1 0 0 1 ${leftX} 782 Tm (${escapePdfText(input.subtitle)}) Tj ET`)
+      }
+      y = topY
+    }
+  }
+  const advance = (lineHeight: number): void => {
+    y -= lineHeight
+    if (y >= bottomY) return
+    if (column === 0) {
+      column = 1
+      y = topY
+      return
+    }
+    flushPage()
+  }
+  const emit = (text: string, font: 'F1' | 'F2', size: number, lineHeight: number): void => {
+    ensurePage()
+    advance(lineHeight)
+    const x = column === 0 ? leftX : rightX
+    ops.push(`BT /${font} ${size} Tf 1 0 0 1 ${x} ${y} Tm (${escapePdfText(`${text} `)}) Tj ET`)
+  }
+
+  for (const section of input.sections) {
+    emit(section.heading, 'F2', 12, 18)
+    for (const paragraph of section.paragraphs) {
+      for (const line of wrapLine(paragraph, columnWidthChars)) emit(line, 'F1', 9.5, 12)
+      advance(6)
+    }
+    advance(4)
+  }
+  flushPage()
+  if (pages.length === 0) pages.push([])
+
+  const objects: string[] = []
+  const fontBodyId = 3
+  const fontBoldId = 4
+  const pagesObjectId = 2
+  const catalogObjectId = 1
+  const pageObjectStart = 5
+  const pageObjectIds = pages.map((_, index) => pageObjectStart + index * 2)
+
+  objects[catalogObjectId] = `<< /Type /Catalog /Pages ${pagesObjectId} 0 R >>`
+  objects[pagesObjectId] = `<< /Type /Pages /Count ${pages.length} /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(' ')}] >>`
+  objects[fontBodyId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'
+  objects[fontBoldId] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'
+
+  pages.forEach((pageOps, index) => {
+    const pageId = pageObjectIds[index]!
+    const contentId = pageId + 1
+    const stream = pageOps.join('\n')
+    objects[pageId] = `<< /Type /Page /Parent ${pagesObjectId} 0 R /MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] /Resources << /Font << /F1 ${fontBodyId} 0 R /F2 ${fontBoldId} 0 R >> >> /Contents ${contentId} 0 R >>`
+    objects[contentId] = `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`
+  })
+
+  let pdf = '%PDF-1.4\n'
+  const offsets: number[] = []
+  for (let id = 1; id < objects.length; id += 1) {
+    const body = objects[id]
+    if (!body) continue
+    offsets[id] = Buffer.byteLength(pdf, 'latin1')
+    pdf += `${id} 0 obj\n${body}\nendobj\n`
+  }
+  const xrefOffset = Buffer.byteLength(pdf, 'latin1')
+  const maxId = objects.length - 1
+  pdf += `xref\n0 ${maxId + 1}\n`
+  pdf += '0000000000 65535 f \n'
+  for (let id = 1; id <= maxId; id += 1) {
+    const offset = offsets[id] ?? 0
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`
+  }
+  pdf += `trailer\n<< /Size ${maxId + 1} /Root ${catalogObjectId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+  return Buffer.from(pdf, 'latin1')
+}
+
 /** SKLGP 泥石流演示论文（合成数据，明确标注 DEMO）。 */
 export function buildSkLgpDemoPaperPdf(): Buffer {
   return buildTextPdf([

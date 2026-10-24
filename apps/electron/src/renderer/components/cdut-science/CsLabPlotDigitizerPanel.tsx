@@ -28,6 +28,7 @@ import {
 interface CsLabPlotDigitizerPanelProps {
   labId: string
   selection?: CsLabPdfSelection
+  demoCalibration?: CsLabPlotCalibration
   onSaved: () => void
 }
 
@@ -35,21 +36,10 @@ type PolygonMode = 'x' | 'y' | null
 
 const MAX_TICKS = 3
 
-/** 演示光谱图的预置标定点（坐标已按 640×480 原图边框像素扫描校准） */
-const DEMO_DIGITIZER_TICKS = {
-  x: [
-    { px: 80.5, py: 419.5, value: 0 },
-    { px: 599.5, py: 419.5, value: 1000 },
-  ] as CsLabAxisTick[],
-  y: [
-    { px: 80.5, py: 419.5, value: 0 },
-    { px: 80.5, py: 40.5, value: 100 },
-  ] as CsLabAxisTick[],
-}
-
 export function CsLabPlotDigitizerPanel({
   labId,
   selection,
+  demoCalibration,
   onSaved,
 }: CsLabPlotDigitizerPanelProps): React.ReactElement {
   const runtime = useAtomValue(cslabToolRuntimeAtom)
@@ -75,6 +65,7 @@ export function CsLabPlotDigitizerPanel({
   const [message, setMessage] = React.useState<string | null>(null)
   const dragRef = React.useRef<{ seriesIndex: number; pointIndex: number } | null>(null)
   const suppressClickRef = React.useRef(false)
+  const lastTickDeleteAtRef = React.useRef(0)
 
   React.useEffect(() => {
     setTitle(`数字化图表 · 第 ${(selection?.pageIndex ?? 0) + 1} 页`)
@@ -111,26 +102,36 @@ export function CsLabPlotDigitizerPanel({
       suppressClickRef.current = false
       return
     }
+    // 删除刻度后的 200ms 内抑制新增，避免事件穿透在同一位置立刻补一个坏点。
+    if (Date.now() - lastTickDeleteAtRef.current < 200) return
     if (!tickAxis || !naturalSize) return
     const rect = event.currentTarget.getBoundingClientRect()
     const point = {
       x: ((event.clientX - rect.left) / rect.width) * naturalSize.width,
       y: ((event.clientY - rect.top) / rect.height) * naturalSize.height,
     }
-    const tick: CsLabAxisTick = { px: point.x, py: point.y, value: 0 }
+    const tick: CsLabAxisTick = { px: point.x, py: point.y, value: 0, pending: true }
     if (tickAxis === 'x' && xTicks.length < MAX_TICKS) setXTicks([...xTicks, tick])
     if (tickAxis === 'y' && yTicks.length < MAX_TICKS) setYTicks([...yTicks, tick])
   }
 
-  const updateTickValue = (axis: 'x' | 'y', index: number, value: number): void => {
+  const updateTickValue = (
+    axis: 'x' | 'y',
+    index: number,
+    value: number,
+    pending = false,
+  ): void => {
     const update = (ticks: CsLabAxisTick[]): CsLabAxisTick[] =>
-      ticks.map((tick, current) => (current === index ? { ...tick, value } : tick))
+      ticks.map((tick, current) =>
+        current === index ? { ...tick, value, pending } : tick,
+      )
     if (axis === 'x') setXTicks(update(xTicks))
     else setYTicks(update(yTicks))
   }
 
   /** 点击十字标记删除单个标定点：局部修正无需重新标定。 */
   const removeTick = (axis: 'x' | 'y', index: number): void => {
+    lastTickDeleteAtRef.current = Date.now()
     if (axis === 'x') setXTicks((previous) => previous.filter((_, current) => current !== index))
     else setYTicks((previous) => previous.filter((_, current) => current !== index))
   }
@@ -179,6 +180,10 @@ export function CsLabPlotDigitizerPanel({
       setError('X/Y 轴各至少需要 2 个刻度点')
       return
     }
+    if ([...effectiveX, ...effectiveY].some((tick) => tick.pending || !Number.isFinite(tick.value))) {
+      setError('请先为所有刻度输入数值，再执行提取')
+      return
+    }
     setBusy('digitize')
     setError(null)
     setMessage(null)
@@ -216,24 +221,26 @@ export function CsLabPlotDigitizerPanel({
     }
   }, [selection, xTicks, yTicks, labId, mode, color, colors, tolerance, setRuntime])
 
-  /** 仅演示光谱图（640×480）提供的一键标定：写入预置刻度并立即提取 */
-  const isDemoSpectrum = naturalSize?.width === 640 && naturalSize?.height === 480
+  /** 演示图版由资产元数据提供预置标定，不再依赖 640×480 尺寸。 */
+  const hasDemoCalibration = Boolean(
+    demoCalibration?.x?.ticks?.length && demoCalibration?.y?.ticks?.length,
+  )
   const applyDemoCalibration = React.useCallback(async (): Promise<void> => {
-    if (!isDemoSpectrum) return
-    setXTicks(DEMO_DIGITIZER_TICKS.x)
-    setYTicks(DEMO_DIGITIZER_TICKS.y)
+    if (!demoCalibration) return
+    setXTicks(demoCalibration.x.ticks)
+    setYTicks(demoCalibration.y.ticks)
     setMode('line')
     setColor('')
     setColors([])
     setTolerance(28)
     await digitize({
-      xTicks: DEMO_DIGITIZER_TICKS.x,
-      yTicks: DEMO_DIGITIZER_TICKS.y,
+      xTicks: demoCalibration.x.ticks,
+      yTicks: demoCalibration.y.ticks,
       mode: 'line',
       color: '',
       tolerance: 28,
     })
-  }, [digitize, isDemoSpectrum])
+  }, [demoCalibration, digitize])
 
   // 引导气泡通过自定义事件触发同一套一键标定逻辑
   React.useEffect(() => {
@@ -518,10 +525,11 @@ export function CsLabPlotDigitizerPanel({
               <input
                 key={`${axis}-${index}`}
                 type="number"
-                value={Number.isFinite(tick.value) ? tick.value : 0}
-                onChange={(event) =>
-                  updateTickValue(axis, index, Number(event.target.value) || 0)
-                }
+                value={tick.pending ? '' : Number.isFinite(tick.value) ? tick.value : ''}
+                onChange={(event) => {
+                  const raw = event.target.value.trim()
+                  updateTickValue(axis, index, raw === '' ? 0 : Number(raw), raw === '')
+                }}
                 className="w-full rounded-md border border-cslab-border bg-cslab-elevated px-2 py-1 text-[11px] text-cslab-text outline-none focus:border-cslab-accent/50"
                 aria-label={`${axis} 轴第 ${index + 1} 个刻度值`}
               />
@@ -630,7 +638,7 @@ export function CsLabPlotDigitizerPanel({
         </div>
       )}
 
-      {isDemoSpectrum && (
+      {hasDemoCalibration && (
         <button
           type="button"
           data-tour="cslab-digitizer-demo"

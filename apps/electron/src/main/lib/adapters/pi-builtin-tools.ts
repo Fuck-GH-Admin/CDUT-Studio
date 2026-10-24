@@ -130,6 +130,7 @@ import { buildPiCsLabTools } from './pi-cslab-tools'
 import { buildCsLabScienceTools } from '../cslab/cslab-scientific-tools'
 import { buildCsLabLiteratureTools } from '../cslab/cslab-literature-tools'
 import { buildCsLabGeohazardTools } from '../cslab/cslab-geohazard-tools'
+import { buildCsLabAssetTools } from '../cslab/cslab-asset-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -2241,6 +2242,13 @@ export async function buildPiBuiltinTools(
     tools.push(...buildCsLabGeohazardTools(sdk, { sessionId: ctx.sessionId }))
   } catch (error) {
     console.error('[Pi 桥接] 注入 CSLab 地质灾害工具失败:', error)
+  }
+
+  // 15.4 CSLab 8 类资产专职工具链（仅实验室研讨会话）
+  try {
+    tools.push(...buildCsLabAssetTools(sdk, { sessionId: ctx.sessionId }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 CSLab 资产工具失败:', error)
   }
 
   const cloudTools = buildProferCloudTools(sdk, ctx)

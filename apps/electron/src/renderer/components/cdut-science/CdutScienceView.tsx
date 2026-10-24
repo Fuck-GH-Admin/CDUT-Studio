@@ -91,6 +91,9 @@ export function CdutScienceView(): React.ReactElement {
               <CsLabAuthGate />
             </div>
           </div>
+          <p className="pointer-events-none absolute inset-x-0 bottom-4 text-center font-sans text-[11px] tracking-wider text-cslab-muted/60">
+            Powered by 雫窝中央实验室 · 2026
+          </p>
         </div>
       )}
     </div>

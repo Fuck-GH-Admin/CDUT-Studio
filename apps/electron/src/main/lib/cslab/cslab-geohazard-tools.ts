@@ -20,7 +20,7 @@ import type {
   CsLabRainfallThresholdInput,
 } from '@profer/shared'
 import { createPlotDocument } from '@profer/shared'
-import { getAgentSessionMeta } from '../agent-session-manager'
+import { resolveCsLabSeminarLabId } from './cslab-session-gate'
 import {
   getCsLabDatabase,
   nextLabRevision,
@@ -171,14 +171,8 @@ export function buildCsLabGeohazardTools(
   sdk: PiSdkLike,
   ctx: PiCsLabGeohazardToolsContext,
 ): ToolDefinition[] {
-  const meta = getAgentSessionMeta(ctx.sessionId)
-  if (!meta?.cslabLabId) return []
-  let labId: string
-  try {
-    labId = assertLabId(meta.cslabLabId)
-  } catch {
-    return []
-  }
+  const labId = resolveCsLabSeminarLabId(ctx.sessionId)
+  if (!labId) return []
 
   const tools: ToolDefinition[] = []
 

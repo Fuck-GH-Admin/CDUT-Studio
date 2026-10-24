@@ -66,6 +66,8 @@ interface CsLabMolstarViewerProps {
   supercellRange?: { na: number; nb: number; nc: number }
   /** 外部指定的 Miller 晶面（VESTA 工作台）。 */
   externalPlane?: CsLabMillerPlane | null
+  /** 演示资产默认自旋；用户拖拽时暂停 2 秒。 */
+  autoSpin?: boolean
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
@@ -87,6 +89,7 @@ export function CsLabMolstarViewer({
   isoNegative,
   supercellRange,
   externalPlane,
+  autoSpin = false,
 }: CsLabMolstarViewerProps): React.ReactElement {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const pluginRef = React.useRef<PluginContext | null>(null)
@@ -185,6 +188,62 @@ export function CsLabMolstarViewer({
   React.useEffect(() => {
     if (externalPlane !== undefined) setPlane(externalPlane)
   }, [externalPlane])
+
+  // ===== 演示自旋（相机环绕；用户拖拽后暂停 2s） =====
+  React.useEffect(() => {
+    if (!autoSpin || !ready) return
+    const plugin = pluginRef.current
+    const container = containerRef.current
+    const camera = plugin?.canvas3d?.camera
+    if (!plugin || !container || !camera) return
+
+    let frame = 0
+    let last = 0
+    let pausedUntil = 0
+    const pause = (): void => {
+      pausedUntil = performance.now() + 2000
+    }
+    container.addEventListener('pointerdown', pause)
+    const tick = (now: number): void => {
+      frame = requestAnimationFrame(tick)
+      if (now - last < 33) return
+      last = now
+      if (now < pausedUntil) return
+      try {
+        const snapshot = camera.getSnapshot()
+        const target = snapshot.target
+        if (!target || !snapshot.position) return
+        const targetX = target[0] ?? 0
+        const targetZ = target[2] ?? 0
+        const positionX = snapshot.position[0] ?? 0
+        const positionY = snapshot.position[1] ?? 0
+        const positionZ = snapshot.position[2] ?? 0
+        const dx = positionX - targetX
+        const dz = positionZ - targetZ
+        const angle = 0.007
+        const cos = Math.cos(angle)
+        const sin = Math.sin(angle)
+        plugin.managers.camera.setSnapshot(
+          {
+            ...snapshot,
+            position: Vec3.create(
+              targetX + dx * cos - dz * sin,
+              positionY,
+              targetZ + dx * sin + dz * cos,
+            ),
+          },
+          0,
+        )
+      } catch {
+        // 相机可能已释放；静默停止本帧。
+      }
+    }
+    frame = requestAnimationFrame(tick)
+    return () => {
+      cancelAnimationFrame(frame)
+      container.removeEventListener('pointerdown', pause)
+    }
+  }, [autoSpin, ready])
 
   // ===== 初始化 / 销毁 =====
   React.useEffect(() => {

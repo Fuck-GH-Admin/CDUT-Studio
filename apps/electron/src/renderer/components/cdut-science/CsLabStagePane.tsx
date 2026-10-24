@@ -27,6 +27,7 @@ import type {
   CsLabLiteratureItem,
   CsLabManuscript,
   CsLabMolAsset,
+  CsLabGeoRasterPayload,
   CsLabTablePayload,
 } from '@profer/shared'
 import { canvasTitleFromRelPath } from '@profer/shared'
@@ -43,6 +44,7 @@ import { CsLabPdfViewer } from './CsLabPdfViewer'
 import { CsLabDagCanvas } from './CsLabDagCanvas'
 import { CsLabOriginPlotPane } from './CsLabOriginPlotPane'
 import { CsLabVestaCrystalPane } from './crystal/CsLabVestaCrystalPane'
+import { CsLabTerrainPane } from './CsLabTerrainPane'
 import {
   CSLAB_ASSET_MIME,
   hasDragType,
@@ -62,6 +64,7 @@ interface CsLabStagePaneProps {
   literature: CsLabLiteratureItem | null
   canvas: CsLabCanvasDocument | null
   mol: CsLabMolAsset | null
+  geo?: CsLabGeoRasterPayload | null
   figureAsset?: CsLabAssetSummary | null
   initialPage?: number
   focusHighlight?: { page: number; bbox: [number, number, number, number] }
@@ -100,6 +103,7 @@ export function CsLabStagePane({
   literature,
   canvas,
   mol,
+  geo,
   figureAsset,
   initialPage,
   focusHighlight,
@@ -136,8 +140,10 @@ export function CsLabStagePane({
             : '推演画布'
           : pane.viewType === 'mol'
             ? mol?.title ?? '分子与晶体'
-            : pane.viewType === 'figure'
-              ? figureAsset?.title ?? title ?? '科研图表'
+            : pane.viewType === 'terrain'
+              ? geo?.title ?? title ?? '2.5D 地貌'
+              : pane.viewType === 'figure'
+                ? figureAsset?.title ?? title ?? '科研图表'
               : pane.viewType === 'origin-plot'
                 ? title ?? '出版绘图'
                 : '空窗格'
@@ -269,6 +275,8 @@ export function CsLabStagePane({
           />
         ) : pane.viewType === 'mol' && mol ? (
           <CsLabVestaCrystalPane paneId={paneId} labId={labId} asset={mol} onToast={onToast} />
+        ) : pane.viewType === 'terrain' && geo ? (
+          <CsLabTerrainPane payload={geo} onToast={onToast} />
         ) : pane.viewType === 'origin-plot' ? (
           <CsLabOriginPlotPane labId={labId} pane={pane} onToast={onToast} />
         ) : (

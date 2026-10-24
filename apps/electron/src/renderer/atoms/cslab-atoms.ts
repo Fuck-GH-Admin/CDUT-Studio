@@ -37,7 +37,9 @@ import type {
   CsLabHpcMfaRequest,
   CsLabMolAsset,
   CsLabAtomSiteSelection,
+  CsLabGeoRasterPayload,
   CsLabPaneViewType,
+  CsLabPlotCalibration,
   CsLabPlotDocument,
   CsLabPlotSummary,
 } from '@profer/shared'
@@ -106,6 +108,8 @@ export interface CsLabPaneState {
   literatureUri?: string
   /** 分子/晶体窗格对应的 mol 资产 URI。 */
   molUri?: string
+  /** 2.5D 地貌窗格对应的 geo 资产 URI。 */
+  geoUri?: string
   /** 图表/图像窗格对应的图片资产 URI。 */
   figureUri?: string
   /** 数据窗格的展示模式（曲线 / 表格 / 分屏）。 */
@@ -178,6 +182,11 @@ export const cslabPaneCanvasesAtom = atom<Record<CsLabPaneId, CsLabCanvasDocumen
 
 /** 每窗格的分子/晶体载荷。 */
 export const cslabPaneMolAtom = atom<Record<CsLabPaneId, CsLabMolAsset | null>>(
+  emptyRecord(() => null),
+)
+
+/** 每窗格的 2.5D 地貌载荷。 */
+export const cslabPaneGeoAtom = atom<Record<CsLabPaneId, CsLabGeoRasterPayload | null>>(
   emptyRecord(() => null),
 )
 
@@ -263,6 +272,8 @@ export interface CsLabPdfSelection {
   pageHeight: number
   rect: { x: number; y: number; width: number; height: number }
   cropDataUrl: string
+  /** 演示图版预置标定（标准曲线一键逆向化）。 */
+  demoCalibration?: CsLabPlotCalibration
 }
 
 export interface CsLabDrawerState {

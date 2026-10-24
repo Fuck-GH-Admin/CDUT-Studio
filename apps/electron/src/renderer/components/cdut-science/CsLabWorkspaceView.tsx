@@ -42,6 +42,7 @@ import type {
   CsLabManuscriptSummary,
   CsLabMolAsset,
   CsLabPlotUpdatedEvent,
+  CsLabAssetFocusedEvent,
   CsLabStructureFocusedEvent,
   CsLabStructureSnapshotRequest,
   CsLabTablePayload,
@@ -66,6 +67,7 @@ import {
   cslabPlotListAtom,
   cslabPaneLoadingAtom,
   cslabPaneManuscriptsAtom,
+  cslabPaneGeoAtom,
   cslabPaneMolAtom,
   cslabPaneTablesAtom,
   cslabPanesAtom,
@@ -221,6 +223,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const [paneLiterature, setPaneLiterature] = useAtom(cslabPaneLiteratureAtom)
   const [paneCanvases, setPaneCanvases] = useAtom(cslabPaneCanvasesAtom)
   const [paneMol, setPaneMol] = useAtom(cslabPaneMolAtom)
+  const [paneGeo, setPaneGeo] = useAtom(cslabPaneGeoAtom)
   const [zoteroStatus, setZoteroStatus] = useAtom(cslabZoteroStatusAtom)
   const [toolSeed, setToolSeed] = useAtom(cslabToolSeedAtom)
   const [runSeed, setRunSeed] = useAtom(cslabRunSeedAtom)
@@ -669,9 +672,63 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
     ],
   )
 
+  const openGeoInPane = React.useCallback(
+    async (paneId: CsLabPaneId, asset: CsLabAssetSummary): Promise<void> => {
+      const existingPane = CSLAB_PANE_IDS.find(
+        (id) => panes[id].viewType === 'terrain' && panes[id].geoUri === asset.uri,
+      )
+      if (existingPane) {
+        focusPane(existingPane)
+        return
+      }
+      patchPane(paneId, {
+        viewType: 'terrain',
+        geoUri: asset.uri,
+        assetUri: asset.uri,
+        molUri: undefined,
+        manuscriptUri: undefined,
+        literatureUri: undefined,
+      })
+      setPaneTables((previous) => ({ ...previous, [paneId]: null }))
+      setPaneManuscripts((previous) => ({ ...previous, [paneId]: null }))
+      setPaneLiterature((previous) => ({ ...previous, [paneId]: null }))
+      setPaneCanvases((previous) => ({ ...previous, [paneId]: null }))
+      setPaneMol((previous) => ({ ...previous, [paneId]: null }))
+      setPaneGeo((previous) => ({ ...previous, [paneId]: null }))
+      setPaneLoading((previous) => ({ ...previous, [paneId]: true }))
+      try {
+        const payload = await window.electronAPI.cslab.getGeoRaster({ labId, uri: asset.uri })
+        setPaneGeo((previous) => ({ ...previous, [paneId]: payload }))
+      } catch (err) {
+        patchPane(paneId, emptyPane(paneId))
+        showToast('error', err instanceof Error ? err.message : '地貌栅格读取失败')
+      } finally {
+        setPaneLoading((previous) => ({ ...previous, [paneId]: false }))
+      }
+    },
+    [
+      focusPane,
+      labId,
+      panes,
+      patchPane,
+      setPaneCanvases,
+      setPaneGeo,
+      setPaneLiterature,
+      setPaneLoading,
+      setPaneManuscripts,
+      setPaneMol,
+      setPaneTables,
+      showToast,
+    ],
+  )
+
   const openAssetInPane = React.useCallback(
     async (paneId: CsLabPaneId, asset: CsLabAssetSummary): Promise<void> => {
       const capability = resolveAssetCapability(asset)
+      if (asset.layerType === 'geo') {
+        await openGeoInPane(paneId, asset)
+        return
+      }
       if (capability.kind === 'figure') {
         openFigureInPane(paneId, asset)
         return
@@ -746,6 +803,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
       openLiteratureInPane,
       openManuscriptInPane,
       openMolInPane,
+      openGeoInPane,
       openTableInPane,
       setDrawer,
       setRunSeed,
@@ -1013,6 +1071,25 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
         }
       },
       [activePaneId, labId, openMolInPane, setAssets, showToast],
+    ),
+    onAssetFocused: React.useCallback(
+      async (event: CsLabAssetFocusedEvent) => {
+        if (event.labId !== labId) return
+        try {
+          const latestAssets = await window.electronAPI.cslab.listAssets(labId)
+          setAssets(latestAssets)
+          const target = latestAssets.find((item) => item.uri === event.uri)
+          if (!target) {
+            showToast('error', '未能定位目标资产')
+            return
+          }
+          await openAssetInPane(activePaneId, target)
+          showToast('success', `已打开《${target.title}》`)
+        } catch (err) {
+          showToast('error', err instanceof Error ? err.message : '打开资产窗格失败')
+        }
+      },
+      [activePaneId, labId, openAssetInPane, setAssets, showToast],
     ),
     onRequestStructureSnapshot: React.useCallback(
       async (event: CsLabStructureSnapshotRequest) => {
@@ -1868,7 +1945,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           </p>
         </div>
 
-        <div className="titlebar-no-drag relative ml-auto flex items-center gap-1.5">
+        <div className="cslab-toolbar-actions titlebar-no-drag relative ml-auto flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-none">
           <button
             type="button"
             onClick={() => {
@@ -1887,7 +1964,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
                   : undefined,
               })
             }}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
             title="呼出科学助理"
           >
             <Sparkles size={12} />
@@ -1896,7 +1973,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           <button
             type="button"
             onClick={() => setDrawer({ open: true, mode: 'zotero', title: 'Zotero 文献同步' })}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
             title={zoteroStatus?.message ?? 'Zotero 文献同步'}
           >
             <BookOpen size={12} />
@@ -1913,7 +1990,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           <button
             type="button"
             onClick={() => setDrawer({ open: true, mode: 'brain', title: '文献智脑' })}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
           >
             <Brain size={12} />
             文献智脑
@@ -1925,19 +2002,19 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
               setRunSeed(null)
               setDrawer({ open: true, mode: 'runs', title: '实验规程与批次' })
             }}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
           >
             <FlaskConical size={12} />
-            <span className="hidden xl:inline">实验</span>
+            <span className="whitespace-nowrap">实验</span>
           </button>
           <button
             type="button"
             title="笔记与推演"
             onClick={() => setDrawer({ open: true, mode: 'notes', title: '笔记与推演' })}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
           >
             <Network size={12} />
-            <span className="hidden xl:inline">笔记</span>
+            <span className="whitespace-nowrap">笔记</span>
           </button>
           <button
             type="button"
@@ -1946,28 +2023,28 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
               setToolSeed(null)
               setDrawer({ open: true, mode: 'tools', title: '自定义科研算子 (Python Workspace)' })
             }}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
           >
             <Wrench size={12} />
-            <span className="hidden xl:inline">工具</span>
+            <span className="whitespace-nowrap">工具</span>
           </button>
           <button
             type="button"
             title="局域网仪器共享盘"
             onClick={() => setDrawer({ open: true, mode: 'share', title: '局域网仪器共享盘' })}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
           >
             <HardDrive size={12} />
-            <span className="hidden xl:inline">共享盘</span>
+            <span className="whitespace-nowrap">共享盘</span>
           </button>
           <button
             type="button"
             title="远程算力集群"
             onClick={() => setDrawer({ open: true, mode: 'hpc', title: '远程算力集群' })}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
           >
             <Server size={12} />
-            <span className="hidden xl:inline">超算</span>
+            <span className="whitespace-nowrap">超算</span>
           </button>
           <span className="mx-0.5 h-5 w-px bg-cslab-border" aria-hidden="true" />
           <CsLabSplitControls layout={layout} onChange={setLayout} />
@@ -1993,7 +2070,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
           <button
             type="button"
             onClick={() => docxInputRef.current?.click()}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            className="inline-flex shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
           >
             <Upload size={12} />
             导入 Word
@@ -2123,6 +2200,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
               literature={paneLiterature}
               canvases={paneCanvases}
               mols={paneMol}
+              geos={paneGeo}
               assets={assets}
               loading={paneLoading}
               saving={savingPanes}
@@ -2318,6 +2396,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
             <CsLabPlotDigitizerPanel
               labId={labId}
               selection={drawer.selection}
+              demoCalibration={drawer.selection?.demoCalibration}
               onSaved={() => {
                 void refreshAssets()
               }}

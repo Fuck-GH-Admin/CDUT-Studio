@@ -461,7 +461,7 @@ export function CsLabPreparationView(): React.ReactElement {
                         <div
                           role="button"
                           tabIndex={0}
-                          data-tour={lab.demoKind === 'origin-vesta' ? 'cslab-demo-lab' : `cslab-lab-${lab.id}`}
+                          data-tour={lab.demoKind ? 'cslab-demo-lab' : `cslab-lab-${lab.id}`}
                           data-demo-kind={lab.demoKind}
                           aria-disabled={!!openingId || undefined}
                           onClick={() => {

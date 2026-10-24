@@ -30,6 +30,21 @@ export interface CsLabGeoRaster {
   values: Float32Array
 }
 
+/** 渲染层 2.5D 地貌载荷：降采样后的高程与 D8 汇流矩阵。 */
+export interface CsLabGeoRasterPayload {
+  uri: string
+  title: string
+  meta: CsLabGeoRasterMeta
+  /** 行优先高程；NaN 表示无效格网。 */
+  heights: number[]
+  /** 行优先 D8 汇流累积量。 */
+  flowAccumulation: number[]
+  channelThreshold: number
+  sampledWidth: number
+  sampledHeight: number
+  stride: number
+}
+
 export interface CsLabDemAnalysisInput {
   demUri: string
 }

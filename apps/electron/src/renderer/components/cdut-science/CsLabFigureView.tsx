@@ -187,6 +187,20 @@ export function CsLabFigureView({
       if (raster.scaled) {
         onToast('info', `图像已降采样至 ${raster.width}×${raster.height} 用于数字化`)
       }
+      let demoCalibration: CsLabPdfSelection['demoCalibration']
+      if (asset.metaJson) {
+        try {
+          const meta = JSON.parse(asset.metaJson) as {
+            kind?: string
+            calibration?: CsLabPdfSelection['demoCalibration']
+          }
+          if (meta.kind === 'plot-digitizer-standard' && meta.calibration) {
+            demoCalibration = meta.calibration
+          }
+        } catch {
+          demoCalibration = undefined
+        }
+      }
       const payload: CsLabPdfSelection = {
         literatureUri: asset.uri,
         pageIndex: 0,
@@ -194,6 +208,7 @@ export function CsLabFigureView({
         pageHeight: raster.height,
         rect: { x: 0, y: 0, width: raster.width, height: raster.height },
         cropDataUrl: raster.dataUrl,
+        ...(demoCalibration ? { demoCalibration } : {}),
       }
       setDrawer({
         open: true,

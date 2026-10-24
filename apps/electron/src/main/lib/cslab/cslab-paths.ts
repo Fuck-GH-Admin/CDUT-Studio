@@ -198,10 +198,12 @@ export function readLabManifest(labDir: string): CsLabLab | null {
         parsed.statusBeforeArchive === '筹建中'
           ? parsed.statusBeforeArchive
           : undefined,
-      demoKind:
-        parsed.demoKind === 'origin-vesta' || parsed.demoKind === 'sklgp-geohazard'
-          ? parsed.demoKind
-          : undefined,
+      // 旧 manifest 里可能仍保存已下线的 demoKind 字符串；保留原值供
+      // ensureDemoLabs() 用宽泛字符串比对清理，绝不能在这里静默丢弃。
+      demoKind: (() => {
+        const raw = (parsed as { demoKind?: string }).demoKind
+        return raw ? (raw as CsLabLab['demoKind']) : undefined
+      })(),
     }
   } catch {
     console.warn(`[CSLab] 实验室清单损坏，已跳过: ${manifestPath}`)

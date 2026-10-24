@@ -7,8 +7,7 @@
 import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import { getAgentSessionMeta } from '../agent-session-manager'
-import { assertLabId } from './cslab-paths'
+import { resolveCsLabSeminarLabId } from './cslab-session-gate'
 import { searchLabLiterature } from './cslab-graphrag-router'
 import { buildLiteratureGuide, readPaperSection } from './cslab-literature-structure'
 
@@ -37,15 +36,8 @@ export function buildCsLabLiteratureTools(
   sdk: PiSdkLike,
   ctx: PiCsLabLiteratureToolsContext,
 ): ToolDefinition[] {
-  const meta = getAgentSessionMeta(ctx.sessionId)
-  if (!meta?.cslabLabId) return []
-
-  let labId: string
-  try {
-    labId = assertLabId(meta.cslabLabId)
-  } catch {
-    return []
-  }
+  const labId = resolveCsLabSeminarLabId(ctx.sessionId)
+  if (!labId) return []
 
   const tools: ToolDefinition[] = []
 

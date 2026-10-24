@@ -20,6 +20,7 @@ import {
   MousePointer2,
   Plus,
   Sparkles,
+  X,
 } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
@@ -33,6 +34,7 @@ import { cn } from '@/lib/utils'
 import type { CsLabPdfSelection } from '@/atoms/cslab-atoms'
 import { detectIsWindows } from '@profer/ui'
 import { CsLabLiteratureGuidePanel } from './CsLabLiteratureGuidePanel'
+import { computeCursorAnchoredScroll, normalizePdfBbox } from './cslab-pdf-geometry'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc
 
@@ -97,6 +99,17 @@ export function CsLabPdfViewer({
   const [discussing, setDiscussing] = React.useState(false)
   const [notice, setNotice] = React.useState<string | null>(null)
   const [showGuide, setShowGuide] = React.useState(false)
+  const scaleRef = React.useRef(scale)
+  scaleRef.current = scale
+  const focusKey = focusHighlight
+    ? `${focusHighlight.page}:${focusHighlight.bbox.join(',')}`
+    : null
+  const [dismissedFocusKey, setDismissedFocusKey] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    setDismissedFocusKey(null)
+  }, [focusKey])
+  const activeFocus =
+    focusHighlight && dismissedFocusKey !== focusKey ? focusHighlight : undefined
 
   /** 把导读提示词预填到实验室研讨助理输入框（不自动发送）。 */
   const discussInAgentWindow = async (sectionTitle?: string, page?: number): Promise<void> => {
@@ -283,14 +296,38 @@ export function CsLabPdfViewer({
     const el = scrollRef.current
     if (!el) return
     const onWheel = (event: WheelEvent): void => {
-      if (!event.ctrlKey && !event.metaKey) return
-      // 普通滚轮保持原生滚动翻页；Ctrl+滚轮在所有模式下统一缩放。
+      // 滚动模式：普通滚轮保持原生滚动；Ctrl/Cmd 缩放。
+      // 抓手模式：普通滚轮直接缩放。
+      const shouldZoom = pointerMode === 'hand' || event.ctrlKey || event.metaKey
+      if (!shouldZoom) return
       event.preventDefault()
-      setScale((value) => Math.max(0.4, Math.min(3, value + (event.deltaY > 0 ? -0.1 : 0.1))))
+      const rect = el.getBoundingClientRect()
+      const cursorX = event.clientX - rect.left
+      const cursorY = event.clientY - rect.top
+      const oldScale = scaleRef.current
+      const newScale = Math.max(
+        0.4,
+        Math.min(3, oldScale + (event.deltaY > 0 ? -0.1 : 0.1)),
+      )
+      if (Math.abs(newScale - oldScale) < 1e-4) return
+      const next = computeCursorAnchoredScroll({
+        oldScale,
+        newScale,
+        scrollLeft: el.scrollLeft,
+        scrollTop: el.scrollTop,
+        cursorX,
+        cursorY,
+      })
+      setScale(newScale)
+      scaleRef.current = newScale
+      requestAnimationFrame(() => {
+        el.scrollLeft = next.scrollLeft
+        el.scrollTop = next.scrollTop
+      })
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [pointerMode])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-cslab-bg">
@@ -383,6 +420,18 @@ export function CsLabPdfViewer({
         >
           <Hand size={12} />
         </button>
+        {activeFocus && (
+          <button
+            type="button"
+            onClick={() => setDismissedFocusKey(focusKey)}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-amber-700 transition-colors hover:bg-amber-50"
+            title="清除检索高亮"
+            aria-label="清除检索高亮"
+          >
+            <X size={11} />
+            清除高亮
+          </button>
+        )}
         <span className="mx-0.5 h-4 w-px shrink-0 bg-cslab-border" />
         <button
           type="button"
@@ -436,6 +485,7 @@ export function CsLabPdfViewer({
         onPointerCancel={handleContainerPointerUp}
         className={cn(
           'min-h-0 min-w-0 flex-1 overflow-auto bg-cslab-surface px-5 py-4',
+          pointerMode === 'scroll' && 'cursor-text',
           pointerMode === 'hand' && !panning && 'cursor-grab',
           pointerMode === 'hand' && panning && 'cursor-grabbing',
         )}
@@ -461,7 +511,8 @@ export function CsLabPdfViewer({
                 scale={scale}
                 literatureUri={literature.uri}
                 annotations={showAnnotations ? annotations : []}
-                focusBbox={focusHighlight?.page === pageNumber ? focusHighlight.bbox : undefined}
+                pointerMode={pointerMode}
+                focusBbox={activeFocus?.page === pageNumber ? activeFocus.bbox : undefined}
                 onSelection={onSelection}
                 onVisible={setCurrentPage}
                 registerRef={registerPage}
@@ -490,7 +541,8 @@ interface PdfPageViewProps {
   scale: number
   literatureUri: string
   annotations: CsLabZoteroAnnotation[]
-  /** 智脑命中聚焦：页内归一化 bbox [x0, y0, x1, y1]；4s 渐隐或点击消除。 */
+  pointerMode: 'scroll' | 'hand'
+  /** 智脑命中聚焦：页内归一化 bbox [x0, y0, x1, y1]；3.5s 后 800ms 渐隐。 */
   focusBbox?: [number, number, number, number]
   onSelection: (selection: CsLabPdfSelection) => void
   onVisible: (page: number) => void
@@ -510,6 +562,7 @@ function PdfPageView({
   scale,
   literatureUri,
   annotations,
+  pointerMode,
   focusBbox,
   onSelection,
   onVisible,
@@ -518,6 +571,8 @@ function PdfPageView({
   const wrapperRef = React.useRef<HTMLDivElement | null>(null)
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null)
   const overlayRef = React.useRef<HTMLDivElement | null>(null)
+  const textLayerRef = React.useRef<HTMLDivElement | null>(null)
+  const textLayerInstanceRef = React.useRef<pdfjsLib.TextLayer | null>(null)
   const pageRef = React.useRef<PDFPageProxy | null>(null)
   const renderTaskRef = React.useRef<RenderTask | null>(null)
   const dragRef = React.useRef<{ x: number; y: number } | null>(null)
@@ -527,17 +582,24 @@ function PdfPageView({
   const [selection, setSelection] = React.useState<SelectionRect | null>(null)
   /** 按住 Ctrl（或 Cmd）时显示十字光标 —— 框选的唯一起动条件。 */
   const [ctrlHeld, setCtrlHeld] = React.useState(false)
-  /** 智脑聚焦选框：4s 渐隐，任意按下立即消除。 */
-  const [focusBox, setFocusBox] = React.useState<[number, number, number, number] | null>(null)
+  /** 智脑聚焦选框：3.5s 保持 + 800ms 渐隐，任意按下立即消除。 */
+  const [focusBox, setFocusBox] = React.useState<ReturnType<typeof normalizePdfBbox> | null>(null)
+  const [focusFading, setFocusFading] = React.useState(false)
 
   React.useEffect(() => {
     if (!focusBbox) {
       setFocusBox(null)
+      setFocusFading(false)
       return
     }
-    setFocusBox(focusBbox)
-    const timer = setTimeout(() => setFocusBox(null), 4000)
-    return () => clearTimeout(timer)
+    setFocusBox(normalizePdfBbox(focusBbox))
+    setFocusFading(false)
+    const fadeTimer = setTimeout(() => setFocusFading(true), 3500)
+    const removeTimer = setTimeout(() => setFocusBox(null), 4300)
+    return () => {
+      clearTimeout(fadeTimer)
+      clearTimeout(removeTimer)
+    }
   }, [focusBbox])
 
   React.useEffect(() => {
@@ -621,10 +683,33 @@ function PdfPageView({
       console.warn('[CSLab] PDF 页面渲染失败:', renderError)
     })
 
+    // pdf.js 文本层：仅用于划词复制与浏览器原生选区，不参与框选。
+    textLayerInstanceRef.current?.cancel()
+    textLayerInstanceRef.current = null
+    const textContainer = textLayerRef.current
+    if (textContainer) {
+      textContainer.replaceChildren()
+      try {
+        const textViewport = page.getViewport({ scale })
+        const textLayer = new pdfjsLib.TextLayer({
+          textContentSource: page.streamTextContent(),
+          container: textContainer,
+          viewport: textViewport,
+        })
+        textLayerInstanceRef.current = textLayer
+        void textLayer.render().catch(() => undefined)
+      } catch (textError) {
+        console.warn('[CSLab] PDF 文本层渲染失败:', textError)
+      }
+    }
+
     return () => {
       cancelled = true
       renderTaskRef.current?.cancel()
       renderTaskRef.current = null
+      textLayerInstanceRef.current?.cancel()
+      textLayerInstanceRef.current = null
+      textLayerRef.current?.replaceChildren()
       canvas.width = 0
       canvas.height = 0
       page.cleanup()
@@ -732,7 +817,7 @@ function PdfPageView({
       ref={wrapperRef}
       className={cn(
         'relative shrink-0 rounded-sm bg-cslab-elevated shadow-subtle',
-        ctrlHeld && 'cursor-crosshair',
+        ctrlHeld ? 'cursor-crosshair' : pointerMode === 'scroll' && 'cursor-text',
       )}
       style={{ width, height }}
       onPointerDown={handlePointerDown}
@@ -745,18 +830,31 @@ function PdfPageView({
       }}
     >
       <canvas ref={canvasRef} className="block h-full w-full select-none" />
+      <div
+        ref={textLayerRef}
+        className={cn(
+          'cslab-pdf-text-layer absolute inset-0',
+          pointerMode === 'scroll' && !ctrlHeld
+            ? 'pointer-events-auto select-text'
+            : 'pointer-events-none select-none',
+        )}
+        style={{ width, height }}
+      />
       <div ref={overlayRef} className="pointer-events-none absolute inset-0">
         {focusBox && dimensions && (
           <div
-            className="pointer-events-none absolute rounded-[3px] border-2 border-amber-400 bg-amber-300/30"
+            className={cn(
+              'pointer-events-none absolute rounded-[3px] border-2 border-amber-400 bg-amber-300/25',
+              !focusFading && 'animate-pulse',
+            )}
             style={{
-              left: focusBox[0] * width,
-              top: focusBox[1] * height,
-              width: Math.max(10, (focusBox[2] - focusBox[0]) * width),
-              height: Math.max(8, (focusBox[3] - focusBox[1]) * height),
+              left: focusBox.x * width,
+              top: focusBox.y * height,
+              width: Math.max(10, focusBox.width * width),
+              height: Math.max(8, focusBox.height * height),
               boxShadow: '0 0 0 3px rgba(251, 191, 36, 0.25)',
-              transition: 'opacity 0.6s ease 3.2s',
-              opacity: 1,
+              transition: 'opacity 800ms ease',
+              opacity: focusFading ? 0 : 1,
             }}
           />
         )}

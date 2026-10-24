@@ -158,6 +158,8 @@ export const CSLAB_IPC_CHANNELS = {
   // ===== 晶体结构与谱图（Phase 4） =====
   GET_MOL_ASSET: 'cslab:get-mol-asset',
   GET_TABLE_SERIES: 'cslab:get-table-series',
+  /** 读取 geo 栅格并降采样为 2.5D 地貌窗格载荷。 */
+  GET_GEO_RASTER: 'cslab:get-geo-raster',
 
   // ===== 科学引擎：晶体分析 / PXRD / 拟合 / 出版绘图 =====
   ANALYZE_CRYSTAL: 'cslab:analyze-crystal',
@@ -201,6 +203,7 @@ export const CSLAB_IPC_CHANNELS = {
   ON_PLOT_UPDATED: 'cslab:on-plot-updated',
   ON_AGENT_CONTEXT: 'cslab:on-agent-context',
   ON_STRUCTURE_FOCUSED: 'cslab:on-structure-focused',
+  ON_ASSET_FOCUSED: 'cslab:on-asset-focused',
 } as const
 
 export type CsLabChannelKey = keyof typeof CSLAB_IPC_CHANNELS
@@ -272,7 +275,7 @@ export type CsLabLayerType =
   | 'geo'
 
 /** 官方演示实验室类型；普通实验室缺省。 */
-export type CsLabDemoKind = 'origin-vesta' | 'sklgp-geohazard'
+export type CsLabDemoKind = 'flagship'
 
 export type CsLabLabStatus = '运行中' | '调试中' | '筹建中' | '已归档'
 
@@ -288,6 +291,7 @@ export type CsLabPaneViewType =
   | 'mol'
   | 'figure'
   | 'origin-plot'
+  | 'terrain'
 
 export type CsLabCapabilityKind =
   | 'dataset'
@@ -296,6 +300,7 @@ export type CsLabCapabilityKind =
   | 'literature'
   | 'manuscript'
   | 'canvas'
+  | 'terrain'
   | 'generic'
 
 export type CsLabFileAction =
@@ -314,6 +319,7 @@ export type CsLabFileAction =
   | 'ai-review'
   | 'capsule-lineage'
   | 'open-origin-plot'
+  | 'open-terrain'
   | 'analyze-crystal'
   | 'simulate-pxrd'
 
@@ -421,6 +427,8 @@ export interface CsLabAssetSummary {
   relPath?: string
   sha256?: string
   bytes?: number
+  /** 实体级结构化元数据（JSON 字符串），供演示标定与默认视口使用。 */
+  metaJson?: string
   revision: number
   /** 原始文件是否已上只读锁（Windows 下为 attrib +r 结果）。 */
   locked: boolean
@@ -829,6 +837,8 @@ export interface CsLabAxisTick {
   px: number
   py: number
   value: number
+  /** true 表示用户尚未录入刻度值；参与数字化前必须清除。 */
+  pending?: boolean
 }
 
 export interface CsLabAxisCalibration {
@@ -1718,6 +1728,13 @@ export interface CsLabMolAsset {
   format: CsLabMolFormat
   text: string
   bytes: number
+  /** 演示资产的默认视口设置（超胞 / Miller 面 / 自旋）。 */
+  defaultSettings?: {
+    supercell?: { na: number; nb: number; nc: number }
+    miller?: [number, number, number]
+    autoSpin?: boolean
+    highlightPolyhedra?: boolean
+  }
 }
 
 export interface CsLabCrystalCell {
@@ -1848,6 +1865,13 @@ export interface CsLabStructureFocusedEvent {
   highlightPolyhedra?: boolean
 }
 
+/** Agent 请求把任意资产在原生窗格中打开。 */
+export interface CsLabAssetFocusedEvent {
+  labId: string
+  uri: string
+  view?: 'auto' | 'terrain'
+}
+
 /** 注入 Agent 系统提示词的实验室资产与环境上下文。 */
 export interface CsLabPromptAssetSummary {
   uri: string
@@ -1884,4 +1908,12 @@ export interface CsLabPromptLabInfo {
   literature?: readonly CsLabPromptLiteratureSummary[]
   /** 地理栅格资产（DEM/GeoTIFF/推演输出）。 */
   geoAssets?: readonly CsLabPromptGeoAssetSummary[]
+  /** 列式数据表资产（仅元数据）。 */
+  tables?: readonly { uri: string; title: string; rowCount?: number }[]
+  /** 科研图版资产（仅元数据）。 */
+  figures?: readonly CsLabPromptAssetSummary[]
+  /** 手稿文稿（仅元数据）。 */
+  manuscripts?: readonly { uri: string; title: string; updatedAt: number }[]
+  /** 推演画布（仅元数据）。 */
+  canvases?: readonly { relPath: string; title: string }[]
 }

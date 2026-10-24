@@ -15,12 +15,11 @@ import type {
   CsLabPlotDigitizeResult,
 } from '@profer/shared'
 import { assertLabId } from './cslab-paths'
+import { decodeImageDataUrl } from './cslab-image-data'
 import {
   defaultCsLabPythonRunner,
   type CsLabPythonRunner,
 } from './cslab-python-runtime'
-
-const MAX_IMAGE_BYTES = 24 * 1024 * 1024
 
 interface RawDigitizePayload {
   ok?: boolean
@@ -40,13 +39,11 @@ interface RawDigitizePayload {
 }
 
 function parseDataUrl(dataUrl: string): { buffer: Buffer; extension: string } {
-  const match = /^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl.trim())
-  if (!match) throw new Error('框选图像格式无效（仅支持 PNG/JPEG dataURL）')
-  const extension = match[1] === 'jpeg' ? 'jpg' : match[1]!
-  const buffer = Buffer.from(match[2]!.replace(/\s/g, ''), 'base64')
-  if (buffer.length === 0) throw new Error('框选图像为空')
-  if (buffer.length > MAX_IMAGE_BYTES) throw new Error('框选图像超过 24MB，请缩小框选范围')
-  return { buffer, extension }
+  const decoded = decodeImageDataUrl(dataUrl)
+  if (decoded.extension === 'svg') {
+    throw new Error('SVG 需先栅格化为 PNG/WebP，当前不支持直接数字化')
+  }
+  return { buffer: decoded.buffer, extension: decoded.extension }
 }
 
 function normalizeSeries(raw: RawDigitizePayload['series']): CsLabDigitizedSeries[] {

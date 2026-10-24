@@ -62,6 +62,7 @@ import type {
   CsLabPxrdOptions,
   CsLabPlotExportResult,
   CsLabDemoLabResult,
+  CsLabGeoRasterPayload,
   AgentSessionMeta,
 } from '@profer/shared'
 import { AGENT_IPC_CHANNELS } from '@profer/shared'
@@ -153,6 +154,7 @@ import {
 } from './cslab-python-runtime'
 import { digitizePlot } from './cslab-plot-digitizer'
 import { persistDigitizedFigure } from './cslab-dataset-store'
+import { analyzeDem, parseGeoRasterBuffer } from './cslab-geohazard'
 import { ocrFormula, verifyFormula } from './cslab-formula-verifier'
 import {
   buildLiteratureIndex,
@@ -445,12 +447,7 @@ export function registerCsLabIpc(): void {
 
   ipcMain.handle(
     CSLAB_IPC_CHANNELS.CREATE_DEMO_LAB,
-    async (_event, kind?: unknown): Promise<CsLabDemoLabResult> => {
-      const normalized = kind === 'sklgp-geohazard' || kind === 'origin-vesta'
-        ? kind
-        : undefined
-      return createDemoLab({ kind: normalized })
-    },
+    async (): Promise<CsLabDemoLabResult> => createDemoLab(),
   )
 
   ipcMain.handle(
@@ -1820,6 +1817,46 @@ export function registerCsLabIpc(): void {
       asString(record.uri, '结构资产 URI'),
     )
   })
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.GET_GEO_RASTER,
+    async (_event, input: unknown): Promise<CsLabGeoRasterPayload> => {
+      const record = asObject(input, '地貌栅格参数')
+      const labId = asString(record.labId, '实验室标识')
+      const uri = asString(record.uri, 'geo 资产 URI')
+      const entity = getAssetEntity(labId, uri)
+      if (!entity || entity.layerType !== 'geo') throw new Error('该资产不是地理栅格（geo 层）')
+      const path = resolveAssetPath(labId, uri)
+      if (!path) throw new Error('地理栅格文件不存在')
+      const raster = await parseGeoRasterBuffer(await fs.readFile(path), path)
+      const analysis = analyzeDem(raster)
+      const stride = Math.max(1, Math.ceil(Math.max(raster.meta.width, raster.meta.height) / 512))
+      const sampledWidth = Math.max(1, Math.floor(raster.meta.width / stride))
+      const sampledHeight = Math.max(1, Math.floor(raster.meta.height / stride))
+      const heights: number[] = []
+      const flowAccumulation: number[] = []
+      for (let row = 0; row < sampledHeight; row += 1) {
+        for (let col = 0; col < sampledWidth; col += 1) {
+          const source = Math.min(raster.meta.height - 1, row * stride) * raster.meta.width
+            + Math.min(raster.meta.width - 1, col * stride)
+          const height = raster.values[source]
+          heights.push(Number.isFinite(height) ? Number(height) : Number.NaN)
+          flowAccumulation.push(analysis.flowAccumulation[source] ?? 0)
+        }
+      }
+      return {
+        uri,
+        title: entity.title,
+        meta: raster.meta,
+        heights,
+        flowAccumulation,
+        channelThreshold: analysis.channelThreshold,
+        sampledWidth,
+        sampledHeight,
+        stride,
+      }
+    },
+  )
 
   ipcMain.handle(CSLAB_IPC_CHANNELS.GET_TABLE_SERIES, async (_event, input: unknown) => {
     const record = asObject(input, '数据表参数')

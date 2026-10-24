@@ -133,6 +133,8 @@ import {
   type CsLabDemoLabResult,
   type CsLabAgentContext,
   type CsLabStructureFocusedEvent,
+  type CsLabAssetFocusedEvent,
+  type CsLabGeoRasterPayload,
   type CsLabAgentWindowInput,
   type CsLabAgentWindowRef,
   type CsLabPlotUndoResult,
@@ -1944,6 +1946,8 @@ export interface ElectronAPI {
 
     /** 晶体结构与谱图 */
     getMolAsset: (input: { labId: string; uri: string }) => Promise<CsLabMolAsset | null>
+    /** 2.5D 地貌载荷（降采样高程 + D8 汇流）。 */
+    getGeoRaster: (input: { labId: string; uri: string }) => Promise<CsLabGeoRasterPayload>
     getTableSeries: (input: {
       labId: string
       tableUri: string
@@ -2009,6 +2013,7 @@ export interface ElectronAPI {
     onPlotUpdated: (handler: (event: CsLabPlotUpdatedEvent) => void) => () => void
     onAgentContext: (handler: (context: CsLabAgentContext) => void) => () => void
     onStructureFocused: (handler: (event: CsLabStructureFocusedEvent) => void) => () => void
+    onAssetFocused: (handler: (event: CsLabAssetFocusedEvent) => void) => () => void
     onRequestStructureSnapshot: (
       handler: (event: CsLabStructureSnapshotRequest) => void,
     ) => () => void
@@ -4456,6 +4461,8 @@ const electronAPI: ElectronAPI = {
     // ===== 晶体结构与谱图 =====
     getMolAsset: (input: { labId: string; uri: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_MOL_ASSET, input),
+    getGeoRaster: (input: { labId: string; uri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_GEO_RASTER, input),
     getTableSeries: (input: { labId: string; tableUri: string; maxPoints?: number }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_TABLE_SERIES, input),
 
@@ -4571,6 +4578,11 @@ const electronAPI: ElectronAPI = {
       const listener = (_event: unknown, payload: CsLabStructureFocusedEvent): void => handler(payload)
       ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_STRUCTURE_FOCUSED, listener)
       return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_STRUCTURE_FOCUSED, listener)
+    },
+    onAssetFocused: (handler: (event: CsLabAssetFocusedEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabAssetFocusedEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_ASSET_FOCUSED, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_ASSET_FOCUSED, listener)
     },
     onRequestStructureSnapshot: (handler: (event: CsLabStructureSnapshotRequest) => void) => {
       const listener = (_event: unknown, payload: CsLabStructureSnapshotRequest): void =>

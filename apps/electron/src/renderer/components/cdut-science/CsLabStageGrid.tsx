@@ -11,6 +11,7 @@ import type {
   CsLabLiteratureItem,
   CsLabManuscript,
   CsLabMolAsset,
+  CsLabGeoRasterPayload,
   CsLabTablePayload,
 } from '@profer/shared'
 import { cn } from '@/lib/utils'
@@ -37,6 +38,7 @@ interface CsLabStageGridProps {
   literature: Record<CsLabPaneId, CsLabLiteratureItem | null>
   canvases: Record<CsLabPaneId, CsLabCanvasDocument | null>
   mols: Record<CsLabPaneId, CsLabMolAsset | null>
+  geos: Record<CsLabPaneId, CsLabGeoRasterPayload | null>
   assets: CsLabAssetSummary[]
   loading: Record<CsLabPaneId, boolean>
   saving: Record<CsLabPaneId, boolean>
@@ -98,6 +100,7 @@ export function CsLabStageGrid({
   literature,
   canvases,
   mols,
+  geos,
   assets,
   loading,
   saving,
@@ -151,6 +154,7 @@ export function CsLabStageGrid({
             literature={literature[paneId]}
             canvas={canvases[paneId]}
             mol={mols[paneId]}
+            geo={geos[paneId]}
             figureAsset={figureAsset}
             initialPage={pane.pdfInitialPage}
             focusHighlight={pane.pdfFocusHighlight}
