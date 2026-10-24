@@ -36,7 +36,13 @@ export function dataBounds(
   seriesList: readonly CsLabPlotSeries[],
   key: 'x' | 'y',
 ): { min: number; max: number } {
-  if (axis.min !== undefined && axis.max !== undefined) return { min: axis.min, max: axis.max }
+  if (axis.min !== undefined && axis.max !== undefined) {
+    if (axis.scale !== 'linear' && axis.min <= 0) {
+      const min = 1e-4
+      return { min, max: Math.max(axis.max, min * 1.0001) }
+    }
+    return { min: axis.min, max: axis.max }
+  }
   let min = axis.min ?? Infinity
   let max = axis.max ?? -Infinity
   for (const series of seriesList) {

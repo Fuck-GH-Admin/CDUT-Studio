@@ -269,6 +269,7 @@ export async function createSkLgpGeohazardDemoLab(demoDirInput?: string): Promis
   })
 
   const ingestResults = await ingestFiles(lab.id, [...dataPaths, paperPath])
+  await fs.rm(paperPath, { force: true }).catch(() => undefined)
   const failed = ingestResults.filter((result) => result.status !== 'ok')
   if (failed.length > 0) {
     throw new Error(`SKLGP 演示数据摄取失败：${failed.map((result) => result.message).join('；')}`)

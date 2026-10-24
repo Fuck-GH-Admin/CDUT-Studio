@@ -87,8 +87,25 @@ function cleanText(value: string): string {
   return value.replace(/\s+/g, ' ').trim()
 }
 
+const HEADING_FALLBACK = /^(?:\d+(?:\.\d+)*\s+[A-Z][A-Za-z0-9 ,&/()-]{2,80}|abstract|摘要|keywords?|关键词|references|acknowledg(?:e)?ments?|limitations?|conclusions?|discussion|introduction|methods?|results?)$/i
+
 function isHeading(block: DocumentLayoutBlock): boolean {
-  return block.kind === 'section-heading' || block.kind === 'title'
+  if (block.kind === 'section-heading' || block.kind === 'title') return true
+  // 演示 PDF / 纯文本排版可能没有字号层级：用编号标题做保守兜底。
+  return HEADING_FALLBACK.test(cleanText(block.text))
+}
+
+function looksLikeEquationText(text: string): boolean {
+  const trimmed = text.trim()
+  if (trimmed.length < 5 || trimmed.length > 160) return false
+  if (/[。.!?]\s/.test(trimmed)) return false
+  if (/\b(with|where|and|the|is|are|for|from|this|that)\b/i.test(trimmed)) return false
+  return /=/.test(trimmed) && /[*^+\-/()]/.test(trimmed) && !/^\d+(?:\.\d+)*\s+[A-Z]/.test(trimmed)
+}
+
+function looksLikeTableText(text: string): boolean {
+  const pipes = text.split('|').length - 1
+  return pipes >= 2 && !/^\d+(?:\.\d+)*\s+[A-Z]/.test(text.trim())
 }
 
 function pickTitle(blocks: DocumentLayoutBlock[], fallback: string): string {
@@ -230,7 +247,7 @@ export function buildStructureFromAst(
   const year = extractYear(blocks, doi)
   const sections = buildSections(blocks)
   const equations = blocks
-    .filter((block) => block.kind === 'equation')
+    .filter((block) => block.kind === 'equation' || looksLikeEquationText(block.text))
     .map((block) => ({
       latex: block.equation?.latex ?? block.text,
       tag: block.equation?.tag,
@@ -238,7 +255,7 @@ export function buildStructureFromAst(
     }))
     .filter((item) => item.latex.length > 0)
   const tables = blocks
-    .filter((block) => block.kind === 'table')
+    .filter((block) => block.kind === 'table' || looksLikeTableText(block.text))
     .map((block) => ({
       page: block.pageNumber,
       markdown: block.table?.markdown ?? block.text,
@@ -396,6 +413,7 @@ interface EnrichmentJob {
 }
 
 const enrichmentQueue: EnrichmentJob[] = []
+const inFlightEnrichments = new Map<string, Promise<void>>()
 let activeEnrichments = 0
 
 function drainEnrichmentQueue(): void {
@@ -411,13 +429,32 @@ function drainEnrichmentQueue(): void {
   }
 }
 
-/** 批量入笼限流：最多 2 个 PDF 并行解析，其余排队。 */
+/** 批量入笼限流：最多 2 个 PDF 并行解析，其余排队；同一文献单飞。 */
 export function enrichLiteratureInBackground(labId: string, uri: string): Promise<void> {
   const normalizedLabId = assertLabId(labId)
-  return new Promise<void>((resolve, reject) => {
+  const key = `${normalizedLabId}|${uri}`
+  const existing = inFlightEnrichments.get(key)
+  if (existing) return existing
+  const task = new Promise<void>((resolve, reject) => {
     enrichmentQueue.push({ labId: normalizedLabId, uri, resolve, reject })
     drainEnrichmentQueue()
   })
+  inFlightEnrichments.set(key, task)
+  void task.then(
+    () => inFlightEnrichments.delete(key),
+    () => inFlightEnrichments.delete(key),
+  )
+  return task
+}
+
+/** 等待所有在途富化结束（删除/重置实验室前释放文件句柄）。 */
+export async function waitForLiteratureEnrichments(timeoutMs = 8_000): Promise<void> {
+  const pending = [...inFlightEnrichments.values()]
+  if (pending.length === 0) return
+  await Promise.race([
+    Promise.allSettled(pending).then(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ])
 }
 
 /** 读取结构；`ensure` 为 true 时按需同步解析（导读按钮首次点击）。 */

@@ -44,23 +44,48 @@ const LINES_PER_PAGE = 49
 /**
  * 把按页组织的文本行编译为 PDF。
  *
+ * 语法：以 `# ` 开头的行为标题（14pt，额外留白），用于演示/测试中让解析器
+ * 能按字号与间距识别章节。其余行为正文 11pt。
+ *
  * @param pages 每页一组文本行（空行用 '' 表示）
  */
 export function buildTextPdf(pages: string[][]): Buffer {
-  const normalizedPages = pages.length > 0 ? pages : [['']]
-  const pageContents = normalizedPages.map((lines) => {
-    const body = lines
-      .flatMap((line) => (line ? wrapLine(line) : ['']))
-      .slice(0, LINES_PER_PAGE)
-      .map((line, index) => {
-        const y = TOP_Y - index * LINE_HEIGHT
-        if (!line) return ''
-        return `BT /F1 11 Tf 1 0 0 1 ${MARGIN_X} ${y} Tm (${escapePdfText(line)}) Tj ET`
-      })
-      .filter(Boolean)
-      .join('\n')
-    return body
-  })
+  const inputPages = pages.length > 0 ? pages : [['']]
+  const normalizedPages: string[][] = []
+
+  for (const input of inputPages) {
+    let y = TOP_Y
+    let ops: string[] = []
+    const flush = (): void => {
+      if (ops.length > 0) {
+        normalizedPages.push(ops)
+        ops = []
+      }
+      y = TOP_Y
+    }
+    for (const rawLine of input) {
+      const isHeading = rawLine.startsWith('# ')
+      const text = (isHeading ? rawLine.slice(2) : rawLine).trim()
+      if (!text) {
+        // 空行是段落分隔信号：给足间距，避免分段器把相邻段落并成一块。
+        y -= 30
+        if (y < 60) flush()
+        continue
+      }
+      if (isHeading) y -= 12
+      for (const line of wrapLine(text)) {
+        if (y < 60) flush()
+        // 末尾空格保证跨行拼接时词间不被吞掉。
+        ops.push(`BT /F1 ${isHeading ? 16 : 11} Tf 1 0 0 1 ${MARGIN_X} ${y} Tm (${escapePdfText(`${line} `)}) Tj ET`)
+        y -= isHeading ? LINE_HEIGHT + 4 : LINE_HEIGHT
+      }
+      if (isHeading) y -= 18
+    }
+    flush()
+  }
+  if (normalizedPages.length === 0) normalizedPages.push([])
+
+  const pageContents = normalizedPages.map((lines) => lines.join('\n'))
 
   const objects: string[] = []
   const pageObjectIds = normalizedPages.map((_, index) => 4 + index * 2)
@@ -105,59 +130,45 @@ export function buildTextPdf(pages: string[][]): Buffer {
 export function buildSkLgpDemoPaperPdf(): Buffer {
   return buildTextPdf([
     [
-      'Wenjia Gully Debris Flow: Rainfall Thresholds and Voellmy Runout Simulation (DEMO)',
+      'DEMO',
       '',
+      'Wenjia Gully Debris Flow: Rainfall Thresholds and Voellmy Runout Simulation (DEMO)',
       'SKLGP Demonstration Paper - Synthetic data for CDUT Science onboarding',
       '',
-      'Abstract',
-      'Debris flows in the Wenchuan earthquake area are triggered by short, intense rainfall and',
-      'amplified by abundant loose material on steep gully beds. This demonstration paper combines a',
-      '20 m DEM of a synthetic Wenjia-like gully with an empirical intensity-duration threshold and a',
-      'depth-averaged Voellmy runout model. The example is intended to exercise the CDUT Science',
-      'literature, DEM analysis and debris-flow toolchain; it is not a field investigation.',
+      '# Abstract',
+      'Debris flows in the Wenchuan earthquake area are triggered by short, intense rainfall and amplified by abundant loose material on steep gully beds. This demonstration paper combines a 20 m DEM of a synthetic Wenjia-like gully with an empirical intensity-duration threshold and a depth-averaged Voellmy runout model. The example is intended to exercise the CDUT Science literature, DEM analysis and debris-flow toolchain; it is not a field investigation.',
       '',
       'Keywords: debris flow; rainfall threshold; Voellmy; DEM; runout; SKLGP',
       '',
-      '1 Introduction',
-      'Post-earthquake gullies in the Longmen Mountains deliver sediment pulses to towns and',
-      'infrastructure. Rainfall intensity-duration (I-D) envelopes are widely used for early warning,',
-      'while runout models estimate the exposed area downstream. This demo illustrates both steps.',
+      '# 1 Introduction',
+      'Post-earthquake gullies in the Longmen Mountains deliver sediment pulses to towns and infrastructure. Rainfall intensity-duration (I-D) envelopes are widely used for early warning, while runout models estimate the exposed area downstream. This demo illustrates both steps.',
       '',
-      '2 Study Area and DEM',
-      'The synthetic DEM contains a main gully and two tributaries with a relief of about 420 m.',
-      'Grid cells are 20 m. Slope, aspect and D8 flow accumulation are derived with standard',
-      'finite-difference operators. The suggested source cell is the highest cell of the main',
-      'channel network.',
+      '# 2 Study Area and DEM',
+      'The synthetic DEM contains a main gully and two tributaries with a relief of about 420 m. Grid cells are 20 m. Slope, aspect and D8 flow accumulation are derived with standard finite-difference operators. The suggested source cell is the highest cell of the main channel network.',
       '',
-      '3 Rainfall Thresholds',
-      'The empirical threshold follows I = alpha * D^(-beta), where I is mean intensity in mm/h and',
-      'D is duration in minutes. For the demonstration we use alpha = 30 and beta = 0.6. Local',
-      'calibration is required before operational use.',
+      '# 3 Rainfall Thresholds',
+      'The empirical threshold follows I = alpha * D^(-beta), where I is mean intensity in mm/h and D is duration in minutes. For the demonstration we use alpha = 30 and beta = 0.6. Local calibration is required before operational use.',
       '',
-      '4 Voellmy Simulation',
+      '# 4 Voellmy Simulation',
       'The depth-averaged shallow-water solver uses Voellmy basal resistance:',
+      '',
       'tau = mu * rho * g * h * cos(theta) + rho * g * |u|^2 / xi',
-      'with mu = 0.20 and xi = 400 m/s^2. A released volume of 2.0e5 m3 is imposed at the source',
-      'cell over a short hydrograph. The solver uses a CFL-limited explicit time step.',
       '',
-      '5 Results',
-      'The simulated flow reaches the fan within several minutes. Maximum depth occurs in the',
-      'channel bend, and the deposition lobe extends downstream of the gully mouth. Table 1 lists',
-      'the demonstration metrics.',
+      'with mu = 0.20 and xi = 400 m/s^2. A released volume of 2.0e5 m3 is imposed at the source cell over a short hydrograph. The solver uses a CFL-limited explicit time step.',
       '',
-      'Table 1. Demonstration runout metrics (synthetic).',
+      '# 5 Results',
+      'The simulated flow reaches the fan within several minutes. Maximum depth occurs in the channel bend, and the deposition lobe extends downstream of the gully mouth. Table 1 lists the demonstration metrics.',
+      '',
       'Metric | Value',
       'Released volume | 2.0e5 m3',
       'Peak discharge | 85 m3/s',
       'Maximum depth | 3.1 m',
       'Runout distance | 1250 m',
       '',
-      '6 Limitations',
-      'This demonstration uses a synthetic DEM and a simplified rheology. It ignores entrainment,',
-      'bed erosion, woody debris and channel blockage. Results must not be used for engineering',
-      'design or evacuation planning without field calibration and a certified simulator.',
+      '# 6 Limitations',
+      'This demonstration uses a synthetic DEM and a simplified rheology. It ignores entrainment, bed erosion, woody debris and channel blockage. Results must not be used for engineering design or evacuation planning without field calibration and a certified simulator.',
       '',
-      'References',
+      '# References',
       '[1] Iverson, R.M. (1997) The physics of debris flows. Reviews of Geophysics.',
       '[2] Rickenmann, D. (1999) Empirical relationships for debris flows. Natural Hazards.',
       '[3] SKLGP demonstration notes (synthetic, 2026).',

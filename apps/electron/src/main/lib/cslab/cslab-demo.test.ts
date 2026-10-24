@@ -22,6 +22,9 @@ let labId = ''
 let demo: CsLabDemoLabResult
 
 const DEMO_DIR = fileURLToPath(new URL('../../../../resources/cslab/demo', import.meta.url))
+const GEOHAZARD_DEMO_DIR = fileURLToPath(
+  new URL('../../../../resources/cslab/demo-geohazard', import.meta.url),
+)
 const PLOT_IDS = [
   'demo-rutile-xrd',
   'demo-silicon-srm640',
@@ -162,6 +165,42 @@ describe('演示实验室', () => {
       expect(hasEditableText(svg)).toBe(true)
       expect(hasEmbeddedImage(svg)).toBe(false)
     }
+  })
+
+  test('Given SKLGP 演示数据 When 创建 Then geo/文献/图版与推演指标齐备', async () => {
+    const { createDemoLab } = await import('./cslab-demo')
+    const result = await createDemoLab({
+      kind: 'sklgp-geohazard',
+      demoDir: GEOHAZARD_DEMO_DIR,
+    })
+    expect(result.lab.demoKind).toBe('sklgp-geohazard')
+    expect(result.kind).toBe('sklgp-geohazard')
+    const layerTypes = new Set(result.assets.map((asset) => asset.layerType))
+    expect(layerTypes.has('geo')).toBe(true)
+    expect(layerTypes.has('lit')).toBe(true)
+    expect(layerTypes.has('table')).toBe(true)
+    expect(layerTypes.has('fig')).toBe(true)
+    expect(result.plotIds?.length).toBe(3)
+    expect(result.geohazardStats?.runoutDistanceM ?? 0).toBeGreaterThan(0)
+    expect(result.geohazardStats?.maxFlowDepthM ?? 0).toBeGreaterThan(0)
+  })
+
+  test('Given 两间演示实验室已存在 When ensure 再次调用 Then 幂等且总数保持 2', async () => {
+    const { ensureDemoLabs, listAllDemoLabs } = await import('./cslab-demo')
+    await ensureDemoLabs({ originDemoDir: DEMO_DIR, geohazardDemoDir: GEOHAZARD_DEMO_DIR })
+    const created = await ensureDemoLabs({ originDemoDir: DEMO_DIR, geohazardDemoDir: GEOHAZARD_DEMO_DIR })
+    expect(created.created).toEqual([])
+    expect(listAllDemoLabs().length).toBe(2)
+  })
+
+  test('Given SKLGP 演示实验室 When 重置 Then 沙箱重建且资产恢复', async () => {
+    const { findDemoLab, resetDemoLab } = await import('./cslab-demo')
+    const before = findDemoLab('sklgp-geohazard')
+    expect(before).toBeTruthy()
+    const result = await resetDemoLab(before!.id)
+    // labId 由名称确定性生成，重置后沿用同一 ID，但沙箱内容必须重建。
+    expect(result.lab.demoKind).toBe('sklgp-geohazard')
+    expect(result.assets.length).toBeGreaterThan(3)
   })
 
   test('Given Nature 图版 When 检查图层 Then 双 Y 轴与 89 mm 单栏成立', async () => {

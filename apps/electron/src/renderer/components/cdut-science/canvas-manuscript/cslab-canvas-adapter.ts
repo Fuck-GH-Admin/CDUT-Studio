@@ -453,7 +453,21 @@ export function canvasToTipTapDoc(
         nodes.push(...makeInlineNodes(flattenValueList(element)))
         continue
       }
-      if (element.type === CsCanvasElementType.CONTROL) {
+      if (element.type === CsCanvasElementType.CONTROL || element.control) {
+        // 胶囊的非 value 组件（prefix/postfix/placeholder）已经在上面被过滤，
+        // 这里再兜底跳过，避免把 prefix/postfix 重复算作文本。
+        if (capsuleExtensionOf(element)) continue
+        const component = element.controlComponent
+        if (
+          component !== undefined &&
+          component !== CsCanvasControlComponent.VALUE
+        ) {
+          continue
+        }
+        if (component === CsCanvasControlComponent.VALUE) {
+          appendText(String(element.value ?? ''), {}, [])
+          continue
+        }
         const controlValue = element.control?.value
         if (Array.isArray(controlValue) && controlValue.length > 0) {
           appendText(
@@ -650,42 +664,52 @@ export function extractCanvasCapsules(
 export function extractCanvasText(canvasData: CsLabCanvasData): string {
   const main = (Array.isArray(canvasData.main) ? canvasData.main : []) as IElement[]
   const pieces: string[] = []
+  let lastCapsuleId: string | null = null
   for (const element of main) {
     if (!element) continue
     if (element.type === CsCanvasElementType.PAGE_BREAK) {
       pieces.push('\n')
+      lastCapsuleId = null
       continue
     }
     if (element.type === CsCanvasElementType.TITLE || element.type === CsCanvasElementType.LIST) {
       pieces.push(flattenValueList(element).map((item) => String(item.value ?? '')).join(''))
+      lastCapsuleId = null
       continue
     }
-    if (element.type === CsCanvasElementType.CONTROL) {
-      if (element.controlComponent === CsCanvasControlComponent.PREFIX) continue
-      if (element.controlComponent === CsCanvasControlComponent.POSTFIX) continue
-      const extension = capsuleExtensionOf(element)
-      if (extension) {
-        if (
-          element.controlComponent === undefined ||
-          element.controlComponent === CsCanvasControlComponent.VALUE
-        ) {
-          pieces.push(capsuleDisplayText({
-            capsuleId: extension.capsuleId,
-            label: extension.label,
-            value: extension.value,
-            unit: extension.unit,
-            tableUri: extension.tableUri,
-            column: extension.column,
-            rowIndex: extension.rowIndex,
-            revisionAtBind: extension.revisionAtBind,
-            status: extension.status,
-          }))
-        }
+    if (element.type === CsCanvasElementType.CONTROL || element.control) {
+      if (
+        element.controlComponent !== undefined &&
+        element.controlComponent !== CsCanvasControlComponent.VALUE
+      ) {
         continue
       }
+      const extension = capsuleExtensionOf(element)
+      if (extension) {
+        // 同一胶囊会展开成多个 value 元素，只输出一次。
+        if (extension.capsuleId !== lastCapsuleId) {
+          pieces.push(
+            capsuleDisplayText({
+              capsuleId: extension.capsuleId,
+              label: extension.label,
+              value: extension.value,
+              unit: extension.unit,
+              tableUri: extension.tableUri,
+              column: extension.column,
+              rowIndex: extension.rowIndex,
+              revisionAtBind: extension.revisionAtBind,
+              status: extension.status,
+            }),
+          )
+        }
+        lastCapsuleId = extension.capsuleId
+        continue
+      }
+      lastCapsuleId = null
       if (element.value) pieces.push(String(element.value))
       continue
     }
+    lastCapsuleId = null
     pieces.push(String(element.value ?? ''))
   }
   return pieces.join('')
@@ -719,7 +743,7 @@ export function findTextRange(
 
   main.forEach((element, elementIndex) => {
     if (!element) return
-    if (element.type === CsCanvasElementType.CONTROL) return
+    if (element.type === CsCanvasElementType.CONTROL || element.control) return
     if (element.type === CsCanvasElementType.PAGE_BREAK) return
     const elements =
       element.type === CsCanvasElementType.TITLE || element.type === CsCanvasElementType.LIST

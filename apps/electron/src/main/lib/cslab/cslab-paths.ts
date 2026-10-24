@@ -255,7 +255,7 @@ function clearReadonlyAttributes(dir: string): void {
 }
 
 /** 物理删除实验室沙箱目录并注销索引（调用方必须先释放数据库与文件监听）。 */
-export function deleteLabFiles(labId: string): void {
+export async function deleteLabFiles(labId: string): Promise<void> {
   const root = assertSafeLabRootPath(resolveLabDir(labId))
   try {
     if (!existsSync(root)) return
@@ -269,8 +269,33 @@ export function deleteLabFiles(labId: string): void {
         console.warn('[CSLab] 删除前切换工作目录失败:', error)
       }
     }
-    clearReadonlyAttributes(root)
-    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 })
+
+    // SQLite close 在 Windows 上可能延迟释放句柄：多轮重试，而不是一次失败就放弃。
+    let removed = false
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      clearReadonlyAttributes(root)
+      try {
+        rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 })
+        removed = !existsSync(root)
+      } catch (error) {
+        if (attempt === 0) {
+          console.warn('[CSLab] 根目录删除失败，将重试:', root, error)
+        }
+      }
+      if (removed) break
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+
+    if (!removed && existsSync(root)) {
+      // 根目录仍被锁住时退化为逐项清空，至少保证重置/删除语义成立。
+      for (const entry of readdirSync(root)) {
+        try {
+          rmSync(join(root, entry), { recursive: true, force: true, maxRetries: 10, retryDelay: 150 })
+        } catch (childError) {
+          console.warn('[CSLab] 子项清空失败:', entry, childError)
+        }
+      }
+    }
   } catch (error) {
     // 物理删除失败仍注销索引，保证已删除实验室不会永远卡在 UI 中。
     console.warn(`[CSLab] 物理删除实验室目录失败，已注销索引: ${root}`, error)

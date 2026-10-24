@@ -31,6 +31,21 @@ const dirtyIndexLabs = new Set<string>()
 const indexRebuildTimers = new Map<string, NodeJS.Timeout>()
 const INDEX_REBUILD_DEBOUNCE_MS = 500
 
+/** 立即执行所有防抖中的索引重建并等待完成（删除/重置实验室前调用）。 */
+export async function flushLiteratureIndexRebuilds(timeoutMs = 15_000): Promise<void> {
+  for (const [labId, timer] of indexRebuildTimers) {
+    clearTimeout(timer)
+    indexRebuildTimers.delete(labId)
+    if (dirtyIndexLabs.has(labId)) startIndexRebuild(labId)
+  }
+  const pending = [...pendingIndexBuilds.values()]
+  if (pending.length === 0) return
+  await Promise.race([
+    Promise.allSettled(pending).then(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ])
+}
+
 function startIndexRebuild(labId: string): void {
   if (pendingIndexBuilds.has(labId)) return
   dirtyIndexLabs.delete(labId)

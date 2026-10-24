@@ -62,6 +62,7 @@ interface CsLabCanvasEditorProps {
   onDirtyChange: (dirty: boolean) => void
   onRangeStyleChange: (style: CsLabRangeStyle) => void
   onPageChange: (currentPage: number, totalPages: number) => void
+  onZoomChange?: (percent: number) => void
   onCapsuleClick: (capsuleId: string) => void
   onMetricsChange: (metrics: CsLabCanvasMetrics) => void
   onToast?: (kind: 'info' | 'success' | 'error', text: string) => void
@@ -120,6 +121,7 @@ export function CsLabCanvasEditor({
   onDirtyChange,
   onRangeStyleChange,
   onPageChange,
+  onZoomChange,
   onCapsuleClick,
   onMetricsChange,
   onToast,
@@ -141,6 +143,7 @@ export function CsLabCanvasEditor({
     onDirtyChange,
     onRangeStyleChange,
     onPageChange,
+    onZoomChange,
     onCapsuleClick,
     onMetricsChange,
     onToast,
@@ -151,6 +154,7 @@ export function CsLabCanvasEditor({
     onDirtyChange,
     onRangeStyleChange,
     onPageChange,
+    onZoomChange,
     onCapsuleClick,
     onMetricsChange,
     onToast,
@@ -364,19 +368,32 @@ export function CsLabCanvasEditor({
     const onZoneChange = (zone: string): void => {
       zoneRef.current = zone
     }
+    const onPageScale = (scale: number): void => {
+      propsRef.current.onZoomChange?.(Math.round(Number(scale) * 100))
+    }
 
     editor.eventBus.on('contentChange', onContentChange)
     editor.eventBus.on('rangeStyleChange', onRangeStyle)
     editor.eventBus.on('pageSizeChange', onPageSize)
     editor.eventBus.on('intersectionPageNoChange', onIntersectionPageNo)
     editor.eventBus.on('zoneChange', onZoneChange)
+    editor.eventBus.on('pageScaleChange', onPageScale)
 
     const onMouseDown = (event: MouseEvent): void => {
       try {
         const context = editor.command.getPositionContextByEvent(event, {
           isMustDirectHit: false,
         })
-        const extension = capsuleExtensionOf(context?.element)
+        let extension = capsuleExtensionOf(context?.element)
+        if (!extension) {
+          const controlId = (context?.element as IElement | null | undefined)?.controlId
+          if (controlId) {
+            const main = (editor.command.getValue().data.main ?? []) as IElement[]
+            extension = capsuleExtensionOf(
+              main.find((element) => element.controlId === controlId),
+            )
+          }
+        }
         if (extension) propsRef.current.onCapsuleClick(extension.capsuleId)
       } catch {
         // 命中失败不影响编辑。
@@ -446,6 +463,7 @@ export function CsLabCanvasEditor({
       editor.eventBus.off('pageSizeChange', onPageSize)
       editor.eventBus.off('intersectionPageNoChange', onIntersectionPageNo)
       editor.eventBus.off('zoneChange', onZoneChange)
+      editor.eventBus.off('pageScaleChange', onPageScale)
       editor.destroy()
       host.innerHTML = ''
     }

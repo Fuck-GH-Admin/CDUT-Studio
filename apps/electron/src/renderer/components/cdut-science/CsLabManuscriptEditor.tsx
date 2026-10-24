@@ -157,6 +157,7 @@ export function CsLabManuscriptEditor({
   const [reviewBusy, setReviewBusy] = React.useState(false)
   const [reviewMenuOpen, setReviewMenuOpen] = React.useState(false)
   const [capsuleMenuOpen, setCapsuleMenuOpen] = React.useState(false)
+  const [ready, setReady] = React.useState(false)
 
   const handleRef = React.useRef<CsLabCanvasHandle | null>(null)
   const lastDirtyRef = React.useRef<boolean | null>(null)
@@ -175,6 +176,7 @@ export function CsLabManuscriptEditor({
   const handleReady = React.useCallback(
     (handle: CsLabCanvasHandle | null): void => {
       handleRef.current = handle
+      setReady(!!handle)
       onEditorReady(handle)
     },
     [onEditorReady],
@@ -276,7 +278,7 @@ export function CsLabManuscriptEditor({
             personaTitle: personaTitle(suggestion.persona),
           })),
         )
-        setDirty(true)
+        if (applied.applied > 0) setDirty(true)
         if (applied.applied === 0) {
           onToast?.(
             'error',
@@ -311,7 +313,7 @@ export function CsLabManuscriptEditor({
       return
     }
     const applied = handle.applyReview(items)
-    setDirty(true)
+    if (applied.applied > 0) setDirty(true)
     onToast?.(
       applied.applied > 0 ? 'success' : 'error',
       applied.applied > 0
@@ -348,7 +350,7 @@ export function CsLabManuscriptEditor({
           personaTitle: personaTitle(item.persona),
         })),
       )
-      setDirty(true)
+      if (applied.applied > 0) setDirty(true)
       onToast?.(
         applied.applied > 0 ? 'success' : 'error',
         applied.applied > 0
@@ -433,7 +435,7 @@ export function CsLabManuscriptEditor({
             <div className="relative">
               <button
                 type="button"
-                disabled={!handleRef.current || reviewBusy}
+                disabled={!ready || reviewBusy}
                 onClick={() => {
                   setCapsuleMenuOpen(false)
                   setReviewMenuOpen((value) => !value)
@@ -529,7 +531,7 @@ export function CsLabManuscriptEditor({
             <button
               type="button"
               onClick={() => void handleSave()}
-              disabled={saving || !handleRef.current}
+              disabled={saving || !ready}
               title="保存到工作区 (Ctrl+S)"
               className="inline-flex h-6 items-center gap-1.5 rounded bg-cslab-accent px-2.5 text-[11px] font-medium text-white shadow-xs transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -539,7 +541,7 @@ export function CsLabManuscriptEditor({
             <button
               type="button"
               onClick={() => void handleSaveAs()}
-              disabled={saving || !handleRef.current}
+              disabled={saving || !ready}
               title="另存为外部文件 (.docx / .md) (Ctrl+Shift+S)"
               className="inline-flex h-6 items-center gap-1.5 rounded border border-zinc-300 bg-white px-2.5 text-[11px] font-medium text-zinc-700 shadow-2xs transition-colors hover:bg-zinc-50 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
             >
@@ -693,7 +695,7 @@ export function CsLabManuscriptEditor({
               <RibbonDivider />
               <button
                 type="button"
-                disabled={reviewBusy || !handleRef.current}
+                disabled={reviewBusy || !ready}
                 onClick={() => void runReview(reviewPersona)}
                 className="inline-flex h-6 items-center gap-1 rounded bg-cslab-accent px-2 text-[11px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -805,6 +807,7 @@ export function CsLabManuscriptEditor({
           onPageChange={(currentPage, totalPages) =>
             setPage({ current: currentPage, total: totalPages })
           }
+          onZoomChange={setZoom}
           onCapsuleClick={onCapsuleClick}
           onMetricsChange={setMetrics}
           onToast={onToast}

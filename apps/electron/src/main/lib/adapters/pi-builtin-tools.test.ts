@@ -610,6 +610,22 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     expect(allGroups.find((group) => group.id === 'cdut-tools')?.activation).toBe('off')
   })
 
+  test('Given 会话显式开启 CDUT When 构建工具 Then cdut 组实际挂载', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      activeToolGroups: new Set(['cdut-tools']),
+    })
+    expect(tools.some((tool) => tool.name === 'cdut_grades_assessment')).toBe(true)
+    const discover = tools.find((tool) => tool.name === 'discover_tools')
+    const result = await discover!.execute!('call-discover-on', { category: 'cdut' }) as {
+      details?: { groups?: Array<{ id: string; enabled: boolean; activation?: string }> }
+    }
+    const cdut = (result.details?.groups ?? []).find((group) => group.id === 'cdut-tools')
+    expect(cdut?.enabled).toBe(true)
+    expect(cdut?.activation).toBe('mounted')
+  })
+
   test('Given disabledTools 单工具短名 When building Pi builtin tools Then 只过滤列出的工具且同组其余工具保留', async () => {
     const { sdk } = createPiSdkStub()
     const result = await buildPiBuiltinTools(sdk, {

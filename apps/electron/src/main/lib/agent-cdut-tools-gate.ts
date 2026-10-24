@@ -8,7 +8,7 @@
 const CDUT_TOOL_GROUP = 'cdut-tools'
 
 const CDUT_INTENT_PATTERN =
-  /(?:课表|成绩|教室|自习|学分|选课|教务|考务|考试|培养方案|cdut|青果)/i
+  /(?:课表|成绩|绩点|GPA|分数|教室|自习|学分|选课|教务|考务|考试|培养方案|cdut|青果)/i
 
 export interface CdutToolGateInput {
   /** 会话元数据或消息级显式开关；undefined 表示旧会话兼容。 */

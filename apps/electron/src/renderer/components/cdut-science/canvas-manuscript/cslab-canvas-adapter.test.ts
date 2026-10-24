@@ -272,7 +272,7 @@ describe('胶囊提取与文本定位', () => {
     expect(findTextRange(main, 'Yie')).toBeNull()
   })
 
-  test('extractCanvasText 输出可读正文', () => {
+  test('extractCanvasText 输出可读正文且胶囊只计一次', () => {
     const main = [
       { value: '转' },
       { value: '化' },
@@ -280,5 +280,16 @@ describe('胶囊提取与文本定位', () => {
       { value: '\n' },
     ] as IElement[]
     expect(extractCanvasText({ main })).toBe('转化率\n')
+
+    const extension = capsuleExtensionOf(buildCanvasCapsuleControl(CAPSULE_ATTRS))!
+    expect(
+      extractCanvasText({
+        main: [
+          capsuleValueElement(extension),
+          capsuleValueElement(extension),
+          capsuleValueElement(extension),
+        ] as IElement[],
+      }),
+    ).toBe('Yield 80 %')
   })
 })

@@ -197,6 +197,10 @@ export function buildCsLabGeohazardTools(
         try {
           const raster = await requireGeoRaster(labId, input.demUri)
           const analysis = analyzeDem(raster)
+          let flowAccumulationMax = 0
+          for (const value of analysis.flowAccumulation) {
+            if (value > flowAccumulationMax) flowAccumulationMax = value
+          }
           return jsonToolResult({
             ok: true,
             uri: input.demUri,
@@ -209,7 +213,7 @@ export function buildCsLabGeohazardTools(
             maxSlopeDeg: Math.round(analysis.maxSlopeDeg * 100) / 100,
             dominantAspect: analysis.dominantAspect,
             flowDirectionCounts: analysis.flowDirectionCounts,
-            flowAccumulationMax: Math.max(...analysis.flowAccumulation),
+            flowAccumulationMax,
             channelThreshold: analysis.channelThreshold,
             channelCount: analysis.channelCount,
             suggestedSource: analysis.suggestedSource,
@@ -323,7 +327,39 @@ export function buildCsLabGeohazardTools(
         const input = params as CsLabDebrisFlowSimulationInput
         try {
           const raster = await requireGeoRaster(labId, input.demUri)
-          const { result, grid, analysis } = simulateDebrisFlowDetailed(raster, input)
+          let result: ReturnType<typeof simulateDebrisFlowDetailed>['result']
+          let analysis: ReturnType<typeof simulateDebrisFlowDetailed>['analysis']
+          let maxH: Float32Array
+          let maxSpeed: Float32Array
+          let arrivalValues: Float32Array
+          if (input.engine === 'python') {
+            try {
+              const { runPythonDebrisFlow } = await import('./cslab-geohazard-python')
+              const py = await runPythonDebrisFlow(labId, raster.path, input)
+              result = py.result
+              analysis = analyzeDem(raster)
+              maxH = py.depth.values
+              maxSpeed = py.speed.values
+              arrivalValues = py.arrival.values
+            } catch (error) {
+              const fallback = simulateDebrisFlowDetailed(raster, input)
+              fallback.result.warnings.push(
+                `Python 通道不可用，已回退 TypeScript：${error instanceof Error ? error.message : '未知错误'}`,
+              )
+              result = fallback.result
+              analysis = fallback.analysis
+              maxH = fallback.grid.maxH
+              maxSpeed = fallback.grid.maxSpeed
+              arrivalValues = fallback.grid.arrival
+            }
+          } else {
+            const detailed = simulateDebrisFlowDetailed(raster, input)
+            result = detailed.result
+            analysis = detailed.analysis
+            maxH = detailed.grid.maxH
+            maxSpeed = detailed.grid.maxSpeed
+            arrivalValues = detailed.grid.arrival
+          }
           if (!result.ok) return jsonToolError(result.message ?? '推演失败')
 
           const stamp = Date.now()
@@ -342,7 +378,7 @@ export function buildCsLabGeohazardTools(
             title: `最大水深 · ${result.model} · ${stamp}`,
             format: 'esri-ascii-grid',
             relDir: 'geo',
-            content: writeEsriAsciiGrid(raster.meta, grid.maxH),
+            content: writeEsriAsciiGrid(raster.meta, maxH),
             metaJson,
           })
           const speedAsset = await registerEntityFile({
@@ -351,7 +387,7 @@ export function buildCsLabGeohazardTools(
             title: `最大流速 · ${result.model} · ${stamp}`,
             format: 'esri-ascii-grid',
             relDir: 'geo',
-            content: writeEsriAsciiGrid(raster.meta, grid.maxSpeed),
+            content: writeEsriAsciiGrid(raster.meta, maxSpeed),
             metaJson,
           })
           const arrivalAsset = await registerEntityFile({
@@ -360,11 +396,16 @@ export function buildCsLabGeohazardTools(
             title: `到达时间 · ${result.model} · ${stamp}`,
             format: 'esri-ascii-grid',
             relDir: 'geo',
-            content: writeEsriAsciiGrid(raster.meta, grid.arrival),
+            content: writeEsriAsciiGrid(raster.meta, arrivalValues),
             metaJson,
           })
 
-          const png = renderHazardMapPng(raster, { meta: raster.meta, values: grid.maxH }, { meta: raster.meta, values: grid.maxSpeed }, result.source)
+          const png = renderHazardMapPng(
+            raster,
+            { meta: raster.meta, values: maxH },
+            { meta: raster.meta, values: maxSpeed },
+            result.source,
+          )
           const hazardAsset = await registerEntityFile({
             labId,
             layerType: 'fig',

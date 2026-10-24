@@ -3,7 +3,8 @@
  *
  * 存储：
  * - vault/manuscripts/{uuid}.md   —— 人类可读 Markdown（胶囊序列化为 {{capsule:id}}）
- * - vault/manuscripts/{uuid}.json —— TipTap doc JSON + 胶囊快照（编辑器单一事实源）
+ * - vault/manuscripts/{uuid}.json —— Sidecar v2：canvasData（主状态）+ 派生 docJson
+ *                                    + 批注 + 胶囊快照；v1 旧稿由渲染层即时升级
  * - vault/manuscripts/{uuid}.docx —— 关联的 Word 文稿（可选）
  */
 

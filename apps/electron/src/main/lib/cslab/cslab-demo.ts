@@ -195,15 +195,22 @@ async function createOriginVestaDemoLab(demoDir: string): Promise<CsLabDemoLabRe
 }
 
 /** 创建/复用任意官方演示实验室。 */
+/** 记录自定义演示目录（测试/打包覆盖），重置时沿用同一来源。 */
+const rememberedDemoDirs = new Map<CsLabDemoKind, string>()
+
 export async function createDemoLab(
   options: { demoDir?: string; kind?: CsLabDemoKind } = {},
 ): Promise<CsLabDemoLabResult> {
   const kind = options.kind ?? 'origin-vesta'
+  if (options.demoDir) rememberedDemoDirs.set(kind, options.demoDir)
+  const demoDir = options.demoDir
+    ?? rememberedDemoDirs.get(kind)
+    ?? (kind === 'sklgp-geohazard' ? resolveGeohazardDemoDir() : resolveDemoDir())
   if (kind === 'sklgp-geohazard') {
     const { createSkLgpGeohazardDemoLab } = await import('./cslab-demo-geohazard')
-    return createSkLgpGeohazardDemoLab(options.demoDir)
+    return createSkLgpGeohazardDemoLab(demoDir)
   }
-  return createOriginVestaDemoLab(resolveDemoDir(options.demoDir))
+  return createOriginVestaDemoLab(demoDir)
 }
 
 /** 按类型查找演示实验室；旧 Origin 实验室按名称回填 demoKind。 */
@@ -223,6 +230,11 @@ export function findDemoLab(kind?: CsLabDemoKind): CsLabLab | undefined {
     return undefined
   }
   return labs.find((lab) => lab.demoKind === 'origin-vesta')
+}
+
+/** 列出全部官方演示实验室（供列表徽标与测试）。 */
+export function listAllDemoLabs(): CsLabLab[] {
+  return listLabs().filter((lab) => Boolean(lab.demoKind))
 }
 
 let ensurePromise: Promise<{ created: CsLabDemoKind[] }> | null = null
@@ -266,6 +278,15 @@ export async function resetDemoLab(labId: string): Promise<CsLabDemoLabResult> {
   const lab = getLab(labId)
   if (!lab) throw new Error('实验室不存在或清单损坏')
   if (!lab.demoKind) throw new Error('只有官方演示实验室支持恢复初始数据')
+  // 先等待后台 PDF 富化释放文件句柄，避免 Windows 上 rm EBUSY 留下孤儿目录。
+  try {
+    const { waitForLiteratureEnrichments } = await import('./cslab-literature-structure')
+    await waitForLiteratureEnrichments(8_000)
+    const { flushLiteratureIndexRebuilds } = await import('./cslab-graphrag-router')
+    await flushLiteratureIndexRebuilds(8_000)
+  } catch {
+    // 忽略等待失败。
+  }
   await deleteLab(labId)
   return createDemoLab({ kind: lab.demoKind })
 }

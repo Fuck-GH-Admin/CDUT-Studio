@@ -203,7 +203,9 @@ export async function deleteLab(labId: string): Promise<string[]> {
   closeShareDatabase(labId)
   closeCsLabVaultCache(labId)
 
-  deleteLabFiles(labId)
+  // 给 SQLite/WAL 句柄一个释放窗口，再进入带重试的物理删除。
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  await deleteLabFiles(labId)
   return unboundSessionIds
 }
 
