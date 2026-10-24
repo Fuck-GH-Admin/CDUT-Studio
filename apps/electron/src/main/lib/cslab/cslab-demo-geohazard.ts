@@ -7,21 +7,22 @@
 
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import type {
   CsLabAssetSummary,
+  CsLabCapsule,
   CsLabDemoLabResult,
+  CsLabIngestResult,
   CsLabLab,
   CsLabPlotDocument,
   CsLabPlotSeries,
 } from '@profer/shared'
 import { createPlotDocument } from '@profer/shared'
 import { createLab, listLabs } from './cslab-manager'
-import { ingestFiles, listAssets } from './cslab-iron-cage'
+import { ingestFiles, listAssets, resolveDerivedTableUri } from './cslab-iron-cage'
 import { savePlot } from './cslab-science'
 import { broadcastCsLabEvent } from './cslab-events'
 import { CSLAB_IPC_CHANNELS } from './cslab-types'
-import { buildSkLgpDemoPaperPdf } from './cslab-demo-pdf'
 import {
   analyzeDem,
   buildRainfallThresholdResult,
@@ -32,6 +33,35 @@ import {
 } from './cslab-geohazard'
 import { registerEntityFile } from './cslab-geohazard-tools'
 import { DEMO_LAB_NAMES, resolveGeohazardDemoDir } from './cslab-demo'
+import { bindCapsule } from './cslab-capsule'
+import {
+  attachDocx,
+  createManuscript,
+  getLinkedDocxPath,
+  getManuscript,
+  listManuscripts,
+  saveManuscript,
+} from './cslab-manuscript'
+import { exportManuscriptToDocx } from './cslab-ooxml'
+import { getCsLabDatabase, getLabState, setLabState } from './cslab-db'
+import { resolveLabDir, resolveLabRelativePath } from './cslab-paths'
+import { getLiteratureStructure } from './cslab-literature-structure'
+import { buildLabLiteratureIndex } from './cslab-literature-index'
+import { createCanvas, listCanvases, writeCanvas } from './cslab-canvas-sync'
+import { indexSingleNote, listVaultNotes } from './cslab-vault-index'
+import {
+  SKLGP_CANVAS_TITLE,
+  SKLGP_HYDROGRAPH_FILE,
+  SKLGP_NOTE_REL_PATH,
+  SKLGP_NOTE_TITLE,
+  SKLGP_THESIS_TITLE,
+  buildSkLgpCanvasDocument,
+  buildSkLgpDemoPapers,
+  buildSkLgpResearchNote,
+  buildSkLgpThesisDocJson,
+  renderDemoHydrographPng,
+  resolveThesisCapsuleRows,
+} from './cslab-demo-geohazard-content'
 
 const REQUIRED_FILES = [
   'wenjia_gully_dem.asc',
@@ -63,10 +93,20 @@ async function requireDemoFiles(demoDir: string): Promise<string[]> {
   return paths
 }
 
-async function writeDemoPaper(): Promise<string> {
-  const path = join(tmpdir(), `sklgp-demo-paper-${Date.now()}.pdf`)
-  await fs.writeFile(path, buildSkLgpDemoPaperPdf())
-  return path
+/** 把 3 篇演示 PDF 写入临时目录后入笼；ingestFiles 按 SHA 去重，重复调用不会产生副本。 */
+async function ingestDemoPapers(labId: string): Promise<CsLabIngestResult[]> {
+  const tempDir = await fs.mkdtemp(join(tmpdir(), 'cslab-demo-papers-'))
+  try {
+    const paths: string[] = []
+    for (const paper of buildSkLgpDemoPapers()) {
+      const path = join(tempDir, paper.fileName)
+      await fs.writeFile(path, paper.buffer)
+      paths.push(path)
+    }
+    return await ingestFiles(labId, paths)
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+  }
 }
 
 function basePlot(labId: string, id: string, title: string): CsLabPlotDocument {
@@ -254,22 +294,300 @@ function buildRunoutProfile(
   }
 }
 
+export const SKLGP_DEMO_CONTENT_VERSION = '2'
+
+function resolveDebrisTableUri(
+  labId: string,
+  ingestResults?: CsLabIngestResult[],
+): string | undefined {
+  const fromIngest = ingestResults?.find(
+    (result) => result.asset.title === 'debris_flow_timeseries.csv',
+  )?.tableUri
+  if (fromIngest) return fromIngest
+  const raw = listAssets(labId).find(
+    (asset) => asset.title === 'debris_flow_timeseries.csv' && asset.layerType === 'raw',
+  )
+  return raw ? (resolveDerivedTableUri(labId, raw.uri) ?? undefined) : undefined
+}
+
+function resolveDemoDemUri(labId: string): string | undefined {
+  return listAssets(labId).find(
+    (asset) => asset.layerType === 'geo' && asset.title === 'wenjia_gully_dem.asc',
+  )?.uri
+}
+
+async function seedDemoThesis(
+  lab: CsLabLab,
+  demoDir: string,
+  tableUri: string | undefined,
+  db: ReturnType<typeof getCsLabDatabase>,
+): Promise<void> {
+  const storedUri = getLabState(db, 'sklgp_demo_thesis_uri') ?? undefined
+  const titledUri = listManuscripts(lab.id).find(
+    (manuscript) => manuscript.title === SKLGP_THESIS_TITLE,
+  )?.uri
+  const existingUri = storedUri ?? titledUri
+
+  if (existingUri) {
+    const existing = await getManuscript(lab.id, existingUri)
+    if (existing) {
+      if (!getLinkedDocxPath(lab.id, existingUri)) {
+        const buffer = await exportManuscriptToDocx({
+          title: existing.title,
+          docJson: existing.docJson,
+          capsules: existing.capsules.map(({ id, label, unit, value }) => ({
+            id,
+            label,
+            unit,
+            value,
+          })),
+        })
+        await attachDocx(lab.id, existingUri, buffer)
+      }
+      setLabState(db, 'sklgp_demo_thesis_uri', existingUri)
+      return
+    }
+  }
+
+  const csvText = await fs.readFile(join(demoDir, 'debris_flow_timeseries.csv'), 'utf-8')
+  const { peakDischargeRow, maxDepthRow } = resolveThesisCapsuleRows(csvText)
+  const manuscript = await createManuscript(lab.id, SKLGP_THESIS_TITLE)
+
+  let capsules: CsLabCapsule[] = []
+  if (tableUri) {
+    try {
+      const peak = await bindCapsule(lab.id, manuscript.uri, {
+        id: 'cap-demo-peak-discharge',
+        label: '峰值流量（示例时程）',
+        tableUri,
+        column: 'y1',
+        rowIndex: peakDischargeRow,
+        unit: 'm³/s',
+      })
+      const depth = await bindCapsule(lab.id, manuscript.uri, {
+        id: 'cap-demo-max-depth',
+        label: '最大水深（示例时程）',
+        tableUri,
+        column: 'y2',
+        rowIndex: maxDepthRow,
+        unit: 'm',
+      })
+      capsules = [peak, depth]
+    } catch (error) {
+      console.warn('[CSLab] 演示论文胶囊绑定失败，已降级为占位文字:', error)
+    }
+  }
+
+  const docJson = buildSkLgpThesisDocJson(
+    capsules.map((capsule) => ({
+      id: capsule.id,
+      label: capsule.label,
+      value: capsule.value,
+      unit: capsule.unit ?? '',
+      tableUri: capsule.tableUri,
+      column: capsule.column,
+      rowIndex: capsule.rowIndex,
+      revisionAtBind: capsule.revisionAtBind,
+    })),
+  )
+
+  // 关键：不传 canvasData / comments。sidecar 会省略空 Canvas，
+  // 渲染层才能通过 legacyTipTapToCanvasWithComments 正常显示正文与批注。
+  await saveManuscript({
+    labId: lab.id,
+    uri: manuscript.uri,
+    title: SKLGP_THESIS_TITLE,
+    docJson,
+    capsules,
+  })
+
+  const buffer = await exportManuscriptToDocx({
+    title: SKLGP_THESIS_TITLE,
+    docJson,
+    capsules: capsules.map(({ id, label, unit, value }) => ({ id, label, unit, value })),
+  })
+  await attachDocx(lab.id, manuscript.uri, buffer)
+  setLabState(db, 'sklgp_demo_thesis_uri', manuscript.uri)
+}
+
+async function seedDemoCanvas(
+  lab: CsLabLab,
+  tableUri: string | undefined,
+  db: ReturnType<typeof getCsLabDatabase>,
+): Promise<void> {
+  const stored = getLabState(db, 'sklgp_demo_canvas_rel_path')
+  if (stored) {
+    try {
+      await fs.access(resolveLabRelativePath(lab.id, stored))
+      return
+    } catch {
+      // 文件被移动/删除，走重建分支。
+    }
+  }
+
+  const existing = (await listCanvases(lab.id)).find(
+    (canvas) => canvas.title === SKLGP_CANVAS_TITLE,
+  )
+  if (existing) {
+    setLabState(db, 'sklgp_demo_canvas_rel_path', existing.relPath)
+    return
+  }
+
+  const created = await createCanvas(lab.id, SKLGP_CANVAS_TITLE)
+  await writeCanvas({
+    labId: lab.id,
+    relPath: created.relPath,
+    document: buildSkLgpCanvasDocument({
+      tableUri,
+      demUri: resolveDemoDemUri(lab.id),
+    }),
+    expectedMtimeMs: created.mtimeMs,
+  })
+  setLabState(db, 'sklgp_demo_canvas_rel_path', created.relPath)
+}
+
+async function seedDemoNote(
+  lab: CsLabLab,
+  tableUri: string | undefined,
+  db: ReturnType<typeof getCsLabDatabase>,
+): Promise<void> {
+  await fs.mkdir(resolveLabRelativePath(lab.id, 'vault/notes'), { recursive: true })
+
+  const stored = getLabState(db, 'sklgp_demo_note_rel_path')
+  if (stored) {
+    try {
+      await fs.access(resolveLabRelativePath(lab.id, stored))
+      return
+    } catch {
+      // 文件被移动/删除，走重建分支。
+    }
+  }
+
+  const existing = listVaultNotes(lab.id).find((note) => note.title === SKLGP_NOTE_TITLE)
+  if (existing) {
+    setLabState(db, 'sklgp_demo_note_rel_path', existing.relPath)
+    return
+  }
+
+  const content = buildSkLgpResearchNote({
+    demUri: resolveDemoDemUri(lab.id),
+    tableUri,
+    thesisTitle: SKLGP_THESIS_TITLE,
+    canvasTitle: SKLGP_CANVAS_TITLE,
+  })
+  const absPath = resolveLabRelativePath(lab.id, SKLGP_NOTE_REL_PATH)
+  await fs.writeFile(absPath, content, 'utf-8')
+  await indexSingleNote(lab.id, SKLGP_NOTE_REL_PATH)
+  setLabState(db, 'sklgp_demo_note_rel_path', SKLGP_NOTE_REL_PATH)
+}
+
+/**
+ * 幂等补齐 SKLGP 演示实验室的「新增演示内容」。
+ *
+ * - 已有实验室升级与首次创建共用；
+ * - 只补缺失项，绝不覆盖用户改过的文稿/画布/笔记；
+ * - 版本号写入 lab_state，避免每次 LIST_LABS 都重复解析 PDF。
+ */
+export async function ensureSkLgpDemoContent(
+  lab: CsLabLab,
+  options: { demoDir?: string; ingestResults?: CsLabIngestResult[] } = {},
+): Promise<void> {
+  const demoDir = resolveGeohazardDemoDir(options.demoDir)
+  const db = getCsLabDatabase(join(resolveLabDir(lab.id), 'db', 'central_meta.sqlite'))
+  if (getLabState(db, 'sklgp_demo_content_version') === SKLGP_DEMO_CONTENT_VERSION) return
+
+  let criticalOk = true
+  const run = async (label: string, task: () => Promise<void>, critical = true): Promise<void> => {
+    try {
+      await task()
+    } catch (error) {
+      console.warn(`[CSLab] SKLGP 演示内容补齐失败（${label}）:`, error)
+      if (critical) criticalOk = false
+    }
+  }
+
+  // 1. 文献：3 篇 PDF 入笼 + 结构化解析 + 跨文献索引。
+  await run(
+    '文献',
+    async () => {
+      const paperResults = await ingestDemoPapers(lab.id)
+      const litUris = new Set(
+        paperResults
+          .filter((result) => result.asset.layerType === 'lit')
+          .map((result) => result.asset.uri),
+      )
+      for (const asset of listAssets(lab.id)) {
+        if (asset.layerType === 'lit') litUris.add(asset.uri)
+      }
+      for (const uri of litUris) {
+        try {
+          await getLiteratureStructure(lab.id, uri, { ensure: true })
+        } catch (error) {
+          console.warn(`[CSLab] 演示文献结构解析失败: ${uri}`, error)
+        }
+      }
+      await buildLabLiteratureIndex(lab.id, { force: true })
+    },
+    false,
+  )
+
+  // 2. 多曲线过程线 PNG（走 registerEntityFile，直接写 Buffer）。
+  await run('过程线图', async () => {
+    const existing = listAssets(lab.id).find(
+      (asset) => asset.layerType === 'fig' && asset.title === SKLGP_HYDROGRAPH_FILE,
+    )
+    if (existing) return
+    await registerEntityFile({
+      labId: lab.id,
+      layerType: 'fig',
+      title: SKLGP_HYDROGRAPH_FILE,
+      format: 'png',
+      relDir: 'figures',
+      content: Buffer.from(renderDemoHydrographPng()),
+      metaJson: JSON.stringify({ kind: 'digitizer-demo', curves: 3 }),
+    })
+  })
+
+  // 3. 写了一半的 DOCX 论文初稿。
+  const tableUri = resolveDebrisTableUri(lab.id, options.ingestResults)
+  await run('论文初稿', () => seedDemoThesis(lab, demoDir, tableUri, db))
+
+  // 4. JSON Canvas 推演画布。
+  await run('推演画布', () => seedDemoCanvas(lab, tableUri, db))
+
+  // 5. 研究日志（为 Obsidian 互通提供双链入口）。
+  await run('研究日志', () => seedDemoNote(lab, tableUri, db))
+
+  if (criticalOk) {
+    setLabState(db, 'sklgp_demo_content_version', SKLGP_DEMO_CONTENT_VERSION)
+  }
+}
+
 export async function createSkLgpGeohazardDemoLab(demoDirInput?: string): Promise<CsLabDemoLabResult> {
   const demoDir = resolveGeohazardDemoDir(demoDirInput)
   const dataPaths = await requireDemoFiles(demoDir)
-  const paperPath = await writeDemoPaper()
 
   const existing = listLabs().find((lab) => lab.demoKind === 'sklgp-geohazard')
   const lab: CsLabLab = existing ?? createLab({
     name: DEMO_LAB_NAMES['sklgp-geohazard'],
     description:
-      '内置 SKLGP 方向演示沙箱：合成 Wenjia-like 沟谷 DEM、小时降雨、入口时程、I-D 临界降雨曲线、Voellmy 泥石流推演与危险性分区图版。',
-    tags: ['演示', 'SKLGP', '泥石流', 'DEM', 'I-D 曲线', 'Voellmy', '危险性图版'],
+      '内置 SKLGP 方向演示沙箱：合成 Wenjia-like 沟谷 DEM、小时降雨、入口时程、I-D 临界降雨曲线、Voellmy 泥石流推演与危险性分区图版，另含 3 篇演示文献、推演画布、研究日志与一篇未完成的论文初稿（含审稿批注与活体数据胶囊）。',
+    tags: [
+      '演示',
+      'SKLGP',
+      '泥石流',
+      'DEM',
+      'I-D 曲线',
+      'Voellmy',
+      '危险性图版',
+      '论文初稿',
+      '文献智脑',
+      '推演画布',
+    ],
     demoKind: 'sklgp-geohazard',
   })
 
-  const ingestResults = await ingestFiles(lab.id, [...dataPaths, paperPath])
-  await fs.rm(paperPath, { force: true }).catch(() => undefined)
+  const ingestResults = await ingestFiles(lab.id, dataPaths)
   const failed = ingestResults.filter((result) => result.status !== 'ok')
   if (failed.length > 0) {
     throw new Error(`SKLGP 演示数据摄取失败：${failed.map((result) => result.message).join('；')}`)
@@ -360,6 +678,10 @@ export async function createSkLgpGeohazardDemoLab(demoDirInput?: string): Promis
   } catch (error) {
     console.warn('[CSLab] SKLGP 演示推演生成失败（实验室仍可用）:', error)
   }
+
+  // 新增演示内容：多文献、过程线图、论文初稿、推演画布、研究日志。
+  // 单步失败只告警，保证实验室与已有资产仍可用。
+  await ensureSkLgpDemoContent(lab, { demoDir, ingestResults })
 
   const assets = await listAssets(lab.id)
   return {

@@ -256,7 +256,12 @@ export function ensureDemoLabs(options: {
       console.warn('[CSLab] Origin × VESTA 演示实验室注册失败:', error)
     }
     try {
-      if (!findDemoLab('sklgp-geohazard')) {
+      const existing = findDemoLab('sklgp-geohazard')
+      if (existing) {
+        // 已有实验室只补缺失的新增演示内容，不重复跑推演、不覆盖用户编辑。
+        const { ensureSkLgpDemoContent } = await import('./cslab-demo-geohazard')
+        await ensureSkLgpDemoContent(existing, { demoDir: options.geohazardDemoDir })
+      } else {
         await createDemoLab({
           kind: 'sklgp-geohazard',
           demoDir: options.geohazardDemoDir,
