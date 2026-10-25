@@ -34,7 +34,7 @@ export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequ
   if (busyCases.has(input.caseId)) throw new Error('该案卷正在启动或停止，请稍后再试')
   busyCases.add(input.caseId)
   try {
-    const aggregate = getCaseV2Aggregate(input.caseId)
+    let aggregate = getCaseV2Aggregate(input.caseId)
     if (!aggregate) throw new Error('案卷不存在或尚未初始化')
     // MHI-03：bridge 与网关使用同一解析顺序（审核模块显式选择 → 应用全局渠道/模型）。
     const { selection, explicit } = getEffectiveReviewModelSelection()
@@ -57,6 +57,11 @@ export async function startBackgroundPiReview(input: ReviewBackgroundPiStartRequ
       || listRunsV2(input.caseId).some((run) => run.status === 'running' || run.status === 'queued')) {
       throw new Error('该案卷已有审核正在进行，请等待结束或先停止本轮')
     }
+    // Older V1 PDFs may have been migrated with no page-image blocks. Restore
+    // only those immutable-source derivatives before freezing this Run input.
+    const { rehydrateLegacyPdfImageBlocks } = require('./case-import') as typeof import('./case-import')
+    await rehydrateLegacyPdfImageBlocks(input.caseId)
+    aggregate = getCaseV2Aggregate(input.caseId) ?? aggregate
     const reusable = input.mode !== 'restart' ? sessions.find((session) => !session.archived
       && (session.presetReference?.presetId ?? session.presetId) === 'review-operator'
       && session.agentRuntime === 'pi' && session.channelId === channel.id && session.modelId === modelId) : undefined

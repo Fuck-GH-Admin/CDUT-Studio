@@ -8,11 +8,12 @@
 
 import type { BrowserWindow } from 'electron'
 import { createHash } from 'node:crypto'
-import { copyFileSync, statSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { copyFileSync, statSync, mkdirSync, existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { EvidenceDocument, ImportDocumentsResult, ReviewCase, ReviewDocumentBlock, ReviewImportProgressEvent, RulePack, SourceDocument } from '@profer/shared'
 import { getCase, saveCase, updateCase, assertSafeId, getReviewCasesDir } from './case-store'
+import { readAggregate } from './case-store-v2'
 import { parseFileIntoSourceDocument } from './document-service'
 import { invalidateDerivedReviewInputs } from './input-invalidation'
 import { syncWorkspaceProjectionV2 } from './workspace-service-v2'
@@ -41,6 +42,7 @@ const MAX_PDF_PAGE_IMAGES = 24
 
 /** PDF raster images are retained as image blocks so the model sees embedded scans and charts. */
 export async function renderPdfImageBlocks(input: {
+  caseId?: string
   filePath: string
   fileName: string
   documentId: string
@@ -113,6 +115,7 @@ export async function renderPdfImageBlocks(input: {
     if (!image) continue
     const imageFileName = `${input.documentId}-page-${String(page).padStart(3, '0')}.png`
     const imageAssetPath = `${input.assetDirectoryPrefix ?? 'source-docs'}/${imageFileName}`
+    assertReviewPreuploadAllowed('persist', { caseId: input.caseId })
     writeFileSync(join(input.assetDir, imageFileName), Buffer.from(image.data, 'base64'))
     blocks.push({
       id: `blk-${input.documentId}-page-${String(page).padStart(3, '0')}-image`,
@@ -246,7 +249,50 @@ export async function importDocumentFromPath(input: {
 
   // 解析（parseFileIntoSourceDocument 读取原件路径）
   reportProgress({ phase: 'extracting-text', message: `正在解析：${fileName}` })
-  const document = await parseFileIntoSourceDocument(filePath, fileName, input.role, assetRelativePath, assetDir)
+  let document = await parseFileIntoSourceDocument(filePath, fileName, input.role, assetRelativePath, assetDir)
+  if (fileName.toLowerCase().endsWith('.pdf')) {
+    try {
+      // The legacy V1 importer used to keep only the text layer. Preserve actual
+      // scanned/chart pages as case-owned image blocks so the Pi review tools can
+      // submit them to vision and record the corresponding read receipt.
+      const visual = await renderPdfImageBlocks({
+        caseId: input.caseId,
+        filePath,
+        fileName,
+        documentId: docId,
+        assetDir,
+        assetDirectoryPrefix: 'source-docs',
+      })
+      const warnings = [...visual.warnings]
+      if (visual.blocks.length > 0) {
+        warnings.unshift(`已收录 ${visual.blocks.length} 个 PDF 图像页，审核运行将逐页视觉读取`)
+        document = {
+          ...document,
+          parseStatus: 'partial',
+          blocks: [...document.blocks, ...visual.blocks],
+        }
+      }
+      if (warnings.length > 0) {
+        document = {
+          ...document,
+          parseStatus: 'partial',
+          parseError: [...new Set([document.parseError, ...warnings].filter((item): item is string => !!item))].join('；'),
+        }
+      }
+    } catch (error) {
+      // Authorization failure is a hard security boundary. Ordinary rendering
+      // failures remain visible parse warnings while preserving the original.
+      if (error instanceof Error && error.message.startsWith('REVIEW_PREUPLOAD_DENIED')) throw error
+      document = {
+        ...document,
+        parseStatus: 'partial',
+        parseError: [...new Set([
+          document.parseError,
+          `PDF 页面图像登记失败，审核运行将尝试读取原件：${error instanceof Error ? error.message : String(error)}`,
+        ].filter((item): item is string => !!item))].join('；'),
+      }
+    }
+  }
   const storedDocument: SourceDocument = {
     ...document, id: docId, origin: 'upload',
     byteHash: createHash('sha256').update(readFileSync(filePath)).digest('hex'),
@@ -308,6 +354,103 @@ export async function importDocumentFromPath(input: {
       `${input.role === 'rule' ? '，已登记规则包' : ''}）`,
   )
   return storedDocument
+}
+
+/**
+ * Upgrade migrated V1 PDF records whose old parser saved no blocks. This only
+ * adds image derivatives of the same immutable original; it keeps documentId,
+ * versionId, contentHash, parseRevision and partial status unchanged, so a
+ * frozen plan remains bound to the same source bytes. Native V2/C0 cases are
+ * deliberately excluded from the legacy projection writer.
+ */
+export async function rehydrateLegacyPdfImageBlocks(caseId: string): Promise<number> {
+  assertSafeId(caseId)
+  assertReviewPreuploadAllowed('read', { caseId })
+  const aggregate = readAggregate(caseId)
+  if (!aggregate?.receiptLog.some((receipt) => receipt.type === 'EnsureReviewWorkspaceAggregate')) return 0
+  // A frozen C0/D2 plan forbids the V1 projection writer. Keep its source
+  // identity untouched; the Pi prompt will instead require a full original PDF
+  // visual read through the already-authorized review_inspect_original tool.
+  if (aggregate.canonicalPlan || aggregate.d2RuntimePlan || aggregate.v3ReviewRun
+    || aggregate.v3TechnicalExecution || aggregate.localBusinessConfirmation || (aggregate.decisions?.length ?? 0) > 0) return 0
+  const reviewCase = getCase(caseId)
+  if (!reviewCase) return 0
+  const caseRoot = resolve(getReviewCasesDir(), caseId)
+  const assetDir = join(caseRoot, 'source-docs')
+  const candidates = reviewCase.documents.filter((document) =>
+    document.origin === 'upload'
+    && document.fileName.toLowerCase().endsWith('.pdf')
+    && document.parseStatus === 'partial'
+    && document.blocks.length === 0,
+  )
+  if (candidates.length === 0) return 0
+
+  const parsedById = new Map<string, ReviewDocumentBlock[]>()
+  const warningsById = new Map<string, string[]>()
+  for (const document of candidates) {
+    assertReviewPreuploadAllowed('parse', { caseId })
+    const assetPath = join('source-docs', `${document.id}-${document.fileName}`)
+    const candidatePath = resolve(caseRoot, assetPath)
+    const relation = relative(caseRoot, candidatePath)
+    if (!relation || relation.startsWith('..') || isAbsolute(relation)) continue
+    let filePath: string
+    try {
+      const realRoot = realpathSync(caseRoot)
+      filePath = realpathSync(candidatePath)
+      const realRelation = relative(realRoot, filePath)
+      if (!realRelation || realRelation.startsWith('..') || isAbsolute(realRelation) || !statSync(filePath).isFile()) continue
+      const sourceStat = statSync(filePath)
+      if (document.sizeBytes > 0 && sourceStat.size !== document.sizeBytes) continue
+      // Legacy byteHash, when present, is part of the immutable source identity.
+      // Never attach newly rendered pages to a replaced or corrupted original.
+      if (document.byteHash) {
+        const actualByteHash = createHash('sha256').update(readFileSync(filePath)).digest('hex')
+        if (actualByteHash !== document.byteHash) continue
+      }
+    } catch {
+      continue
+    }
+    const visualId = `${document.id}-visual-${document.byteHash?.slice(0, 12) ?? 'legacy'}`
+    const visual = await renderPdfImageBlocks({
+      caseId,
+      filePath,
+      fileName: document.fileName,
+      documentId: visualId,
+      assetDir,
+      assetDirectoryPrefix: 'source-docs',
+    })
+    if (visual.blocks.length === 0) continue
+    parsedById.set(document.id, [
+      ...document.blocks,
+      ...visual.blocks,
+    ])
+    if (visual.warnings.length > 0) warningsById.set(document.id, visual.warnings)
+  }
+  if (parsedById.size === 0) return 0
+
+  assertReviewPreuploadAllowed('persist', { caseId })
+  await updateCase(caseId, (fresh) => ({
+    ...fresh,
+    documents: fresh.documents.map((document) => {
+      const blocks = parsedById.get(document.id)
+      if (!blocks || document.parseStatus !== 'partial' || document.blocks.length !== 0) return document
+      const original = candidates.find((candidate) => candidate.id === document.id)
+      if (!original || document.fileName !== original.fileName || document.sizeBytes !== original.sizeBytes) return document
+      return {
+        ...document,
+        blocks,
+        // This is still partial until OCR/vision is actually performed in a Run.
+        parseStatus: 'partial',
+        parseError: [...new Set([
+          document.parseError,
+          `旧案卷 PDF 已补回填 ${blocks.length} 个页面图像；待本轮 Pi 视觉读取。`,
+          ...(warningsById.get(document.id) ?? []),
+        ].filter((item): item is string => !!item))].join('；'),
+      }
+    }),
+  }), { reason: '为旧案卷 PDF 补回填页面图像索引' })
+  await syncWorkspaceProjectionV2(caseId)
+  return parsedById.size
 }
 
 /** 将材料从当前审核输入中移出；原始文件与 V2 来源版本保留，供历史追溯。 */

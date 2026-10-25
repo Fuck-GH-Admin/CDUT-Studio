@@ -165,7 +165,7 @@ export function buildReviewWorkspaceViewModel(
         ? '自动解析失败。请打开原件逐页检查后确认已核对；若材料与本案无关，可记录忽略。这是读取状态，不代表材料不合格。'
         : `自动解析失败；空占位内容不能证明读过原件。请打开原件核验，或记录忽略。${document.parseError ? `原因：${document.parseError}` : ''}`
       : document.parseStatus === 'partial' && document.blocks.length === 0
-        ? '旧版导入未提取出可用文本。请打开原件逐页检查后确认已核对；若与本案无关，可记录忽略。这不代表材料不合格。'
+        ? `自动解析没有产出可读取内容；审核运行会尝试读取原件。${document.parseError ? `解析信息：${document.parseError}` : '如果原件仍无法读取，系统会说明具体缺失页或解析原因。'}`
         : !run
           ? '尚未开始审核运行，本案还没有本次读取记录，不能说成漏读。开始审核后 Agent 的读取会记入运行账本；也可先打开原件人工核对并记录。这是读取状态，不代表材料不合格。'
           : notInCurrentRun

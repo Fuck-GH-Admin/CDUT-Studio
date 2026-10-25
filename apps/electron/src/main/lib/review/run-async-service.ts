@@ -106,6 +106,8 @@ function assertCaseReadyForReview(
 
 export async function assembleAndRunReview(caseId: string, options: { signal?: AbortSignal; initiatedBy?: Actor } = {}): Promise<ReviewRunV2> {
   assertReviewPreuploadAllowed('read', { caseId })
+  const { rehydrateLegacyPdfImageBlocks } = require('./case-import') as typeof import('./case-import')
+  await rehydrateLegacyPdfImageBlocks(caseId)
   const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
   const { getTemplate } = require('./template-store') as typeof import('./template-store')
   const { assembleV2Executors } = require('./v2-executor-factory') as typeof import('./v2-executor-factory')

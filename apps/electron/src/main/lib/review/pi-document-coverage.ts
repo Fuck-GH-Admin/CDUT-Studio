@@ -1,6 +1,23 @@
 import type { DocumentVersion, ReviewRunV2 } from '@profer/shared'
+import { extname } from 'node:path'
 
 type RunDocumentCoverage = ReviewRunV2['coverage']['documents'][number]
+
+const STANDALONE_RASTER_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
+
+function isStandaloneRaster(document: DocumentVersion): boolean {
+  const extension = extname(document.fileName).toLowerCase()
+  return extension !== '.pdf'
+    && (document.mimeType.startsWith('image/') || STANDALONE_RASTER_EXTENSIONS.has(extension))
+}
+
+function hasCompleteRasterImageRepresentation(document: DocumentVersion): boolean {
+  return isStandaloneRaster(document)
+    && document.blocks.length > 0
+    && document.blocks.every((block) => block.kind === 'image'
+      && typeof block.imageAssetPath === 'string'
+      && block.imageAssetPath.trim().length > 0)
+}
 
 /** 根据一次 Pi 运行里实际记录的 block 读取状态生成材料覆盖账本。 */
 export function finalizePiDocumentCoverage(input: {
@@ -21,9 +38,12 @@ export function finalizePiDocumentCoverage(input: {
         reason: `审核员已核对原件：${document.manualReadReceipt.reason}`,
       }
     }
+    const standaloneRaster = isStandaloneRaster(document)
     // 不凭旧 coverage.read 直接继承：同一版本可能重新解析出新块，旧状态本身
-    // 不是读取凭据。只有本轮块账本/完整原件预览/人工回执能重新证明完整读取。
-    if (input.fullyPreviewedDocumentVersionIds?.has(document.versionId)) {
+    // 不是读取凭据。只有本轮块账本、PDF 完整原件预览或人工回执能重新证明完整读取。
+    // Raster imports have an explicit image block tool; a file-level preview is
+    // not a substitute for the per-block Pi read receipt required for these files.
+    if (!standaloneRaster && input.fullyPreviewedDocumentVersionIds?.has(document.versionId)) {
       return { documentVersionId: document.versionId, status: 'read' }
     }
 
@@ -33,12 +53,16 @@ export function finalizePiDocumentCoverage(input: {
     const expected = new Set(expectedBlockIds)
     const readBlockIds = new Set((input.readBlocksByDocument[document.versionId] ?? []).filter((blockId) => expected.has(blockId)))
     const allParsedBlocksRead = expectedBlockIds.length > 0 && readBlockIds.size === expectedBlockIds.length
+    const imageBlocks = document.blocks.filter((block) => block.kind === 'image')
+    const completePdfPageImages = extname(document.fileName).toLowerCase() === '.pdf'
+      && imageBlocks.length > 0
+      && imageBlocks.every((block) => !!block.imageAssetPath)
+      // A cap or render failure means some source pages never entered the visual input set.
+      && !/(超过\s*\d+\s*页上限|仅保留前|停止后续页|图像页提取失败|无可访问的视觉原件)/.test(document.parseError ?? '')
     // Raster files intentionally have no extracted text. Their image block is the
     // complete source; a successful visual inspection can therefore cover the file.
-    const fullyRepresentedImage = document.mimeType.startsWith('image/')
-      && expectedBlockIds.length > 0
-      && document.blocks.every((block) => block.kind === 'image')
-    if (allParsedBlocksRead && (document.parseStatus === 'parsed' || fullyRepresentedImage)) {
+    const fullyRepresentedImage = hasCompleteRasterImageRepresentation(document)
+    if (allParsedBlocksRead && (document.parseStatus === 'parsed' || fullyRepresentedImage || completePdfPageImages)) {
       return { documentVersionId: document.versionId, status: 'read' }
     }
 
@@ -98,10 +122,16 @@ export function missingReadablePiDocuments(
   coverage: readonly RunDocumentCoverage[],
 ): Array<{ documentVersionId: string; fileName: string }> {
   const statuses = new Map(coverage.map(item => [item.documentVersionId, item.status]))
-  return documents.filter(document => document.active !== false
-    && document.parseStatus === 'parsed'
-    && document.blocks.some(block => block.kind !== 'image' && !!block.text?.trim())
-    && !document.manualReadReceipt
-    && statuses.get(document.versionId) !== 'read')
+  return documents.filter(document => {
+    if (document.active === false || document.manualReadReceipt) return false
+    const hasParsedText = document.parseStatus === 'parsed'
+      && document.blocks.some(block => block.kind !== 'image' && !!block.text?.trim())
+    // PDFs and raster originals with real image assets need an explicit image
+    // receipt; neither a filename nor a parse status counts as visual reading.
+    const needsVisualRead = extname(document.fileName).toLowerCase() === '.pdf'
+      || hasCompleteRasterImageRepresentation(document)
+    if (document.parseStatus === 'failed' && !needsVisualRead) return false
+    return (hasParsedText || needsVisualRead) && statuses.get(document.versionId) !== 'read'
+  })
     .map(document => ({ documentVersionId: document.versionId, fileName: document.fileName }))
 }

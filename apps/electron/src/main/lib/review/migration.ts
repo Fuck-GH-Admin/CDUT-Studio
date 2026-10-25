@@ -66,6 +66,7 @@ export function documentToVersion(doc: ReviewCase['documents'][number]): Documen
     assetPath: legacyAssetPath || (doc.origin === 'upload' ? `source-docs/${doc.id}-${doc.fileName}` : ''),
     parseRevision: 1,
     parseStatus: doc.parseStatus === 'parsed' ? 'parsed' : doc.parseStatus === 'partial' ? 'partial' : doc.parseStatus === 'failed' ? 'failed' : 'pending',
+    ...(doc.parseError ? { parseError: doc.parseError } : {}),
     blocks: doc.blocks.map((block, index) => ({
       blockId: block.id,
       text: block.text ?? '',

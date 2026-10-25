@@ -175,7 +175,7 @@ export async function registerMaterial(caseId: string, command: { requestId: str
   if (pdfImageTempDir) {
     try {
       const { renderPdfImageBlocks } = await import('./case-import')
-      const pdfImages = await renderPdfImageBlocks({ filePath: frozen.stagedPath, fileName: frozen.fileName, documentId: 'pending-review', assetDir: pdfImageTempDir })
+      const pdfImages = await renderPdfImageBlocks({ caseId, filePath: frozen.stagedPath, fileName: frozen.fileName, documentId: 'pending-review', assetDir: pdfImageTempDir })
       parsedPdfImages = pdfImages.blocks
       // 页图像被截断或中途失败时如实进入解析警告，登记状态不伪造成 parsed。
       pdfPageWarnings.push(...pdfImages.warnings)
