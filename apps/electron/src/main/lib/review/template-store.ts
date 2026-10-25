@@ -18,6 +18,8 @@ import { archiveTemplateInCatalog, isTemplateArchived, listArchivedTemplateIds, 
 
 export const TEMPLATE_SCHEMA_VERSION = 2
 const SAFE_TEMPLATE_ID = /^[\p{L}\p{N}_-]{1,120}$/u
+// R02 研究候选专属命名空间；不能靠用户可编辑的 sourceNote 判定能否正式发布。
+const R02_RESEARCH_TEMPLATE_ID = /^(?:S0[1-8]|T0[1-8])-T\d{2}$/
 
 /** 模板 ID 允许中文等 Unicode 字母/数字，但不允许路径分隔符或点号。 */
 export function isSafeTemplateId(value: unknown): value is string {
@@ -76,7 +78,9 @@ function readPublicationControl(templateId: string, version: number): Publicatio
   return candidate
 }
 function isCandidateDraft(template: TemplateVersion): boolean {
-  return template.sourceNote?.startsWith('D0.5_DEMO_ONLY:') === true ||
+  return R02_RESEARCH_TEMPLATE_ID.test(template.templateId) ||
+    template.sourceNote?.startsWith('R02_RESEARCH_TEMPLATE_NONOFFICIAL:') === true ||
+    template.sourceNote?.startsWith('D0.5_DEMO_ONLY:') === true ||
     template.sourceNote?.startsWith('D1_AUTHORING_CANDIDATE:') === true ||
     ((template.sections ?? []).some((section) =>
       section.id === 'semantic-tasks' && section.criteria.some((criterion) => criterion.id.startsWith('demo-'))))

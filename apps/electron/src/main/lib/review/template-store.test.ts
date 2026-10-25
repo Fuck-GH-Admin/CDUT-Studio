@@ -27,6 +27,30 @@ describe('模板发布信任（TAR-08/13/17）', () => {
     ...overrides,
   } as TemplateVersion)
 
+  test('R02 研究模板允许登记草稿，但不能因为删除非官方说明而被正式发布', () => {
+    const id = 'S07-T02'
+    saveDraft(baseTemplate(id, { sourceNote: 'R02_RESEARCH_TEMPLATE_NONOFFICIAL: 研究候选' }))
+    expect(getTemplate(id, 1)?.status).toBe('draft')
+    expect(() => publishTemplate(id, 1)).toThrow('模板发布资格未获允许')
+
+    // 即使在保存前抹去说明，保留的候选 ID 命名空间也必须拒绝发布。
+    saveDraft(baseTemplate(id, { sourceNote: '普通草稿' }))
+    expect(() => publishTemplate(id, 1)).toThrow('模板发布资格未获允许')
+
+    // 旧版本资格记录曾误记为普通草稿时，发布时仍应重新拒止。
+    const legacy = 'T02-T08'
+    saveDraft(baseTemplate(legacy, { sourceNote: '普通草稿' }))
+    writeFileSync(join(CONFIG_DIR, 'review-template-controls', legacy, '1.json'),
+      JSON.stringify({ schemaVersion: 1, templateId: legacy, version: 1, classification: 'regular-draft' }))
+    expect(() => publishTemplate(legacy, 1)).toThrow('模板发布资格未获允许')
+  })
+
+  test('R02 研究来源标记移到任意 ID 也不能绕过发布门槛', () => {
+    const id = 'local-r02-copy'
+    saveDraft(baseTemplate(id, { sourceNote: 'R02_RESEARCH_TEMPLATE_NONOFFICIAL: 复制件' }))
+    expect(() => publishTemplate(id, 1)).toThrow('模板发布资格未获允许')
+  })
+
   test('TAR-08：Main 发布事务拒绝缺负责人确认的确定性数值规则', () => {
     const templateId = 'tar08-typed-gate'
     saveDraft(baseTemplate(templateId, {
