@@ -14,8 +14,7 @@ import { useAtom } from 'jotai'
 import { AlertTriangle, Eye, EyeOff, KeyRound, ShieldCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { cslabAuthAtom } from '@/atoms/cslab-atoms'
-import CDUTStudioLogo from '@/assets/models/CDUT_Studio.png'
-import { CdutLogo } from '@/components/shared/CdutLogo'
+import { CdutLogo, CdutMark } from '@/components/shared/CdutLogo'
 
 const MIN_PASSWORD_LENGTH = 6
 
@@ -224,30 +223,16 @@ export function CsLabAuthGate(): React.ReactElement {
         </p>
       </div>
 
-      <div className="mt-5 flex items-center justify-center gap-4" data-tour="cslab-brand-row">
-        <img
-          src={CDUTStudioLogo}
+      <div className="mt-5 flex items-center justify-center gap-5" data-tour="cslab-brand-row">
+        <CdutMark
           alt="CDUT Studio"
-          draggable={false}
-          className="h-20 w-auto object-contain"
+          className="h-16 w-auto object-contain select-none"
         />
-        <span className="h-12 w-px bg-border/70" aria-hidden="true" />
-        {/*
-          CDUT-CE 锁版 PNG（3509×1681）在画布两侧留有大量未着色像素：
-          左 956px / 右 1012px 透明，实际着色宽度仅 1541px。
-          若直接交给 flex 居中，会按 bounding box 计算，导致可见校徽整体偏左、
-          且分隔线到校徽的视觉间距远大于分隔线到 Studio 图标。
-          这里用 overflow-hidden 包裹，宽度按 h-24 渲染下的实际着色宽度（88px）取值，
-          再以负 margin 把校徽左透明边裁掉，使 flex 以实际着色宽度为准居中。
-          着色区在深浅色两张 PNG 中几何完全重合，故同一组偏移适用两种主题。
-        */}
-        <span className="relative block h-24 w-[88px] overflow-hidden">
-          <CdutLogo
-            alt="成都理工大学校徽"
-            className="absolute left-0 top-0 h-24 w-auto"
-            style={{ marginLeft: '-54.5px' }}
-          />
-        </span>
+        <span className="h-10 w-px bg-border/70" aria-hidden="true" />
+        <CdutLogo
+          alt="成都理工大学校徽"
+          className="h-16 w-auto object-contain select-none"
+        />
       </div>
     </div>
   )

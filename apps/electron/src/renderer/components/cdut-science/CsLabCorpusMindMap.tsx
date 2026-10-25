@@ -81,63 +81,71 @@ interface MindMapLayoutEdge {
 
 const TYPE_CONFIG: Record<
   string,
-  { label: string; icon: string; bg: string; border: string; text: string }
+  { label: string; icon: string; bg: string; border: string; text: string; badge: string }
 > = {
   paper: {
     label: '论文',
     icon: '📄',
-    bg: 'rgba(30, 27, 75, 0.92)',
+    bg: 'var(--cslab-surface, #ffffff)',
     border: '#6366f1',
-    text: '#ffffff',
+    text: '#4338ca',
+    badge: 'rgba(99, 102, 241, 0.12)',
   },
   section: {
     label: '章节',
     icon: '📑',
-    bg: 'rgba(15, 23, 42, 0.88)',
-    border: '#38bdf8',
-    text: '#e0f2fe',
+    bg: 'var(--cslab-surface, #ffffff)',
+    border: '#0284c7',
+    text: '#0369a1',
+    badge: 'rgba(2, 132, 199, 0.1)',
   },
   method: {
     label: '方法',
     icon: '⚙️',
-    bg: 'rgba(20, 24, 39, 0.88)',
-    border: '#a855f7',
-    text: '#f3e8ff',
+    bg: 'var(--cslab-surface, #ffffff)',
+    border: '#9333ea',
+    text: '#7e22ce',
+    badge: 'rgba(147, 51, 234, 0.1)',
   },
   concept: {
     label: '概念',
     icon: '💡',
-    bg: 'rgba(28, 25, 23, 0.88)',
-    border: '#eab308',
-    text: '#fef08a',
+    bg: 'var(--cslab-surface, #ffffff)',
+    border: '#d97706',
+    text: '#b45309',
+    badge: 'rgba(217, 119, 6, 0.1)',
   },
   figure: {
     label: '图表',
     icon: '🖼️',
-    bg: 'rgba(26, 18, 24, 0.88)',
-    border: '#f43f5e',
-    text: '#ffe4e6',
+    bg: 'var(--cslab-surface, #ffffff)',
+    border: '#e11d48',
+    text: '#be123c',
+    badge: 'rgba(225, 29, 72, 0.1)',
   },
   metric: {
     label: '指标',
     icon: '📊',
-    bg: 'rgba(12, 28, 22, 0.88)',
-    border: '#10b981',
-    text: '#d1fae5',
+    bg: 'var(--cslab-surface, #ffffff)',
+    border: '#059669',
+    text: '#047857',
+    badge: 'rgba(5, 150, 105, 0.1)',
   },
   author: {
     label: '学者',
     icon: '👤',
-    bg: 'rgba(17, 24, 39, 0.85)',
-    border: '#94a3b8',
-    text: '#f1f5f9',
+    bg: 'var(--cslab-surface, #ffffff)',
+    border: '#64748b',
+    text: '#475569',
+    badge: 'rgba(100, 116, 139, 0.1)',
   },
   table: {
     label: '表格',
     icon: '📋',
-    bg: 'rgba(23, 23, 23, 0.88)',
-    border: '#14b8a6',
-    text: '#ccfbf1',
+    bg: 'var(--cslab-surface, #ffffff)',
+    border: '#0d9488',
+    text: '#0f766e',
+    badge: 'rgba(13, 148, 136, 0.1)',
   },
 }
 
@@ -150,33 +158,6 @@ function computeCorpusMindMapLayout(
   const layoutNodes: MindMapLayoutNode[] = []
   const nodeMap = new Map<string, MindMapLayoutNode>()
 
-  // 1. 论文核心节点排布（多论文环状分布于画布中心）
-  const paperCount = Math.max(1, paperNodes.length)
-  const ringRadius = paperCount > 1 ? Math.max(360, paperCount * 140) : 0
-
-  paperNodes.forEach((node, index) => {
-    const angle = (index / paperCount) * Math.PI * 2 - Math.PI / 2
-    const cx = paperCount > 1 ? Math.cos(angle) * ringRadius : 0
-    const cy = paperCount > 1 ? Math.sin(angle) * ringRadius : 0
-
-    const layoutNode: MindMapLayoutNode = {
-      id: node.id,
-      label: node.label,
-      type: 'paper',
-      layer: 'macro',
-      paperUri: node.id.replace(/^paper:/, ''),
-      paperTitle: node.label,
-      x: cx,
-      y: cy,
-      width: 220,
-      height: 60,
-      color: '#6366f1',
-      details: node.details,
-    }
-    layoutNodes.push(layoutNode)
-    nodeMap.set(node.id, layoutNode)
-  })
-
   // 建立邻接关系便于树状派生
   const childrenMap = new Map<string, string[]>()
   for (const edge of data.edges) {
@@ -185,118 +166,176 @@ function computeCorpusMindMapLayout(
     childrenMap.set(edge.source, list)
   }
 
-  // 2. 为每篇论文展开章节、方法、图表、指标脉络
-  paperNodes.forEach((paperNode) => {
-    const paperLayout = nodeMap.get(paperNode.id)!
+  // 1. 论文核心节点排布（单论文居中，多论文纵向整齐排列）
+  const paperCount = Math.max(1, paperNodes.length)
+  const PAPER_V_SPACING = 520
+
+  paperNodes.forEach((paperNode, pIndex) => {
+    const rootX = 0
+    const rootY = paperCount > 1 ? (pIndex - (paperCount - 1) / 2) * PAPER_V_SPACING : 0
+
+    const paperLayout: MindMapLayoutNode = {
+      id: paperNode.id,
+      label: paperNode.label,
+      type: 'paper',
+      layer: 'macro',
+      paperUri: paperNode.id.replace(/^paper:/, ''),
+      paperTitle: paperNode.label,
+      x: rootX,
+      y: rootY,
+      width: 240,
+      height: 52,
+      color: '#6366f1',
+      details: paperNode.details,
+    }
+    layoutNodes.push(paperLayout)
+    nodeMap.set(paperNode.id, paperLayout)
+
+    // 获取直系子节点（章节/方法等）
     const directChildrenIds = childrenMap.get(paperNode.id) ?? []
     const directChildren = directChildrenIds
       .map((id) => data.nodes.find((n) => n.id === id))
       .filter((n): n is Hierarchical3DGraphNode => !!n && !nodeMap.has(n.id))
 
-    const childCount = directChildren.length
-    if (childCount === 0) return
+    if (directChildren.length === 0) return
 
-    directChildren.forEach((child, cIndex) => {
-      // 围绕论文向外扇形辐射展开
-      const baseAngle =
-        paperCount > 1 ? Math.atan2(paperLayout.y, paperLayout.x) : 0
-      const spread = Math.PI * 1.2
-      const angle =
-        baseAngle - spread / 2 + ((cIndex + 0.5) / childCount) * spread
-      const distance = 170
+    // 采用经典思维导图：左右双向均匀分支树 (Left / Right balanced tree)
+    const rightChildren: Hierarchical3DGraphNode[] = []
+    const leftChildren: Hierarchical3DGraphNode[] = []
+    directChildren.forEach((child, i) => {
+      if (i % 2 === 0) rightChildren.push(child)
+      else leftChildren.push(child)
+    })
 
-      const childX = paperLayout.x + Math.cos(angle) * distance
-      const childY = paperLayout.y + Math.sin(angle) * distance
+    const layoutBranchSide = (
+      branches: Hierarchical3DGraphNode[],
+      dir: 1 | -1, // 1 为向右, -1 为向左
+    ) => {
+      // 预先收集每个分支的二级子项
+      const branchItems = branches.map((child) => {
+        const subIds = childrenMap.get(child.id) ?? []
+        const subNodes = subIds
+          .filter((targetId) => {
+            const isNextSection = data.edges.some(
+              (e) => e.source === child.id && e.target === targetId && e.relation === 'next-section',
+            )
+            return !isNextSection
+          })
+          .map((id) => data.nodes.find((n) => n.id === id && !nodeMap.has(n.id)))
+          .filter((n): n is Hierarchical3DGraphNode => !!n)
+          .slice(0, 5)
+        return { child, subNodes }
+      })
 
-      const isSection = (child.type as string) === 'section' || child.details?.kind === 'section'
-      const effectiveType = isSection ? 'section' : child.type
-      const width = isSection ? 170 : 130
-      const height = isSection ? 42 : 32
+      // 计算每个一级分支所需的纵向跨度高度（叶子越多高度越大，彻底杜绝重叠）
+      const itemHeights = branchItems.map((item) =>
+        Math.max(46, item.subNodes.length * 36 + 8),
+      )
+      const totalBranchHeight = itemHeights.reduce((sum, h) => sum + h, 0)
+      let currentTopY = rootY - totalBranchHeight / 2
 
-      const layoutNode: MindMapLayoutNode = {
-        id: child.id,
-        label: child.label,
-        type: effectiveType,
-        layer: child.layer,
-        paperUri: paperLayout.paperUri,
-        paperTitle: paperLayout.paperTitle,
-        page: typeof child.details?.page === 'number' ? child.details.page : undefined,
-        x: childX,
-        y: childY,
-        width,
-        height,
-        color: TYPE_CONFIG[effectiveType]?.border ?? '#38bdf8',
-        details: child.details,
-      }
-      layoutNodes.push(layoutNode)
-      nodeMap.set(child.id, layoutNode)
+      branchItems.forEach(({ child, subNodes }, bIdx) => {
+        const itemH = itemHeights[bIdx]!
+        const centerY = currentTopY + itemH / 2
+        currentTopY += itemH
 
-      // 展开二级子块（图表、公式、指标、概念）
-      const subChildrenIds = childrenMap.get(child.id) ?? []
-      const subChildren = subChildrenIds
-        .filter((targetId) => {
-          // 排除章节顺序边 next-section，避免将后续章节误作为当前章节的子证据
-          const isNextSection = data.edges.some(
-            (e) => e.source === child.id && e.target === targetId && e.relation === 'next-section',
-          )
-          return !isNextSection
-        })
-        .map((id) => data.nodes.find((n) => n.id === id && !nodeMap.has(n.id)))
-        .filter((n): n is Hierarchical3DGraphNode => !!n)
-        .slice(0, 4)
+        const isSection = (child.type as string) === 'section' || child.details?.kind === 'section'
+        const effectiveType = isSection ? 'section' : child.type
+        const width = isSection ? 175 : 140
+        const height = isSection ? 38 : 32
 
-      subChildren.forEach((sub, sIndex) => {
-        const subAngle = angle + (sIndex - (subChildren.length - 1) / 2) * 0.45
-        const subDist = 130
-        const subX = childX + Math.cos(subAngle) * subDist
-        const subY = childY + Math.sin(subAngle) * subDist
+        // 一级子节点 X 坐标
+        const level1X = rootX + dir * 260
+        const level1Y = centerY
 
-        const subNode: MindMapLayoutNode = {
-          id: sub.id,
-          label: sub.label,
-          type: sub.type,
-          layer: sub.layer,
+        const l1Node: MindMapLayoutNode = {
+          id: child.id,
+          label: child.label,
+          type: effectiveType,
+          layer: child.layer,
           paperUri: paperLayout.paperUri,
           paperTitle: paperLayout.paperTitle,
-          page: typeof sub.details?.page === 'number' ? sub.details.page : undefined,
-          x: subX,
-          y: subY,
-          width: 120,
-          height: 30,
-          color: TYPE_CONFIG[sub.type]?.border ?? '#10b981',
-          details: sub.details,
+          page: typeof child.details?.page === 'number' ? child.details.page : undefined,
+          x: level1X,
+          y: level1Y,
+          width,
+          height,
+          color: TYPE_CONFIG[effectiveType]?.border ?? '#0284c7',
+          details: child.details,
         }
-        layoutNodes.push(subNode)
-        nodeMap.set(sub.id, subNode)
+        layoutNodes.push(l1Node)
+        nodeMap.set(child.id, l1Node)
+
+        // 布局该分支下的二级子节点（向同方向继续延伸，纵向平铺）
+        const subCount = subNodes.length
+        if (subCount > 0) {
+          const subStartY = centerY - ((subCount - 1) * 36) / 2
+          subNodes.forEach((sub, sIdx) => {
+            const subX = level1X + dir * 210
+            const subY = subStartY + sIdx * 36
+
+            const subNode: MindMapLayoutNode = {
+              id: sub.id,
+              label: sub.label,
+              type: sub.type,
+              layer: sub.layer,
+              paperUri: paperLayout.paperUri,
+              paperTitle: paperLayout.paperTitle,
+              page: typeof sub.details?.page === 'number' ? sub.details.page : undefined,
+              x: subX,
+              y: subY,
+              width: 135,
+              height: 28,
+              color: TYPE_CONFIG[sub.type]?.border ?? '#059669',
+              details: sub.details,
+            }
+            layoutNodes.push(subNode)
+            nodeMap.set(sub.id, subNode)
+          })
+        }
       })
-    })
+    }
+
+    // 分别排布右侧分支和左侧分支
+    layoutBranchSide(rightChildren, 1)
+    layoutBranchSide(leftChildren, -1)
   })
 
   // 3. 处理全局共享节点（跨论文共同作者、共享概念）
   const remainingNodes = nonPaperNodes.filter((n) => !nodeMap.has(n.id))
-  remainingNodes.slice(0, 60).forEach((node, rIndex) => {
-    const angle = (rIndex / Math.max(1, remainingNodes.length)) * Math.PI * 2
-    const dist = ringRadius > 0 ? ringRadius * 0.55 : 120
-    const rx = Math.cos(angle) * dist
-    const ry = Math.sin(angle) * dist
-
-    const layoutNode: MindMapLayoutNode = {
-      id: node.id,
-      label: node.label,
-      type: node.type,
-      layer: node.layer,
-      x: rx,
-      y: ry,
-      width: 120,
-      height: 30,
-      color: TYPE_CONFIG[node.type]?.border ?? '#94a3b8',
-      details: node.details,
+  if (remainingNodes.length > 0) {
+    let minY = 0
+    let maxY = 0
+    for (const n of layoutNodes) {
+      if (n.y < minY) minY = n.y
+      if (n.y > maxY) maxY = n.y
     }
-    layoutNodes.push(layoutNode)
-    nodeMap.set(node.id, layoutNode)
-  })
+    const globalStartY = maxY + 90
+    const cols = 5
+    remainingNodes.slice(0, 30).forEach((node, rIndex) => {
+      const col = (rIndex % cols) - (cols - 1) / 2
+      const row = Math.floor(rIndex / cols)
+      const rx = col * 150
+      const ry = globalStartY + row * 44
 
-  // 4. 构建边连接（区分论文内部连接与跨论文串联）
+      const layoutNode: MindMapLayoutNode = {
+        id: node.id,
+        label: node.label,
+        type: node.type,
+        layer: node.layer,
+        x: rx,
+        y: ry,
+        width: 130,
+        height: 28,
+        color: TYPE_CONFIG[node.type]?.border ?? '#64748b',
+        details: node.details,
+      }
+      layoutNodes.push(layoutNode)
+      nodeMap.set(node.id, layoutNode)
+    })
+  }
+
+  // 4. 构建边连接
   const layoutEdges: MindMapLayoutEdge[] = []
   data.edges.forEach((edge, index) => {
     const sourceNode = nodeMap.get(edge.source)
@@ -605,43 +644,54 @@ export function CsLabCorpusMindMap({
           onPointerUp={handlePointerUp}
         >
           <defs>
+            <linearGradient id="mindmap-edge-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#818cf8" stopOpacity="0.8" />
+              <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.4" />
+            </linearGradient>
             <marker
               id="mindmap-arrow"
               viewBox="0 0 10 10"
               refX="8"
               refY="5"
-              markerWidth="6"
-              markerHeight="6"
+              markerWidth="5"
+              markerHeight="5"
               orient="auto-start-reverse"
             >
-              <path d="M 0 1 L 9 5 L 0 9 z" fill="rgba(148, 163, 184, 0.6)" />
+              <path d="M 0 2 L 7 5 L 0 8 z" fill="rgba(100, 116, 139, 0.4)" />
             </marker>
             <marker
               id="mindmap-arrow-cross"
               viewBox="0 0 10 10"
               refX="8"
               refY="5"
-              markerWidth="6"
-              markerHeight="6"
+              markerWidth="5"
+              markerHeight="5"
               orient="auto-start-reverse"
             >
-              <path d="M 0 1 L 9 5 L 0 9 z" fill="#818cf8" />
+              <path d="M 0 2 L 7 5 L 0 8 z" fill="#818cf8" />
             </marker>
           </defs>
 
           <g
             transform={`translate(${containerSize.width / 2} ${containerSize.height / 2}) scale(${view.scale}) translate(${-view.cx} ${-view.cy})`}
           >
-            {/* 连线层 */}
+            {/* 连线层：采用水平 S 型流线贝塞尔曲线 */}
             {layout.edges.map((edge) => {
-              const dx = edge.target.x - edge.source.x
-              const dy = edge.target.y - edge.source.y
-              const cx1 = edge.source.x + dx * 0.4
-              const cy1 = edge.source.y
-              const cx2 = edge.source.x + dx * 0.6
-              const cy2 = edge.target.y
+              const isRight = edge.target.x >= edge.source.x
+              // 锚点对齐边缘：从起点卡片的侧边中点射出，进入目标卡片的对应侧边中点
+              const startX = isRight ? edge.source.x + edge.source.width / 2 : edge.source.x - edge.source.width / 2
+              const startY = edge.source.y
+              const endX = isRight ? edge.target.x - edge.target.width / 2 : edge.target.x + edge.target.width / 2
+              const endY = edge.target.y
 
-              const pathData = `M ${edge.source.x} ${edge.source.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${edge.target.x} ${edge.target.y}`
+              const dx = endX - startX
+              const cOffset = Math.max(30, Math.abs(dx) * 0.5)
+              const cx1 = startX + (isRight ? cOffset : -cOffset)
+              const cy1 = startY
+              const cx2 = endX - (isRight ? cOffset : -cOffset)
+              const cy2 = endY
+
+              const pathData = `M ${startX} ${startY} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${endX} ${endY}`
               const isHighlighted =
                 selectedNode &&
                 (edge.source.id === selectedNode.id || edge.target.id === selectedNode.id)
@@ -655,18 +705,18 @@ export function CsLabCorpusMindMap({
                       edge.isCrossPaper
                         ? '#818cf8'
                         : isHighlighted
-                          ? '#38bdf8'
-                          : 'rgba(148, 163, 184, 0.35)'
+                          ? '#6366f1'
+                          : 'rgba(148, 163, 184, 0.45)'
                     }
-                    strokeWidth={edge.isCrossPaper ? 2 : isHighlighted ? 2.2 : 1.2}
+                    strokeWidth={edge.isCrossPaper ? 1.8 : isHighlighted ? 2.2 : 1.4}
                     strokeDasharray={edge.isCrossPaper ? '4 3' : undefined}
-                    opacity={isHighlighted ? 1 : edge.isCrossPaper ? 0.8 : 0.6}
-                    markerEnd={edge.isCrossPaper ? 'url(#mindmap-arrow-cross)' : 'url(#mindmap-arrow)'}
+                    opacity={isHighlighted ? 1 : edge.isCrossPaper ? 0.85 : 0.75}
+                    markerEnd={edge.isCrossPaper ? 'url(#mindmap-arrow-cross)' : undefined}
                   />
                   {edge.isCrossPaper && (
                     <text
-                      x={(edge.source.x + edge.target.x) / 2}
-                      y={(edge.source.y + edge.target.y) / 2 - 4}
+                      x={(startX + endX) / 2}
+                      y={(startY + endY) / 2 - 4}
                       fill="#818cf8"
                       fontSize="9"
                       textAnchor="middle"
@@ -679,7 +729,7 @@ export function CsLabCorpusMindMap({
               )
             })}
 
-            {/* 节点气泡层 */}
+            {/* 节点胶囊层 */}
             {layout.nodes.map((node) => {
               const isSelected = selectedNode?.id === node.id
               const isMatch = filteredNodeIds.has(node.id)
@@ -690,8 +740,8 @@ export function CsLabCorpusMindMap({
                 <g
                   key={node.id}
                   transform={`translate(${node.x - node.width / 2} ${node.y - node.height / 2})`}
-                  className="cursor-pointer transition-transform"
-                  opacity={isMatch ? 1 : 0.25}
+                  className="cursor-pointer transition-all duration-150"
+                  opacity={isMatch ? 1 : 0.2}
                   onClick={(e) => {
                     e.stopPropagation()
                     setSelectedNode(node)
@@ -708,34 +758,40 @@ export function CsLabCorpusMindMap({
                   }}
                 >
                   <title>{`${cfg.label}: ${node.label} (双击在阅读器中定位)`}</title>
+                  {/* 外层优雅微阴影与现代圆角卡片 */}
                   <rect
                     width={node.width}
                     height={node.height}
-                    rx={isPaper ? 10 : 6}
-                    fill={cfg.bg}
-                    stroke={isSelected ? '#f59e0b' : node.color}
-                    strokeWidth={isSelected ? 2.5 : isPaper ? 2 : 1.2}
-                    filter="drop-shadow(0 2px 4px rgba(0,0,0,0.35))"
+                    rx={isPaper ? 14 : 8}
+                    className={cn(
+                      'transition-colors duration-150',
+                      isPaper
+                        ? 'fill-indigo-600/10 stroke-indigo-500/80 shadow-md'
+                        : 'fill-card/90 stroke-border/70 hover:stroke-foreground/40',
+                    )}
+                    fill={isPaper ? undefined : undefined}
+                    stroke={isSelected ? '#6366f1' : isPaper ? '#6366f1' : undefined}
+                    strokeWidth={isSelected ? 2 : isPaper ? 1.6 : 1}
+                    filter={isPaper ? 'drop-shadow(0 4px 8px rgba(99, 102, 241, 0.15))' : 'drop-shadow(0 1px 3px rgba(0,0,0,0.06))'}
                   />
-                  <foreignObject width={node.width} height={node.height} className="overflow-hidden p-1.5 pointer-events-none">
-                    <div className="flex h-full flex-col justify-center">
-                      <div className="flex items-center gap-1 min-w-0">
-                        <span className="shrink-0 text-[10px]">{cfg.icon}</span>
+                  <foreignObject width={node.width} height={node.height} className="overflow-hidden px-2 pointer-events-none">
+                    <div className="flex h-full items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <span className="shrink-0 text-[11px]">{cfg.icon}</span>
                         <span
                           className={cn(
-                            'truncate font-medium text-left',
-                            isPaper ? 'text-[11px] font-bold text-white' : 'text-[10px]',
+                            'truncate font-medium text-left leading-tight',
+                            isPaper ? 'text-[12px] font-semibold text-foreground' : 'text-[11px] text-foreground/90',
                           )}
-                          style={{ color: cfg.text }}
                         >
                           {node.label}
                         </span>
                       </div>
-                      {node.page && (
-                        <span className="text-[8px] text-cslab-muted/70 text-left pl-3.5">
-                          第 {node.page} 页
+                      {node.page ? (
+                        <span className="shrink-0 rounded bg-muted/80 px-1 py-0.2 text-[8px] font-mono text-muted-foreground">
+                          P.{node.page}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   </foreignObject>
                 </g>

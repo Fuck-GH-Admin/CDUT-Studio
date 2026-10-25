@@ -15,9 +15,9 @@ const SRC = process.argv[2]
 const OUT = process.argv[3] ?? '../../assets/CDUT/CDUT-CE-white.png'
 
 /** 与 assets/CDUT/CDUT-CE.png 完全一致的裁切窗口 */
-const CROP = { x: 0, y: 300, width: 3509, height: 1681 }
+const CROP = { x: 956, y: 571, width: 1541, height: 1190 }
 /** 原版有效内容包围盒（像素坐标，含端点） */
-const EXPECTED_BBOX = { minX: 956, minY: 271, maxX: 2496, maxY: 1460 }
+const EXPECTED_BBOX = { minX: 0, minY: 0, maxX: 1540, maxY: 1189 }
 
 if (!SRC) {
   console.error('缺少源图路径。用法：bun run scripts/crop-cdut-white-logo.ts <源图.png> [输出.png]')
