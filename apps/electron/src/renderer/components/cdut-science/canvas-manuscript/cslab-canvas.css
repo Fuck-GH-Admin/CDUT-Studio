@@ -1,0 +1,66 @@
+/**
+ * Canvas 编辑器宿主与原生批注轨的皮肤收敛
+ *
+ * canvas-editor 与 comment 插件都把 CSS 以 JS 注入，这里只做主题覆盖与品牌化。
+ */
+
+.cslab-canvas-host {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  background: #f3f2ee;
+  scrollbar-gutter: stable;
+}
+
+.dark .cslab-canvas-host {
+  background: #151518;
+}
+
+/* 批注轨（插件默认浅灰）在暗色主题下的覆盖 */
+.dark .cslab-canvas-host .ce-comment-rail {
+  background: #1e1e22;
+  border-left-color: #2a2a2e;
+}
+
+.dark .cslab-canvas-host .ce-comment-rail--overlay {
+  background: rgba(30, 30, 34, 0.94);
+}
+
+.dark .cslab-canvas-host .ce-comment-card {
+  background: #26262b;
+  border-color: #3a3a40;
+  color: #e4e4e7;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.dark .cslab-canvas-host .ce-comment-card__content {
+  color: #d4d4d8;
+}
+
+.dark .cslab-canvas-host .ce-comment-card__time {
+  color: #8b8b94;
+}
+
+.dark .cslab-canvas-host .ce-comment-card__textarea {
+  background: #1e1e22;
+  border-color: #3a3a40;
+  color: #e4e4e7;
+}
+
+/* 批注作者统一为 CDUT Science，头像用产品 Logo 注入（插件无 avatar 配置） */
+.cslab-canvas-host .ce-comment-card__user::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  vertical-align: -2px;
+  background: url('../../../../../icon.png') center / contain no-repeat;
+  border-radius: 360px;
+}
+
+/* 窄窗格下批注轨不要盖住画布阴影区 */
+.cslab-canvas-host .ce-comment-rail {
+  box-shadow: -1px 0 0 rgba(0, 0, 0, 0.03);
+}

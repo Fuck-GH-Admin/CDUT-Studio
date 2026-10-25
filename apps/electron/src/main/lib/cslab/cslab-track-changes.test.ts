@@ -286,3 +286,56 @@ describe('跨块切片计划', () => {
     if (!empty.ok) expect(empty.reason).toBe('quote-empty')
   })
 })
+
+describe('Canvas 原生批注导出', () => {
+  test('batch comment mark 以 CDUT Science 身份落为标准 Word 批注', async () => {
+    const buffer = await exportManuscriptToDocx({
+      title: 'Canvas 批注',
+      docJson: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: '需要核验的数据',
+                marks: [
+                  {
+                    type: 'comment',
+                    attrs: {
+                      suggestionId: 'canvas-c1',
+                      commentText: '【数据可靠性】建议补做三次平行实验',
+                      authorName: 'CDUT Science',
+                      authorId: 'CDUT Science',
+                      personaType: 'human',
+                      createdAt: NOW,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      capsules: [],
+    })
+    const parts = await loadParts(buffer)
+    const documentXml = parts.get('word/document.xml') ?? ''
+    expect(documentXml).toContain('<w:commentRangeStart ')
+    expect(documentXml).toContain('<w:commentRangeEnd ')
+    expect(documentXml).toContain('<w:commentReference ')
+
+    const commentsXml = parts.get('word/comments.xml') ?? ''
+    expect(commentsXml).toContain('w:author="CDUT Science"')
+    expect(commentsXml).toContain('建议补做三次平行实验')
+
+    const imported = await importDocx(buffer)
+    const inline = imported.blocks[0]?.inlines.find(
+      (item) => item.kind === 'text' && item.text === '需要核验的数据',
+    )
+    expect(inline?.kind).toBe('text')
+    if (inline?.kind !== 'text') return
+    expect(inline.comments?.[0]?.author).toBe('CDUT Science')
+  })
+})

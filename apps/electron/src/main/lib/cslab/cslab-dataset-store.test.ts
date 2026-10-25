@@ -142,7 +142,7 @@ describe('persistDigitizedFigure', () => {
     ).rejects.toThrow('没有可保存的数字化曲线')
   })
 
-  test('JPEG dataURL 也可保存（仍以图表资产登记）', async () => {
+  test('JPEG dataURL 也可保存并保留真实扩展名', async () => {
     const { persistDigitizedFigure } = await import('./cslab-dataset-store')
     const { listAssets } = await import('./cslab-iron-cage')
 
@@ -157,8 +157,26 @@ describe('persistDigitizedFigure', () => {
     })
 
     const fig = listAssets(lab.id).find((asset) => asset.uri === result.figUri)
-    expect(fig?.format).toBe('png')
+    expect(fig?.format).toBe('jpg')
     expect(result.rowCount).toBe(2)
+  })
+
+  test('WebP dataURL 可保存为 webp 资产', async () => {
+    const { persistDigitizedFigure } = await import('./cslab-dataset-store')
+    const { listAssets } = await import('./cslab-iron-cage')
+
+    const header = Buffer.from('RIFF0000WEBP', 'ascii')
+    const webpDataUrl = `data:image/webp;base64,${header.toString('base64')}`
+    const result = await persistDigitizedFigure({
+      labId: lab.id,
+      title: 'WebP 图表',
+      sourceUri: '',
+      imageDataUrl: webpDataUrl,
+      calibration: CALIBRATION,
+      series: [{ label: 'A', points: [[0, 0], [1, 1]] }],
+    })
+    const fig = listAssets(lab.id).find((asset) => asset.uri === result.figUri)
+    expect(fig?.format).toBe('webp')
   })
 })
 

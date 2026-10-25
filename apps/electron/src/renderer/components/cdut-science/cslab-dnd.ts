@@ -7,7 +7,7 @@
  */
 
 import type { CsLabCellRef, CsLabLayerType } from '@profer/shared'
-import type { CapsuleNodeAttrs } from './cslab-capsule-node'
+import type { CsLabCapsuleAttrs } from './canvas-manuscript/cslab-canvas-types'
 
 export const CSLAB_CELL_MIME = 'application/x-cslab-ref'
 export const CSLAB_ASSET_MIME = 'application/x-cslab-asset'
@@ -70,8 +70,8 @@ export function readAssetDrag(
   }
 }
 
-/** 单元格引用 → TipTap 胶囊节点属性。 */
-export function buildCapsuleAttrs(cellRef: CsLabCellRef): CapsuleNodeAttrs {
+/** 单元格引用 → 活体胶囊绑定属性。 */
+export function buildCapsuleAttrs(cellRef: CsLabCellRef): CsLabCapsuleAttrs {
   return {
     capsuleId: `cap-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     label: cellRef.label,

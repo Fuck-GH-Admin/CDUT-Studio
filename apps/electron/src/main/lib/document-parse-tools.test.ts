@@ -10,6 +10,7 @@ import {
   redirectBinaryDocumentRead,
   resolveDocumentAnchor,
 } from './document-parse-tools'
+import { clearSettingsCache } from './settings-service'
 
 /** 现场构造合法单页 PDF（ASCII，便于按字节计算 xref 偏移） */
 function buildPdfWithText(text: string): Buffer {
@@ -35,13 +36,24 @@ function buildPdfWithText(text: string): Buffer {
 }
 
 let root: string
+let configRoot: string
+const originalConfigDir = process.env.PROFER_CONFIG_DIR
 
 beforeAll(() => {
+  // 仓库纪律：测试不得触碰用户真实配置。PDF 解析链路会读取设置并探测 CSLab 实验室，
+  // 必须重定向到隔离配置根，避免误连用户实验室的 Python 运行时拖垮/干扰用例。
+  configRoot = mkdtempSync(join(tmpdir(), 'doc-parse-config-'))
+  process.env.PROFER_CONFIG_DIR = configRoot
+  clearSettingsCache()
   root = mkdtempSync(join(tmpdir(), 'doc-parse-tools-'))
 })
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true })
+  rmSync(configRoot, { recursive: true, force: true })
+  clearSettingsCache()
+  if (originalConfigDir === undefined) delete process.env.PROFER_CONFIG_DIR
+  else process.env.PROFER_CONFIG_DIR = originalConfigDir
 })
 
 describe('文档内容解析服务（内核双态物化）', () => {

@@ -26,6 +26,7 @@ import type {
   CsLabHpcProfileSummary,
   CsLabHpcScheduler,
 } from '@profer/shared'
+import { formatBytes } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { cslabHpcJobsAtom, cslabHpcProfilesAtom } from '@/atoms/cslab-atoms'
 
@@ -104,14 +105,6 @@ function formatTime(timestamp?: number): string {
   const hours = String(date.getHours()).padStart(2, '0')
   const minutes = String(date.getMinutes()).padStart(2, '0')
   return `${month}-${day} ${hours}:${minutes}`
-}
-
-function formatBytes(bytes?: number): string {
-  if (!bytes) return '0 B'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
 export function CsLabHpcPanel({

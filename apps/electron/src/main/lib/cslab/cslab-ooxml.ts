@@ -47,6 +47,10 @@ export interface OoxmlExportInput {
   title: string
   docJson: unknown
   capsules: OoxmlCapsuleValue[]
+  /** Canvas 页眉纯文本；非空时生成 word/header1.xml。 */
+  headerText?: string
+  /** Canvas 页脚纯文本；非空时生成 word/footer1.xml。 */
+  footerText?: string
 }
 
 export interface OoxmlTextMarks {
@@ -570,13 +574,22 @@ function buildDocumentXml(input: OoxmlExportInput): {
     root && Array.isArray(root.content) ? (root.content as Array<Record<string, unknown>>) : []
   const body = content.map((node) => renderBlockNode(node, capsuleMap, context)).join('')
 
+  const hasHeader = !!input.headerText?.trim()
+  const hasFooter = !!input.footerText?.trim()
+  const headerReference = hasHeader
+    ? '<w:headerReference w:type="default" r:id="rIdHeader"/>'
+    : ''
+  const footerReference = hasFooter
+    ? '<w:footerReference w:type="default" r:id="rIdFooter"/>'
+    : ''
+
   return {
     xml: [
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
       '<w:body>',
       body || renderParagraph([], capsuleMap, context, { style: 'Heading1', prefix: input.title }),
-      '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>',
+      `<w:sectPr>${headerReference}${footerReference}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>`,
       '</w:body>',
       '</w:document>',
     ].join(''),
@@ -584,7 +597,28 @@ function buildDocumentXml(input: OoxmlExportInput): {
   }
 }
 
-function buildContentTypesXml(hasComments: boolean): string {
+function buildHeaderFooterXml(text: string, tag: 'hdr' | 'ftr'): string {
+  const paragraphs = text
+    .split('\n')
+    .map(
+      (line) =>
+        `<w:p><w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`,
+    )
+    .join('')
+  return [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    `<w:${tag} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`,
+    paragraphs,
+    `</w:${tag}>`,
+    '',
+  ].join('\n')
+}
+
+function buildContentTypesXml(
+  hasComments: boolean,
+  hasHeader = false,
+  hasFooter = false,
+): string {
   return [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
@@ -598,6 +632,16 @@ function buildContentTypesXml(hasComments: boolean): string {
           '  <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>',
         ]
       : []),
+    ...(hasHeader
+      ? [
+          '  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>',
+        ]
+      : []),
+    ...(hasFooter
+      ? [
+          '  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>',
+        ]
+      : []),
     '</Types>',
   ].join('\n')
 }
@@ -607,7 +651,11 @@ const ROOT_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`
 
-function buildDocumentRelsXml(hasComments: boolean): string {
+function buildDocumentRelsXml(
+  hasComments: boolean,
+  hasHeader = false,
+  hasFooter = false,
+): string {
   return [
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
@@ -616,6 +664,16 @@ function buildDocumentRelsXml(hasComments: boolean): string {
     ...(hasComments
       ? [
           '  <Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>',
+        ]
+      : []),
+    ...(hasHeader
+      ? [
+          '  <Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>',
+        ]
+      : []),
+    ...(hasFooter
+      ? [
+          '  <Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>',
         ]
       : []),
     '</Relationships>',
@@ -808,10 +866,14 @@ export async function syncCapsulesToDocx(
  */
 export async function exportManuscriptToDocx(input: OoxmlExportInput): Promise<Uint8Array> {
   const { xml: documentXml, comments } = buildDocumentXml(input)
+  const headerText = input.headerText?.trim()
+  const footerText = input.footerText?.trim()
   const hasComments = comments.length > 0
+  const hasHeader = !!headerText
+  const hasFooter = !!footerText
   const commentsXml = hasComments ? buildCommentsXml(comments) : undefined
-  const contentTypes = buildContentTypesXml(hasComments)
-  const documentRels = buildDocumentRelsXml(hasComments)
+  const contentTypes = buildContentTypesXml(hasComments, hasHeader, hasFooter)
+  const documentRels = buildDocumentRelsXml(hasComments, hasHeader, hasFooter)
 
   // 三件套原子校验：缺任一项直接失败，不产出坏包。
   assertCommentsParts({ hasComments, commentsXml, documentRels, contentTypes })
@@ -823,6 +885,8 @@ export async function exportManuscriptToDocx(input: OoxmlExportInput): Promise<U
   zip.file('word/_rels/document.xml.rels', documentRels)
   zip.file('word/styles.xml', STYLES_XML)
   if (commentsXml) zip.file('word/comments.xml', commentsXml)
+  if (headerText) zip.file('word/header1.xml', buildHeaderFooterXml(headerText, 'hdr'))
+  if (footerText) zip.file('word/footer1.xml', buildHeaderFooterXml(footerText, 'ftr'))
   zip.file(CUSTOM_XML_PATH, buildCustomXml(input.capsules))
   zip.file('customXml/_rels/item1.xml.rels', CUSTOM_XML_RELS_XML)
   zip.file('customXml/itemProps1.xml', ITEM_PROPS_XML)

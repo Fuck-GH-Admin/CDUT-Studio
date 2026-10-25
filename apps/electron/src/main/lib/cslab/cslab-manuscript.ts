@@ -3,7 +3,8 @@
  *
  * 存储：
  * - vault/manuscripts/{uuid}.md   —— 人类可读 Markdown（胶囊序列化为 {{capsule:id}}）
- * - vault/manuscripts/{uuid}.json —— TipTap doc JSON + 胶囊快照（编辑器单一事实源）
+ * - vault/manuscripts/{uuid}.json —— Sidecar v2：canvasData（主状态）+ 派生 docJson
+ *                                    + 批注 + 胶囊快照；v1 旧稿由渲染层即时升级
  * - vault/manuscripts/{uuid}.docx —— 关联的 Word 文稿（可选）
  */
 
@@ -11,8 +12,10 @@ import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type {
+  CsLabCanvasData,
   CsLabCapsule,
   CsLabManuscript,
+  CsLabManuscriptComment,
   CsLabManuscriptSummary,
   CsLabSaveManuscriptInput,
   CsLabSaveManuscriptAsInput,
@@ -39,9 +42,11 @@ import { listLabCapsules } from './cslab-capsule'
 import type { OoxmlImportBlock } from './cslab-ooxml'
 
 interface ManuscriptSidecar {
-  version: 1
+  version: 1 | 2
   title: string
   docJson: unknown
+  canvasData?: CsLabCanvasData
+  comments?: CsLabManuscriptComment[]
   capsules: CsLabCapsule[]
   updatedAt: number
 }
@@ -50,18 +55,75 @@ function labDb(labId: string): CsLabDatabase {
   return getCsLabDatabase(join(resolveLabDir(labId), 'db', 'central_meta.sqlite'))
 }
 
-function emptyDoc(title: string): unknown {
+function emptyDoc(): unknown {
   return {
     type: 'doc',
-    content: [
-      {
-        type: 'heading',
-        attrs: { level: 1 },
-        content: [{ type: 'text', text: title }],
-      },
-      { type: 'paragraph' },
-    ],
+    content: [{ type: 'paragraph' }],
   }
+}
+
+function normalizeCanvasData(value: unknown): CsLabCanvasData | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const data = value as { main?: unknown; header?: unknown; footer?: unknown }
+  if (!Array.isArray(data.main)) return undefined
+  return {
+    main: data.main,
+    ...(Array.isArray(data.header) && data.header.length > 0 ? { header: data.header } : {}),
+    ...(Array.isArray(data.footer) && data.footer.length > 0 ? { footer: data.footer } : {}),
+  }
+}
+
+function normalizeComments(value: unknown): CsLabManuscriptComment[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const result: CsLabManuscriptComment[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Partial<CsLabManuscriptComment>
+    if (typeof record.id !== 'string' || !record.id) continue
+    if (typeof record.content !== 'string') continue
+    result.push({
+      id: record.id,
+      content: record.content,
+      createdAt:
+        typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString(),
+      user: typeof record.user === 'string' ? record.user : undefined,
+    })
+  }
+  return result
+}
+
+/**
+ * 从 Canvas 页眉/页脚元素中提取纯文本（供 docx 真实 header/footer 部件使用）。
+ * 控件只取其 value 组件，prefix/postfix 不计入。
+ */
+export function extractCanvasZoneText(canvasData: unknown): { header: string; footer: string } {
+  const readZone = (zone: unknown): string => {
+    if (!Array.isArray(zone)) return ''
+    const parts: string[] = []
+    for (const raw of zone) {
+      if (!raw || typeof raw !== 'object') continue
+      const element = raw as {
+        value?: unknown
+        control?: unknown
+        controlComponent?: unknown
+        valueList?: unknown[]
+      }
+      if (element.control && element.controlComponent !== undefined && element.controlComponent !== 'value') {
+        continue
+      }
+      if (Array.isArray(element.valueList)) {
+        parts.push(element.valueList.map((item) => String((item as { value?: unknown }).value ?? '')).join(''))
+        continue
+      }
+      if (typeof element.value === 'string' && element.value.length > 0) {
+        parts.push(element.value)
+      }
+    }
+    return parts.join('').replace(/\n{3,}/g, '\n\n').trim()
+  }
+
+  const data = canvasData as { header?: unknown; footer?: unknown } | undefined
+  return { header: readZone(data?.header), footer: readZone(data?.footer) }
 }
 
 /** 将 TipTap JSON 转成可读 Markdown（用于 .md 互通与 docx 导出）。 */
@@ -166,9 +228,11 @@ export async function createManuscript(
   const now = Date.now()
 
   const sidecar: ManuscriptSidecar = {
-    version: 1,
+    version: 2,
     title,
-    docJson: emptyDoc(title),
+    docJson: emptyDoc(),
+    canvasData: { main: [] },
+    comments: [],
     capsules: [],
     updatedAt: now,
   }
@@ -201,7 +265,15 @@ export async function createManuscript(
     })
   })
 
-  return { uri, title, docJson: sidecar.docJson, capsules: [], updatedAt: now }
+  return {
+    uri,
+    title,
+    docJson: sidecar.docJson,
+    canvasData: sidecar.canvasData,
+    comments: sidecar.comments,
+    capsules: [],
+    updatedAt: now,
+  }
 }
 
 export async function getManuscript(
@@ -221,10 +293,16 @@ export async function getManuscript(
       status: statusMap.get(capsule.id) ?? capsule.status ?? 'fresh',
     }))
 
+    const canvasData =
+      sidecar.version === 2 ? normalizeCanvasData(sidecar.canvasData) : undefined
+    const comments = canvasData ? normalizeComments(sidecar.comments) : undefined
+
     return {
       uri,
       title: sidecar.title ?? record.title,
-      docJson: sidecar.docJson ?? emptyDoc(record.title),
+      docJson: sidecar.docJson ?? emptyDoc(),
+      canvasData,
+      comments,
       capsules,
       updatedAt: Number(sidecar.updatedAt ?? record.updatedAt),
       docxPath: record.docxRelPath ? resolveLabRelativePath(labId, record.docxRelPath) : undefined,
@@ -233,7 +311,7 @@ export async function getManuscript(
     return {
       uri,
       title: record.title,
-      docJson: emptyDoc(record.title),
+      docJson: emptyDoc(),
       capsules: [],
       updatedAt: record.updatedAt,
       docxPath: record.docxRelPath ? resolveLabRelativePath(labId, record.docxRelPath) : undefined,
@@ -248,11 +326,15 @@ export async function saveManuscript(input: CsLabSaveManuscriptInput): Promise<C
 
   const title = (input.title || record.title).trim().slice(0, 120)
   const capsules = Array.isArray(input.capsules) ? input.capsules : []
+  const canvasData = normalizeCanvasData(input.canvasData)
+  const comments = normalizeComments(input.comments)
   const now = Date.now()
   const sidecar: ManuscriptSidecar = {
-    version: 1,
+    version: 2,
     title,
     docJson: input.docJson,
+    ...(canvasData ? { canvasData } : {}),
+    ...(comments ? { comments } : {}),
     capsules,
     updatedAt: now,
   }
@@ -310,6 +392,8 @@ export async function saveManuscript(input: CsLabSaveManuscriptInput): Promise<C
     uri: record.uri,
     title,
     docJson: input.docJson,
+    canvasData,
+    comments,
     capsules,
     updatedAt: now,
     docxPath: record.docxRelPath ? resolveLabRelativePath(labId, record.docxRelPath) : undefined,
@@ -331,6 +415,8 @@ export async function saveManuscriptAs(
     uri: input.uri,
     title: input.title,
     docJson: input.docJson,
+    canvasData: input.canvasData,
+    comments: input.comments,
     capsules: input.capsules,
   })
 
@@ -359,12 +445,15 @@ export async function saveManuscriptAs(
     value: capsule.value,
   }))
 
+  const zoneText = extractCanvasZoneText(input.canvasData)
   const exported = await runOoxmlTask({
     type: 'export',
     input: {
       title: input.title,
       docJson: input.docJson,
       capsules,
+      headerText: zoneText.header || undefined,
+      footerText: zoneText.footer || undefined,
     },
   })
   if (exported.type !== 'export') throw new Error('OOXML 导出结果类型异常')

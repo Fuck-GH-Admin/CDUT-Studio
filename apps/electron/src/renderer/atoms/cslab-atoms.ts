@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CSLab Atoms - CDUT Science 客户端状态管理
  *
  * 安全红线契约：
@@ -37,7 +37,9 @@ import type {
   CsLabHpcMfaRequest,
   CsLabMolAsset,
   CsLabAtomSiteSelection,
+  CsLabGeoRasterPayload,
   CsLabPaneViewType,
+  CsLabPlotCalibration,
   CsLabPlotDocument,
   CsLabPlotSummary,
 } from '@profer/shared'
@@ -106,6 +108,8 @@ export interface CsLabPaneState {
   literatureUri?: string
   /** 分子/晶体窗格对应的 mol 资产 URI。 */
   molUri?: string
+  /** 2.5D 地貌窗格对应的 geo 资产 URI。 */
+  geoUri?: string
   /** 图表/图像窗格对应的图片资产 URI。 */
   figureUri?: string
   /** 数据窗格的展示模式（曲线 / 表格 / 分屏）。 */
@@ -118,6 +122,8 @@ export interface CsLabPaneState {
   canvasMtimeMs?: number
   /** PDF 窗格首次定位页码（1 起）。 */
   pdfInitialPage?: number
+  /** PDF 窗格聚焦高亮（文献智脑命中联动）：页码 + 页内归一化 bbox。 */
+  pdfFocusHighlight?: { page: number; bbox: [number, number, number, number] }
   /** 出版图窗格对应的绘图文档标识。 */
   plotId?: string
 }
@@ -179,6 +185,11 @@ export const cslabPaneMolAtom = atom<Record<CsLabPaneId, CsLabMolAsset | null>>(
   emptyRecord(() => null),
 )
 
+/** 每窗格的 2.5D 地貌载荷。 */
+export const cslabPaneGeoAtom = atom<Record<CsLabPaneId, CsLabGeoRasterPayload | null>>(
+  emptyRecord(() => null),
+)
+
 /** 每窗格的出版绘图文档载荷。 */
 export const cslabPanePlotsAtom = atom<Record<CsLabPaneId, CsLabPlotDocument | null>>(
   emptyRecord(() => null),
@@ -224,6 +235,9 @@ export const cslabRunsAtom = atom<CsLabRun[]>([])
 /** Vault 笔记摘要（含反向链接计数）。 */
 export const cslabNotesAtom = atom<CsLabVaultNoteSummary[]>([])
 
+/** 当前选中要查看/编辑的 Vault 笔记相对路径（如 vault/notes/...）。 */
+export const cslabSelectedNoteRelPathAtom = atom<string | null>(null)
+
 /** Vault 索引状态（笔记/Canvas/链接数）。 */
 export const cslabVaultIndexAtom = atom<CsLabVaultIndexStatus | null>(null)
 
@@ -241,6 +255,7 @@ export type CsLabDrawerMode =
   | 'selection'
   | 'plot'
   | 'formula'
+  | 'translate'
   | 'brain'
   | 'zotero'
   | 'runs'
@@ -260,6 +275,10 @@ export interface CsLabPdfSelection {
   pageHeight: number
   rect: { x: number; y: number; width: number; height: number }
   cropDataUrl: string
+  /** PDF 矢量文字直读结果；为空表示纯图片选区，走视觉 LLM / OCR 兜底。 */
+  vectorText?: string
+  /** 演示图版预置标定（标准曲线一键逆向化）。 */
+  demoCalibration?: CsLabPlotCalibration
 }
 
 export interface CsLabDrawerState {
@@ -269,7 +288,7 @@ export interface CsLabDrawerState {
   capsuleId?: string
   /** 资产详情抽屉所指向的资产 URI（不再依赖单一 activeAssetUri）。 */
   assetUri?: string
-  /** PDF 框选载荷（selection/plot/formula 模式共用）。 */
+  /** PDF 框选载荷（selection/plot/formula/translate 模式共用）。 */
   selection?: CsLabPdfSelection
 }
 

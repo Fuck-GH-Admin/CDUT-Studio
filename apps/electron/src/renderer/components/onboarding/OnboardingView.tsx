@@ -1,25 +1,26 @@
 /**
  * Onboarding 视图组件
  *
- * 首次启动时显示的全屏欢迎界面。
+ * 首次启动时显示的全屏欢迎界面与功能导览。
  *
- * 流程（Windows 10 首次启动式收尾）：
- *  Step 0：开屏水波纹动画（CDUT Studio 从水面具现，自动进入下一步）
- *  Step 1：欢迎
- *  Step 2：核心功能导览（6 张特性卡片）
- *  Step 3：迁移数据指引（从其他设备 / 其他用户导入配置）
- *  Step 4：审核准备（复用全局渠道，显式选择模型、按需真实自检）
- *  Step 5：诗意插页（海内存知己，天涯若比邻）——独立整屏，如同 Windows 10 首启
- *  Step 6：品牌收尾（CDUT Studio / 欢迎您！），点击进入主界面
- *
- * 说明：Windows 执行环境已改为静默自适应（Git Bash > 内置 BusyBox > WSL > 原生 PowerShell），
- * 首启不再需要环境检测页；环境自检仍可从「设置 → 关于」随时发起。
+ * 流程：开屏 → 欢迎概览 → FeatureTour（8 组交互式导览）→ 数据迁移 → 诗意插页 → 品牌收尾。
+ * 审核模型设置在应用设置中完成；Windows 执行环境保持静默自适应。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
-import { ChevronRight, HardDriveDownload, Users } from 'lucide-react'
+import {
+  ArrowRight,
+  Atom,
+  Bot,
+  ChevronRight,
+  FileCheck,
+  GraduationCap,
+  HardDriveDownload,
+  Sparkles,
+  Users,
+} from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
@@ -80,46 +81,112 @@ export function OnboardingView({
     setMigrationImportDialogOpen(true)
   }
 
+  const isFullScreenDark = step === 'intro' || step === 'featureTour' || step === 'poetry'
+
   return (
-    <div className={cn(
-      'flex h-screen w-screen overflow-hidden flex-col items-center justify-center',
-      step === 'intro'
-        ? 'bg-black'
-        : 'bg-gradient-to-br from-background via-background to-muted/20 p-8',
-    )}>
+    <div
+      className={cn(
+        'relative flex h-screen w-screen overflow-hidden flex-col items-center justify-center select-none transition-colors duration-500',
+        isFullScreenDark
+          ? 'bg-black p-0'
+          : 'bg-gradient-to-br from-background via-background to-muted/30 p-6 sm:p-10',
+      )}
+    >
       {step === 'intro' && (
         <IntroWaterRipple
           onDone={() => {
-            // 开屏结束后先进入欢迎页；用户再按需浏览功能导览或导入配置。
             setStep('welcome')
           }}
         />
       )}
 
       {step === 'welcome' && (
-        <>
-          <div className="mb-12 text-center">
-            <h1 className="text-4xl font-bold mb-4">欢迎使用 CDUT Studio</h1>
-            <p className="text-lg text-muted-foreground">
-              Pi 单内核驱动的下一代桌面 AI，让通用 Agent 触手可及
-            </p>
-            <p className="text-sm text-muted-foreground/60 mt-2">
-              校园特区 · 材料审核 · 内置浏览器，开箱即用
+        <div className="flex w-full max-w-4xl flex-col items-center animate-in fade-in-0 duration-500">
+          {/* 标头区域 */}
+          <div className="text-center">
+            <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3.5 py-1 text-xs font-semibold text-primary mb-4">
+              <Sparkles className="size-3.5" />
+              <span>CDUT Studio 智能终端</span>
+            </div>
+            <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-foreground">
+              欢迎使用 CDUT Studio
+            </h1>
+            <p className="mt-3 text-base sm:text-lg text-muted-foreground max-w-xl mx-auto">
+              Pi 单内核驱动的下一代桌面通用 AI，让推理、学术与校园事务触手可及
             </p>
           </div>
 
-          <div className="w-full max-w-2xl mt-8 flex flex-col items-center gap-2">
-            <Button className="w-full h-12 text-base" onClick={() => setStep('featureTour')}>
-              <>
-                了解 CDUT Studio 能做什么
-                <ChevronRight className="ml-1 h-4 w-4" />
-              </>
-            </Button>
-            <p className="text-xs text-muted-foreground/60">
-              这些内容之后也能在设置中找到，不用担心错过
-            </p>
+          {/* 四大核心支柱卡片 */}
+          <div className="mt-8 grid w-full grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div className="rounded-xl border border-border/60 bg-card/60 p-4 backdrop-blur-md transition-all hover:border-primary/40 hover:bg-card/90">
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <Bot className="size-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Pi 全能 Agent</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">单内核推理 · 终端执行 · 独立沙箱会话</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-card/60 p-4 backdrop-blur-md transition-all hover:border-primary/40 hover:bg-card/90">
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-cyan-500/15 text-cyan-600 dark:text-cyan-400">
+                  <GraduationCap className="size-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">CDUT 校园特区</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">成理统一身份直联 · 课表/成绩/空教室</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-card/60 p-4 backdrop-blur-md transition-all hover:border-primary/40 hover:bg-card/90">
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                  <FileCheck className="size-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">材料审核专区</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">三栏同色联动 · 跨文档资金与规则合规核验</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-card/60 p-4 backdrop-blur-md transition-all hover:border-primary/40 hover:bg-card/90">
+              <div className="flex items-center gap-3">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-600 dark:text-indigo-400">
+                  <Atom className="size-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">CDUT Science 工作台</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">数据铁笼 · 3D分子晶胞 · 曲线逆向数字化</p>
+                </div>
+              </div>
+            </div>
           </div>
-        </>
+
+          {/* 决策操作区 */}
+          <div className="mt-9 flex w-full max-w-md flex-col items-center gap-3">
+            <Button
+              className="w-full h-12 text-sm sm:text-base font-semibold shadow-md gap-2"
+              onClick={() => setStep('featureTour')}
+            >
+              <span>开始功能导览（全景体验核心特性）</span>
+              <ChevronRight className="size-4" />
+            </Button>
+
+            <Button
+              variant="ghost"
+              className="w-full text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setStep('migration')}
+            >
+              <span>跳过导览（直接导入配置或进入）</span>
+              <ArrowRight className="ml-1 size-3.5" />
+            </Button>
+          </div>
+        </div>
       )}
 
       {step === 'featureTour' && (
@@ -131,65 +198,60 @@ export function OnboardingView({
       )}
 
       {step === 'migration' && (
-        <>
-          <div className="mb-12 text-center">
-            <h2 className="text-4xl font-bold mb-4">导入已有数据</h2>
-            <p className="text-lg text-muted-foreground">
-              自己或身边的人已经在用 CDUT Studio？可直接导入现有配置，无需从零开始
+        <div className="flex w-full max-w-3xl flex-col items-center animate-in fade-in-0 duration-500">
+          <div className="mb-8 text-center">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-foreground">
+              导入已有数据与配置
+            </h2>
+            <p className="mt-2 text-sm sm:text-base text-muted-foreground">
+              自己或课题组成员已经在用 CDUT Studio？可直接导入配置，无需从零开始
             </p>
           </div>
 
-          <div className="w-full max-w-2xl">
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={handleOpenMigration}
-                className="rounded-xl bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border border-primary/15 p-4 flex items-center gap-3 hover:from-primary/10 hover:via-primary/15 hover:to-primary/10 transition-colors text-left"
-              >
-                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-                  <HardDriveDownload size={20} className="text-primary" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-foreground">从其他设备迁移</h3>
-                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                    导入自己其他设备上的完整配置（含模型渠道与偏好）。
-                  </p>
-                  <p className="text-[11px] text-muted-foreground/70 mt-1.5">
-                    在原设备导出 .profer-backup 文件，再双击导入即可。
-                  </p>
-                </div>
-              </button>
-              <button
-                onClick={handleOpenMigration}
-                className="rounded-xl bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border border-primary/15 p-4 flex items-center gap-3 hover:from-primary/10 hover:via-primary/15 hover:to-primary/10 transition-colors text-left"
-              >
-                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-                  <Users size={20} className="text-primary" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-foreground">导入其他用户的配置</h3>
-                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                    从同事或团队成员处导入环境，凭据会被自动剥离。
-                  </p>
-                  <p className="text-[11px] text-muted-foreground/70 mt-1.5">
-                    先导出 .profer-share 文件，再双击导入即可。
-                  </p>
-                </div>
-              </button>
-            </div>
+          <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <button
+              onClick={handleOpenMigration}
+              className="group rounded-2xl border border-border/80 bg-card/60 p-5 flex flex-col items-start text-left backdrop-blur-md transition-all hover:border-primary/50 hover:bg-card/90 hover:shadow-lg"
+            >
+              <div className="size-11 rounded-xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
+                <HardDriveDownload size={22} />
+              </div>
+              <h3 className="text-base font-semibold text-foreground mt-4">从其他设备迁移</h3>
+              <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
+                导入原设备导出的完整配置镜像（含模型渠道、提示词预设与个人偏好）。
+              </p>
+              <span className="mt-3 text-[11px] font-mono text-primary/80">
+                支持 .profer-backup 归档文件
+              </span>
+            </button>
+
+            <button
+              onClick={handleOpenMigration}
+              className="group rounded-2xl border border-border/80 bg-card/60 p-5 flex flex-col items-start text-left backdrop-blur-md transition-all hover:border-primary/50 hover:bg-card/90 hover:shadow-lg"
+            >
+              <div className="size-11 rounded-xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
+                <Users size={22} />
+              </div>
+              <h3 className="text-base font-semibold text-foreground mt-4">导入团队共享配置</h3>
+              <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
+                从课题组或同事处导入环境配置，所有敏感 API Key 与账号密码已自动脱敏剥离。
+              </p>
+              <span className="mt-3 text-[11px] font-mono text-primary/80">
+                支持 .profer-share 分享包
+              </span>
+            </button>
           </div>
 
-          <div className="w-full max-w-2xl mt-8 flex flex-col items-center gap-2">
-            <Button className="w-full h-12 text-base" onClick={() => setStep('poetry')}>
-              <>
-                继续
-                <ChevronRight className="ml-1 h-4 w-4" />
-              </>
+          <div className="w-full max-w-sm mt-8 flex flex-col items-center gap-2">
+            <Button className="w-full h-11 text-sm font-semibold gap-1.5" onClick={() => setStep('poetry')}>
+              <span>继续</span>
+              <ChevronRight className="size-4" />
             </Button>
-            <p className="text-xs text-muted-foreground/60">
-              也可以之后随时在设置 → 数据管理中导入配置
+            <p className="text-xs text-muted-foreground/60 text-center">
+              也可以随时在「设置 → 数据管理」中导入或备份配置
             </p>
           </div>
-        </>
+        </div>
       )}
 
       {step === 'poetry' && <PoetryInterlude onDone={() => setStep('ready')} />}
@@ -220,7 +282,12 @@ function PoetryInterlude({ onDone }: { onDone: () => void }): React.ReactElement
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowRight' || event.key === 'Escape') {
+      if (
+        event.key === 'Enter' ||
+        event.key === ' ' ||
+        event.key === 'ArrowRight' ||
+        event.key === 'Escape'
+      ) {
         event.preventDefault()
         finish()
       }
@@ -238,20 +305,20 @@ function PoetryInterlude({ onDone }: { onDone: () => void }): React.ReactElement
 
   return (
     <section
-      className="relative -m-8 flex h-screen w-screen cursor-pointer select-none items-center justify-center overflow-hidden bg-black"
+      className="relative flex h-screen w-screen cursor-pointer select-none items-center justify-center overflow-hidden bg-black"
       onClick={finish}
       role="presentation"
       aria-label="海内存知己，天涯若比邻"
     >
-      {/* 复用液态玻璃背景：与开屏、功能导览一脉相承的电影感停顿 */}
+      {/* 复用液态玻璃背景 */}
       <IntroFluidBackground durationMs={6000} />
       <div className="pointer-events-none absolute inset-0 z-[1] bg-[radial-gradient(ellipse_at_50%_52%,transparent_44%,rgba(0,0,0,.34)_100%)]" />
 
-      <div className="relative z-10 flex flex-col items-center gap-6 px-8 text-center">
+      <div className="relative z-10 flex flex-col items-center gap-6 px-8 text-center animate-in fade-in-0 duration-700">
         {['海内存知己', '天涯若比邻'].map((line) => (
           <p
             key={line}
-            className="font-sans text-[clamp(30px,5.4vw,62px)] font-semibold leading-tight tracking-[0.12em] drop-shadow-[0_14px_38px_rgba(0,0,0,.62)]"
+            className="font-sans text-[clamp(32px,5.4vw,64px)] font-semibold leading-tight tracking-[0.14em] drop-shadow-[0_14px_38px_rgba(0,0,0,.75)]"
             style={gradientText}
           >
             {line}
@@ -262,8 +329,11 @@ function PoetryInterlude({ onDone }: { onDone: () => void }): React.ReactElement
         </p>
       </div>
 
-      <span className="absolute bottom-[8%] z-10 font-mono text-[10px] uppercase tracking-[0.32em] text-white/30" aria-hidden="true">
-        Click to continue
+      <span
+        className="absolute bottom-[8%] z-10 font-mono text-[10px] uppercase tracking-[0.32em] text-white/30"
+        aria-hidden="true"
+      >
+        Click or press any key to continue
       </span>
     </section>
   )
@@ -272,23 +342,25 @@ function PoetryInterlude({ onDone }: { onDone: () => void }): React.ReactElement
 /** WelcomeFinale — 品牌收尾：CDUT Studio / 欢迎您！，点击进入主界面。 */
 function WelcomeFinale({ onEnter }: { onEnter: () => void }): React.ReactElement {
   return (
-    <>
-      <div className="mb-12 text-center">
-        <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">CDUT Studio</h1>
-        <p className="mt-5 text-2xl font-semibold text-foreground/90 sm:text-3xl">欢迎您！</p>
-        <p className="mt-4 text-sm text-muted-foreground">
-          一切已就绪，开始你的第一个任务吧
-        </p>
+    <div className="flex w-full max-w-lg flex-col items-center text-center animate-in fade-in-0 zoom-in-95 duration-500">
+      <div className="flex size-16 items-center justify-center rounded-2xl bg-primary/10 border border-primary/20 text-primary mb-6 shadow-inner">
+        <Sparkles className="size-8" />
       </div>
 
-      <div className="w-full max-w-2xl flex justify-center">
-        <Button className="w-full h-12 text-base" onClick={onEnter}>
-          <>
-            进入 CDUT Studio
-            <ChevronRight className="ml-1 h-4 w-4" />
-          </>
+      <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-foreground">
+        CDUT Studio
+      </h1>
+      <p className="mt-3 text-2xl sm:text-3xl font-semibold text-foreground/90">欢迎您！</p>
+      <p className="mt-3 text-sm text-muted-foreground">
+        一切准备就绪，开启你的第一个通用 Agent 任务
+      </p>
+
+      <div className="w-full mt-9">
+        <Button className="w-full h-12 text-base font-semibold shadow-lg gap-2" onClick={onEnter}>
+          <span>进入 CDUT Studio</span>
+          <ChevronRight className="size-4" />
         </Button>
       </div>
-    </>
+    </div>
   )
 }

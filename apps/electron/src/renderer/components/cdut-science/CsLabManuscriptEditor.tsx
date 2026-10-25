@@ -1,31 +1,24 @@
-/**
- * CsLabManuscriptEditor — Microsoft Word 级论文编辑器
+﻿/**
+ * CsLabManuscriptEditor — Canvas Word 级论文编辑器外壳
  *
- * 特性：
- * 1. 真实 A4 纸张页面视图（794px 宽度、物理级投影、边距刻度与视区自适应）。
- * 2. 经典 Word Ribbon 选项卡栏（开始 / 插入 / 排版与视图）。
- * 3. 物理厘米标尺（带版心指示、左/右页边距阴影）。
- * 4. 显式分离「保存 (Ctrl+S)」与「另存为 (Ctrl+Shift+S)」。
- * 5. Word 标准底部状态栏（页码估算、中英文字数、字符数、胶囊数、保存状态、缩放滑块）。
- * 6. 支持把数据表单元格（application/x-cslab-ref）直接拖入正文生成活体胶囊。
+ * 纸张渲染与分页由 CsLabCanvasEditor 负责；本组件只承载：
+ * 1. Word Ribbon（开始 / 插入 / 审稿 / 排版与视图）；
+ * 2. 标题输入（位于工作区标头，不再占用 A4 纸面）；
+ * 3. AI 审稿 → 原生批注注入；
+ * 4. 真实页码/字数状态栏与保存/另存为。
  */
 
 import * as React from 'react'
-import { EditorContent, useEditor } from '@tiptap/react'
-import type { Editor } from '@tiptap/core'
-import StarterKit from '@tiptap/starter-kit'
-import Placeholder from '@tiptap/extension-placeholder'
 import {
   Bold,
   Italic,
+  Underline,
   Strikethrough,
-  Code,
   Heading1,
   Heading2,
   Heading3,
   List,
   ListOrdered,
-  Quote,
   Minus,
   Save,
   Download,
@@ -35,41 +28,41 @@ import {
   Sparkles,
   Loader2,
   CheckCircle2,
-  AlertCircle,
   FileText,
-  Clock,
   ChevronDown,
   Link2,
+  MessageSquare,
+  Eraser,
+  ImagePlus,
+  Sigma,
+  Hand,
+  MousePointer2,
+  X,
 } from 'lucide-react'
+import katex from 'katex'
+import DOMPurify from 'dompurify'
 import type { CsLabCapsule, CsLabManuscript } from '@profer/shared'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
+import { CSLAB_CELL_MIME, hasDragType } from './cslab-dnd'
+import { CsLabCanvasEditor } from './canvas-manuscript/CsLabCanvasEditor'
 import {
-  ScienceCapsuleNode,
-  collectCapsulesFromDoc,
-  markCapsulesStale,
-} from './cslab-capsule-node'
-import {
-  CSLAB_CELL_MIME,
-  buildCapsuleAttrs,
-  hasDragType,
-  readCellRef,
-} from './cslab-dnd'
+  extractCanvasText,
+  legacyTipTapToCanvasWithComments,
+} from './canvas-manuscript/cslab-canvas-adapter'
+import { buildLocalCanvasSuggestions } from './canvas-manuscript/cslab-canvas-comments'
+import type {
+  CsLabCanvasHandle,
+  CsLabCanvasSnapshot,
+  CsLabRangeStyle,
+} from './canvas-manuscript/cslab-canvas-types'
 import {
   CSLAB_PERSONA_META,
   CSLAB_REVIEWER_PERSONAS,
-  CsLabTrackChanges,
-  CommentMark,
-  DeletionMark,
-  InsertionMark,
-  TrackChangeBlockAttributes,
-  buildLocalGrammarSuggestions,
   buildReviewerPromptText,
-  collectSuggestions,
   parseReviewerJson,
-  type CsLabCollectedSuggestion,
-  type CsLabReviewCommandInput,
-} from './cslab-track-changes-extension'
-import { CsLabReviewMarginalia } from './CsLabReviewMarginalia'
+  personaTitle,
+} from './cslab-review-personas'
 import type { CsLabSuggestionPersona } from '@profer/shared'
 
 interface CsLabManuscriptEditorProps {
@@ -77,16 +70,29 @@ interface CsLabManuscriptEditorProps {
   manuscript: CsLabManuscript
   staleCapsuleIds: Set<string>
   saving: boolean
-  onEditorReady: (editor: Editor | null) => void
+  onEditorReady: (handle: CsLabCanvasHandle | null) => void
   onCapsuleClick: (capsuleId: string) => void
-  onSave: (docJson: unknown, title: string, capsules: CsLabCapsule[]) => Promise<void>
-  onSaveAs?: (docJson: unknown, title: string, capsules: CsLabCapsule[]) => Promise<void>
+  onSave: (snapshot: CsLabCanvasSnapshot, title: string) => Promise<void>
+  onSaveAs?: (snapshot: CsLabCanvasSnapshot, title: string) => Promise<void>
   onDirtyChange?: (dirty: boolean) => void
   onTitleChange?: (title: string) => void
   onToast?: (kind: 'info' | 'success' | 'error', text: string) => void
+  /** 划词右键「检索关联学术文献」反向打开学术检索弹窗。 */
+  onSearchLiterature?: (query: string) => void
 }
 
 type RibbonTab = 'home' | 'insert' | 'review' | 'view'
+
+const EMPTY_STYLE: CsLabRangeStyle = {
+  bold: false,
+  italic: false,
+  underline: false,
+  strikeout: false,
+  level: null,
+  listType: null,
+  undo: false,
+  redo: false,
+}
 
 function RibbonButton({
   active,
@@ -127,6 +133,65 @@ function RibbonDivider(): React.ReactElement {
   return <div className="mx-1 h-5 w-px self-center bg-zinc-200 dark:bg-zinc-800" />
 }
 
+/** 常用 LaTeX 公式模板（点击填入输入框，可在其上改写）。 */
+const FORMULA_TEMPLATES: Array<{ label: string; latex: string }> = [
+  { label: '分式', latex: '\\frac{a}{b}' },
+  { label: '积分', latex: '\\int_{a}^{b} f(x)\\,\\mathrm{d}x' },
+  { label: '根号', latex: '\\sqrt{x}' },
+  { label: '上下标', latex: 'x^{2}_{i}' },
+]
+
+/** KaTeX 预览（复用仓库既有 KaTeX + DOMPurify 组合，与 CsLabFormulaPanel 同款写法）。 */
+function LatexPreview({ latex }: { latex: string }): React.ReactElement {
+  const html = React.useMemo(() => {
+    if (!latex.trim()) return ''
+    try {
+      const rendered = katex.renderToString(latex, {
+        throwOnError: false,
+        displayMode: true,
+        strict: 'ignore',
+      })
+      return DOMPurify.sanitize(rendered, {
+        USE_PROFILES: { html: true, svg: true, mathMl: true },
+      })
+    } catch {
+      return ''
+    }
+  }, [latex])
+
+  if (!html) {
+    return <p className="py-2 text-center text-[10px] text-cslab-muted/70">公式预览</p>
+  }
+  return (
+    <div
+      className="overflow-x-auto py-1 text-center text-[13px] text-cslab-text"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  )
+}
+
+/** 解码 dataURL 的像素尺寸，并等比收敛到正文可用框（794 - 2×96 页边距内）。 */
+function measureImage(dataUrl: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => {
+      const maxWidth = 560
+      const maxHeight = 720
+      const scale = Math.min(
+        1,
+        maxWidth / (image.naturalWidth || 1),
+        maxHeight / (image.naturalHeight || 1),
+      )
+      resolve({
+        width: Math.max(1, Math.round((image.naturalWidth || 1) * scale)),
+        height: Math.max(1, Math.round((image.naturalHeight || 1) * scale)),
+      })
+    }
+    image.onerror = () => resolve(null)
+    image.src = dataUrl
+  })
+}
+
 export function CsLabManuscriptEditor({
   labId,
   manuscript,
@@ -139,125 +204,127 @@ export function CsLabManuscriptEditor({
   onDirtyChange,
   onTitleChange,
   onToast,
+  onSearchLiterature,
 }: CsLabManuscriptEditorProps): React.ReactElement {
   const [activeTab, setActiveTab] = React.useState<RibbonTab>('home')
   const [title, setTitle] = React.useState(manuscript.title)
   const [dirty, setDirty] = React.useState(false)
   const [showRuler, setShowRuler] = React.useState(true)
   const [zoom, setZoom] = React.useState(100)
-  const [lastSavedTime, setLastSavedTime] = React.useState<number | null>(manuscript.updatedAt || null)
-  const [showMarginalia, setShowMarginalia] = React.useState(true)
+  const [lastSavedTime, setLastSavedTime] = React.useState<number | null>(
+    manuscript.updatedAt || null,
+  )
+  const [rangeStyle, setRangeStyle] = React.useState<CsLabRangeStyle>(EMPTY_STYLE)
+  const [page, setPage] = React.useState({ current: 1, total: 1 })
+  const [metrics, setMetrics] = React.useState({
+    words: 0,
+    chars: 0,
+    capsules: 0,
+    comments: 0,
+  })
   const [reviewPersona, setReviewPersona] =
     React.useState<Exclude<CsLabSuggestionPersona, 'human'>>('Methodology_Reviewer')
   const [reviewBusy, setReviewBusy] = React.useState(false)
-  const [suggestions, setSuggestions] = React.useState<CsLabCollectedSuggestion[]>([])
   const [reviewMenuOpen, setReviewMenuOpen] = React.useState(false)
   const [capsuleMenuOpen, setCapsuleMenuOpen] = React.useState(false)
+  const [ready, setReady] = React.useState(false)
+  const [formulaOpen, setFormulaOpen] = React.useState(false)
+  const [formulaText, setFormulaText] = React.useState('E=mc^2')
+  const [handTool, setHandTool] = React.useState(false)
 
+  const handleRef = React.useRef<CsLabCanvasHandle | null>(null)
   const lastDirtyRef = React.useRef<boolean | null>(null)
   const lastTitleRef = React.useRef<string | null>(null)
+  const handToolRef = React.useRef(false)
 
-  const editor = useEditor(
-    {
-      extensions: [
-        StarterKit,
-        Placeholder.configure({
-          placeholder: '在此键入正文内容，或从右侧数据表中直接拖拽单元格嵌入活体胶囊…',
-        }),
-        ScienceCapsuleNode,
-        InsertionMark,
-        DeletionMark,
-        CommentMark,
-        TrackChangeBlockAttributes,
-        CsLabTrackChanges,
-      ],
-      content: manuscript.docJson as never,
-      editorProps: {
-        attributes: {
-          class:
-            'cslab-prose min-h-[820px] font-serif text-[15px] leading-[1.8] text-zinc-900 dark:text-zinc-100 focus:outline-none selection:bg-cslab-accent/20',
-        },
-        handleDOMEvents: {
-          dragenter(_view, event) {
-            if (!hasDragType(event.dataTransfer, CSLAB_CELL_MIME)) return false
-            event.preventDefault()
-            return false
-          },
-          dragover(_view, event) {
-            if (!hasDragType(event.dataTransfer, CSLAB_CELL_MIME)) return false
-            event.preventDefault()
-            if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
-            return false
-          },
-        },
-        handleDrop(view, event) {
-          const cellRef = readCellRef(event.dataTransfer)
-          if (!cellRef) return false
-          event.preventDefault()
+  const initial = React.useMemo(() => {
+    if (manuscript.canvasData) {
+      return {
+        canvasData: manuscript.canvasData,
+        comments: manuscript.comments ?? [],
+      }
+    }
+    return legacyTipTapToCanvasWithComments(manuscript.docJson)
+  }, [manuscript.uri, manuscript.canvasData, manuscript.comments, manuscript.docJson])
 
-          const coords = view.posAtCoords({ left: event.clientX, top: event.clientY })
-          const nodeType = view.state.schema.nodes.scienceCapsule
-          if (!nodeType) return false
-
-          const position = coords ? coords.pos : view.state.selection.from
-          view.dispatch(view.state.tr.insert(position, nodeType.create(buildCapsuleAttrs(cellRef))))
-          setDirty(true)
-          return true
-        },
-      },
-      onUpdate: () => {
-        setDirty(true)
-      },
+  const handleReady = React.useCallback(
+    (handle: CsLabCanvasHandle | null): void => {
+      handleRef.current = handle
+      setReady(!!handle)
+      // 文稿切换重建编辑器后恢复抓手态，保持 UI 与引擎一致。
+      if (handle && handToolRef.current) handle.setHandTool(true)
+      onEditorReady(handle)
     },
-    [manuscript.uri],
+    [onEditorReady],
   )
 
-  React.useEffect(() => {
-    onEditorReady(editor ?? null)
-    return () => onEditorReady(null)
-  }, [editor, onEditorReady])
+  const handleDirtyChange = React.useCallback((next: boolean): void => {
+    setDirty(next)
+  }, [])
 
   React.useEffect(() => {
-    if (!editor) return
-    markCapsulesStale(editor, staleCapsuleIds)
-  }, [editor, staleCapsuleIds])
+    if (lastDirtyRef.current === dirty) return
+    lastDirtyRef.current = dirty
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
 
-  // 审稿建议随文档实时重算（Marks/块属性是唯一事实源）。
   React.useEffect(() => {
-    if (!editor) {
-      setSuggestions([])
-      return
+    if (lastTitleRef.current === title) return
+    lastTitleRef.current = title
+    onTitleChange?.(title)
+  }, [title, onTitleChange])
+
+  React.useEffect(() => {
+    setTitle(manuscript.title)
+    setDirty(false)
+    setLastSavedTime(manuscript.updatedAt || null)
+  }, [manuscript.uri, manuscript.title, manuscript.updatedAt])
+
+  // ===== 保存 =====
+
+  const handleSave = React.useCallback(async (): Promise<void> => {
+    const handle = handleRef.current
+    if (!handle || saving) return
+    const snapshot = handle.getSnapshot()
+    await onSave(snapshot, title.trim() || '未命名文稿')
+    setDirty(false)
+    setLastSavedTime(Date.now())
+  }, [onSave, saving, title])
+
+  const handleSaveAs = React.useCallback(async (): Promise<void> => {
+    const handle = handleRef.current
+    if (!handle || saving) return
+    const snapshot = handle.getSnapshot()
+    if (onSaveAs) {
+      await onSaveAs(snapshot, title.trim() || '未命名文稿')
+    } else {
+      await onSave(snapshot, title.trim() || '未命名文稿')
     }
-    const update = (): void => setSuggestions(collectSuggestions(editor))
-    update()
-    editor.on('update', update)
-    return () => {
-      editor.off('update', update)
+    setDirty(false)
+    setLastSavedTime(Date.now())
+  }, [onSave, onSaveAs, saving, title])
+
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      const isSave = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's'
+      if (!isSave) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.shiftKey) void handleSaveAs()
+      else void handleSave()
     }
-  }, [editor])
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [handleSave, handleSaveAs])
 
-  const applySuggestions = React.useCallback(
-    (items: CsLabReviewCommandInput[]): void => {
-      if (!editor || items.length === 0) {
-        onToast?.('info', '没有可施加的审稿建议')
-        return
-      }
-      const applied = editor.chain().focus().applyReviewSuggestions(items).run()
-      setSuggestions(collectSuggestions(editor))
-      if (applied) {
-        setDirty(true)
-        onToast?.('success', `已生成 ${items.length} 条修订标记，可在正文/旁注中逐条接受或拒绝`)
-      } else {
-        onToast?.('error', '原文片段未在单段内精确命中，未产生任何修订（不做模糊替换）')
-      }
-    },
-    [editor, onToast],
-  )
+  // ===== 审稿 =====
 
-  const handleAiReview = React.useCallback(
+  const runReview = React.useCallback(
     async (persona: Exclude<CsLabSuggestionPersona, 'human'>): Promise<void> => {
-      if (!editor || reviewBusy) return
-      const text = editor.getText({ blockSeparator: '\n' })
+      const handle = handleRef.current
+      if (!handle || reviewBusy) return
+      const snapshot = handle.getSnapshot()
+      const text = extractCanvasText(snapshot.canvasData)
       if (!text.trim()) {
         onToast?.('error', '正文为空，无法审阅')
         return
@@ -278,34 +345,58 @@ export function CsLabManuscriptEditor({
           onToast?.('info', result.message)
           return
         }
-        applySuggestions(
+        const applied = handle.applyReview(
           result.suggestions.map((suggestion) => ({
             kind: suggestion.kind,
             quote: suggestion.quote,
             replacement: suggestion.replacement,
             comment: suggestion.comment,
-            persona: suggestion.persona,
+            personaTitle: personaTitle(suggestion.persona),
           })),
         )
-        onToast?.('success', result.message)
+        if (applied.applied > 0) setDirty(true)
+        if (applied.applied === 0) {
+          onToast?.(
+            'error',
+            `${applied.skipped} 条建议未定位到原文片段，已全部收入审阅报告侧栏（不做盲目替换）`,
+          )
+        } else if (applied.skipped > 0) {
+          onToast?.(
+            'success',
+            `已为 ${applied.applied} 处生成正文批注${applied.fuzzy > 0 ? `（其中 ${applied.fuzzy} 处为模糊定位）` : ''}，${applied.skipped} 处建议已收入审阅报告侧栏`,
+          )
+        } else {
+          onToast?.('success', `已为 ${applied.applied} 处生成正文批注${applied.fuzzy > 0 ? `（其中 ${applied.fuzzy} 处为模糊定位）` : ''}，可在右侧批注轨查看`)
+        }
       } catch (error) {
         onToast?.('error', error instanceof Error ? error.message : 'AI 审稿失败')
       } finally {
         setReviewBusy(false)
       }
     },
-    [applySuggestions, editor, labId, manuscript.uri, onToast, reviewBusy],
+    [labId, manuscript.uri, onToast, reviewBusy],
   )
 
   const handleLocalCheck = React.useCallback((): void => {
-    if (!editor) return
-    const items = buildLocalGrammarSuggestions(editor)
+    const handle = handleRef.current
+    if (!handle) return
+    const snapshot = handle.getSnapshot()
+    const items = buildLocalCanvasSuggestions(
+      snapshot.canvasData.main as Parameters<typeof buildLocalCanvasSuggestions>[0],
+    )
     if (items.length === 0) {
       onToast?.('success', '本地规则体检未发现明显问题')
       return
     }
-    applySuggestions(items)
-  }, [applySuggestions, editor, onToast])
+    const applied = handle.applyReview(items)
+    if (applied.applied > 0) setDirty(true)
+    onToast?.(
+      applied.applied > 0 ? 'success' : 'error',
+      applied.applied > 0
+        ? `已生成 ${applied.applied} 条体检批注${applied.skipped > 0 ? `（跳过 ${applied.skipped} 条）` : ''}`
+        : '未定位到可批注片段',
+    )
+  }, [onToast])
 
   const handleCopyPrompt = React.useCallback(async (): Promise<void> => {
     try {
@@ -317,6 +408,8 @@ export function CsLabManuscriptEditor({
   }, [onToast, reviewPersona])
 
   const handlePasteSuggestions = React.useCallback(async (): Promise<void> => {
+    const handle = handleRef.current
+    if (!handle) return
     try {
       const raw = await navigator.clipboard.readText()
       const items = parseReviewerJson(raw, reviewPersona)
@@ -324,116 +417,90 @@ export function CsLabManuscriptEditor({
         onToast?.('error', '剪贴板中没有可解析的审稿 JSON')
         return
       }
-      applySuggestions(items)
+      const applied = handle.applyReview(
+        items.map((item) => ({
+          kind: item.kind,
+          quote: item.quote,
+          replacement: item.replacement,
+          comment: item.comment,
+          personaTitle: personaTitle(item.persona),
+        })),
+      )
+      if (applied.applied > 0) setDirty(true)
+      onToast?.(
+        applied.applied > 0 ? 'success' : 'error',
+        applied.applied > 0
+          ? `已生成 ${applied.applied} 条批注${applied.skipped > 0 ? `（跳过 ${applied.skipped} 条）` : ''}`
+          : '未定位到原文片段，未产生批注',
+      )
     } catch {
       onToast?.('error', '读取剪贴板失败')
     }
-  }, [applySuggestions, onToast, reviewPersona])
+  }, [onToast, reviewPersona])
 
-  const handleAcceptSuggestion = React.useCallback(
-    (id: string): void => {
-      if (!editor) return
-      editor.chain().focus().acceptSuggestion(id).run()
-      setSuggestions(collectSuggestions(editor))
-      setDirty(true)
-    },
-    [editor],
-  )
+  const handleClearComments = React.useCallback((): void => {
+    const handle = handleRef.current
+    if (!handle) return
+    handle.clearComments()
+    setMetrics((previous) => ({ ...previous, comments: 0 }))
+    setDirty(true)
+    onToast?.('success', '已清空全部批注')
+  }, [onToast])
 
-  const handleRejectSuggestion = React.useCallback(
-    (id: string): void => {
-      if (!editor) return
-      editor.chain().focus().rejectSuggestion(id).run()
-      setSuggestions(collectSuggestions(editor))
-      setDirty(true)
-    },
-    [editor],
-  )
+  // ===== 插入：图片 / LaTeX 公式 / 抓手平移 =====
 
-  React.useEffect(() => {
-    if (lastDirtyRef.current === dirty) return
-    lastDirtyRef.current = dirty
-    onDirtyChange?.(dirty)
-  }, [dirty, onDirtyChange])
-
-  React.useEffect(() => {
-    if (lastTitleRef.current === title) return
-    lastTitleRef.current = title
-    onTitleChange?.(title)
-  }, [title, onTitleChange])
-
-  React.useEffect(() => {
-    setTitle(manuscript.title)
-    setDirty(false)
-    setLastSavedTime(manuscript.updatedAt || null)
-  }, [manuscript.uri, manuscript.title, manuscript.updatedAt])
-
-  // ===== 保存与另存为 =====
-
-  const handleSave = React.useCallback(async (): Promise<void> => {
-    if (!editor || saving) return
-    const docJson = editor.getJSON()
-    const capsules = collectCapsulesFromDoc(docJson, labId)
-    await onSave(docJson, title.trim() || '未命名文稿', capsules)
-    setDirty(false)
-    setLastSavedTime(Date.now())
-  }, [editor, labId, onSave, saving, title])
-
-  const handleSaveAs = React.useCallback(async (): Promise<void> => {
-    if (!editor || saving) return
-    const docJson = editor.getJSON()
-    const capsules = collectCapsulesFromDoc(docJson, labId)
-    if (onSaveAs) {
-      await onSaveAs(docJson, title.trim() || '未命名文稿', capsules)
-      setDirty(false)
-      setLastSavedTime(Date.now())
-    } else {
-      await onSave(docJson, title.trim() || '未命名文稿', capsules)
-      setDirty(false)
-      setLastSavedTime(Date.now())
-    }
-  }, [editor, labId, onSave, onSaveAs, saving, title])
-
-  // ===== 快捷键捕获 (Ctrl+S / Ctrl+Shift+S) =====
-
-  React.useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      const isSave = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's'
-      if (!isSave) return
-
-      event.preventDefault()
-      event.stopPropagation()
-
-      if (event.shiftKey) {
-        void handleSaveAs()
-      } else {
-        void handleSave()
+  /** 插入图片：复用全局文件选择通道（openFileDialog）→ base64 dataURL → 引擎 image 元素。 */
+  const handleInsertImage = React.useCallback(async (): Promise<void> => {
+    const handle = handleRef.current
+    if (!handle) return
+    try {
+      const result = await window.electronAPI.openFileDialog()
+      const images = (result.files ?? []).filter((file) => file.mediaType.startsWith('image/'))
+      if (images.length === 0) {
+        onToast?.('info', '未选择图片文件（支持 png / jpg / jpeg / gif / webp）')
+        return
       }
+      let inserted = 0
+      for (const file of images) {
+        const dataUrl = `data:${file.mediaType};base64,${file.data}`
+        const size = await measureImage(dataUrl)
+        if (!size) continue
+        handle.insertImage({ value: dataUrl, width: size.width, height: size.height })
+        inserted += 1
+      }
+      if (inserted > 0) {
+        setDirty(true)
+        onToast?.('success', `已插入 ${inserted} 张图片`)
+      } else {
+        onToast?.('error', '图片解码失败，未插入')
+      }
+    } catch {
+      onToast?.('error', '打开文件选择器失败')
     }
+  }, [onToast])
 
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [handleSave, handleSaveAs])
+  const handleInsertFormula = React.useCallback((): void => {
+    const handle = handleRef.current
+    const latex = formulaText.trim()
+    if (!handle || !latex) return
+    handle.insertLatex(latex)
+    setFormulaOpen(false)
+    setDirty(true)
+  }, [formulaText])
 
-  const handleClick = (event: React.MouseEvent<HTMLDivElement>): void => {
+  const toggleHandTool = React.useCallback((enabled: boolean): void => {
+    handToolRef.current = enabled
+    setHandTool(enabled)
+    handleRef.current?.setHandTool(enabled)
+  }, [])
+
+  // ===== 胶囊 =====
+
+  const handleClickInPaper = (event: React.MouseEvent<HTMLDivElement>): void => {
     const target = (event.target as HTMLElement).closest('[data-capsule-id]')
     const capsuleId = target?.getAttribute('data-capsule-id')
     if (capsuleId) onCapsuleClick(capsuleId)
   }
-
-  // ===== 统计指标估算 =====
-
-  const stats = React.useMemo(() => {
-    if (!editor) return { words: 0, chars: 0, paragraphs: 1, pages: 1 }
-    const text = editor.state.doc.textContent || ''
-    const chars = text.length
-    // 中文按单字、英文按空格分词统计
-    const words = (text.match(/[\u4e00-\u9fa5]|[a-zA-Z0-9_-]+/g) || []).length
-    const paragraphs = editor.state.doc.childCount || 1
-    // A4 标准纸张一页约 800-1000 字
-    const pages = Math.max(1, Math.ceil(chars / 850))
-    return { words, chars, paragraphs, pages }
-  }, [editor, dirty])
 
   const formatLastSaved = (time: number | null): string => {
     if (!time) return '未保存'
@@ -443,46 +510,61 @@ export function CsLabManuscriptEditor({
     return `${hours}:${minutes}`
   }
 
+  const style = rangeStyle
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#F3F2EE] select-text dark:bg-[#151518]">
-      {/* ===== Microsoft Word 顶部 Ribbon 功能区 ===== */}
+      {/* ===== Word Ribbon ===== */}
       <header className="flex shrink-0 flex-col border-b border-[#DDDCD5] bg-[#FBFBFA] shadow-xs dark:border-[#2A2A2E] dark:bg-[#1E1E22]">
-        {/* Ribbon 选项卡标题栏 */}
-        <div className="flex h-8 items-center justify-between border-b border-zinc-200/80 px-3 dark:border-zinc-800">
-          <div className="flex items-center gap-1">
-            <span className="mr-2 inline-flex items-center gap-1 font-serif text-[12px] font-semibold tracking-wider text-cslab-accent uppercase">
+        <div className="flex h-9 items-center justify-between gap-3 border-b border-zinc-200/80 px-3 dark:border-zinc-800">
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+            <span className="mr-1 inline-flex shrink-0 items-center gap-1 font-serif text-[12px] font-semibold tracking-wider text-cslab-accent uppercase">
               <FileText size={13} />
               CSLab Word
             </span>
-            {(['home', 'insert', 'review', 'view'] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setActiveTab(tab)}
-                className={cn(
-                  'relative h-8 px-3 text-[12px] font-medium transition-colors',
-                  activeTab === tab
-                    ? 'font-semibold text-zinc-900 after:absolute after:bottom-0 after:left-0 after:h-[2px] after:w-full after:bg-cslab-accent dark:text-zinc-100'
-                    : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200',
-                )}
-              >
-                {{ home: '开始', insert: '插入', review: '审稿', view: '排版与视图' }[tab]}
-              </button>
-            ))}
+            <input
+              value={title}
+              onChange={(event) => {
+                setTitle(event.target.value)
+                setDirty(true)
+              }}
+              placeholder="键入论文标题…"
+              aria-label="论文标题"
+              className="h-7 min-w-0 max-w-[420px] flex-1 rounded border border-transparent bg-transparent px-2 font-serif text-[13px] font-semibold text-zinc-900 transition-colors placeholder:text-zinc-300 hover:border-zinc-200 focus:border-cslab-accent/40 focus:bg-white focus:outline-none dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:hover:border-zinc-700 dark:focus:bg-zinc-900"
+            />
+            <span className="ml-1 hidden shrink-0 font-mono text-[10px] text-zinc-400 sm:inline">
+              {getFileBaseName(manuscript.uri)}
+            </span>
+            <div className="ml-2 flex items-center gap-1">
+              {(['home', 'insert', 'review', 'view'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={cn(
+                    'relative h-9 px-3 text-[12px] font-medium transition-colors',
+                    activeTab === tab
+                      ? 'font-semibold text-zinc-900 after:absolute after:bottom-0 after:left-0 after:h-[2px] after:w-full after:bg-cslab-accent dark:text-zinc-100'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200',
+                  )}
+                >
+                  {{ home: '开始', insert: '插入', review: '审稿', view: '排版' }[tab]}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* 快速保存 / 另存为操作组 */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5">
             <div className="relative">
               <button
                 type="button"
-                disabled={!editor || reviewBusy}
+                disabled={!ready || reviewBusy}
                 onClick={() => {
                   setCapsuleMenuOpen(false)
                   setReviewMenuOpen((value) => !value)
                 }}
                 className="inline-flex h-6 items-center gap-1 rounded border border-cslab-accent/40 bg-cslab-accent/10 px-2 text-[11px] font-medium text-cslab-accent transition-colors hover:bg-cslab-accent/15 disabled:cursor-not-allowed disabled:opacity-50"
-                title="选择 AI 审稿专家，对正文生成修订与旁注"
+                title="选择 AI 审稿专家，对正文生成原生批注"
               >
                 {reviewBusy ? (
                   <Loader2 size={10} className="animate-spin" />
@@ -503,7 +585,7 @@ export function CsLabManuscriptEditor({
                         onClick={() => {
                           setReviewMenuOpen(false)
                           setReviewPersona(persona)
-                          void handleAiReview(persona)
+                          void runReview(persona)
                         }}
                         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-zinc-700 transition-colors hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                       >
@@ -548,7 +630,7 @@ export function CsLabManuscriptEditor({
               </button>
               {capsuleMenuOpen && (
                 <div className="absolute right-0 top-full z-40 mt-1 max-h-64 w-60 overflow-auto rounded-lg border border-cslab-border bg-cslab-elevated py-1 shadow-subtle">
-                  {manuscript.capsules.map((capsule) => (
+                  {manuscript.capsules.map((capsule: CsLabCapsule) => (
                     <button
                       key={capsule.id}
                       type="button"
@@ -572,7 +654,7 @@ export function CsLabManuscriptEditor({
             <button
               type="button"
               onClick={() => void handleSave()}
-              disabled={saving || !editor}
+              disabled={saving || !ready}
               title="保存到工作区 (Ctrl+S)"
               className="inline-flex h-6 items-center gap-1.5 rounded bg-cslab-accent px-2.5 text-[11px] font-medium text-white shadow-xs transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -582,7 +664,7 @@ export function CsLabManuscriptEditor({
             <button
               type="button"
               onClick={() => void handleSaveAs()}
-              disabled={saving || !editor}
+              disabled={saving || !ready}
               title="另存为外部文件 (.docx / .md) (Ctrl+Shift+S)"
               className="inline-flex h-6 items-center gap-1.5 rounded border border-zinc-300 bg-white px-2.5 text-[11px] font-medium text-zinc-700 shadow-2xs transition-colors hover:bg-zinc-50 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
             >
@@ -596,97 +678,88 @@ export function CsLabManuscriptEditor({
         <div className="flex h-10 items-center gap-1 overflow-x-auto px-3 py-1 text-zinc-700 dark:text-zinc-300">
           {activeTab === 'home' && (
             <>
-              {/* 格式刷 / 字体 */}
               <RibbonButton
                 title="加粗"
                 shortcut="Ctrl+B"
-                active={editor?.isActive('bold')}
-                onClick={() => editor?.chain().focus().toggleBold().run()}
+                active={style.bold}
+                onClick={() => handleRef.current?.bold()}
               >
                 <Bold size={13} />
               </RibbonButton>
               <RibbonButton
                 title="斜体"
                 shortcut="Ctrl+I"
-                active={editor?.isActive('italic')}
-                onClick={() => editor?.chain().focus().toggleItalic().run()}
+                active={style.italic}
+                onClick={() => handleRef.current?.italic()}
               >
                 <Italic size={13} />
               </RibbonButton>
               <RibbonButton
-                title="删除线"
-                active={editor?.isActive('strike')}
-                onClick={() => editor?.chain().focus().toggleStrike().run()}
+                title="下划线"
+                shortcut="Ctrl+U"
+                active={style.underline}
+                onClick={() => handleRef.current?.underline()}
               >
-                <Strikethrough size={13} />
+                <Underline size={13} />
               </RibbonButton>
               <RibbonButton
-                title="行内代码"
-                active={editor?.isActive('code')}
-                onClick={() => editor?.chain().focus().toggleCode().run()}
+                title="删除线"
+                active={style.strikeout}
+                onClick={() => handleRef.current?.strikeout()}
               >
-                <Code size={13} />
+                <Strikethrough size={13} />
               </RibbonButton>
 
               <RibbonDivider />
 
-              {/* 标题层次 */}
               <RibbonButton
                 title="正文段落"
-                active={editor?.isActive('paragraph')}
-                onClick={() => editor?.chain().focus().setParagraph().run()}
+                active={style.level === null}
+                onClick={() => handleRef.current?.title(null)}
               >
                 <span className="text-[11px]">正文</span>
               </RibbonButton>
               <RibbonButton
                 title="一级标题 (Heading 1)"
-                active={editor?.isActive('heading', { level: 1 })}
-                onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
+                active={style.level === 'first'}
+                onClick={() => handleRef.current?.title('first')}
               >
                 <Heading1 size={13} />
               </RibbonButton>
               <RibbonButton
                 title="二级标题 (Heading 2)"
-                active={editor?.isActive('heading', { level: 2 })}
-                onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
+                active={style.level === 'second'}
+                onClick={() => handleRef.current?.title('second')}
               >
                 <Heading2 size={13} />
               </RibbonButton>
               <RibbonButton
                 title="三级标题 (Heading 3)"
-                active={editor?.isActive('heading', { level: 3 })}
-                onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
+                active={style.level === 'third'}
+                onClick={() => handleRef.current?.title('third')}
               >
                 <Heading3 size={13} />
               </RibbonButton>
 
               <RibbonDivider />
 
-              {/* 列表与引用 */}
               <RibbonButton
                 title="无序列表"
-                active={editor?.isActive('bulletList')}
-                onClick={() => editor?.chain().focus().toggleBulletList().run()}
+                active={style.listType === 'ul'}
+                onClick={() => handleRef.current?.list('ul')}
               >
                 <List size={13} />
               </RibbonButton>
               <RibbonButton
                 title="有序列表"
-                active={editor?.isActive('orderedList')}
-                onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+                active={style.listType === 'ol'}
+                onClick={() => handleRef.current?.list('ol')}
               >
                 <ListOrdered size={13} />
               </RibbonButton>
               <RibbonButton
-                title="引用块"
-                active={editor?.isActive('blockquote')}
-                onClick={() => editor?.chain().focus().toggleBlockquote().run()}
-              >
-                <Quote size={13} />
-              </RibbonButton>
-              <RibbonButton
                 title="分割线"
-                onClick={() => editor?.chain().focus().setHorizontalRule().run()}
+                onClick={() => handleRef.current?.separator()}
               >
                 <Minus size={13} />
               </RibbonButton>
@@ -701,11 +774,100 @@ export function CsLabManuscriptEditor({
               </span>
               <RibbonDivider />
               <RibbonButton
+                title="插入图片（本地文件 → 正文）"
+                disabled={!ready}
+                onClick={() => void handleInsertImage()}
+              >
+                <ImagePlus size={13} />
+                <span className="ml-1 text-[11px]">图片</span>
+              </RibbonButton>
+              <div className="relative">
+                <RibbonButton
+                  title="插入 LaTeX 公式"
+                  disabled={!ready}
+                  active={formulaOpen}
+                  onClick={() => setFormulaOpen((value) => !value)}
+                >
+                  <Sigma size={13} />
+                  <span className="ml-1 text-[11px]">公式</span>
+                </RibbonButton>
+                {formulaOpen && (
+                  <div className="absolute left-0 top-full z-40 mt-1 w-80 rounded-lg border border-cslab-border bg-cslab-elevated p-2.5 shadow-subtle">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-medium text-cslab-text">插入 LaTeX 公式</p>
+                      <button
+                        type="button"
+                        aria-label="关闭公式面板"
+                        onClick={() => setFormulaOpen(false)}
+                        className="rounded p-0.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                    <textarea
+                      value={formulaText}
+                      onChange={(event) => setFormulaText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault()
+                          handleInsertFormula()
+                        }
+                      }}
+                      rows={2}
+                      placeholder="输入 LaTeX，例如 E=mc^2"
+                      aria-label="LaTeX 公式"
+                      className="mt-2 w-full resize-none rounded-md border border-cslab-border bg-cslab-bg px-2 py-1.5 font-mono text-[11px] text-cslab-text outline-none focus:border-cslab-accent/40"
+                    />
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                      {FORMULA_TEMPLATES.map((template) => (
+                        <button
+                          key={template.label}
+                          type="button"
+                          title={`填入 ${template.latex}`}
+                          onClick={() => setFormulaText(template.latex)}
+                          className="rounded-md border border-cslab-border px-1.5 py-0.5 text-[10px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+                        >
+                          {template.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-2 rounded-md border border-cslab-border bg-cslab-bg px-2 py-1">
+                      <LatexPreview latex={formulaText} />
+                    </div>
+                    <div className="mt-2 flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setFormulaOpen(false)}
+                        className="h-6 rounded border border-cslab-border px-2 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!formulaText.trim()}
+                        onClick={handleInsertFormula}
+                        className="h-6 rounded bg-cslab-accent px-2.5 text-[11px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        插入
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <RibbonDivider />
+              <RibbonButton
                 title="插入横向分割线"
-                onClick={() => editor?.chain().focus().setHorizontalRule().run()}
+                onClick={() => handleRef.current?.separator()}
               >
                 <Minus size={13} />
                 <span className="ml-1 text-[11px]">横线</span>
+              </RibbonButton>
+              <RibbonButton
+                title="插入分页符"
+                onClick={() => handleRef.current?.pageBreak()}
+              >
+                <FileText size={13} />
+                <span className="ml-1 text-[11px]">分页符</span>
               </RibbonButton>
             </div>
           )}
@@ -738,8 +900,8 @@ export function CsLabManuscriptEditor({
               <RibbonDivider />
               <button
                 type="button"
-                disabled={reviewBusy || !editor}
-                onClick={() => void handleAiReview(reviewPersona)}
+                disabled={reviewBusy || !ready}
+                onClick={() => void runReview(reviewPersona)}
                 className="inline-flex h-6 items-center gap-1 rounded bg-cslab-accent px-2 text-[11px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {reviewBusy ? (
@@ -775,41 +937,59 @@ export function CsLabManuscriptEditor({
               </button>
               <RibbonDivider />
               <RibbonButton
-                title="显示/隐藏旁注"
-                active={showMarginalia}
-                onClick={() => setShowMarginalia((value) => !value)}
+                title="清空全部批注"
+                disabled={metrics.comments === 0}
+                onClick={handleClearComments}
               >
-                <span className="text-[11px]">旁注</span>
+                <Eraser size={12} />
+                <span className="ml-1 text-[11px]">清空批注</span>
               </RibbonButton>
-              <RibbonButton
-                title="接受全部修订"
-                disabled={suggestions.length === 0}
-                onClick={() => {
-                  editor?.chain().focus().acceptAllSuggestions().run()
-                  setSuggestions(collectSuggestions(editor ?? null))
-                  setDirty(true)
-                }}
-              >
-                <CheckCircle2 size={12} />
-                <span className="ml-1 text-[11px]">全部接受</span>
-              </RibbonButton>
-              <RibbonButton
-                title="拒绝全部修订"
-                disabled={suggestions.length === 0}
-                onClick={() => {
-                  editor?.chain().focus().rejectAllSuggestions().run()
-                  setSuggestions(collectSuggestions(editor ?? null))
-                  setDirty(true)
-                }}
-              >
-                <AlertCircle size={12} />
-                <span className="ml-1 text-[11px]">全部拒绝</span>
-              </RibbonButton>
+              <span className="inline-flex items-center gap-1 rounded bg-rose-50 px-2 py-1 text-[10px] font-medium text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+                <MessageSquare size={10} />
+                {metrics.comments} 条批注
+              </span>
             </div>
           )}
 
           {activeTab === 'view' && (
             <div className="flex items-center gap-2">
+              <div
+                className="inline-flex items-center gap-0.5 rounded border border-cslab-border p-0.5"
+                role="group"
+                aria-label="画布工具"
+              >
+                <button
+                  type="button"
+                  disabled={!ready}
+                  onClick={() => toggleHandTool(false)}
+                  title="选择工具（默认）"
+                  className={cn(
+                    'flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    !handTool
+                      ? 'bg-cslab-accent/15 text-cslab-accent'
+                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
+                  )}
+                >
+                  <MousePointer2 size={12} />
+                  选择
+                </button>
+                <button
+                  type="button"
+                  disabled={!ready}
+                  onClick={() => toggleHandTool(true)}
+                  title="抓手工具：按住拖动平移画布视口"
+                  className={cn(
+                    'flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    handTool
+                      ? 'bg-cslab-accent/15 text-cslab-accent'
+                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
+                  )}
+                >
+                  <Hand size={12} />
+                  抓手
+                </button>
+              </div>
+              <RibbonDivider />
               <button
                 type="button"
                 onClick={() => setShowRuler(!showRuler)}
@@ -845,109 +1025,63 @@ export function CsLabManuscriptEditor({
         </div>
       </header>
 
-      {/* ===== 物理标尺 (cm 刻度) ===== */}
-      {showRuler && (
-        <div className="flex shrink-0 items-center justify-center border-b border-[#DDDCD5] bg-[#EBE9E3] py-0.5 select-none dark:border-[#2A2A2E] dark:bg-[#1A1A1D]">
-          <div
-            style={{ width: `${Math.round((794 * zoom) / 100)}px` }}
-            className="relative flex h-5 items-center justify-between overflow-hidden rounded-xs border border-zinc-300 bg-white px-8 text-[9px] font-mono text-zinc-400 shadow-2xs dark:border-zinc-700 dark:bg-[#202024]"
-          >
-            {/* 左页边距阴影 */}
-            <div className="absolute top-0 bottom-0 left-0 w-8 bg-zinc-100/80 border-r border-zinc-300 dark:bg-zinc-800/80 dark:border-zinc-700" />
-            {/* 刻度标记 0 ~ 16 cm */}
-            {Array.from({ length: 17 }).map((_, i) => (
-              <div key={i} className="flex flex-col items-center">
-                <span className="text-[8px] leading-none text-zinc-500">{i}</span>
-                <span className="h-1.5 w-px bg-zinc-300 dark:bg-zinc-600" />
-              </div>
-            ))}
-            {/* 右页边距阴影 */}
-            <div className="absolute top-0 bottom-0 right-0 w-8 bg-zinc-100/80 border-l border-zinc-300 dark:bg-zinc-800/80 dark:border-zinc-700" />
-          </div>
-        </div>
-      )}
-
-      {/* ===== A4 纸张排版主桌面容器 ===== */}
+      {/* ===== Canvas A4 纸面 ===== */}
       <div
         data-cslab-scroll
-        className="min-h-0 flex-1 overflow-auto px-4 py-8"
-        onClick={handleClick}
+        className="min-h-0 flex-1 overflow-hidden"
+        onClick={handleClickInPaper}
+        onDragOver={(event) => {
+          if (!hasDragType(event.dataTransfer, CSLAB_CELL_MIME)) return
+          event.preventDefault()
+        }}
       >
-        <div className="flex min-h-full justify-center">
-          {/* A4 实体纸张白板 */}
-          <div
-            style={{
-              width: `${Math.round((794 * zoom) / 100)}px`,
-              minHeight: `${Math.round((1123 * zoom) / 100)}px`,
-              transformOrigin: 'top center',
-            }}
-            className="flex flex-col rounded-sm border border-[#D5D3CC] bg-white px-14 py-12 shadow-[0_4px_24px_rgba(0,0,0,0.08),0_1px_3px_rgba(0,0,0,0.05)] transition-all dark:border-[#333338] dark:bg-[#1E1E22] dark:shadow-[0_4px_24px_rgba(0,0,0,0.4)]"
-          >
-            {/* 论文页眉：可编辑论文大标题 */}
-            <div className="mb-6 border-b border-zinc-200/90 pb-4 dark:border-zinc-800">
-              <input
-                value={title}
-                onChange={(event) => {
-                  setTitle(event.target.value)
-                  setDirty(true)
-                }}
-                placeholder="键入论文标题…"
-                aria-label="论文标题"
-                className="w-full bg-transparent font-serif text-2xl font-bold tracking-tight text-zinc-900 placeholder:text-zinc-300 focus:outline-none dark:text-zinc-100 dark:placeholder:text-zinc-600"
-              />
-              <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-400">
-                <span>CDUT Science · 学术论文活体数据绑定文档</span>
-                <span className="font-mono">{manuscript.uri.split('/').pop()}</span>
-              </div>
-            </div>
-
-            {/* TipTap 正文容器 */}
-            <div className="min-h-0 flex-1">
-              <EditorContent editor={editor} />
-            </div>
-
-            {/* A4 页面底部装订线装饰 */}
-            <div className="mt-12 flex items-center justify-between border-t border-zinc-200/60 pt-3 text-[10px] text-zinc-400 dark:border-zinc-800/80">
-              <span>第 1 页</span>
-              <span>成都理工大学 · CDUT Studio 科研工作台</span>
-            </div>
-          </div>
-
-          {/* 审稿旁注：与纸张同处一个滚动容器，位置用 translateY 调整 */}
-          <CsLabReviewMarginalia
-            editor={editor ?? null}
-            suggestions={suggestions}
-            active={showMarginalia && suggestions.length > 0}
-            onAccept={handleAcceptSuggestion}
-            onReject={handleRejectSuggestion}
-          />
-        </div>
+        <CsLabCanvasEditor
+          key={manuscript.uri}
+          labId={labId}
+          canvasData={initial.canvasData}
+          initialComments={initial.comments}
+          staleCapsuleIds={staleCapsuleIds}
+          zoom={zoom}
+          showRuler={showRuler}
+          onReady={handleReady}
+          onDirtyChange={handleDirtyChange}
+          onRangeStyleChange={setRangeStyle}
+          onPageChange={(currentPage, totalPages) =>
+            setPage({ current: currentPage, total: totalPages })
+          }
+          onZoomChange={setZoom}
+          onCapsuleClick={onCapsuleClick}
+          onMetricsChange={setMetrics}
+          onToast={onToast}
+          onSearchLiterature={onSearchLiterature}
+        />
       </div>
 
-      {/* ===== Microsoft Word 经典底部状态栏 ===== */}
+      {/* ===== Word 状态栏 ===== */}
       <footer className="flex h-6 shrink-0 items-center justify-between border-t border-[#DDDCD5] bg-[#F7F6F2] px-4 text-[11px] text-zinc-500 select-none dark:border-[#2A2A2E] dark:bg-[#1A1A1D] dark:text-zinc-400">
         <div className="flex items-center gap-4">
-          <span>第 1 页，共 {stats.pages} 页</span>
+          <span>
+            第 {page.current} 页，共 {page.total} 页
+          </span>
           <span className="h-3 w-px bg-zinc-300 dark:bg-zinc-700" />
-          <span>{stats.words.toLocaleString()} 词</span>
-          <span>{stats.chars.toLocaleString()} 字符</span>
+          <span>{metrics.words.toLocaleString()} 词</span>
+          <span>{metrics.chars.toLocaleString()} 字符</span>
           <span className="h-3 w-px bg-zinc-300 dark:bg-zinc-700" />
           <span className="inline-flex items-center gap-1 font-medium text-cslab-accent">
             <Sparkles size={11} />
-            {manuscript.capsules.length} 个活体胶囊
+            {metrics.capsules} 个活体胶囊
           </span>
-          {suggestions.length > 0 && (
+          {metrics.comments > 0 && (
             <>
               <span className="h-3 w-px bg-zinc-300 dark:bg-zinc-700" />
               <span className="tabular-nums text-[10px] text-cslab-muted">
-                {suggestions.length} 条审稿意见
+                {metrics.comments} 条审稿批注
               </span>
             </>
           )}
         </div>
 
         <div className="flex items-center gap-4">
-          {/* 保存状态提示 */}
           <div className="flex items-center gap-1.5">
             {saving ? (
               <>
@@ -956,24 +1090,27 @@ export function CsLabManuscriptEditor({
               </>
             ) : dirty ? (
               <>
-                <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
-                <span className="text-amber-600 dark:text-amber-400">有未保存修改 (Ctrl+S)</span>
+                <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
+                <span className="text-amber-600 dark:text-amber-400">
+                  有未保存修改 (Ctrl+S)
+                </span>
               </>
             ) : (
               <>
                 <CheckCircle2 size={11} className="text-emerald-600" />
-                <span className="text-zinc-400">已保存至沙箱 ({formatLastSaved(lastSavedTime)})</span>
+                <span className="text-zinc-400">
+                  已保存至沙箱 ({formatLastSaved(lastSavedTime)})
+                </span>
               </>
             )}
           </div>
 
           <span className="h-3 w-px bg-zinc-300 dark:bg-zinc-700" />
 
-          {/* 缩放控制器 */}
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setZoom((z) => Math.max(50, z - 10))}
+              onClick={() => setZoom((value) => Math.max(50, value - 10))}
               title="缩小"
               className="rounded p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-800"
             >
@@ -982,7 +1119,7 @@ export function CsLabManuscriptEditor({
             <span className="w-9 text-center font-mono text-[10px]">{zoom}%</span>
             <button
               type="button"
-              onClick={() => setZoom((z) => Math.min(150, z + 10))}
+              onClick={() => setZoom((value) => Math.min(150, value + 10))}
               title="放大"
               className="rounded p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-800"
             >

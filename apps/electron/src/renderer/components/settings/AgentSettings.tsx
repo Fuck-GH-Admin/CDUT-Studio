@@ -86,7 +86,7 @@ export function AgentSettings(): React.ReactElement {
         description="AI 在每轮对话结束后静默反思，持续沉淀您的编码偏好、解法范式与高频工具习惯；内置 Classic RAG 毫秒级召回并自适应注入。"
       >
         <SettingsCard>
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div className="min-w-0">
               <p className="text-sm font-medium">长期记忆与个性化偏好图谱</p>
               <p className="text-xs text-muted-foreground">

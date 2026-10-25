@@ -4,7 +4,7 @@
  * 主题模式、IPC 通道等设置相关定义。
  */
 
-import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort, FeishuSessionMirrorSettings, AgentRuntime } from '@profer/shared'
+import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort, FeishuSessionMirrorSettings, AgentRuntime, PdfParseAccuracy } from '@profer/shared'
 
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode' | 'planningReminder'
@@ -348,6 +348,8 @@ export interface AppSettings {
   studyRetrievalEngine?: 'classic' | 'graphrag'
   /** 全局上下文索引开关：true 时所有会话强制使用索引模式（默认 false）。 */
   agentContextIndexGlobal?: boolean
+  /** 论文解析准度（快速/均衡/精细，缺省 'balanced'，见 PDF_PARSE_ACCURACY_OPTIONS） */
+  pdfParseAccuracy?: PdfParseAccuracy
   /** 最近一次已读的系统公告 ID；与内置最新公告 ID 不一致时启动弹一次公告栏 */
   lastReadBulletinId?: string
 }

@@ -97,6 +97,29 @@ export function CsLabVestaCrystalPane({
   const [isovalue, setIsovalue] = React.useState(0.01)
   const [isosurfaceEnabled, setIsosurfaceEnabled] = React.useState(false)
 
+  // ===== 演示资产默认视口 =====
+  React.useEffect(() => {
+    const defaults = asset.defaultSettings
+    setSupercell(defaults?.supercell ?? { na: 1, nb: 1, nc: 1 })
+  }, [asset.uri, asset.defaultSettings])
+
+  React.useEffect(() => {
+    const miller = asset.defaultSettings?.miller
+    if (!analysis || !miller) return
+    const [h, k, l] = miller
+    setPlaneH(h)
+    setPlaneK(k)
+    setPlaneL(l)
+    const built = buildMillerPlane(
+      analysis.structure.cell,
+      h,
+      k,
+      l,
+      WAVELENGTH_OPTIONS.find((item) => item.id === wavelengthId)?.value,
+    )
+    if (built) setPlane(built)
+  }, [analysis, asset.uri, asset.defaultSettings, wavelengthId])
+
   // ===== 晶体分析 =====
   React.useEffect(() => {
     if (!format) {
@@ -474,6 +497,7 @@ export function CsLabVestaCrystalPane({
             isoNegative={isosurfaceEnabled ? isosurface.negative : null}
             supercellRange={supercell}
             externalPlane={plane}
+            autoSpin={asset.defaultSettings?.autoSpin === true}
           />
         </div>
 

@@ -1,5 +1,5 @@
 import { getLab } from './cslab-manager'
-import { getCsLabDatabase, listEntities } from './cslab-db'
+import { getCsLabDatabase, listEntities, listLiteratureSources } from './cslab-db'
 import type { CsLabPromptLabInfo } from '@profer/shared'
 /**
  * CSLab 科学计算服务（主进程）
@@ -39,6 +39,8 @@ import {
 import { writeTextAtomic } from './cslab-atomic'
 import { exportPlotToFile } from './cslab-figure-export'
 import { getMolAsset, getVolumeAsset } from './cslab-mol'
+import { listManuscripts } from './cslab-manuscript'
+import { listCanvases } from './cslab-canvas-sync'
 import { assertLabId, resolveLabDir, sanitizeFileName } from './cslab-paths'
 
 const PLOT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
@@ -233,12 +235,92 @@ export async function getCsLabPromptLabInfo(
         format: e.format,
       }))
     const plots = await listPlots(labId)
+
+    // 文献清单：只取轻量摘要，避免提示词装配被 sidecar 全文拖慢。
+    const metadataByUri = new Map<string, Record<string, unknown>>()
+    for (const source of listLiteratureSources(db, labId)) {
+      if (!source.metadataJson) continue
+      try {
+        const parsed = JSON.parse(source.metadataJson) as Record<string, unknown>
+        if (parsed && typeof parsed === 'object') metadataByUri.set(source.uri, parsed)
+      } catch {
+        // 忽略损坏的 metadata。
+      }
+    }
+    const literature = entities
+      .filter((e) => e.layerType === 'lit')
+      .slice(0, 30)
+      .map((e) => {
+        const meta = metadataByUri.get(e.uri) ?? {}
+        return {
+          uri: e.uri,
+          title: e.title,
+          year: typeof meta.year === 'string' ? meta.year : undefined,
+          doi: typeof meta.doi === 'string' ? meta.doi : undefined,
+          pageCount: typeof meta.pageCount === 'number' ? meta.pageCount : undefined,
+          sectionCount: typeof meta.sectionCount === 'number' ? meta.sectionCount : undefined,
+        }
+      })
+
+    const geoAssets = entities
+      .filter((e) => e.layerType === 'geo')
+      .slice(0, 30)
+      .map((e) => {
+        let meta: Record<string, unknown> = {}
+        if (e.metaJson) {
+          try {
+            meta = JSON.parse(e.metaJson) as Record<string, unknown>
+          } catch {
+            meta = {}
+          }
+        }
+        return {
+          uri: e.uri,
+          title: e.title,
+          format: e.format,
+          width: typeof meta.width === 'number' ? meta.width : undefined,
+          height: typeof meta.height === 'number' ? meta.height : undefined,
+          cellsize: typeof meta.cellsize === 'number' ? meta.cellsize : undefined,
+        }
+      })
+
+    const tables = entities
+      .filter((e) => e.layerType === 'table')
+      .slice(0, 30)
+      .map((e) => ({ uri: e.uri, title: e.title }))
+    const figures = entities
+      .filter((e) => e.layerType === 'fig')
+      .slice(0, 30)
+      .map((e) => ({
+        uri: e.uri,
+        title: e.title,
+        layerType: e.layerType,
+        format: e.format,
+      }))
+    const manuscripts = listManuscripts(labId)
+      .slice(0, 30)
+      .map((item) => ({ uri: item.uri, title: item.title, updatedAt: item.updatedAt }))
+    let canvases: Array<{ relPath: string; title: string }> = []
+    try {
+      canvases = (await listCanvases(labId))
+        .slice(0, 30)
+        .map((item) => ({ relPath: item.relPath, title: item.title }))
+    } catch {
+      canvases = []
+    }
+
     return {
       labId,
       labName: lab.name,
       vaultDir: join(resolveLabDir(labId), 'vault'),
       structures,
       plots: plots.map((p) => ({ id: p.id, title: p.title })),
+      literature,
+      geoAssets,
+      tables,
+      figures,
+      manuscripts,
+      canvases,
     }
   } catch (err) {
     console.warn('[CSLab] 获取提示词实验室概况失败:', err)

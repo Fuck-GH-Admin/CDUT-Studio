@@ -1,11 +1,11 @@
-/**
+﻿/**
  * CSLab IPC 路由与分发层
  *
  * 严格收敛于 cslab 隔离目录，由 main/ipc.ts 单点挂载。
  * 所有渲染进程输入必须先做类型与路径校验。
  */
 
-import { BrowserWindow, dialog, ipcMain as electronIpcMain, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, dialog, ipcMain as electronIpcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { basename, extname, resolve } from 'node:path'
@@ -34,8 +34,11 @@ import type {
   CsLabDocxSyncResult,
   CsLabIngestResult,
   CsLabFormulaVerifyInput,
+  CsLabTranslateSelectionInput,
+  CsLabZoteroBridgeWriteInput,
   CsLabLiteratureSearchInput,
   CsLabPlotDigitizeInput,
+  CsLabTickReadInput,
   CsLabDigitizedFigureInput,
   CsLabTableExportFormat,
   CsLabTableExportResult,
@@ -43,6 +46,8 @@ import type {
   CsLabZoteroDiscovery,
   CsLabZoteroStatus,
   CsLabZoteroSyncResult,
+  EmpiricalMetric,
+  Hierarchical3DGraphData,
   CsLabCanvasWriteInput,
   CsLabCreateProtocolInput,
   CsLabCreateRunInput,
@@ -60,10 +65,11 @@ import type {
   CsLabPxrdOptions,
   CsLabPlotExportResult,
   CsLabDemoLabResult,
+  CsLabGeoRasterPayload,
   AgentSessionMeta,
 } from '@profer/shared'
 import { AGENT_IPC_CHANNELS } from '@profer/shared'
-import { createDemoLab } from './cslab-demo'
+import { createDemoLab, ensureDemoLabs, resetDemoLab } from './cslab-demo'
 import {
   analyzeCrystalAsset,
   exportFigure,
@@ -110,6 +116,7 @@ import {
   attachDocx,
   blocksToDocJson,
   createManuscript,
+  extractCanvasZoneText,
   getLinkedDocxPath,
   getManuscript,
   listManuscripts,
@@ -140,19 +147,40 @@ import {
   stopZoteroWatcher,
   syncZoteroLibrary,
 } from './cslab-zotero'
-import { getZoteroBridgeStatus } from './cslab-zotero-bridge'
+import { getZoteroBridgeStatus, initZoteroBridgeConfig, writeZoteroBridge } from './cslab-zotero-bridge'
+import { resolveLabRelativePath } from './cslab-paths'
+import { translateSelection } from './cslab-translate'
 import { getLiteratureFilePath, getLiteratureItem } from './cslab-literature'
+import { buildLiteratureGuide, getLiteratureStructure } from './cslab-literature-structure'
+import { parseEmpiricalMetricsFromMarkdown } from './cslab-empirical-parser'
+import { loadCorpusTopology, loadTopology } from './cslab-3d-topology'
+import { runPaperIngestionPipeline } from './cslab-paper-pipeline'
+import {
+  fetchPaperPreview,
+  ingestAcademicPaper,
+  searchAcademicPapers,
+} from './cslab-academic-search-service'
+import type {
+  CsLabAcademicIngestResult,
+  CsLabAcademicPaperMetadata,
+  CsLabAcademicPreviewInput,
+  CsLabAcademicPreviewResult,
+  CsLabAcademicSearchInput,
+  CsLabAcademicSearchResult,
+} from '@profer/shared'
 import {
   ensureToolEnvironment,
   getToolRuntimeStatus,
 } from './cslab-python-runtime'
-import { digitizePlot } from './cslab-plot-digitizer'
+import { digitizePlot, readTickValue } from './cslab-plot-digitizer'
 import { persistDigitizedFigure } from './cslab-dataset-store'
+import { analyzeDem, parseGeoRasterBuffer } from './cslab-geohazard'
 import { ocrFormula, verifyFormula } from './cslab-formula-verifier'
 import {
   buildLiteratureIndex,
   searchLabLiterature,
 } from './cslab-graphrag-router'
+import { getLiteratureGraph } from './cslab-literature-index'
 import { registerProferFilePath } from '../local-file-protocol'
 import { updateAgentSessionMeta } from '../agent-session-manager'
 import {
@@ -183,6 +211,9 @@ import {
 } from './cslab-vault-index'
 import {
   getLabToolScan,
+  installToolPresets,
+  listToolPresets,
+  readToolPresetSource,
   runLabTool,
   scanLabTools,
   startLabToolWatcher,
@@ -424,11 +455,26 @@ export function registerCsLabIpc(): void {
   ipcMain.handle(CSLAB_IPC_CHANNELS.PING, async () => csLabService.ping())
 
   // ===== 实验室沙箱 =====
-  ipcMain.handle(CSLAB_IPC_CHANNELS.LIST_LABS, async (): Promise<CsLabLab[]> => listLabs())
+  ipcMain.handle(CSLAB_IPC_CHANNELS.LIST_LABS, async (): Promise<CsLabLab[]> => {
+    // 首次进入列表时静默注册官方演示实验室；失败不阻断正常列表。
+    try {
+      await ensureDemoLabs()
+    } catch (error) {
+      console.warn('[CSLab] 演示实验室自动注册失败:', error)
+    }
+    return listLabs()
+  })
 
   ipcMain.handle(
     CSLAB_IPC_CHANNELS.CREATE_DEMO_LAB,
     async (): Promise<CsLabDemoLabResult> => createDemoLab(),
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.RESET_DEMO_LAB,
+    async (_event, labId: unknown): Promise<CsLabDemoLabResult> => {
+      return resetDemoLab(asString(labId, '实验室标识'))
+    },
   )
 
   ipcMain.handle(
@@ -712,6 +758,8 @@ export function registerCsLabIpc(): void {
         uri: asString(record.uri, '文稿 URI'),
         title: asString(record.title, '文稿标题'),
         docJson: record.docJson,
+        canvasData: record.canvasData,
+        comments: record.comments,
         capsules: Array.isArray(record.capsules) ? (record.capsules as CsLabCapsule[]) : [],
       })
 
@@ -743,12 +791,15 @@ export function registerCsLabIpc(): void {
         value: capsule.value,
       }))
 
+      const zoneText = extractCanvasZoneText(manuscript.canvasData)
       const exported = await runOoxmlTask({
         type: 'export',
         input: {
           title: manuscript.title,
           docJson: manuscript.docJson,
           capsules,
+          headerText: zoneText.header || undefined,
+          footerText: zoneText.footer || undefined,
         },
       })
       if (exported.type !== 'export') throw new Error('OOXML 导出结果类型异常')
@@ -892,6 +943,8 @@ export function registerCsLabIpc(): void {
         format: record.format,
         title: asString(record.title, '文稿标题'),
         docJson: record.docJson,
+        canvasData: record.canvasData,
+        comments: record.comments,
         capsules: Array.isArray(record.capsules) ? (record.capsules as CsLabCapsule[]) : [],
       })
     },
@@ -1136,6 +1189,18 @@ export function registerCsLabIpc(): void {
     },
   )
 
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.GET_LITERATURE_GUIDE,
+    async (_event, input: unknown) => {
+      if (!input || typeof input !== 'object') throw new Error('文献导读参数无效')
+      const record = input as { labId?: unknown; literatureUri?: unknown }
+      return buildLiteratureGuide(
+        asString(record.labId, '实验室标识'),
+        asString(record.literatureUri, '文献 URI'),
+      )
+    },
+  )
+
   // ===== 图表逆向数字化 =====
   ipcMain.handle(CSLAB_IPC_CHANNELS.DIGITIZE_PLOT, async (_event, input: unknown) => {
     if (!input || typeof input !== 'object') throw new Error('数字化参数无效')
@@ -1153,8 +1218,33 @@ export function registerCsLabIpc(): void {
       mode: record.mode,
       calibration: record.calibration as CsLabPlotDigitizeInput['calibration'],
       color: typeof record.color === 'string' ? record.color : undefined,
+      colors: Array.isArray(record.colors)
+        ? record.colors.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : undefined,
+      seriesCount: typeof record.seriesCount === 'number' ? record.seriesCount : undefined,
       tolerance: typeof record.tolerance === 'number' ? record.tolerance : undefined,
     })
+  })
+
+  // ===== 刻度数值自动读取（read-tick 模板匹配） =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.READ_TICK_VALUE, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('刻度识别参数无效')
+    const record = input as Partial<CsLabTickReadInput>
+    const labId = asString(record.labId, '实验室标识')
+    if (typeof record.imageDataUrl !== 'string' || !record.imageDataUrl.trim()) {
+      throw new Error('缺少框选图像')
+    }
+    const rect = record.rect as CsLabTickReadInput['rect'] | undefined
+    if (
+      !rect
+      || !Number.isFinite(rect.x)
+      || !Number.isFinite(rect.y)
+      || !Number.isFinite(rect.w)
+      || !Number.isFinite(rect.h)
+    ) {
+      throw new Error('刻度识别区域无效')
+    }
+    return readTickValue({ labId, imageDataUrl: record.imageDataUrl, rect })
   })
 
   ipcMain.handle(CSLAB_IPC_CHANNELS.SAVE_DIGITIZED_FIGURE, async (_event, input: unknown) => {
@@ -1194,6 +1284,59 @@ export function registerCsLabIpc(): void {
     })
   })
 
+  // ===== 选区学术翻译（矢量直读 / 视觉 LLM / OCR 隔离补全，防提示词注入） =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.TRANSLATE_SELECTION, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('翻译参数无效')
+    const record = input as Partial<CsLabTranslateSelectionInput>
+    // 业务级失败（OCR 缺依赖 / 渠道未配置）以结果对象返回，不抛 IPC 异常。
+    // vectorText / imageDataUrl 至少其一即可（仅有矢量文字不得被误拦，R2）。
+    return translateSelection({
+      labId: asString(record.labId, '实验室标识'),
+      imageDataUrl: typeof record.imageDataUrl === 'string' ? record.imageDataUrl : undefined,
+      vectorText: typeof record.vectorText === 'string' ? record.vectorText : undefined,
+      source: record.source,
+      channelId: asString(record.channelId, '模型渠道'),
+      modelId: asString(record.modelId, '模型标识'),
+    })
+  })
+
+  // ===== 预置科研算子 =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.TOOL_PRESET_LIST, async () => listToolPresets())
+
+  ipcMain.handle(CSLAB_IPC_CHANNELS.TOOL_PRESET_INSTALL, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('算子安装参数无效')
+    const record = input as { labId?: unknown; filenames?: unknown }
+    return installToolPresets(
+      asString(record.labId, '实验室标识'),
+      Array.isArray(record.filenames)
+        ? record.filenames.filter((item): item is string => typeof item === 'string')
+        : undefined,
+    )
+  })
+
+  ipcMain.handle(CSLAB_IPC_CHANNELS.TOOL_PRESET_READ, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('算子读取参数无效')
+    const record = input as { filename?: unknown }
+    return readToolPresetSource(asString(record.filename, '算子文件名'))
+  })
+
+  // ===== Zotero 写回桥接（仅 HTTP 通道，无任何 sqlite 写路径） =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.ZOTERO_BRIDGE_WRITE, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('写回参数无效')
+    const record = input as Partial<CsLabZoteroBridgeWriteInput>
+    return writeZoteroBridge({
+      op: (typeof record.op === 'string' ? record.op : '') as CsLabZoteroBridgeWriteInput['op'],
+      payload:
+        record.payload && typeof record.payload === 'object'
+          ? (record.payload as Record<string, unknown>)
+          : {},
+    })
+  })
+
+  // 生成默认写回桥接配置模板（zotero-bridge.json）。通道常量暂以字面量注册，
+  // 避免改动共享 CSLAB_IPC_CHANNELS 契约（见 preload 同名通道）。
+  ipcMain.handle(CSLAB_IPC_CHANNELS.ZOTERO_BRIDGE_INIT_CONFIG, async () => initZoteroBridgeConfig())
+
   // ===== 跨文献 GraphRAG =====
   ipcMain.handle(CSLAB_IPC_CHANNELS.BUILD_LITERATURE_INDEX, async (_event, input: unknown) => {
     if (!input || typeof input !== 'object') throw new Error('索引构建参数无效')
@@ -1218,6 +1361,114 @@ export function registerCsLabIpc(): void {
             ? record.literatureUri
             : undefined,
       })
+    },
+  )
+
+  // 文献智脑全景图谱（未搜索时的默认视图）
+  ipcMain.handle(CSLAB_IPC_CHANNELS.GET_LITERATURE_GRAPH, async (_event, labId: unknown) =>
+    getLiteratureGraph(asString(labId, '实验室标识')),
+  )
+
+  // ===== 论文入库流水线：3D 拓扑 / 实证指标 / Vault 合成 =====
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.GET_LITERATURE_3D_GRAPH,
+    async (_event, labId: unknown, uri?: unknown): Promise<Hierarchical3DGraphData | null> => {
+      const safeLabId = asString(labId, '实验室标识')
+      const safeUri = typeof uri === 'string' && uri.trim() ? uri : undefined
+      return safeUri ? loadTopology(safeLabId, safeUri) : loadCorpusTopology(safeLabId)
+    },
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.GET_EMPIRICAL_METRICS,
+    async (_event, labId: unknown, uri: unknown): Promise<EmpiricalMetric[]> => {
+      const structure = await getLiteratureStructure(
+        asString(labId, '实验室标识'),
+        asString(uri, '文献标识'),
+      )
+      if (!structure) return []
+      const metrics: EmpiricalMetric[] = []
+      for (const table of structure.tables) {
+        metrics.push(...parseEmpiricalMetricsFromMarkdown(table.markdown, table.page))
+      }
+      return metrics
+    },
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.SYNTHESIZE_PAPER_VAULT,
+    async (_event, labId: unknown, uri: unknown): Promise<{ ok: boolean; message: string }> => {
+      const safeLabId = asString(labId, '实验室标识')
+      const safeUri = asString(uri, '文献标识')
+      try {
+        await runPaperIngestionPipeline(safeLabId, safeUri)
+        return { ok: true, message: '论文笔记束与 3D 拓扑已合成' }
+      } catch (error) {
+        return {
+          ok: false,
+          message: error instanceof Error ? error.message : '论文笔记束合成失败',
+        }
+      }
+    },
+  )
+
+  // ===== 跨源学术文献检索（多源联邦） =====
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.ACADEMIC_SEARCH,
+    async (_event, input: unknown): Promise<CsLabAcademicSearchResult> => {
+      if (!input || typeof input !== 'object') throw new Error('学术检索参数无效')
+      const record = input as Partial<CsLabAcademicSearchInput>
+      return searchAcademicPapers({
+        query: asString(record.query, '检索关键词'),
+        topK: typeof record.topK === 'number' ? record.topK : undefined,
+        filters:
+          record.filters && typeof record.filters === 'object' ? record.filters : undefined,
+        channelId: typeof record.channelId === 'string' ? record.channelId : undefined,
+        modelId: typeof record.modelId === 'string' ? record.modelId : undefined,
+      })
+    },
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.ACADEMIC_FETCH_PREVIEW,
+    async (_event, input: unknown): Promise<CsLabAcademicPreviewResult> => {
+      if (!input || typeof input !== 'object') throw new Error('文献预览参数无效')
+      const record = input as Partial<CsLabAcademicPreviewInput>
+      return fetchPaperPreview({
+        doi: typeof record.doi === 'string' ? record.doi : undefined,
+        openAccessPdfUrl:
+          typeof record.openAccessPdfUrl === 'string' ? record.openAccessPdfUrl : undefined,
+        openAccessPdfUrls: Array.isArray(record.openAccessPdfUrls)
+          ? record.openAccessPdfUrls.filter((u): u is string => typeof u === 'string')
+          : undefined,
+        landingPageUrl:
+          typeof record.landingPageUrl === 'string' ? record.landingPageUrl : undefined,
+        arxivId: typeof record.arxivId === 'string' ? record.arxivId : undefined,
+        title: typeof record.title === 'string' ? record.title : undefined,
+      })
+    },
+  )
+
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.ACADEMIC_INGEST_PAPER,
+    async (_event, input: unknown): Promise<CsLabAcademicIngestResult> => {
+      if (!input || typeof input !== 'object') throw new Error('文献入库参数无效')
+      const record = input as { labId?: unknown; paper?: unknown }
+      const labId = asString(record.labId, '实验室标识')
+      const paper = record.paper as CsLabAcademicPaperMetadata
+      if (!paper || typeof paper !== 'object' || typeof paper.title !== 'string') {
+        throw new Error('论文元数据无效')
+      }
+      const result = await ingestAcademicPaper({ labId, paper })
+      if (result.ok && result.uri) {
+        broadcastCsLabEvent(CSLAB_IPC_CHANNELS.ON_ASSET_CHANGED, {
+          labId,
+          uri: result.uri,
+          kind: 'created',
+          revision: result.revision ?? 0,
+        })
+      }
+      return result
     },
   )
 
@@ -1367,6 +1618,22 @@ export function registerCsLabIpc(): void {
       asString(record.labId, '实验室标识'),
       asString(record.relPath, '笔记路径'),
     )
+  })
+
+  // 在 Obsidian 中打开 Vault：主进程解析 vault/notes 绝对路径后 shell.openPath。
+  // 通道常量暂以字面量注册，避免改动共享 CSLAB_IPC_CHANNELS 契约（见 preload 同名通道）。
+  ipcMain.handle(CSLAB_IPC_CHANNELS.OPEN_OBSIDIAN_VAULT, async (_event, input: unknown) => {
+    const record = asObject(input, 'Vault 打开参数')
+    const labId = asString(record.labId, '实验室标识')
+    // resolveLabRelativePath 内含实验室沙箱越界校验。
+    const notesDir = resolveLabRelativePath(labId, 'vault/notes')
+    const stat = await fs.stat(notesDir).catch(() => null)
+    if (!stat?.isDirectory()) {
+      return { ok: false as const, message: `Vault 目录不存在：${notesDir}` }
+    }
+    const errMsg = await shell.openPath(notesDir)
+    if (errMsg) return { ok: false as const, message: `打开失败：${errMsg}` }
+    return { ok: true as const, path: notesDir }
   })
 
   ipcMain.handle(CSLAB_IPC_CHANNELS.VAULT_INDEX_STATUS, async (_event, labId: unknown) =>
@@ -1722,6 +1989,46 @@ export function registerCsLabIpc(): void {
     )
   })
 
+  ipcMain.handle(
+    CSLAB_IPC_CHANNELS.GET_GEO_RASTER,
+    async (_event, input: unknown): Promise<CsLabGeoRasterPayload> => {
+      const record = asObject(input, '地貌栅格参数')
+      const labId = asString(record.labId, '实验室标识')
+      const uri = asString(record.uri, 'geo 资产 URI')
+      const entity = getAssetEntity(labId, uri)
+      if (!entity || entity.layerType !== 'geo') throw new Error('该资产不是地理栅格（geo 层）')
+      const path = resolveAssetPath(labId, uri)
+      if (!path) throw new Error('地理栅格文件不存在')
+      const raster = await parseGeoRasterBuffer(await fs.readFile(path), path)
+      const analysis = analyzeDem(raster)
+      const stride = Math.max(1, Math.ceil(Math.max(raster.meta.width, raster.meta.height) / 512))
+      const sampledWidth = Math.max(1, Math.floor(raster.meta.width / stride))
+      const sampledHeight = Math.max(1, Math.floor(raster.meta.height / stride))
+      const heights: number[] = []
+      const flowAccumulation: number[] = []
+      for (let row = 0; row < sampledHeight; row += 1) {
+        for (let col = 0; col < sampledWidth; col += 1) {
+          const source = Math.min(raster.meta.height - 1, row * stride) * raster.meta.width
+            + Math.min(raster.meta.width - 1, col * stride)
+          const height = raster.values[source]
+          heights.push(Number.isFinite(height) ? Number(height) : Number.NaN)
+          flowAccumulation.push(analysis.flowAccumulation[source] ?? 0)
+        }
+      }
+      return {
+        uri,
+        title: entity.title,
+        meta: raster.meta,
+        heights,
+        flowAccumulation,
+        channelThreshold: analysis.channelThreshold,
+        sampledWidth,
+        sampledHeight,
+        stride,
+      }
+    },
+  )
+
   ipcMain.handle(CSLAB_IPC_CHANNELS.GET_TABLE_SERIES, async (_event, input: unknown) => {
     const record = asObject(input, '数据表参数')
     return getTableSeries(
@@ -1789,7 +2096,7 @@ export function registerCsLabIpc(): void {
 
   ipcMain.handle(
     CSLAB_IPC_CHANNELS.EXPORT_FIGURE,
-    async (event, input: unknown): Promise<CsLabPlotExportResult> => {
+    async (event, input: unknown): Promise<CsLabPlotExportResult | null> => {
       const record = asObject(input, '绘图导出参数')
       const labId = asString(record.labId, '实验室标识')
       const plot = record.plot as CsLabPlotDocument
@@ -1807,7 +2114,8 @@ export function registerCsLabIpc(): void {
         ],
       })
       if (result.canceled || !result.filePath) {
-        throw new Error('已取消导出')
+        // 用户主动取消，返回 null 而非抛错，前端按取消语义静默处理
+        return null
       }
       return exportFigure({ labId, plot, options, targetPath: result.filePath })
     },
@@ -1941,7 +2249,7 @@ function asAgentContext(value: unknown): CsLabAgentContext {
 }
 
 function asProfile(value: unknown): CsLabToolProfile {
-  if (value === 'plot' || value === 'formula' || value === 'formula-ocr' || value === 'instrument') {
+  if (value === 'plot' || value === 'formula' || value === 'formula-ocr' || value === 'instrument' || value === 'docling') {
     return value
   }
   throw new Error('依赖 profile 无效')

@@ -493,16 +493,59 @@ export function deleteAutomation(id: string): boolean {
 }
 
 /**
+ * 计算一次非跳过运行之后的下一次触发时间。
+ *
+ * interval 任务以「计划槽位」为锚点向后滚动整倍数周期，避免把本次执行耗时
+ * 累进到下一次（例如 10:00 触发、10:00:47 完成，下次仍是 11:00 而不是 11:00:47）。
+ * daily/weekly/monthly 是固定钟点，直接从 now 找下一个未来槽位即可。
+ */
+export function advanceNextRunAt(
+  target: Pick<
+    Automation,
+    'scheduleType' | 'intervalMinutes' | 'timeOfDay' | 'dayOfWeek' | 'dayOfMonth' | 'scheduledAt' | 'nextRunAt'
+  >,
+  runAt: number,
+  now: number,
+): number {
+  if (target.scheduleType !== 'interval') {
+    return computeNextRunAt(target, now)
+  }
+
+  const minutes = Number(target.intervalMinutes)
+  const intervalMs = (Number.isFinite(minutes) && minutes >= 1 ? minutes : 10) * 60_000
+  // 优先用上一轮计划槽位；缺失或明显偏离（例如用户重新排期）时回退到本次实际触发时刻。
+  const base = target.nextRunAt
+    && Number.isFinite(target.nextRunAt)
+    && target.nextRunAt <= runAt + 60_000
+    ? target.nextRunAt
+    : runAt
+
+  let next = computeNextRunAt(target, base)
+  let guard = 0
+  while (next <= now && guard < 100_000) {
+    next += intervalMs
+    guard += 1
+  }
+  return next
+}
+
+/**
  * 记录一次运行结果并推进下次触发时间
  *
  * 由调度器在运行完成/失败/跳过后调用。
- * - 成功/失败：从「现在」起算下次触发时间，并累加 runCount
+ * - 成功/失败：按计划槽位推进 nextRunAt，并累加 runCount
  * - 跳过：不动 nextRunAt、不计入 runCount——否则任务因重入持续跳过时，每次跳过都会把下次触发再推一个完整间隔，
  *   实际周期会被拉成 N×interval。保留原 nextRunAt 让下一个 tick 立刻有机会再次尝试。
+ * - 手动运行：只写运行历史；不改 nextRunAt / lastRunAt / runCount / 连续失败 / 自动完成状态，
+ *   避免用户点一次「立即运行」就把周期重置或把 once 任务跑停。
  * - 成功/跳过：清零连续失败计数；失败：累加（调度器据此判断是否自动暂停）
  * - once 跑完一次 / 达到 maxRuns 上限：自动停用并标记 completedAt，区别于手动暂停
  */
-export function appendRun(id: string, run: AutomationRun): Automation | undefined {
+export function appendRun(
+  id: string,
+  run: AutomationRun,
+  options: { manual?: boolean } = {},
+): Automation | undefined {
   const index = readIndex()
   const target = index.automations.find((a) => a.id === id)
   if (!target) return undefined
@@ -513,10 +556,16 @@ export function appendRun(id: string, run: AutomationRun): Automation | undefine
     target.runHistory = target.runHistory.slice(0, AUTOMATION_MAX_HISTORY)
   }
 
+  if (options.manual) {
+    target.updatedAt = now
+    writeIndex(index)
+    return target
+  }
+
   if (run.status !== 'skipped') {
     target.lastRunAt = run.runAt
     target.runCount = (target.runCount ?? 0) + 1
-    target.nextRunAt = computeNextRunAt(target, now)
+    target.nextRunAt = advanceNextRunAt(target, run.runAt, now)
   }
 
   if (run.status === 'error') {

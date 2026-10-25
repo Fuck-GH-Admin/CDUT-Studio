@@ -336,6 +336,11 @@ export interface ChannelModel {
   contextWindow?: number
   /** 用户为该模型声明的最大输出 token 数；设置后覆盖 provider/catalog 推断值。 */
   maxTokens?: number
+  /**
+   * 模型是否支持图像输入（Vision）。缺省保守视为 false：
+   * 选区翻译的视觉通道仅在显式声明 true 时启用，否则回退纯文本链路。
+   */
+  supportsVision?: boolean
   /** 来源标记：手动添加的模型在拉取供应商列表时保留，不会被覆盖清除 */
   source?: 'manual' | 'fetched'
   /** 服务端代管模式下，当前登录用户实际可见的模型倍率。 */
@@ -373,6 +378,11 @@ export interface Channel {
   apiKey: string
   /** 可用模型列表 */
   models: ChannelModel[]
+  /**
+   * 渠道级 Vision 能力兜底声明（模型未单独声明 `ChannelModel.supportsVision` 时生效）。
+   * 两者皆缺省时保守视为 false。
+   */
+  supportsVision?: boolean
   /** 是否启用 */
   enabled: boolean
   /** 是否由服务端统一管理（商业模式下从 /v1/account/channels 同步的渠道）。服务端删除后本地自动清理 */

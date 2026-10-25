@@ -27,6 +27,7 @@ import {
   createEmptyCanvasDocument,
   evaluateDag,
   mergeCanvasScienceMeta,
+  normalizeCanvasDocumentFilePaths,
   parseCanvasDocument,
   serializeCanvasDocument,
 } from '@profer/shared'
@@ -234,8 +235,9 @@ export async function writeCanvas(input: CsLabCanvasWriteInput): Promise<CsLabCa
     throw new Error('Canvas 文件不存在，可能已被移动或删除')
   }
 
-  const evaluatedIncoming = evaluateDocument(input.document)
-  let baseDocument = input.document
+  const normalizedIncomingDoc = normalizeCanvasDocumentFilePaths(relPath, input.document)
+  const evaluatedIncoming = evaluateDocument(normalizedIncomingDoc)
+  let baseDocument = normalizedIncomingDoc
 
   if (
     typeof input.expectedMtimeMs === 'number' &&
@@ -270,9 +272,10 @@ export async function writeCanvas(input: CsLabCanvasWriteInput): Promise<CsLabCa
   }
 
   const evaluated = evaluateDocument(baseDocument)
+  const normalizedDoc = normalizeCanvasDocumentFilePaths(relPath, evaluated.document)
 
   try {
-    const result = await writeTextAtomic(absolute, serializeCanvasDocument(evaluated.document), {
+    const result = await writeTextAtomic(absolute, serializeCanvasDocument(normalizedDoc), {
       allowInPlaceFallback: true,
     })
     const nextStat = await fs.stat(absolute)
@@ -283,7 +286,7 @@ export async function writeCanvas(input: CsLabCanvasWriteInput): Promise<CsLabCa
     }
     return {
       relPath,
-      document: evaluated.document,
+      document: normalizedDoc,
       mtimeMs: nextStat.mtimeMs,
       durability: result.durability,
       cancelledJobIds: evaluated.cancelledJobIds,

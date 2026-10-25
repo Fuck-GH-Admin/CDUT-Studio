@@ -96,7 +96,7 @@ import {
 } from '../web-search-service'
 import { browserController } from '../browser-controller'
 import { resolveBrowserProfileKey } from '../browser-profile-policy'
-import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
+import { writeClipboardText } from '../clipboard-agent-tools'
 import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
@@ -130,6 +130,9 @@ import { cdutDemoService } from '../cdut/cdut-demo/demo-service'
 import { buildPiStudyTools } from '../study/study-tools'
 import { buildPiCsLabTools } from './pi-cslab-tools'
 import { buildCsLabScienceTools } from '../cslab/cslab-scientific-tools'
+import { buildCsLabLiteratureTools } from '../cslab/cslab-literature-tools'
+import { buildCsLabGeohazardTools } from '../cslab/cslab-geohazard-tools'
+import { buildCsLabAssetTools } from '../cslab/cslab-asset-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -1325,21 +1328,27 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
 /**
  * Agent 读/写系统剪贴板的正规工具；走主进程 Electron clipboard（UTF-8），
  * 避免 Agent 退化为 PowerShell Get-Clipboard 时踩 Windows 代码页中文乱码。
+ *
+ * 安全红线（Bug 19）：**读取剪贴板对 Agent 一律硬拦截**。
+ * 剪贴板内容只能由用户显式粘贴或前台操作提供，Agent 不得以任何理由静默窃取。
+ * 写入不构成信息窃取，保留能力但在描述中提示敏感信息风险。
  */
 function buildPiClipboardTools(sdk: PiSdk): ToolDefinition[] {
   return [
     sdk.defineTool({
       name: 'clipboard_read_text',
       label: '读取系统剪贴板文本',
-      description: 'Read the system clipboard text. Prefer this tool to obtain clipboard content; do not use PowerShell Get-Clipboard (the Windows console code page garbles Chinese text).',
+      description:
+        'BLOCKED by policy: reading the system clipboard is forbidden for the agent. Clipboard content only reaches the conversation when the user pastes it explicitly. Do not attempt workarounds such as PowerShell Get-Clipboard, pbpaste, xclip -o or clip.exe.',
       parameters: Type.Object({}),
       async execute() {
-        const { text, truncated, totalChars } = readClipboardText()
+        // 硬拦截：不返回剪贴板任何内容，只返回结构化拒绝。
         return jsonToolResult({
-          text,
-          truncated,
-          totalChars,
-          message: truncated ? `剪贴板文本超过上限，已截断到 ${text.length} 字符（原文 ${totalChars} 字符）。` : `已读取 ${totalChars} 个字符。`,
+          ok: false,
+          blocked: true,
+          code: 'CLIPBOARD_READ_BLOCKED',
+          message:
+            'CLIPBOARD_READ_BLOCKED: 禁止 Agent 静默读取系统剪贴板。剪贴板内容只能由用户显式粘贴提供。请改为请用户直接粘贴所需内容。',
         })
       },
     }),
@@ -1996,7 +2005,14 @@ function buildDiscoverToolsTool(
   mountedNames: ReadonlySet<string>,
   disabledGroups: ReadonlySet<string>,
   onActivateGroup?: (groupId: string) => void,
+  isGroupActive?: (groupId: AgentPresetToolGroup) => boolean,
 ): ToolDefinition {
+  /** 会话级开关判定：未提供时回退全量兼容（单测路径）。 */
+  const sessionGroupActive = (groupId: string): boolean =>
+    isGroupActive?.(groupId as AgentPresetToolGroup) ?? true
+  /** 输入栏显式关闭（或预设禁用）组统一附带的硬约束警示。 */
+  const OFF_GROUP_WARNING =
+    '该工具集当前在输入栏处于关闭状态，本轮对话中不存在也不会被挂载。请直接回复并提示用户在输入栏左下方开启 CDUT 徽标（或前往预设设置启用）。严禁自行猜测工具名称，严禁通过终端或文件系统扫描寻找未挂载工具。'
   return sdk.defineTool({
     name: 'discover_tools',
     label: 'CDUT Studio 能力发现',
@@ -2012,11 +2028,18 @@ function buildDiscoverToolsTool(
           const mountedTools = groupToolNames.filter((name) =>
             [...mountedNames].some((mounted) => mounted === name || mounted.endsWith(`__${name}`)),
           )
+          const presetDisabled = disabledGroups.has(group.id)
+          const sessionActive = sessionGroupActive(group.id)
+          const enabled = !presetDisabled && sessionActive
+          // mounted=已挂载可直接调用；activatable=会话内可激活（本轮未挂载但开启）；off=输入栏关闭或预设禁用。
+          const activation: 'mounted' | 'activatable' | 'off' =
+            mountedTools.length > 0 ? 'mounted' : enabled ? 'activatable' : 'off'
           return {
             id: group.id,
             label: group.label,
-            hint: group.hint,
-            enabled: !disabledGroups.has(group.id),
+            hint: enabled ? group.hint : `${group.hint}【注意】${OFF_GROUP_WARNING}`,
+            enabled,
+            activation,
             mountedTools,
           }
         })
@@ -2027,6 +2050,7 @@ function buildDiscoverToolsTool(
 
       if (category && onActivateGroup) {
         for (const group of groups) {
+          // 用户显式关闭（或预设禁用）的组不允许被模型静默激活：必须由用户在输入栏开启。
           if (group.enabled) onActivateGroup(group.id)
         }
       }
@@ -2034,7 +2058,7 @@ function buildDiscoverToolsTool(
       const isDocumentQuery = category && /(?:pdf|doc|docx|xlsx|pptx|parse|markdown|文档|解析)/i.test(category)
       const tip = isDocumentQuery
         ? '【Kernel Document Engine】PDF/Office attachments have already been pre-parsed and dual-state persisted by the client kernel high-precision document engine: the complete clean Markdown is written to clean_markdown_path inside <attached_documents>, workspace documents have a silent RAG index built, and relevant <document_evidence> excerpts are injected automatically when the user asks a question. No parsing tools are needed; trust this content and answer from it directly.'
-        : 'mountedTools lists the tools that are actually mounted right now and can be called directly; enabled=false means the capability group is disabled by the current preset, and the user must enable it in preset settings before it becomes usable.'
+        : 'mountedTools lists the tools actually mounted right now and callable directly. activation: mounted=mounted & callable; activatable=enabled in this session but not yet mounted; off=turned off in the input bar or disabled by the preset — for off groups NEVER guess tool names or scan the filesystem; tell the user to enable the badge / preset instead. enabled=false means the group is unavailable in this session.'
 
       const payload = { groups, tip }
       return {
@@ -2252,13 +2276,40 @@ export async function buildPiBuiltinTools(
     console.error('[Pi 桥接] 注入 CSLab 科学引擎工具失败:', error)
   }
 
+  // 15.2 CSLab 文献智脑工具（文献检索 / 章节精读 / 结构化导读）
+  try {
+    tools.push(...buildCsLabLiteratureTools(sdk, { sessionId: ctx.sessionId }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 CSLab 文献工具失败:', error)
+  }
+
+  // 15.3 CSLab 地质灾害工具（DEM / I-D / 泥石流推演 / 危险性图版）
+  try {
+    tools.push(...buildCsLabGeohazardTools(sdk, { sessionId: ctx.sessionId }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 CSLab 地质灾害工具失败:', error)
+  }
+
+  // 15.4 CSLab 8 类资产专职工具链（仅实验室研讨会话）
+  try {
+    tools.push(...buildCsLabAssetTools(sdk, { sessionId: ctx.sessionId }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 CSLab 资产工具失败:', error)
+  }
+
   const cloudTools = buildProferCloudTools(sdk, ctx)
   tools.push(...cloudTools)
 
   // 15. Tier 2 能力发现保底工具（常驻）
   try {
     const mountedBeforeDiscover = new Set(tools.map((tool) => tool.name))
-    tools.push(buildDiscoverToolsTool(sdk, mountedBeforeDiscover, new Set(ctx.disabledToolGroups ?? []), ctx.onActivateToolGroup))
+    tools.push(buildDiscoverToolsTool(
+      sdk,
+      mountedBeforeDiscover,
+      new Set(ctx.disabledToolGroups ?? []),
+      ctx.onActivateToolGroup,
+      isGroupActive,
+    ))
   } catch (error) {
     console.error('[Pi 桥接] 注入能力发现工具失败:', error)
   }

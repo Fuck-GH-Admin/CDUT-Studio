@@ -40,6 +40,7 @@ import { resolvePresetId, getDefaultPresetId } from './agent-preset-manager'
 import { getSessionContextUsageRatio } from './agent-session-usage'
 import { runAgentHeadless, isAgentSessionActive } from './agent-service'
 import { notifyAutomationRunFinished } from './automation-notification-service'
+import { classifyAutomationFailure, shouldRecordBusySkip } from './automation-run-guard'
 
 /** tick 周期：每 30s 检查一次到期任务（短轮询，抗休眠漂移） */
 const TICK_INTERVAL_MS = 30_000
@@ -99,6 +100,8 @@ function formatScheduleLabel(a: Automation): string {
 let tickTimer: NodeJS.Timeout | undefined
 /** 正在执行中的 automation id 集合，防止同一任务重入 */
 const runningAutomations = new Set<string>()
+/** 最近一次「目标会话忙碌」跳过写历史的时刻；用于 5 分钟节流，避免 tick 灌满历史。 */
+const lastBusySkipAt = new Map<string, number>()
 
 /** 向所有渲染窗口广播任务列表变更，触发前端刷新 */
 export function broadcastChanged(): void {
@@ -124,7 +127,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       sessionId: '',
       status: 'skipped',
       skipReason: '上一轮尚未结束',
-    })
+    }, { manual })
     broadcastChanged()
     return
   }
@@ -165,6 +168,25 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       }
     }
 
+    // 复用目标会话正在与用户交互：本轮跳过，不把它当成执行失败，也不推进 nextRunAt。
+    if (reuseSessionId && isAgentSessionActive(reuseSessionId)) {
+      const now = Date.now()
+      if (shouldRecordBusySkip(lastBusySkipAt.get(automation.id), now)) {
+        const run: AutomationRun = {
+          runAt,
+          sessionId: reuseSessionId,
+          status: 'skipped',
+          skipReason: '目标会话当前正在与用户交互',
+          durationMs: 0,
+        }
+        appendRun(automation.id, run, { manual })
+        lastBusySkipAt.set(automation.id, now)
+        broadcastChanged()
+      }
+      console.log(`[定时任务] ${automation.name} 目标会话正在交互，本轮跳过`)
+      return
+    }
+
     let targetSessionId: string
     if (reuseSessionId) {
       targetSessionId = reuseSessionId
@@ -200,28 +222,39 @@ export async function runAutomation(automation: Automation, manual = false): Pro
 
     await new Promise<void>((resolveRun) => {
       let settled = false
-      const finish = (status: 'success' | 'error', error?: string): void => {
+      const finish = (status: 'success' | 'error' | 'skipped', reason?: string): void => {
         if (settled) return
         settled = true
         if (timeoutTimer) clearTimeout(timeoutTimer)
-        const run: AutomationRun = {
-          runAt,
-          sessionId: targetSessionId,
-          status,
-          durationMs: Date.now() - runAt,
-          error,
-        }
-        appendRun(automation.id, run)
+        const run: AutomationRun = status === 'skipped'
+          ? {
+              runAt,
+              sessionId: targetSessionId,
+              status,
+              durationMs: Date.now() - runAt,
+              skipReason: reason ?? '本轮跳过',
+            }
+          : {
+              runAt,
+              sessionId: targetSessionId,
+              status,
+              durationMs: Date.now() - runAt,
+              error: reason,
+            }
+        appendRun(automation.id, run, { manual })
         broadcastChanged()
-        void notifyAutomationRunFinished({ automation, run }).catch((err) => {
-          console.error(`[定时任务] 发送完成通知失败: ${automation.name}`, err)
-        })
-        // 失败退避：连续失败达上限自动暂停
+        if (status !== 'skipped') {
+          void notifyAutomationRunFinished({ automation, run }).catch((err) => {
+            console.error(`[定时任务] 发送完成通知失败: ${automation.name}`, err)
+          })
+        }
+        // 失败退避：只有真实 error 才累加连续失败；skipped 不进入熔断。
         const latest = getAutomation(automation.id)
         if (
-          latest &&
-          latest.active &&
-          (latest.consecutiveFailures ?? 0) >= AUTOMATION_MAX_CONSECUTIVE_FAILURES
+          status === 'error'
+          && latest
+          && latest.active
+          && (latest.consecutiveFailures ?? 0) >= AUTOMATION_MAX_CONSECUTIVE_FAILURES
         ) {
           updateAutomation({ id: automation.id, active: false })
           console.warn(`[定时任务] ${automation.name} 连续失败 ${latest.consecutiveFailures} 次，已自动暂停`)
@@ -257,28 +290,43 @@ export async function runAutomation(automation: Automation, manual = false): Pro
         },
         {
           source: 'bridge',
-          onError: (error) => finish('error', error),
+          onError: (error) => {
+            const classified = classifyAutomationFailure(error)
+            finish(classified.status, classified.reason)
+          },
           onComplete: () => finish('success'),
           onTitleUpdated: () => { /* 子会话标题不需要特殊处理 */ },
         },
       ).catch((err) => {
-        finish('error', err instanceof Error ? err.message : '未知错误')
+        const classified = classifyAutomationFailure(err)
+        finish(classified.status, classified.reason)
       })
     })
   } catch (err) {
+    const classified = classifyAutomationFailure(err)
     console.error(`[定时任务] ${automation.name} 执行异常:`, err)
-    const run: AutomationRun = {
-      runAt,
-      sessionId: '',
-      status: 'error',
-      durationMs: Date.now() - runAt,
-      error: err instanceof Error ? err.message : '未知错误',
-    }
-    appendRun(automation.id, run)
+    const run: AutomationRun = classified.status === 'skipped'
+      ? {
+          runAt,
+          sessionId: '',
+          status: 'skipped',
+          durationMs: Date.now() - runAt,
+          skipReason: classified.reason,
+        }
+      : {
+          runAt,
+          sessionId: '',
+          status: 'error',
+          durationMs: Date.now() - runAt,
+          error: classified.reason,
+        }
+    appendRun(automation.id, run, { manual })
     broadcastChanged()
-    void notifyAutomationRunFinished({ automation, run }).catch((notifyError) => {
-      console.error(`[定时任务] 发送异常通知失败: ${automation.name}`, notifyError)
-    })
+    if (classified.status !== 'skipped') {
+      void notifyAutomationRunFinished({ automation, run }).catch((notifyError) => {
+        console.error(`[定时任务] 发送异常通知失败: ${automation.name}`, notifyError)
+      })
+    }
   } finally {
     runningAutomations.delete(automation.id)
   }

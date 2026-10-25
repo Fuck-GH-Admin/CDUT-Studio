@@ -72,6 +72,8 @@ export function resolveAssetCapability(asset: CsLabAssetSummary): CsLabFileCapab
         defaultView: 'mol',
         actions: ['open-structure', 'analyze-crystal', 'simulate-pxrd'],
       }
+    case 'geo':
+      return { kind: 'terrain', defaultView: 'terrain', actions: ['open-terrain'] }
     case 'lit':
     case 'fact':
       return { kind: 'literature', defaultView: 'pdf', actions: ['open-literature'] }

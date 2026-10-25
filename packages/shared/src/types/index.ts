@@ -119,3 +119,4 @@ export * from './review-v3-template-routing'
 
 export * from './cslab-origin-types'
 export * from './cslab-vesta-types'
+export * from './cslab-geohazard'

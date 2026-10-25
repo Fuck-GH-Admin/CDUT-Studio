@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { GraduationCap } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@profer/ui/primitives/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
@@ -165,5 +166,45 @@ export function AgentComposerToolMenuItem({
     >
       {children}
     </button>
+  )
+}
+
+export interface AgentComposerCdutToggleProps {
+  enabled: boolean
+  pending?: boolean
+  onToggle: () => void
+}
+
+/**
+ * CDUT 教务能力开关（输入栏左下方徽标）。
+ * 默认关闭以精简上下文；开启后本轮请求才会挂载 cdut-tools 组。
+ */
+export function AgentComposerCdutToggle({
+  enabled,
+  pending = false,
+  onToggle,
+}: AgentComposerCdutToggleProps): React.ReactElement {
+  return (
+    <AgentComposerToolTrigger
+      label={enabled ? '关闭 CDUT 教务能力' : '开启 CDUT 教务能力'}
+      tooltip={
+        enabled
+          ? 'CDUT 教务能力已开启：可调用课表、成绩、教室等工具。点击关闭以精简上下文。'
+          : 'CDUT 教务能力已关闭：默认不挂载教务工具。点击开启后再提问课表/成绩/教室。'
+      }
+      state={enabled ? 'active' : 'muted'}
+      aria-pressed={enabled}
+      aria-busy={pending}
+      disabled={pending}
+      onClick={onToggle}
+      className={cn(enabled && 'bg-primary/10')}
+    >
+      <span className="relative inline-flex">
+        <GraduationCap className="size-4" />
+        {enabled && (
+          <span className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary" />
+        )}
+      </span>
+    </AgentComposerToolTrigger>
   )
 }

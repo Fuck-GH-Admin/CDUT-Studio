@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { join, normalize, resolve, parse } from 'node:path'
+import { join, normalize, resolve, parse, dirname } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync } from 'node:fs'
 import type {
   AgentSendInput,
@@ -131,6 +131,8 @@ import { createCommandExecutionLedger } from './pi-execution-ledger'
 import { getSettings } from './settings-service'
 import { getCsLabPromptLabInfo } from './cslab/cslab-science'
 import { resolveLabDir } from './cslab/cslab-paths'
+import type { SandboxContext } from './cslab/cslab-sandbox-guard'
+import { isWithin } from './cslab/cslab-sandbox-guard'
 import { buildSystemPrompt, buildDynamicContext, appendSystemPromptSections } from './agent-prompt-builder'
 import { buildAgentContextEnvelope } from './agent-message-envelope'
 import { buildPiTaskPrompt } from './pi-task-prompt'
@@ -142,6 +144,7 @@ import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-pla
 import { resolveAgentModelRouting } from './agent-model-routing'
 
 import { validateToolInput } from './agent-tool-input-validator'
+import { applyCdutToolGate, CDUT_TOOLS_GROUP_ID } from './agent-cdut-tools-gate'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 
 // 已提取的工具模块
@@ -300,6 +303,9 @@ export class AgentOrchestrator {
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, ProferPermissionMode>()
+
+  /** 各会话最近一次用户消息携带的科研视口快照，供队列消息沿用（Bug：「这是什么」视野盲区）。 */
+  private lastViewportBySession = new Map<string, import('@profer/shared').CsLabViewportSnapshot>()
 
   /** 每轮真实运行的退出信号；仅 owner finally 可以 resolve。 */
   private runCompletions = new Map<string, { token: string; promise: Promise<void>; resolve: () => void }>()
@@ -848,6 +854,8 @@ export class AgentOrchestrator {
       triggeredBy?: string
       disabledToolGroups?: readonly string[]
       hasAttachedDocuments?: boolean
+      /** 消息级 CDUT 开关；缺省回退会话元数据。 */
+      enableCdutTools?: boolean
     },
   ): Set<string> {
     const meta = getAgentSessionMeta(sessionId)
@@ -856,9 +864,24 @@ export class AgentOrchestrator {
 
     const text = userMessage || ''
 
-    // 1. CDUT 教务专区/关键词探测
-    if (/(?:课表|成绩|教室|自习|学分|选课|教务|考务|考试|培养方案|cdut|青果)/i.test(text)) {
-      activeGroups.add('cdut-tools')
+    // 1. CDUT 教务工具组：显式开关优先，正则仅旧会话兜底
+    const explicitCdut = options.enableCdutTools ?? meta?.enableCdutTools
+    const cdutGate = applyCdutToolGate({
+      explicit: explicitCdut,
+      groups: activeGroups,
+      text,
+      disabled: options.disabledToolGroups,
+    })
+    if (
+      options.enableCdutTools !== undefined
+      && meta?.enableCdutTools !== options.enableCdutTools
+    ) {
+      updateAgentSessionMeta(sessionId, { enableCdutTools: options.enableCdutTools })
+    }
+    if (!cdutGate.enabled) {
+      activeGroups.delete(CDUT_TOOLS_GROUP_ID)
+    } else {
+      activeGroups.add(CDUT_TOOLS_GROUP_ID)
     }
 
     // 2. 受管浏览器关键词/上下文探测
@@ -1371,6 +1394,19 @@ export class AgentOrchestrator {
       }
 
       const effectiveWorkspaceId = targetWorkspaceId ?? workspace?.id
+      // 工作区沙盒边界（Bug 19）：最小沙盒 = agentCwd（会话目录 / 实验室 Vault），
+      // 可读根 = 工作区根或实验室根。读宽松、写严控，越界交由用户授权三档。
+      const sandboxGuardContext: SandboxContext | undefined = agentCwd
+        ? {
+            sessionDir: agentCwd,
+            workspaceRoot:
+              cslabLabId && isWithin(resolveLabDir(cslabLabId), agentCwd)
+                ? resolveLabDir(cslabLabId)
+                : workspaceSlug
+                  ? dirname(getAgentSessionWorkspacePath(workspaceSlug, sessionId))
+                  : agentCwd,
+          }
+        : undefined
       const effectiveWorkspaceSlug = workspaceSlug ?? workspace?.slug
       // AI 速课堂专属会话判定：独立工作区（cdut-ai-class）的会话走专用带教身份与学习工具，
       // 常规 Agent 会话不再被注入速课堂铁律与学习工具，实现两套系统提示词彻底分家。
@@ -1493,7 +1529,10 @@ export class AgentOrchestrator {
         disabledToolGroups: [...disabledToolGroups].filter((group): group is import('@profer/shared').AgentPresetToolGroup => AGENT_PRESET_CAPABILITY_GROUPS.some((item) => item.id === group)),
         disabledTools,
         userBrowserContext: browserController.getUserContext(sessionId),
+        cslabViewport: input.cslabViewport,
       })
+      // 记录最近视口，供队列消息（queueMessage 无独立入参）沿用。
+      if (input.cslabViewport) this.lastViewportBySession.set(sessionId, input.cslabViewport)
 
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅引用当前预设实际可用的能力。
       // 所有系统注入块统一收进 <SYSTEM_CONTEXT>，绝不进入 <USER_REQUEST>。
@@ -1655,6 +1694,7 @@ export class AgentOrchestrator {
         triggeredBy: input.triggeredBy,
         disabledToolGroups: [...disabledToolGroups],
         hasAttachedDocuments: Boolean(attachedDocumentsBlock),
+        enableCdutTools: input.enableCdutTools,
       })
       // Pi 通过 customTools 接收内置与外部 MCP 能力。
       // 在这里复用已完成的 Profer MCP 注入和过滤流程，避免两套配置来源漂移。
@@ -1758,6 +1798,8 @@ export class AgentOrchestrator {
             event: { type: 'ask_user_request', request },
           })
         },
+        // 工作区沙盒边界（Bug 19）：读宽松 / 写严控，越界走用户授权三档。
+        sandboxGuardContext,
       )
 
       /**
@@ -3967,9 +4009,11 @@ export class AgentOrchestrator {
     }
 
     const nowIso = new Date().toISOString()
-    const queueDynamicCtx = userBrowserContext
+    const queueDynamicCtx = userBrowserContext || this.lastViewportBySession.get(sessionId)
       ? buildDynamicContext({
           userBrowserContext,
+          // 队列消息没有独立入参，沿用本轮 sendMessage 记录的最近视口快照。
+          cslabViewport: this.lastViewportBySession.get(sessionId),
           mcpServerNames: activePolicy?.loadedMcpServerNames ? [...activePolicy.loadedMcpServerNames] : undefined,
           disabledToolGroups: activePolicy ? [...activePolicy.disabledToolGroups] : undefined,
           disabledTools: activePolicy?.disabledTools,

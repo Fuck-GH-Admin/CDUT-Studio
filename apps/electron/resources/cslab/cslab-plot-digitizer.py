@@ -20,6 +20,11 @@ import math
 import os
 import sys
 
+# 进程间编码治理：Windows 中文系统下默认走 CP936，与 Node 端 UTF-8 解码不一致会产生乱码。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import numpy as np
 
 
@@ -90,6 +95,84 @@ def build_color_mask(image, color, tolerance):
     lower = np.array([max(0, peak - tolerance), 70, 40], dtype=np.uint8)
     upper = np.array([min(179, peak + tolerance), 255, 255], dtype=np.uint8)
     return cv2.inRange(hsv, lower, upper)
+
+
+def hue_distance(a, b):
+    """HSV 色相环距离（0-179 环形）。"""
+    diff = abs(a - b)
+    return min(diff, 180 - diff)
+
+
+def build_series_masks(image, colors, tolerance, series_count):
+    """按显式颜色或自动聚类产出多组 (label, mask)。
+
+    依赖红线：仅使用 cv2.kmeans（环境无 sklearn）。
+    极端少像素防御：有效前景像素不足以支撑 k 簇时降级单掩码，
+    避免 OpenCV C++ 层断言崩溃。
+    """
+    import cv2
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    if colors:
+        masks = []
+        for color in colors:
+            mask = build_color_mask(image, color, tolerance)
+            if np.any(mask > 0):
+                masks.append((color, mask))
+        if masks:
+            return masks
+        return [("auto", build_color_mask(image, "", tolerance))]
+
+    h_channel = hsv[:, :, 0]
+    s_channel = hsv[:, :, 1]
+    v_channel = hsv[:, :, 2]
+    valid = (s_channel > 80) & (v_channel > 50)
+    ys, xs = np.nonzero(valid)
+    if len(ys) == 0:
+        return [("auto", np.zeros(h_channel.shape, dtype=np.uint8))]
+
+    hues = h_channel[ys, xs].astype(np.float32)
+
+    if series_count:
+        k = max(1, min(4, int(series_count)))
+    else:
+        # 依据色相直方图主峰数量估簇数（峰间距 > 2*tolerance，占比 >= 8%）。
+        histogram = np.bincount(hues.astype(np.int64).ravel(), minlength=180)
+        threshold = max(1, int(histogram.max() * 0.08))
+        peaks = [
+            int(h)
+            for h in range(180)
+            if histogram[h] >= threshold
+            and histogram[h] >= histogram[(h - 1) % 180]
+            and histogram[h] >= histogram[(h + 1) % 180]
+        ]
+        merged_peaks = []
+        for peak in peaks:
+            if all(hue_distance(peak, kept) > tolerance * 2 for kept in merged_peaks):
+                merged_peaks.append(peak)
+        k = max(1, min(4, len(merged_peaks)))
+
+    # 少像素防御：像素数不足以稳定支撑 k 簇时直接降级单掩码。
+    if k <= 1 or len(hues) < max(80, k * 50):
+        return [("auto", build_color_mask(image, "", tolerance))]
+
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.5)
+    _, _labels, centers = cv2.kmeans(hues, k, None, criteria, 3, cv2.KMEANS_PP_CENTERS)
+    merged_centers = []
+    for center in centers.ravel().tolist():
+        if all(hue_distance(center, kept) > tolerance for kept in merged_centers):
+            merged_centers.append(center)
+
+    masks = []
+    for center in merged_centers:
+        lower = np.array([max(0, int(center) - tolerance), 70, 40], dtype=np.uint8)
+        upper = np.array([min(179, int(center) + tolerance), 255, 255], dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower, upper)
+        if np.any(mask > 0):
+            masks.append((f"hue-{int(center)}", mask))
+    if len(masks) <= 1:
+        return [("auto", build_color_mask(image, "", tolerance))]
+    return masks
 
 
 def fit_axis(ticks, preferred, coordinate="px"):
@@ -230,14 +313,240 @@ def extract_scatter(mask):
     return [points] if points else []
 
 
+# ===== 刻度数值读取（--mode read-tick）=====
+# 零依赖实现：只用 numpy + cv2（plot profile 既有要求），不引入任何模型文件。
+# R4 低置信度防御：置信度 < TICK_READ_MIN_CONFIDENCE 时 value 恒为 None，绝不猜。
+
+TICK_CHAR_SIZE = (24, 32)  # (宽, 高)
+TICK_READ_MIN_CONFIDENCE = 0.60
+# 最佳与次佳候选的最小分差：低于此值说明字符本身不可辨识，整段作废。
+TICK_MIN_MARGIN = 0.05
+TICK_GLYPHS = "0123456789.-+e"
+
+
+def _normalize_glyph(binary_img, ref_height):
+    """按**行高 ref_height** 统一缩放到 TICK_CHAR_SIZE。
+
+    关键：必须用整行统一的缩放比，而不是逐字 bbox 归一化。
+    逐字归一化会把小数点拉成大色块，误判为 0 / e（实测已踩过此坑）。
+    统一缩放后小数点仍远小于数字，尺寸特征得以保留。
+    """
+    import cv2
+
+    target_w, target_h = TICK_CHAR_SIZE
+    ys, xs = np.nonzero(binary_img)
+    if len(xs) == 0 or len(ys) == 0:
+        return None
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    roi = binary_img[y0:y1, x0:x1]
+
+    canvas = np.zeros((target_h, target_w), dtype=np.uint8)
+    scale = target_h / max(float(ref_height), 1.0)
+    new_w = max(1, int(round(roi.shape[1] * scale)))
+    new_h = max(1, int(round(roi.shape[0] * scale)))
+    if new_w > target_w:
+        new_w = target_w
+    if new_h > target_h:
+        new_h = target_h
+    resized = cv2.resize(roi, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    _, resized = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    ox = (target_w - new_w) // 2
+    oy = target_h - new_h  # 底部对齐：小数点落在底部，与数字共享基线
+    canvas[oy:oy + new_h, ox:ox + new_w] = resized
+    return canvas
+
+
+def _render_tick_templates():
+    """用 cv2.putText 渲染 0-9 . - + e 的多字体二值模板（按数字高度统一缩放）。"""
+    import cv2
+
+    width, height = TICK_CHAR_SIZE
+    raw_variants = {}
+    ref_height = 1.0
+    for glyph in TICK_GLYPHS:
+        variants = []
+        for font in (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX, cv2.FONT_HERSHEY_PLAIN):
+            for thickness in (1, 2):
+                canvas = np.zeros((height, width), dtype=np.uint8)
+                scale = 1.0 if thickness == 1 else 1.2
+                cv2.putText(canvas, glyph, (2, height - 6), font, scale, 255, thickness, cv2.LINE_AA)
+                ys, _xs = np.nonzero(canvas)
+                if len(ys) == 0:
+                    continue
+                ink_h = int(ys.max() - ys.min()) + 1
+                if glyph == "0":
+                    ref_height = max(ref_height, float(ink_h))
+                variants.append((canvas, ink_h))
+        if variants:
+            raw_variants[glyph] = variants
+
+    templates = {}
+    for glyph, variants in raw_variants.items():
+        normalized = []
+        for canvas, _ink_h in variants:
+            glyph_img = _normalize_glyph(canvas, ref_height)
+            if glyph_img is not None:
+                normalized.append(glyph_img)
+        if normalized:
+            templates[glyph] = normalized
+    return templates
+
+
+def _read_tick_value(image, rect):
+    import cv2
+
+    templates = _render_tick_templates()
+    if not templates:
+        return {"ok": True, "value": None, "confidence": 0.0, "message": "刻度模板生成失败"}
+
+    x, y, w, h = (int(v) for v in rect)
+    height, width = image.shape[:2]
+    x = max(0, min(x, width - 1))
+    y = max(0, min(y, height - 1))
+    w = max(1, min(w, width - x))
+    h = max(1, min(h, height - y))
+    crop = image[y:y + h, x:x + w]
+    if crop.size == 0:
+        return {"ok": True, "value": None, "confidence": 0.0, "message": "刻度识别区域为空"}
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    # 文字通常比底色更暗：Otsu 二值化后取反，使字符为白色前景。
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    char_boxes = []
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        cw = stats[label, cv2.CC_STAT_WIDTH]
+        ch = stats[label, cv2.CC_STAT_HEIGHT]
+        # 过噪点与整条基线/刻度线（宽高比异常）。
+        if area < 12 or cw < 2 or ch < 4:
+            continue
+        if cw > 0 and ch > 0 and (cw / ch > 6 or ch / cw > 6):
+            continue
+        char_boxes.append(
+            (
+                stats[label, cv2.CC_STAT_LEFT],
+                stats[label, cv2.CC_STAT_TOP],
+                cw,
+                ch,
+                labels == label,
+            )
+        )
+
+    if not char_boxes:
+        return {"ok": True, "value": None, "confidence": 0.0, "message": "未切分出刻度字符"}
+
+    char_boxes.sort(key=lambda item: item[0])
+
+    # 整行统一缩放比：取各字符框高度的中位数作为行高，与模板侧的「数字高度」对齐。
+    heights = sorted(int(box[3]) for box in char_boxes)
+    ref_height = float(heights[len(heights) // 2]) if heights else 1.0
+
+    matched = []
+    for left, top, cw, ch, mask in char_boxes:
+        glyph_img = np.zeros((h, w), dtype=np.uint8)
+        glyph_img[mask] = 255
+        normalized = _normalize_glyph(glyph_img, ref_height)
+        if normalized is None:
+            continue
+
+        # 每个 glyph 取其所有字体模板中的最高分，再比较 glyph 之间的分差。
+        per_glyph = {}
+        for glyph, variants in templates.items():
+            best = -1.0
+            for variant in variants:
+                result = cv2.matchTemplate(normalized, variant, cv2.TM_CCOEFF_NORMED)
+                score = float(result[0][0])
+                if score > best:
+                    best = score
+            per_glyph[glyph] = best
+
+        ranked = sorted(per_glyph.items(), key=lambda item: item[1], reverse=True)
+        if not ranked:
+            continue
+        best_glyph, best_score = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else -1.0
+
+        # R4 歧义防御：最佳与次佳分差过小说明识别不可靠，整段作废由用户手填。
+        if best_score - second_score < TICK_MIN_MARGIN:
+            return {
+                "ok": True,
+                "value": None,
+                "confidence": round(best_score, 4),
+                "message": f"字符「{best_glyph}」与次优候选分差仅 {best_score - second_score:.2f}，识别存在歧义，请手动填写刻度值",
+            }
+        matched.append((best_glyph, best_score))
+
+    if not matched:
+        return {"ok": True, "value": None, "confidence": 0.0, "message": "刻度字符匹配失败"}
+
+    text = "".join(glyph for glyph, _ in matched)
+    confidence = float(sum(score for _, score in matched) / len(matched))
+
+    # R4：低置信度一律不猜，value 恒为 None 由用户手填。
+    if confidence < TICK_READ_MIN_CONFIDENCE:
+        return {
+            "ok": True,
+            "value": None,
+            "confidence": round(confidence, 4),
+            "text": text,
+            "message": f"置信度 {confidence:.2f} 低于阈值 {TICK_READ_MIN_CONFIDENCE:.2f}，请手动填写刻度值",
+        }
+
+    cleaned = text.replace(" ", "")
+    try:
+        value = float(cleaned)
+    except ValueError:
+        # 兼容 1e-5 / 1E+3 之类的科学计数法写法。
+        try:
+            value = float(cleaned.replace("e", "e").replace("E", "e"))
+        except ValueError:
+            return {
+                "ok": True,
+                "value": None,
+                "confidence": round(confidence, 4),
+                "text": text,
+                "message": f"识别文本「{text}」不是合法数值，请手动填写刻度值",
+            }
+
+    return {"ok": True, "value": value, "confidence": round(confidence, 4), "text": text}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
-    parser.add_argument("--calibration", required=True)
-    parser.add_argument("--mode", choices=["line", "scatter"], default="line")
+    parser.add_argument("--calibration", default="", help="line/scatter 模式必填；read-tick 模式忽略")
+    parser.add_argument("--mode", choices=["line", "scatter", "read-tick"], default="line")
+    parser.add_argument("--rect", default="", help="read-tick 模式必填：x,y,w,h（原图像素坐标）")
     parser.add_argument("--color", default="")
+    parser.add_argument("--colors", default="", help="逗号分隔的多个 #rrggbb，启用多曲线分色提取")
+    parser.add_argument("--series-count", type=int, default=0, help="自动聚类的目标曲线簇数（2-4）；0 = 按色相主峰自动估计")
     parser.add_argument("--tolerance", type=int, default=28)
     args = parser.parse_args()
+
+    # read-tick 只需要 numpy + cv2，且必须最先短路返回。
+    if args.mode == "read-tick":
+        missing = missing_modules(["numpy", "cv2"])
+        if missing:
+            emit({"ok": False, "message": "缺少刻度识别依赖：" + ", ".join(missing), "missing": missing})
+            return
+        import cv2
+
+        image = cv2.imread(args.input, cv2.IMREAD_COLOR)
+        if image is None:
+            emit({"ok": False, "message": "无法读取刻度图像"})
+            return
+        try:
+            rect = [int(part) for part in args.rect.split(",")]
+            if len(rect) != 4:
+                raise ValueError("rect 必须是 x,y,w,h 四段")
+        except Exception as error:
+            emit({"ok": False, "message": f"刻度识别区域无效：{error}"})
+            return
+        emit(_read_tick_value(image, rect))
+        return
 
     required = ["numpy", "cv2", "skimage", "scipy"]
     missing = missing_modules(required)
@@ -272,10 +581,11 @@ def main():
         emit({"ok": False, "message": f"标定参数无效：{error}"})
         return
 
-    mask = build_color_mask(image, args.color.strip(), max(8, args.tolerance))
-    if not np.any(mask > 0):
-        emit({"ok": False, "message": "未在框选区域检测到目标颜色曲线"})
-        return
+    tolerance = max(8, args.tolerance)
+    color_list = [item.strip() for item in args.colors.split(",") if item.strip()]
+    if not color_list and args.color.strip():
+        color_list = [args.color.strip()]
+    series_masks = build_series_masks(image, color_list, tolerance, args.series_count)
 
     x_fit = fit_axis(x_ticks, x_pref, "px")
     y_fit = fit_axis(y_ticks, y_pref, "py")
@@ -283,34 +593,34 @@ def main():
         emit({"ok": False, "message": "标定刻度不足，至少需要 X/Y 各 2 个刻度"})
         return
 
-    curves = extract_lines(mask) if args.mode == "line" else extract_scatter(mask)
-    if not curves:
-        emit({"ok": False, "message": "未提取到有效曲线或散点"})
-        return
-
     series = []
-    for index, pixels in enumerate(curves):
-        values = []
-        pixel_list = []
-        for px, py in pixels:
-            value_x = apply_axis(px, x_fit)
-            value_y = apply_axis(py, y_fit)
-            if not math.isfinite(value_x) or not math.isfinite(value_y):
+    for mask_label, mask in series_masks:
+        curves = extract_lines(mask) if args.mode == "line" else extract_scatter(mask)
+        for index, pixels in enumerate(curves):
+            values = []
+            pixel_list = []
+            for px, py in pixels:
+                value_x = apply_axis(px, x_fit)
+                value_y = apply_axis(py, y_fit)
+                if not math.isfinite(value_x) or not math.isfinite(value_y):
+                    continue
+                values.append([float(value_x), float(value_y)])
+                pixel_list.append([float(px), float(py)])
+            if len(values) < 2:
                 continue
-            values.append([float(value_x), float(value_y)])
-            pixel_list.append([float(px), float(py)])
-        if len(values) < 2:
-            continue
-        series.append(
-            {
-                "label": f"series-{index + 1}",
-                "points": values,
-                "pixels": pixel_list,
-            }
-        )
+            label = mask_label
+            if len(curves) > 1:
+                label = f"{mask_label}-{index + 1}"
+            series.append(
+                {
+                    "label": label,
+                    "points": values,
+                    "pixels": pixel_list,
+                }
+            )
 
     if not series:
-        emit({"ok": False, "message": "提取结果为空，请调整颜色或标定后重试"})
+        emit({"ok": False, "message": "未提取到有效曲线或散点，请调整颜色或标定后重试"})
         return
 
     emit(

@@ -22,6 +22,8 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  SelectGroup,
+  SelectLabel,
 } from '@profer/ui/primitives/select'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { Popover, PopoverTrigger, PopoverContent } from '@profer/ui/primitives/popover'
@@ -49,12 +51,14 @@ import type {
   FeishuChatBinding,
   UpdateAutomationInput,
 } from '@profer/shared'
-import type { AgentPreset, AgentRuntime } from '@profer/shared'
+import type { AgentPreset } from '@profer/shared'
 import { DEFAULT_PRESET_ID } from '@profer/shared'
 
 const NO_FEISHU_BINDING = '__none__'
 /** 预设选择器「跟随工作区默认」的哨兵值（Radix Select 不允许空字符串 value） */
 const PRESET_FOLLOW_DEFAULT = '__default__'
+/** 「从会话继承配置」选择器的不继承哨兵值 */
+const INHERIT_SESSION_NONE = '__inherit_none__'
 
 function formatTime(ts?: number): string {
   if (!ts) return '—'
@@ -105,6 +109,7 @@ function getDraftSignature(draft: AutomationDraft): string {
     presetId: draft.presetId ?? '',
     sessionMode: draft.sessionMode,
     notificationTargets: draft.notificationTargets ?? [],
+    sourceSessionId: draft.sourceSessionId ?? '',
     active: draft.active,
   })
 }
@@ -274,6 +279,53 @@ export function AutomationFormView(): React.ReactElement | null {
     if (!bound || workspaces.some((ws) => ws.id === bound.id)) return workspaces
     return [...workspaces, bound]
   }, [allWorkspaces, workspaces, form?.workspaceId])
+
+  // 「从会话继承配置」候选：按工作区分组的可见会话（排除草稿），按最近活跃倒序。
+  const inheritableSessions = React.useMemo(
+    () => agentSessions
+      .filter((session) => !session.draft)
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
+    [agentSessions],
+  )
+  const inheritGroups = React.useMemo(() => {
+    const groups: Array<{ workspaceId: string; workspaceName: string; sessions: typeof inheritableSessions }> = []
+    for (const session of inheritableSessions) {
+      const wsId = session.workspaceId ?? ''
+      let bucket = groups.find((group) => group.workspaceId === wsId)
+      if (!bucket) {
+        bucket = {
+          workspaceId: wsId,
+          workspaceName: allWorkspaces.find((ws) => ws.id === wsId)?.name ?? '未分组',
+          sessions: [],
+        }
+        groups.push(bucket)
+      }
+      bucket.sessions.push(session)
+    }
+    return groups
+  }, [inheritableSessions, allWorkspaces])
+
+  /** 从已有会话继承配置：仅填充表单字段，任务运行仍由调度器以独立子会话执行。 */
+  const applyInheritedSession = (sessionId: string): void => {
+    if (sessionId === INHERIT_SESSION_NONE) {
+      setForm((prev) => (prev ? { ...prev, sourceSessionId: undefined } : prev))
+      return
+    }
+    const source = agentSessions.find((session) => session.id === sessionId)
+    if (!source) return
+    setForm((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        sourceSessionId: source.id,
+        workspaceId: source.workspaceId ?? prev.workspaceId,
+        channelId: source.channelId || prev.channelId,
+        modelId: source.modelId || prev.modelId,
+        presetId: source.presetId ?? prev.presetId,
+      }
+    })
+  }
+
   const [editingName, setEditingName] = React.useState(false)
   const [runningNow, setRunningNow] = React.useState(false)
   const [feishuBindings, setFeishuBindings] = React.useState<FeishuChatBinding[]>([])
@@ -1041,24 +1093,7 @@ export function AutomationFormView(): React.ReactElement | null {
             </div>
           )}
 
-          {/* 运行时决定模型协议，切换时清空旧模型，避免把 Claude 模型带给 Pi（或反向）。 */}
-          <div className="flex flex-col gap-2">
-            <Label>运行时</Label>
-            <Select
-              value={form.agentRuntime}
-              onValueChange={(value) => {
-                const agentRuntime = value as AgentRuntime
-                if (agentRuntime === form.agentRuntime) return
-                update({ agentRuntime, channelId: '', modelId: undefined })
-              }}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                                <SelectItem value="pi">Pi</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
+          {/* 运行时已内化为 Pi 固定协议：不再向用户暴露下拉（agentRuntime 始终 'pi'，提交时兜底）。 */}
           {/* 选择模型（Claude 仅显示 Agent 兼容渠道；Pi 使用 OpenAI 协议模型）。 */}
           <div className="flex flex-col gap-2">
             <Label>选择模型</Label>
@@ -1087,6 +1122,36 @@ export function AutomationFormView(): React.ReactElement | null {
                 onModelSelect={(opt) => update({ channelId: opt.channelId, modelId: opt.modelId })}
               />
             )}
+          </div>
+
+          {/* 从会话继承配置（可选）：仅自动填充模型 / 工作区 / 预设，任务仍以独立子会话运行，不污染原会话。 */}
+          <div className="flex flex-col gap-2">
+            <Label>从会话继承配置</Label>
+            <Select
+              value={form.sourceSessionId ?? INHERIT_SESSION_NONE}
+              onValueChange={applyInheritedSession}
+            >
+              <SelectTrigger><SelectValue placeholder="选择要继承配置的会话" /></SelectTrigger>
+              <SelectContent className="max-h-72">
+                <SelectItem value={INHERIT_SESSION_NONE}>不继承（手动配置）</SelectItem>
+                {inheritGroups.map((group) => (
+                  <SelectGroup key={group.workspaceId || '__none__'}>
+                    <SelectLabel>{group.workspaceName}</SelectLabel>
+                    {group.sessions.map((session) => (
+                      <SelectItem key={session.id} value={session.id}>
+                        {session.title || '未命名会话'}
+                        <span className="ml-1 text-[10px] text-muted-foreground">
+                          {formatTime(session.updatedAt)}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground leading-relaxed">
+              选中会话后自动填充其模型、工作区与预设；任务执行仍由调度器创建独立子会话，不影响原会话。
+            </span>
           </div>
 
           {/* 工作区（必选，默认填入当前会话所在工作区） */}

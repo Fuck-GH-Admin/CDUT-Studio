@@ -286,3 +286,96 @@ export function canvasTitleFromRelPath(relPath: string): string {
     .replace(/[-_]+/g, ' ')
     .trim() || '未命名画布'
 }
+
+/**
+ * 将相对路径段按 POSIX 规范解析（类似 path.posix.normalize，但在浏览器与 Node 均可用）
+ */
+function normalizePosixPath(parts: string[]): string {
+  const stack: string[] = []
+  for (const part of parts) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (stack.length > 0) stack.pop()
+    } else {
+      stack.push(part)
+    }
+  }
+  return stack.join('/')
+}
+
+/**
+ * 将 Canvas 中 file 节点的目标路径规范化为 Obsidian 标准的 Vault 相对路径（无 leading slash，无 vault/notes/ 前缀）。
+ *
+ * 核心机制：
+ * 1. 若以 vault/notes/ 开头，剥离该前缀；
+ * 2. 若是同目录或相对目录引用（如 `Overview.md`、`./Overview.md` 或 `../sub/Overview.md`），基于 canvas
+ *    文件所在的 vault 子目录做路径补齐，生成 Obsidian 根索引可直接命中的相对路径；
+ * 3. 统一使用 POSIX 斜杠 `/`；
+ * 4. 彻底解决 Obsidian 画布在打开非根目录 .canvas 时卡片显示「找不到对应的文件」的问题。
+ */
+export function normalizeCanvasNodeFilePath(canvasRelPath: string, file: string): string {
+  const cleaned = file.trim().replace(/\\/g, '/')
+  if (!cleaned) return ''
+
+  // 1. 去掉实验室根前缀 vault/notes/
+  let withoutVaultNotes = cleaned.replace(/^vault\/notes\//i, '')
+  withoutVaultNotes = withoutVaultNotes.replace(/^\/+/, '')
+
+  // 获取 canvas 文件在 vault/notes 内的子目录（如 'papers/seismic'）
+  const canvasCleaned = canvasRelPath.replace(/\\/g, '/')
+  const canvasVaultRel = canvasCleaned.replace(/^vault\/notes\//i, '').replace(/^\/+/, '')
+  const canvasSegments = canvasVaultRel.split('/').filter(Boolean)
+  canvasSegments.pop() // 去掉 canvas 文件名自身，保留子目录段
+  const canvasSubDir = canvasSegments.join('/')
+
+  // 若 canvas 就在 vault/notes 根目录下，无子目录需补齐
+  if (!canvasSubDir) {
+    return withoutVaultNotes.replace(/^\.\//, '')
+  }
+
+  // 2. 如果不含 '/'，或者显式以 './' 或 '../' 开头，说明它是相对于当前 canvas 所在目录的同级/相对文件
+  if (
+    !withoutVaultNotes.includes('/') ||
+    withoutVaultNotes.startsWith('./') ||
+    withoutVaultNotes.startsWith('../')
+  ) {
+    const rawSegments = [...canvasSegments, ...withoutVaultNotes.split('/')]
+    return normalizePosixPath(rawSegments)
+  }
+
+  // 3. 已经包含目录路径且非相对段开头，说明已经包含 vault-relative 完整路径
+  return normalizePosixPath(withoutVaultNotes.split('/'))
+}
+
+/**
+ * 将 Canvas 中 file 节点路径解析为 CDUT 实验室相对路径（以 vault/notes/ 开头）。
+ */
+export function resolveCanvasFileNodeToLabRelPath(canvasRelPath: string, file: string): string {
+  const vaultRel = normalizeCanvasNodeFilePath(canvasRelPath, file)
+  if (!vaultRel) return ''
+  return `vault/notes/${vaultRel}`
+}
+
+/**
+ * 递归规范化 Canvas 文档中所有 file 类型节点的路径，确保 Obsidian 100% 互通。
+ */
+export function normalizeCanvasDocumentFilePaths(
+  canvasRelPath: string,
+  doc: CsLabCanvasDocument,
+): CsLabCanvasDocument {
+  if (!Array.isArray(doc.nodes) || doc.nodes.length === 0) return doc
+  let changed = false
+  const nextNodes = doc.nodes.map((node) => {
+    if (node.type === 'file' && typeof node.file === 'string' && node.file.trim()) {
+      const normalized = normalizeCanvasNodeFilePath(canvasRelPath, node.file)
+      if (normalized !== node.file) {
+        changed = true
+        return { ...node, file: normalized }
+      }
+    }
+    return node
+  })
+  if (!changed) return doc
+  return { ...doc, nodes: nextNodes }
+}
+

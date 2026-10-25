@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Preload 脚本
  *
  * 通过 contextBridge 安全地将 API 暴露给渲染进程
@@ -10,6 +10,7 @@ import { IPC_CHANNELS, REVIEW_IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANN
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
+import type { EmpiricalMetric, Hierarchical3DGraphData } from '@profer/shared'
 import { CDUT_AI_CLASS_IPC_CHANNELS, CDUT_ZONE_IPC_CHANNELS, STUDY_IPC_CHANNELS, type AiClassSessionSummary, type CdutAccountProfile, type CdutDomainCacheName, type CdutDomainToolResult, type CdutGatekeeperDecision, type CdutGatekeeperNoticeEvent, type CdutLoginInput, type CdutLoginResult, type CdutSavedAccountSummary, type CdutMutationConfirmRequest, type CdutMutationConfirmResult, type CdutToolInvokeParams, type KnowledgeGraphData, type StudyDocumentOutline, type StudyDocumentQueryInput, type StudyGraphCostEstimate, type StudyGraphGenerateInput, type StudyGraphProgressEvent, type StudyIngestDocumentsInput, type StudySearchKnowledgeInput, type StudySearchKnowledgeResult, type StudySetDocumentsActiveInput, type StudyToggleDocumentActiveInput } from '@profer/shared'
 import { LONGTERM_MEMORY_IPC_CHANNELS, type LongTermMemoryGraph, type LongTermMemoryHit, type LongTermMemoryNode, type LongTermMemoryNodeInput } from '@profer/shared'
 import { YANHU_EXPRESS_IPC_CHANNELS, type YanhuCloseRightInput, type YanhuCreateTabInput, type YanhuLoadingChangedEvent, type YanhuNavigateInput, type YanhuReorderTabsInput, type YanhuSyncThemeInput, type YanhuTabRefInput, type YanhuTabsState, type YanhuUrlChangedEvent, type YanhuViewLayout, type YanhuPetBootstrap, type YanhuPetChatInput, type YanhuPetChatStatus, type YanhuPetConfig, type YanhuPetMessage, type YanhuPetStateEvent, type YanhuPetStreamEvent, type YanhuPetTourFillEvent, type YanhuPetViewport, type YanhuPetWindowGeometry } from '@profer/shared'
@@ -53,14 +54,32 @@ import {
   type CsLabZoteroBridgeStatus,
   type CsLabZoteroAnnotation,
   type CsLabLiteratureItem,
+  type CsLabLiteratureGuide,
+  type CsLabLiteratureGraphResult,
   type CsLabLiteratureSearchResult,
+  type CsLabAcademicSearchInput,
+  type CsLabAcademicSearchResult,
+  type CsLabAcademicPreviewInput,
+  type CsLabAcademicPreviewResult,
+  type CsLabAcademicIngestInput,
+  type CsLabAcademicIngestResult,
   type CsLabPlotDigitizeInput,
   type CsLabPlotDigitizeResult,
+  type CsLabTickReadInput,
+  type CsLabTickReadResult,
   type CsLabDigitizedFigureInput,
   type CsLabDigitizedFigureResult,
   type CsLabFormulaVerifyInput,
   type CsLabFormulaVerifyResult,
   type CsLabFormulaOcrResult,
+  type CsLabTranslateSelectionInput,
+  type CsLabTranslateSelectionResult,
+  type CsLabToolPreset,
+  type CsLabToolPresetInstallInput,
+  type CsLabToolPresetInstallResult,
+  type CsLabToolPresetReadResult,
+  type CsLabZoteroBridgeWriteInput,
+  type CsLabZoteroBridgeWriteResult,
   type CsLabZoteroSyncedEvent,
   type CsLabZoteroStatusEvent,
   type CsLabProtocol,
@@ -123,6 +142,8 @@ import {
   type CsLabDemoLabResult,
   type CsLabAgentContext,
   type CsLabStructureFocusedEvent,
+  type CsLabAssetFocusedEvent,
+  type CsLabGeoRasterPayload,
   type CsLabAgentWindowInput,
   type CsLabAgentWindowRef,
   type CsLabPlotUndoResult,
@@ -1021,6 +1042,8 @@ export interface ElectronAPI {
 
   /** 热切换指定会话的权限模式（运行中生效，仅影响该 session） */
   updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode, expectedRevision?: number) => Promise<AgentSessionMeta>
+  /** 切换指定会话的 CDUT 专属工具开关（下一轮生效）。 */
+  updateSessionEnableCdutTools: (sessionId: string, enabled: boolean, expectedRevision?: number) => Promise<AgentSessionMeta>
   /** 切换当前会话的 ChatGPT Codex Fast Mode。 */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
   /** 切换当前会话的 ChatGPT Codex 推理档位（跨会话持久化）。 */
@@ -1715,7 +1738,9 @@ export interface ElectronAPI {
     /** 实验室沙箱 */
     listLabs: () => Promise<CsLabLab[]>
     createLab: (input: CsLabCreateLabInput) => Promise<CsLabLab>
-    createDemoLab: () => Promise<CsLabDemoLabResult>
+    createDemoLab: (kind?: 'origin-vesta' | 'sklgp-geohazard') => Promise<CsLabDemoLabResult>
+    /** 重置演示实验室（清理沙箱并重建官方样本）。 */
+    resetDemoLab: (labId: string) => Promise<CsLabDemoLabResult>
     openLab: (labId: string) => Promise<CsLabLabSnapshot>
     getLabSnapshot: (labId: string) => Promise<CsLabLabSnapshot>
     renameLab: (input: { labId: string; name: string }) => Promise<CsLabLab>
@@ -1780,6 +1805,13 @@ export interface ElectronAPI {
     startZoteroWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
     stopZoteroWatch: (labId: string) => Promise<{ watching: boolean }>
     getZoteroBridgeStatus: () => Promise<CsLabZoteroBridgeStatus>
+    /** 生成默认写回桥接配置模板（zotero-bridge.json），返回其绝对路径。 */
+    initZoteroBridgeConfig: () => Promise<{
+      ok: boolean
+      configPath: string
+      created: boolean
+      message: string
+    }>
 
     /** 文献阅读 */
     getLiteratureItem: (input: {
@@ -1790,9 +1822,16 @@ export interface ElectronAPI {
       labId: string
       uri: string
     }) => Promise<{ url: string; name: string; pageCount?: number }>
+    /** 结构化智能导读（首次点击可能触发同步解析）。 */
+    getLiteratureGuide: (input: {
+      labId: string
+      literatureUri: string
+    }) => Promise<CsLabLiteratureGuide>
 
     /** 图表逆向数字化 */
     digitizePlot: (input: CsLabPlotDigitizeInput) => Promise<CsLabPlotDigitizeResult>
+    /** 刻度数值自动读取（read-tick 模板匹配）；value=null 表示低置信度，由用户手填。 */
+    readTickValue: (input: CsLabTickReadInput) => Promise<CsLabTickReadResult>
     saveDigitizedFigure: (
       input: CsLabDigitizedFigureInput,
     ) => Promise<CsLabDigitizedFigureResult>
@@ -1800,6 +1839,23 @@ export interface ElectronAPI {
     /** 公式识别与验算 */
     ocrFormula: (input: { labId: string; imageDataUrl: string }) => Promise<CsLabFormulaOcrResult>
     verifyFormula: (input: CsLabFormulaVerifyInput) => Promise<CsLabFormulaVerifyResult>
+
+    /** 选区学术翻译（OCR + 隔离补全，防提示词注入） */
+    translateSelection: (
+      input: CsLabTranslateSelectionInput,
+    ) => Promise<CsLabTranslateSelectionResult>
+
+    /** 预置科研算子 */
+    listToolPresets: (labId?: string) => Promise<CsLabToolPreset[]>
+    installToolPresets: (
+      input: CsLabToolPresetInstallInput,
+    ) => Promise<CsLabToolPresetInstallResult>
+    readToolPresetSource: (filename: string) => Promise<CsLabToolPresetReadResult>
+
+    /** Zotero 写回桥接（仅本地 REST 插件 HTTP 通道） */
+    writeZoteroBridge: (
+      input: CsLabZoteroBridgeWriteInput,
+    ) => Promise<CsLabZoteroBridgeWriteResult>
 
     /** 跨文献 GraphRAG */
     buildLiteratureIndex: (input: {
@@ -1812,6 +1868,22 @@ export interface ElectronAPI {
       topK?: number
       literatureUri?: string
     }) => Promise<CsLabLiteratureSearchResult>
+    /** 文献智脑全景图谱（未搜索时的默认视图） */
+    getLiteratureGraph: (labId: string) => Promise<CsLabLiteratureGraphResult>
+
+    /** 论文入库流水线：3D 分层拓扑 / 实证指标 / Vault 合成 */
+    getLiterature3DGraph: (labId: string, uri?: string) => Promise<Hierarchical3DGraphData | null>
+    getEmpiricalMetrics: (labId: string, uri: string) => Promise<EmpiricalMetric[]>
+    synthesizePaperVault: (labId: string, uri: string) => Promise<{ ok: boolean; message: string }>
+
+    /** 跨源学术文献检索（多源联邦） */
+    academicSearch: (input: CsLabAcademicSearchInput) => Promise<CsLabAcademicSearchResult>
+    academicFetchPreview: (
+      input: CsLabAcademicPreviewInput,
+    ) => Promise<CsLabAcademicPreviewResult>
+    academicIngestPaper: (
+      input: CsLabAcademicIngestInput,
+    ) => Promise<CsLabAcademicIngestResult>
 
     /** 实验规程与批次 */
     listProtocols: (labId: string) => Promise<CsLabProtocol[]>
@@ -1849,6 +1921,12 @@ export interface ElectronAPI {
     rebuildVaultIndex: (input: { labId: string; force?: boolean }) => Promise<CsLabVaultIndexResult>
     startVaultWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
     stopVaultWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
+    /** 在 Obsidian 中打开 Vault（主进程解析 vault/notes 绝对路径后 shell.openPath）。 */
+    openObsidianVault: (input: { labId: string; relPath?: string }) => Promise<{
+      ok: boolean
+      path?: string
+      message?: string
+    }>
     listCanvases: (labId: string) => Promise<CsLabCanvasSummary[]>
     createCanvas: (input: { labId: string; title: string }) => Promise<CsLabCanvasCreateResult>
     readCanvas: (input: { labId: string; relPath: string }) => Promise<CsLabCanvasReadResult>
@@ -1907,6 +1985,8 @@ export interface ElectronAPI {
 
     /** 晶体结构与谱图 */
     getMolAsset: (input: { labId: string; uri: string }) => Promise<CsLabMolAsset | null>
+    /** 2.5D 地貌载荷（降采样高程 + D8 汇流）。 */
+    getGeoRaster: (input: { labId: string; uri: string }) => Promise<CsLabGeoRasterPayload>
     getTableSeries: (input: {
       labId: string
       tableUri: string
@@ -1940,7 +2020,7 @@ export interface ElectronAPI {
       labId: string
       plot: CsLabPlotDocument
       options: CsLabPlotExportOptions
-    }) => Promise<CsLabPlotExportResult>
+    }) => Promise<CsLabPlotExportResult | null>
     snapshotStructure: (input: CsLabStructureSnapshotSubmitInput) => Promise<CsLabStructureSnapshotResult>
 
     /** 科学助理独立窗口 */
@@ -1972,6 +2052,7 @@ export interface ElectronAPI {
     onPlotUpdated: (handler: (event: CsLabPlotUpdatedEvent) => void) => () => void
     onAgentContext: (handler: (context: CsLabAgentContext) => void) => () => void
     onStructureFocused: (handler: (event: CsLabStructureFocusedEvent) => void) => () => void
+    onAssetFocused: (handler: (event: CsLabAssetFocusedEvent) => void) => () => void
     onRequestStructureSnapshot: (
       handler: (event: CsLabStructureSnapshotRequest) => void,
     ) => () => void
@@ -3116,6 +3197,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE, sessionId, mode, expectedRevision)
   },
 
+  updateSessionEnableCdutTools: (sessionId: string, enabled: boolean, expectedRevision?: number) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_ENABLE_CDUT_TOOLS, sessionId, enabled, expectedRevision)
+  },
+
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
   },
@@ -4182,7 +4267,10 @@ const electronAPI: ElectronAPI = {
     listLabs: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.LIST_LABS),
     createLab: (input: CsLabCreateLabInput) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CREATE_LAB, input),
-    createDemoLab: () => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CREATE_DEMO_LAB),
+    createDemoLab: (kind?: 'origin-vesta' | 'sklgp-geohazard') =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CREATE_DEMO_LAB, kind),
+    resetDemoLab: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RESET_DEMO_LAB, labId),
     openLab: (labId: string) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OPEN_LAB, labId),
     getLabSnapshot: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LAB_SNAPSHOT, labId),
@@ -4257,12 +4345,17 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_STOP_WATCH, labId),
     getZoteroBridgeStatus: () =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_GET_BRIDGE_STATUS),
+    initZoteroBridgeConfig: () =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_BRIDGE_INIT_CONFIG),
 
     getLiteratureItem: (input: { labId: string; uri: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_ITEM, input),
     getLiteratureUrl: (input: { labId: string; uri: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_URL, input),
+    getLiteratureGuide: (input: { labId: string; literatureUri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_GUIDE, input),
 
+    readTickValue: (input: CsLabTickReadInput) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.READ_TICK_VALUE, input),
     digitizePlot: (input: CsLabPlotDigitizeInput) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.DIGITIZE_PLOT, input),
     saveDigitizedFigure: (input: CsLabDigitizedFigureInput) =>
@@ -4273,6 +4366,19 @@ const electronAPI: ElectronAPI = {
     verifyFormula: (input: CsLabFormulaVerifyInput) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VERIFY_FORMULA, input),
 
+    translateSelection: (input: CsLabTranslateSelectionInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TRANSLATE_SELECTION, input),
+
+    listToolPresets: (labId?: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TOOL_PRESET_LIST, labId),
+    installToolPresets: (input: CsLabToolPresetInstallInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TOOL_PRESET_INSTALL, input),
+    readToolPresetSource: (filename: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.TOOL_PRESET_READ, { filename }),
+
+    writeZoteroBridge: (input: CsLabZoteroBridgeWriteInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_BRIDGE_WRITE, input),
+
     buildLiteratureIndex: (input: { labId: string; force?: boolean }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.BUILD_LITERATURE_INDEX, input),
     searchLiterature: (input: {
@@ -4281,6 +4387,21 @@ const electronAPI: ElectronAPI = {
       topK?: number
       literatureUri?: string
     }) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SEARCH_LITERATURE, input),
+    getLiteratureGraph: (labId: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_GRAPH, labId),
+    getLiterature3DGraph: (labId: string, uri?: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_3D_GRAPH, labId, uri),
+    getEmpiricalMetrics: (labId: string, uri: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_EMPIRICAL_METRICS, labId, uri),
+    synthesizePaperVault: (labId: string, uri: string) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.SYNTHESIZE_PAPER_VAULT, labId, uri),
+
+    academicSearch: (input: CsLabAcademicSearchInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ACADEMIC_SEARCH, input),
+    academicFetchPreview: (input: CsLabAcademicPreviewInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ACADEMIC_FETCH_PREVIEW, input),
+    academicIngestPaper: (input: CsLabAcademicIngestInput) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ACADEMIC_INGEST_PAPER, input),
 
     listProtocols: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.RUN_LIST_PROTOCOLS, labId),
@@ -4323,6 +4444,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_START_WATCH, labId),
     stopVaultWatch: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_STOP_WATCH, labId),
+    openObsidianVault: (input: { labId: string; relPath?: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OPEN_OBSIDIAN_VAULT, input),
     listCanvases: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CANVAS_LIST, labId),
     createCanvas: (input: { labId: string; title: string }) =>
@@ -4397,6 +4520,8 @@ const electronAPI: ElectronAPI = {
     // ===== 晶体结构与谱图 =====
     getMolAsset: (input: { labId: string; uri: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_MOL_ASSET, input),
+    getGeoRaster: (input: { labId: string; uri: string }) =>
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_GEO_RASTER, input),
     getTableSeries: (input: { labId: string; tableUri: string; maxPoints?: number }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_TABLE_SERIES, input),
 
@@ -4512,6 +4637,11 @@ const electronAPI: ElectronAPI = {
       const listener = (_event: unknown, payload: CsLabStructureFocusedEvent): void => handler(payload)
       ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_STRUCTURE_FOCUSED, listener)
       return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_STRUCTURE_FOCUSED, listener)
+    },
+    onAssetFocused: (handler: (event: CsLabAssetFocusedEvent) => void) => {
+      const listener = (_event: unknown, payload: CsLabAssetFocusedEvent): void => handler(payload)
+      ipcRenderer.on(CSLAB_IPC_CHANNELS.ON_ASSET_FOCUSED, listener)
+      return () => ipcRenderer.removeListener(CSLAB_IPC_CHANNELS.ON_ASSET_FOCUSED, listener)
     },
     onRequestStructureSnapshot: (handler: (event: CsLabStructureSnapshotRequest) => void) => {
       const listener = (_event: unknown, payload: CsLabStructureSnapshotRequest): void =>

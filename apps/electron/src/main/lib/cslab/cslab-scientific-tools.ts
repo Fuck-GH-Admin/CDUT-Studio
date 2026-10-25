@@ -20,8 +20,7 @@ import type {
   CsLabPlotExportFormat,
   CsLabPxrdOptions,
 } from '@profer/shared'
-import { getAgentSessionMeta } from '../agent-session-manager'
-import { assertLabId } from '../cslab/cslab-paths'
+import { resolveCsLabSeminarLabId } from './cslab-session-gate'
 import { broadcastCsLabEvent } from '../cslab/cslab-events'
 import { CSLAB_IPC_CHANNELS } from '../cslab/cslab-types'
 import { getTableSeries, ingestMolAsset } from '../cslab/cslab-mol'
@@ -75,15 +74,8 @@ export function buildCsLabScienceTools(
   sdk: PiSdkLike,
   ctx: PiCsLabScienceToolsContext,
 ): ToolDefinition[] {
-  const meta = getAgentSessionMeta(ctx.sessionId)
-  if (!meta?.cslabLabId) return []
-
-  let labId: string
-  try {
-    labId = assertLabId(meta.cslabLabId)
-  } catch {
-    return []
-  }
+  const labId = resolveCsLabSeminarLabId(ctx.sessionId)
+  if (!labId) return []
 
   const tools: ToolDefinition[] = []
 

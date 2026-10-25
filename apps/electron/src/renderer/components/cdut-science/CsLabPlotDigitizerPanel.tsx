@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Crosshair, Download, Loader2, Pipette, Sparkles } from 'lucide-react'
+import { Crosshair, Download, Loader2, Pipette, Plus, RotateCcw, Sparkles, X } from 'lucide-react'
 import {
   mapPixelToValue,
   snapPointToPolyline,
@@ -28,6 +28,7 @@ import {
 interface CsLabPlotDigitizerPanelProps {
   labId: string
   selection?: CsLabPdfSelection
+  demoCalibration?: CsLabPlotCalibration
   onSaved: () => void
 }
 
@@ -35,21 +36,10 @@ type PolygonMode = 'x' | 'y' | null
 
 const MAX_TICKS = 3
 
-/** 演示光谱图的预置标定点（坐标已按 640×480 原图边框像素扫描校准） */
-const DEMO_DIGITIZER_TICKS = {
-  x: [
-    { px: 80.5, py: 419.5, value: 0 },
-    { px: 599.5, py: 419.5, value: 1000 },
-  ] as CsLabAxisTick[],
-  y: [
-    { px: 80.5, py: 419.5, value: 0 },
-    { px: 80.5, py: 40.5, value: 100 },
-  ] as CsLabAxisTick[],
-}
-
 export function CsLabPlotDigitizerPanel({
   labId,
   selection,
+  demoCalibration,
   onSaved,
 }: CsLabPlotDigitizerPanelProps): React.ReactElement {
   const runtime = useAtomValue(cslabToolRuntimeAtom)
@@ -64,6 +54,10 @@ export function CsLabPlotDigitizerPanel({
   const [xTicks, setXTicks] = React.useState<CsLabAxisTick[]>([])
   const [yTicks, setYTicks] = React.useState<CsLabAxisTick[]>([])
   const [color, setColor] = React.useState('')
+  /** 多曲线分色提取：非空时逐色构建掩码（Series 1/2/...）。 */
+  const [colors, setColors] = React.useState<string[]>([])
+  /** 自动分色：不指定吸管颜色，由 Python 侧按 HSV 色相 K-Means 自动分离 2~4 条曲线。 */
+  const [autoSeries, setAutoSeries] = React.useState(false)
   const [tolerance, setTolerance] = React.useState(28)
   const [title, setTitle] = React.useState('')
   const [result, setResult] = React.useState<CsLabPlotDigitizeResult | null>(null)
@@ -73,6 +67,7 @@ export function CsLabPlotDigitizerPanel({
   const [message, setMessage] = React.useState<string | null>(null)
   const dragRef = React.useRef<{ seriesIndex: number; pointIndex: number } | null>(null)
   const suppressClickRef = React.useRef(false)
+  const lastTickDeleteAtRef = React.useRef(0)
 
   React.useEffect(() => {
     setTitle(`数字化图表 · 第 ${(selection?.pageIndex ?? 0) + 1} 页`)
@@ -109,22 +104,90 @@ export function CsLabPlotDigitizerPanel({
       suppressClickRef.current = false
       return
     }
+    // 删除刻度后的 200ms 内抑制新增，避免事件穿透在同一位置立刻补一个坏点。
+    if (Date.now() - lastTickDeleteAtRef.current < 200) return
     if (!tickAxis || !naturalSize) return
     const rect = event.currentTarget.getBoundingClientRect()
     const point = {
       x: ((event.clientX - rect.left) / rect.width) * naturalSize.width,
       y: ((event.clientY - rect.top) / rect.height) * naturalSize.height,
     }
-    const tick: CsLabAxisTick = { px: point.x, py: point.y, value: 0 }
-    if (tickAxis === 'x' && xTicks.length < MAX_TICKS) setXTicks([...xTicks, tick])
-    if (tickAxis === 'y' && yTicks.length < MAX_TICKS) setYTicks([...yTicks, tick])
+    const tick: CsLabAxisTick = { px: point.x, py: point.y, value: 0, pending: true }
+    if (tickAxis === 'x' && xTicks.length < MAX_TICKS) {
+      setXTicks([...xTicks, tick])
+      autoReadTick('x', xTicks.length, point)
+    }
+    if (tickAxis === 'y' && yTicks.length < MAX_TICKS) {
+      setYTicks([...yTicks, tick])
+      autoReadTick('y', yTicks.length, point)
+    }
   }
 
-  const updateTickValue = (axis: 'x' | 'y', index: number, value: number): void => {
+  const updateTickValue = (
+    axis: 'x' | 'y',
+    index: number,
+    value: number,
+    pending = false,
+    autoRead = false,
+  ): void => {
     const update = (ticks: CsLabAxisTick[]): CsLabAxisTick[] =>
-      ticks.map((tick, current) => (current === index ? { ...tick, value } : tick))
-    if (axis === 'x') setXTicks(update(xTicks))
-    else setYTicks(update(yTicks))
+      ticks.map((tick, current) =>
+        current === index ? { ...tick, value, pending, autoRead } : tick,
+      )
+    // 函数式更新：自动识别回调可能晚于 setXTicks 落盘，闭包里的旧数组会丢掉新刻度。
+    if (axis === 'x') setXTicks((previous) => update(previous))
+    else setYTicks((previous) => update(previous))
+  }
+
+  /** 撤销自动识别：恢复 pending 由用户手填（R4 低置信度防御的人工出口）。 */
+  const undoAutoRead = (axis: 'x' | 'y', index: number): void => {
+    updateTickValue(axis, index, 0, true, false)
+  }
+
+  /**
+   * 刻度数值自动读取：截取刻度点外侧约 48×24 像素区域做零依赖模板匹配。
+   * 低置信度时 Python 返回 value=null，绝不猜，由用户手填。
+   */
+  const autoReadTick = (axis: 'x' | 'y', index: number, point: { x: number; y: number }): void => {
+    if (!selection) return
+    const rect = {
+      x: Math.max(0, Math.round(point.x) - 24),
+      y: Math.max(0, Math.round(point.y) - 12),
+      w: 48,
+      h: 24,
+    }
+    void window.electronAPI.cslab
+      .readTickValue({ labId, imageDataUrl: selection.cropDataUrl, rect })
+      .then((result) => {
+        if (result.ok && typeof result.value === 'number' && Number.isFinite(result.value)) {
+          updateTickValue(axis, index, result.value, false, true)
+        }
+      })
+      .catch(() => undefined)
+  }
+
+  /** 点击十字标记删除单个标定点：局部修正无需重新标定。 */
+  const removeTick = (axis: 'x' | 'y', index: number): void => {
+    lastTickDeleteAtRef.current = Date.now()
+    if (axis === 'x') setXTicks((previous) => previous.filter((_, current) => current !== index))
+    else setYTicks((previous) => previous.filter((_, current) => current !== index))
+  }
+
+  /** 一键清空全部标定（含残留在画布上的十字标记）。 */
+  const clearCalibration = (): void => {
+    setXTicks([])
+    setYTicks([])
+  }
+
+  const addSeriesColor = (hex: string): void => {
+    const normalized = hex.toLowerCase()
+    if (!/^#[0-9a-f]{6}$/.test(normalized) || colors.includes(normalized)) return
+    if (colors.length >= 4) return
+    setColors((previous) => [...previous, normalized])
+  }
+
+  const removeSeriesColor = (hex: string): void => {
+    setColors((previous) => previous.filter((item) => item !== hex))
   }
 
   const calibration: CsLabPlotCalibration = React.useMemo(
@@ -140,6 +203,7 @@ export function CsLabPlotDigitizerPanel({
     yTicks: CsLabAxisTick[]
     mode?: CsLabPlotMode
     color?: string
+    colors?: string[]
     tolerance?: number
   }): Promise<void> => {
     if (!selection) return
@@ -147,9 +211,14 @@ export function CsLabPlotDigitizerPanel({
     const effectiveY = override?.yTicks ?? yTicks
     const effectiveMode = override?.mode ?? mode
     const effectiveColor = override?.color ?? color
+    const effectiveColors = override?.colors ?? colors
     const effectiveTolerance = override?.tolerance ?? tolerance
     if (effectiveX.length < 2 || effectiveY.length < 2) {
       setError('X/Y 轴各至少需要 2 个刻度点')
+      return
+    }
+    if ([...effectiveX, ...effectiveY].some((tick) => tick.pending || !Number.isFinite(tick.value))) {
+      setError('请先为所有刻度输入数值，再执行提取')
       return
     }
     setBusy('digitize')
@@ -166,6 +235,9 @@ export function CsLabPlotDigitizerPanel({
         mode: effectiveMode,
         calibration: calibrationInput,
         color: effectiveColor || undefined,
+        // 自动分色优先：清空吸管颜色，交由 Python 侧 HSV 色相聚类分离多条曲线。
+        colors: autoSeries ? undefined : effectiveColors.length > 0 ? effectiveColors : undefined,
+        seriesCount: autoSeries ? 0 : undefined,
         tolerance: effectiveTolerance,
       })
       setResult(payload)
@@ -186,25 +258,28 @@ export function CsLabPlotDigitizerPanel({
     } finally {
       setBusy(null)
     }
-  }, [selection, xTicks, yTicks, labId, mode, color, tolerance, setRuntime])
+  }, [selection, xTicks, yTicks, labId, mode, color, colors, tolerance, setRuntime])
 
-  /** 仅演示光谱图（640×480）提供的一键标定：写入预置刻度并立即提取 */
-  const isDemoSpectrum = naturalSize?.width === 640 && naturalSize?.height === 480
+  /** 演示图版由资产元数据提供预置标定，不再依赖 640×480 尺寸。 */
+  const hasDemoCalibration = Boolean(
+    demoCalibration?.x?.ticks?.length && demoCalibration?.y?.ticks?.length,
+  )
   const applyDemoCalibration = React.useCallback(async (): Promise<void> => {
-    if (!isDemoSpectrum) return
-    setXTicks(DEMO_DIGITIZER_TICKS.x)
-    setYTicks(DEMO_DIGITIZER_TICKS.y)
+    if (!demoCalibration) return
+    setXTicks(demoCalibration.x.ticks)
+    setYTicks(demoCalibration.y.ticks)
     setMode('line')
     setColor('')
+    setColors([])
     setTolerance(28)
     await digitize({
-      xTicks: DEMO_DIGITIZER_TICKS.x,
-      yTicks: DEMO_DIGITIZER_TICKS.y,
+      xTicks: demoCalibration.x.ticks,
+      yTicks: demoCalibration.y.ticks,
       mode: 'line',
       color: '',
       tolerance: 28,
     })
-  }, [digitize, isDemoSpectrum])
+  }, [demoCalibration, digitize])
 
   // 引导气泡通过自定义事件触发同一套一键标定逻辑
   React.useEffect(() => {
@@ -347,7 +422,7 @@ export function CsLabPlotDigitizerPanel({
               <polyline
                 points={item.pixels.map((pixel) => `${pixel[0]},${pixel[1]}`).join(' ')}
                 fill="none"
-                stroke="#3399FF"
+                stroke={/^#[0-9a-f]{6}$/.test(item.label) ? item.label : '#3399FF'}
                 strokeOpacity={0.7}
                 strokeWidth={2}
                 vectorEffect="non-scaling-stroke"
@@ -369,30 +444,69 @@ export function CsLabPlotDigitizerPanel({
               ))}
             </g>
           ))}
-          {[...xTicks.map((tick) => ({ ...tick, axis: 'x' as const })), ...yTicks.map((tick) => ({ ...tick, axis: 'y' as const }))].map(
-            (tick, index) => (
-              <g key={`tick-${tick.axis}-${index}`}>
-                <line
-                  x1={tick.px - 6}
-                  y1={tick.py}
-                  x2={tick.px + 6}
-                  y2={tick.py}
-                  className="stroke-cslab-accent"
-                  strokeWidth={1}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <line
-                  x1={tick.px}
-                  y1={tick.py - 6}
-                  x2={tick.px}
-                  y2={tick.py + 6}
-                  className="stroke-cslab-accent"
-                  strokeWidth={1}
-                  vectorEffect="non-scaling-stroke"
-                />
-              </g>
-            ),
-          )}
+          {xTicks.map((tick, index) => (
+            <g
+              key={`tick-x-${index}`}
+              className="cursor-pointer"
+              onClick={(event) => {
+                // 点击十字标记删除该标定点；阻止冒泡避免误触发取点。
+                event.stopPropagation()
+                removeTick('x', index)
+              }}
+            >
+              <title>点击删除此 X 标定点</title>
+              <circle cx={tick.px} cy={tick.py} r={9} fill="transparent" />
+              <line
+                x1={tick.px - 6}
+                y1={tick.py}
+                x2={tick.px + 6}
+                y2={tick.py}
+                className="stroke-cslab-accent"
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+              />
+              <line
+                x1={tick.px}
+                y1={tick.py - 6}
+                x2={tick.px}
+                y2={tick.py + 6}
+                className="stroke-cslab-accent"
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+              />
+            </g>
+          ))}
+          {yTicks.map((tick, index) => (
+            <g
+              key={`tick-y-${index}`}
+              className="cursor-pointer"
+              onClick={(event) => {
+                event.stopPropagation()
+                removeTick('y', index)
+              }}
+            >
+              <title>点击删除此 Y 标定点</title>
+              <circle cx={tick.px} cy={tick.py} r={9} fill="transparent" />
+              <line
+                x1={tick.px - 6}
+                y1={tick.py}
+                x2={tick.px + 6}
+                y2={tick.py}
+                className="stroke-cslab-accent"
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+              />
+              <line
+                x1={tick.px}
+                y1={tick.py - 6}
+                x2={tick.px}
+                y2={tick.py + 6}
+                className="stroke-cslab-accent"
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+              />
+            </g>
+          ))}
         </svg>
       </div>
 
@@ -422,6 +536,16 @@ export function CsLabPlotDigitizerPanel({
         <span className="ml-auto text-[10px] text-cslab-muted">
           X {xTicks.length}/3 · Y {yTicks.length}/3
         </span>
+        <button
+          type="button"
+          title="清空全部标定点"
+          disabled={busy !== null || (xTicks.length === 0 && yTicks.length === 0)}
+          onClick={clearCalibration}
+          className="inline-flex items-center gap-1 rounded-lg border border-cslab-border px-2 py-1 text-[10px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text disabled:opacity-40"
+        >
+          <RotateCcw size={10} />
+          清空标定
+        </button>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -437,16 +561,36 @@ export function CsLabPlotDigitizerPanel({
             </p>
             {ticks.length === 0 && <p className="text-[10px] text-cslab-muted/70">点击图像添加</p>}
             {ticks.map((tick, index) => (
-              <input
-                key={`${axis}-${index}`}
-                type="number"
-                value={Number.isFinite(tick.value) ? tick.value : 0}
-                onChange={(event) =>
-                  updateTickValue(axis, index, Number(event.target.value) || 0)
-                }
-                className="w-full rounded-md border border-cslab-border bg-cslab-elevated px-2 py-1 text-[11px] text-cslab-text outline-none focus:border-cslab-accent/50"
-                aria-label={`${axis} 轴第 ${index + 1} 个刻度值`}
-              />
+              <div key={`${axis}-${index}`} className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={tick.pending ? '' : Number.isFinite(tick.value) ? tick.value : ''}
+                  onChange={(event) => {
+                    const raw = event.target.value.trim()
+                    updateTickValue(axis, index, raw === '' ? 0 : Number(raw), raw === '')
+                  }}
+                  className="w-full min-w-0 flex-1 rounded-md border border-cslab-border bg-cslab-elevated px-2 py-1 text-[11px] text-cslab-text outline-none focus:border-cslab-accent/50"
+                  aria-label={`${axis} 轴第 ${index + 1} 个刻度值`}
+                />
+                {tick.autoRead && (
+                  <span
+                    className="shrink-0 rounded-full border border-cslab-accent/40 bg-cslab-accent/10 px-1.5 py-0.5 text-[9px] leading-4 text-cslab-accent"
+                    title="该值由模板匹配自动识别，可能有误"
+                  >
+                    自动识别
+                  </span>
+                )}
+                {tick.autoRead && (
+                  <button
+                    type="button"
+                    title="撤销自动识别，改为手动填写"
+                    onClick={() => undoAutoRead(axis, index)}
+                    className="shrink-0 rounded border border-cslab-border px-1 py-0.5 text-[9px] leading-4 text-cslab-muted transition-colors hover:border-cslab-accent/50 hover:text-cslab-accent"
+                  >
+                    撤销
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         ))}
@@ -490,6 +634,62 @@ export function CsLabPlotDigitizerPanel({
         />
       </div>
 
+      {/* 自动分色：不指定吸管颜色，由 Python 侧按 HSV 色相 K-Means 自动分离 2~4 条曲线。 */}
+      <button
+        type="button"
+        onClick={() => setAutoSeries((previous) => !previous)}
+        title="不指定吸管颜色，按 HSV 色相聚类自动分离多条曲线"
+        className={cn(
+          'rounded-full border px-2 py-1 text-[10px] transition-colors',
+          autoSeries
+            ? 'border-cslab-accent/60 bg-cslab-accent/12 text-cslab-accent'
+            : 'border-cslab-border text-cslab-muted hover:border-cslab-accent/50',
+        )}
+      >
+        {autoSeries ? '✓ 自动分色' : '自动分色'}
+      </button>
+
+      {/* 多曲线分色（Series 1/2/...）：逐色拾取代表色，非空时优先于单色输入。 */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[9px] uppercase tracking-[0.14em] text-cslab-muted">多曲线</span>
+        {colors.map((item) => (
+          <span
+            key={item}
+            className="inline-flex items-center gap-1 rounded-full border border-cslab-border py-0.5 pl-1 pr-1.5 text-[10px] text-cslab-text"
+          >
+            <span
+              className="inline-block size-2.5 rounded-full border border-cslab-border/60"
+              style={{ backgroundColor: item }}
+            />
+            <span className="font-mono text-[9px]">{item}</span>
+            <button
+              type="button"
+              aria-label={`移除颜色 ${item}`}
+              onClick={() => removeSeriesColor(item)}
+              className="rounded p-0.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            >
+              <X size={9} />
+            </button>
+          </span>
+        ))}
+        {colors.length < 4 && (
+          <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-cslab-border px-2 py-0.5 text-[10px] text-cslab-muted transition-colors hover:text-cslab-text">
+            <Plus size={9} />
+            拾取曲线颜色
+            <input
+              type="color"
+              value={color || '#3399ff'}
+              onChange={(event) => addSeriesColor(event.target.value)}
+              className="sr-only"
+              aria-label="拾取曲线代表色"
+            />
+          </label>
+        )}
+        {colors.length > 0 && (
+          <span className="text-[9px] text-cslab-muted/70">将按这些颜色逐条提取（最多 4 条）</span>
+        )}
+      </div>
+
       {!plotReady && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-700">
           缺少 plot 依赖：
@@ -511,7 +711,7 @@ export function CsLabPlotDigitizerPanel({
         </div>
       )}
 
-      {isDemoSpectrum && (
+      {hasDemoCalibration && (
         <button
           type="button"
           data-tour="cslab-digitizer-demo"
