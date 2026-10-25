@@ -20,6 +20,7 @@ import type {
 } from '@profer/shared'
 import { getAgentSessionMeta } from '../agent-session-manager'
 import { assertLabId } from '../cslab/cslab-paths'
+import { resolveCsLabSeminarLabId } from '../cslab/cslab-session-gate'
 import {
   readLabToolManifestSync,
   runLabTool,
@@ -36,6 +37,8 @@ export interface PiCsLabToolsContext {
 
 export interface CsLabToolBridgeDeps {
   getSessionMeta?: (sessionId: string) => AgentSessionMeta | undefined
+  /** 统一会话门禁覆盖（测试用）；缺省走 resolveCsLabSeminarLabId。 */
+  resolveLabId?: (sessionId: string) => string | null
   readManifest?: (labId: string) => CsLabCustomToolScan | null
   runTool?: typeof runLabTool
   scanTools?: typeof scanLabTools
@@ -106,6 +109,19 @@ export function buildPiCsLabTools(
   deps: CsLabToolBridgeDeps = {},
 ): ToolDefinition[] {
   const getSessionMeta = deps.getSessionMeta ?? getAgentSessionMeta
+  const resolveLabId = deps.resolveLabId ?? ((sessionId: string) => {
+    // 测试仍可注入 getSessionMeta；生产缺省统一走 CSLab 研讨会话门禁。
+    if (deps.getSessionMeta) {
+      const meta = getSessionMeta(sessionId)
+      if (!meta?.cslabLabId) return null
+      try {
+        return assertLabId(meta.cslabLabId)
+      } catch {
+        return null
+      }
+    }
+    return resolveCsLabSeminarLabId(sessionId)
+  })
   const readManifest = deps.readManifest ?? readLabToolManifestSync
   const executeTool = deps.runTool ?? runLabTool
   const scanTools = deps.scanTools ?? scanLabTools
@@ -116,16 +132,8 @@ export function buildPiCsLabTools(
     permissionMode: getPermissionMode?.(),
   })
 
-  const meta = getSessionMeta(ctx.sessionId)
-  const labId = meta?.cslabLabId
-  if (!labId) return []
-
-  let normalizedLabId: string
-  try {
-    normalizedLabId = assertLabId(labId)
-  } catch {
-    return []
-  }
+  const normalizedLabId = resolveLabId(ctx.sessionId)
+  if (!normalizedLabId) return []
 
   const manifest = readManifest(normalizedLabId)
   const tools: ToolDefinition[] = []

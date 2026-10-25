@@ -12,7 +12,10 @@ import {
   canvasToDagGraph,
   evaluateDag,
   mergeCanvasScienceMeta,
+  normalizeCanvasDocumentFilePaths,
+  normalizeCanvasNodeFilePath,
   parseCanvasDocument,
+  resolveCanvasFileNodeToLabRelPath,
   serializeCanvasDocument,
   topologicalOrder,
   wouldCreateCycle,
@@ -532,4 +535,70 @@ describe('Vault 索引缓存', () => {
     expect(removed.removed).toBe(1)
     expect(listAssets(lab.id).some((asset) => asset.relPath === 'vault/notes/beta.md')).toBe(false)
   })
+
+  test('同目录与子目录 .md 文件路径规范化（Obsidian 与 CDUT 互通）', async () => {
+    // 1. 同目录下引用 Overview.md
+    expect(
+      normalizeCanvasNodeFilePath('vault/notes/papers/seismic/topo.canvas', 'Overview.md'),
+    ).toBe('papers/seismic/Overview.md')
+
+    // 2. 同目录下显式 ./ 相对引用
+    expect(
+      normalizeCanvasNodeFilePath('vault/notes/papers/seismic/topo.canvas', './Protocols.md'),
+    ).toBe('papers/seismic/Protocols.md')
+
+    // 3. 跨子目录 ../ 相对引用
+    expect(
+      normalizeCanvasNodeFilePath('vault/notes/papers/seismic/topo.canvas', '../geology/Fault.md'),
+    ).toBe('papers/geology/Fault.md')
+
+    // 4. 带 vault/notes 前缀的路径被平滑清洗为 Obsidian Vault 相对路径
+    expect(
+      normalizeCanvasNodeFilePath('vault/notes/papers/seismic/topo.canvas', 'vault/notes/papers/seismic/Overview.md'),
+    ).toBe('papers/seismic/Overview.md')
+
+    // 5. 根目录下的 canvas 引用根目录笔记
+    expect(
+      normalizeCanvasNodeFilePath('vault/notes/root.canvas', 'Overview.md'),
+    ).toBe('Overview.md')
+
+    // 6. CDUT 实验室相对路径解析
+    expect(
+      resolveCanvasFileNodeToLabRelPath('vault/notes/papers/seismic/topo.canvas', 'Overview.md'),
+    ).toBe('vault/notes/papers/seismic/Overview.md')
+
+    // 7. writeCanvas 写盘自动规范化 file 节点，消除 Obsidian 找不到文件
+    const { createLab } = await import('./cslab-manager')
+    const lab = createLab({ name: 'canvas-path-norm' })
+    const { createCanvas, readCanvas, writeCanvas } = await import('./cslab-canvas-sync')
+    const created = await createCanvas(lab.id, '子目录推演')
+    const subCanvasPath = 'vault/notes/papers/demo/test.canvas'
+    const fullSubCanvasDir = join(rootDir, 'cslab-workspaces', lab.id, 'vault', 'notes', 'papers', 'demo')
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    mkdirSync(fullSubCanvasDir, { recursive: true })
+    writeFileSync(join(fullSubCanvasDir, 'test.canvas'), JSON.stringify({ nodes: [], edges: [] }), 'utf-8')
+
+    const written = await writeCanvas({
+      labId: lab.id,
+      relPath: subCanvasPath,
+      document: {
+        nodes: [
+          { id: 'f1', type: 'file', x: 0, y: 0, width: 200, height: 100, file: 'Overview.md' },
+          { id: 'f2', type: 'file', x: 250, y: 0, width: 200, height: 100, file: './Protocols.md' },
+          { id: 'f3', type: 'file', x: 500, y: 0, width: 200, height: 100, file: 'vault/notes/papers/demo/Metrics.md' },
+        ],
+        edges: [],
+      },
+    })
+
+    // 写盘后应自动规范化为 Obsidian 根可索引的完整相对路径
+    expect(written.document.nodes[0]!.file).toBe('papers/demo/Overview.md')
+    expect(written.document.nodes[1]!.file).toBe('papers/demo/Protocols.md')
+    expect(written.document.nodes[2]!.file).toBe('papers/demo/Metrics.md')
+
+    // 读回时也保持规范化
+    const loaded = await readCanvas(lab.id, subCanvasPath)
+    expect(loaded.document.nodes[0]!.file).toBe('papers/demo/Overview.md')
+  })
+
 })

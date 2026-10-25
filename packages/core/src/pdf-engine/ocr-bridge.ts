@@ -35,6 +35,50 @@ export interface PdfOcrPort {
   }): Promise<PdfOcrResult>
 }
 
+/**
+ * 按页面区域调度的 OCR 端口。
+ *
+ * 设计要点：页面栅格化交由端口实现方完成（本地学术 OCR 引擎自带 PDF 渲染能力），
+ * core 只传文档路径 + 页码 + 归一化框，避免在 Node/Electron 主进程引入 canvas 渲染依赖。
+ */
+export interface PdfRegionOcrPort {
+  readonly available: boolean
+  readonly unavailableReason?: string
+  recognizeRegion(input: {
+    pdfPath: string
+    pageNumber: number
+    regionBBox: NormalizedBBox
+    kind: 'text' | 'formula'
+  }): Promise<PdfOcrResult>
+}
+
+/** 公式视觉识别端口（返回端到端 LaTeX） */
+export interface FormulaOcrPort {
+  readonly available: boolean
+  readonly unavailableReason?: string
+  recognizeFormula(input: {
+    pdfPath: string
+    pageNumber: number
+    regionBBox: NormalizedBBox
+  }): Promise<{ ok: boolean; latex?: string; message?: string }>
+}
+
+/** 引擎可注入的 OCR 端口集合（全部可缺省；缺省即优雅降级为纯几何解析） */
+export interface PdfOcrPorts {
+  /** 整页/区域文本 OCR（扫描页降级重构） */
+  region?: PdfRegionOcrPort
+  /** 公式视觉识别（高复杂度公式兜底） */
+  formula?: FormulaOcrPort
+}
+
+/** 端口返回的字块映射结果 */
+export interface RegionOcrMapping {
+  nodes: LayoutNode[]
+  /** 是否真的执行了识别（端口不可用时为 false，绝不伪造） */
+  performed: boolean
+  reason?: string
+}
+
 /** 页面尺寸信息（用于把归一化坐标反算为点坐标） */
 export interface OcrPageInfo {
   pageNumber: number
@@ -85,6 +129,15 @@ export async function bridgeVisualRegionToOcr(
     return []
   }
 
+  return mapOcrBlocksToNodes(result, regionBBox, pageInfo)
+}
+
+/** 把 OCR 字块结果映射为排版节点（两种端口共用） */
+function mapOcrBlocksToNodes(
+  result: PdfOcrResult,
+  regionBBox: NormalizedBBox,
+  pageInfo?: OcrPageInfo,
+): LayoutNode[] {
   const pageNumber = pageInfo?.pageNumber ?? 1
   const pageWidth = pageInfo?.width ?? 1
   const pageHeight = pageInfo?.height ?? 1
@@ -113,4 +166,51 @@ export async function bridgeVisualRegionToOcr(
         isOcrRecognized: true,
       }
     })
+}
+
+/**
+ * 把页面区域交给「按区域调度」的 OCR 端口识别，并映射为排版节点。
+ *
+ * 用于扫描页 / ToUnicode 乱码页的降级重构。端口未注入、不可用或识别失败时
+ * 如实返回 `performed: false` 并给出原因，绝不伪造识别结果。
+ */
+export async function bridgeRegionToOcr(input: {
+  pdfPath: string
+  pageNumber: number
+  regionBBox: NormalizedBBox
+  kind: 'text' | 'formula'
+  port?: PdfRegionOcrPort
+  pageWidth: number
+  pageHeight: number
+}): Promise<RegionOcrMapping> {
+  const { port } = input
+  if (!port) {
+    return { nodes: [], performed: false, reason: 'OCR 端口未注入' }
+  }
+  if (!port.available) {
+    return { nodes: [], performed: false, reason: port.unavailableReason ?? 'OCR 端口不可用' }
+  }
+
+  let result: PdfOcrResult
+  try {
+    result = await port.recognizeRegion({
+      pdfPath: input.pdfPath,
+      pageNumber: input.pageNumber,
+      regionBBox: input.regionBBox,
+      kind: input.kind,
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    console.warn('[PDF引擎] 区域 OCR 识别失败，跳过该区域:', reason)
+    return { nodes: [], performed: false, reason }
+  }
+
+  return {
+    nodes: mapOcrBlocksToNodes(result, input.regionBBox, {
+      pageNumber: input.pageNumber,
+      width: input.pageWidth,
+      height: input.pageHeight,
+    }),
+    performed: true,
+  }
 }

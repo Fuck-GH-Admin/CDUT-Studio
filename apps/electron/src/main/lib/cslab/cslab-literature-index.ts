@@ -13,7 +13,12 @@
 import { createHash } from 'node:crypto'
 import { existsSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import type { CsLabLiteratureIndexStatus } from '@profer/shared'
+import type {
+  CsLabLiteratureGraphEdge,
+  CsLabLiteratureGraphNode,
+  CsLabLiteratureGraphResult,
+  CsLabLiteratureIndexStatus,
+} from '@profer/shared'
 import { buildHierarchicalCommunities, type CommunityNode, type WeightedEdge } from '../study/hierarchical-graphrag'
 import { assertLabId, resolveLabRelativePath } from './cslab-paths'
 import { listLiteratureEntities, readLiteratureBuffer } from './cslab-literature'
@@ -27,6 +32,8 @@ export interface LiteratureChunk {
   title: string
   page: number
   text: string
+  /** 切块在 PDF 页内的归一化坐标 [x0, y0, x1, y1]（0-1）；旧索引缺省时仅跳页不高亮。 */
+  bbox?: [number, number, number, number]
 }
 
 export interface LiteratureIndexFile {
@@ -38,11 +45,18 @@ export interface LiteratureIndexFile {
   communities: CommunityNode[]
   /** chunkId -> L0 社区。 */
   chunkCommunity: Record<string, { id: string; title: string }>
+  /** 切块级共现边（L0 聚类与全景图谱的数据源）；旧版索引可能缺省。 */
+  edges: WeightedEdge[]
 }
 
 interface CachedPageText {
   page: number
   text: string
+  /** 页面尺寸（PDF 视口单位），用于把行框归一化为 0-1 坐标；旧缓存缺省。 */
+  width?: number
+  height?: number
+  /** 行级文本框（PDF 视口坐标）；旧缓存缺省时仅跳页不高亮。 */
+  lines?: Array<{ text: string; x0: number; y0: number; x1: number; y1: number }>
 }
 
 interface CachedLiteratureText {
@@ -60,16 +74,30 @@ function indexFilePath(labId: string): string {
   return resolveLabRelativePath(labId, 'db/graphrag-index.json')
 }
 
-/** 依据 pdfjs 字形坐标重建每页文本。 */
+interface PageLineText {
+  text: string
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+interface PageTextWithLines {
+  text: string
+  lines: PageLineText[]
+}
+
+/** 依据 pdfjs 字形坐标重建每页文本与行级文本框（供切块 bbox 联动）。 */
 function glyphsToPageText(
   glyphs: Array<{
     char: string
     originX: number
     originY: number
+    width: number
     fontSize: number
   }>,
-): string {
-  if (glyphs.length === 0) return ''
+): PageTextWithLines {
+  if (glyphs.length === 0) return { text: '', lines: [] }
   const sorted = [...glyphs].sort((a, b) => (a.originY - b.originY) || (a.originX - b.originX))
   const lines: Array<{ y: number; items: typeof glyphs }> = []
 
@@ -86,21 +114,26 @@ function glyphsToPageText(
   }
 
   lines.sort((a, b) => a.y - b.y)
-  return lines
-    .map((line) => {
-      const items = line.items.sort((a, b) => a.originX - b.originX)
-      let text = ''
-      let previousEnd = 0
-      for (const item of items) {
-        const gap = item.originX - previousEnd
-        if (text && gap > Math.max(4, (item.fontSize || 10) * 0.45)) text += ' '
-        text += item.char
-        previousEnd = item.originX + Math.max(0, item.fontSize * 0.5)
-      }
-      return text.trim()
-    })
-    .filter(Boolean)
-    .join('\n')
+  const pageLines: PageLineText[] = []
+  for (const line of lines) {
+    const items = line.items.sort((a, b) => a.originX - b.originX)
+    let text = ''
+    let previousEnd = 0
+    for (const item of items) {
+      const gap = item.originX - previousEnd
+      if (text && gap > Math.max(4, (item.fontSize || 10) * 0.45)) text += ' '
+      text += item.char
+      previousEnd = item.originX + Math.max(0, item.width)
+    }
+    const trimmed = text.trim()
+    if (!trimmed) continue
+    const x0 = Math.min(...items.map((item) => item.originX))
+    const x1 = Math.max(...items.map((item) => item.originX + Math.max(0, item.width)))
+    const y0 = Math.min(...items.map((item) => item.originY - item.fontSize))
+    const y1 = Math.max(...items.map((item) => item.originY + Math.max(1, item.fontSize * 0.25)))
+    pageLines.push({ text: trimmed, x0, y0, x1, y1 })
+  }
+  return { text: pageLines.map((line) => line.text).join('\n'), lines: pageLines }
 }
 
 async function extractPageText(labId: string, uri: string): Promise<CachedPageText[]> {
@@ -109,17 +142,24 @@ async function extractPageText(labId: string, uri: string): Promise<CachedPageTe
   const { extractPdfGeometry } = await import('@profer/core/pdf-engine')
   // 长综述限 300 页，避免一次性把数百页字形全部驻留内存。
   const geometry = await extractPdfGeometry(buffer, { maxPages: 300 })
-  return geometry.pages.map((page) => ({
-    page: page.pageNumber,
-    text: glyphsToPageText(
+  return geometry.pages.map((page) => {
+    const { text, lines } = glyphsToPageText(
       page.glyphs.map((glyph) => ({
         char: glyph.char,
         originX: glyph.originX,
         originY: glyph.originY,
+        width: glyph.width,
         fontSize: glyph.fontSize,
       })),
-    ),
-  }))
+    )
+    return {
+      page: page.pageNumber,
+      text,
+      width: page.width,
+      height: page.height,
+      lines,
+    }
+  })
 }
 
 async function loadOrExtractText(
@@ -264,6 +304,73 @@ function computeFingerprint(
   return createHash('sha256').update(material).digest('hex')
 }
 
+/**
+ * 推导每个切块在页内的归一化 bbox。
+ *
+ * 切块是页文本的连续切片（splitIntoChunks 保序），以移动游标在页文本中顺序定位
+ * 每个切块的字符区间，再取覆盖行框的并集。旧缓存（无 lines/width/height）返回
+ * undefined，命中时仅跳页不高亮。
+ */
+function deriveChunkBboxes(
+  pageText: string,
+  pageChunks: string[],
+  page: CachedPageText,
+): Array<[number, number, number, number] | undefined> {
+  const lines = page.lines
+  if (!lines || lines.length === 0 || !page.width || !page.height) {
+    return pageChunks.map(() => undefined)
+  }
+
+  // 行框与其在页文本（\n 连接）中的字符区间。
+  const lineSpans: Array<{ start: number; end: number; line: PageLineText }> = []
+  let cursor = 0
+  for (const line of lines) {
+    const start = pageText.indexOf(line.text, cursor)
+    if (start < 0) return pageChunks.map(() => undefined)
+    const end = start + line.text.length
+    lineSpans.push({ start, end, line })
+    cursor = end
+  }
+
+  const pageWidth = page.width
+  const pageHeight = page.height
+  const results: Array<[number, number, number, number] | undefined> = []
+  let searchFrom = 0
+  for (const chunk of pageChunks) {
+    const start = pageText.indexOf(chunk, searchFrom)
+    if (start < 0) {
+      results.push(undefined)
+      continue
+    }
+    const end = start + chunk.length
+    searchFrom = Math.max(searchFrom, start)
+    let x0 = Number.POSITIVE_INFINITY
+    let y0 = Number.POSITIVE_INFINITY
+    let x1 = Number.NEGATIVE_INFINITY
+    let y1 = Number.NEGATIVE_INFINITY
+    let covered = false
+    for (const span of lineSpans) {
+      if (span.end <= start || span.start >= end) continue
+      covered = true
+      x0 = Math.min(x0, span.line.x0)
+      y0 = Math.min(y0, span.line.y0)
+      x1 = Math.max(x1, span.line.x1)
+      y1 = Math.max(y1, span.line.y1)
+    }
+    results.push(
+      covered
+        ? [
+            Math.max(0, x0 / pageWidth),
+            Math.max(0, y0 / pageHeight),
+            Math.min(1, x1 / pageWidth),
+            Math.min(1, y1 / pageHeight),
+          ]
+        : undefined,
+    )
+  }
+  return results
+}
+
 export async function readLiteratureIndex(labIdInput: string): Promise<LiteratureIndexFile | null> {
   const labId = assertLabId(labIdInput)
   const path = indexFilePath(labId)
@@ -271,7 +378,8 @@ export async function readLiteratureIndex(labIdInput: string): Promise<Literatur
   try {
     const parsed = JSON.parse(await fs.readFile(path, 'utf-8')) as LiteratureIndexFile
     if (parsed.version !== 1 || !Array.isArray(parsed.chunks)) return null
-    return parsed
+    // 旧版索引无 edges 字段：容错为空数组，下次 force 重建时自动补全。
+    return { ...parsed, edges: Array.isArray(parsed.edges) ? parsed.edges : [] }
   } catch {
     return null
   }
@@ -337,6 +445,7 @@ export async function buildLabLiteratureIndex(
       extracted += 1
       for (const page of text.pages) {
         const pageChunks = splitIntoChunks(page.text)
+        const bboxes = deriveChunkBboxes(page.text, pageChunks, page)
         pageChunks.forEach((content, index) => {
           chunks.push({
             id: `${entity.uri}#p${page.page}-s${index}`,
@@ -344,6 +453,7 @@ export async function buildLabLiteratureIndex(
             title: entity.title,
             page: page.page,
             text: content,
+            bbox: bboxes[index],
           })
         })
         processedPages += 1
@@ -391,6 +501,7 @@ export async function buildLabLiteratureIndex(
     chunks,
     communities,
     chunkCommunity,
+    edges,
   }
 
   const path = indexFilePath(labId)
@@ -403,5 +514,93 @@ export async function buildLabLiteratureIndex(
     index,
     built: true,
     message: `已索引 ${extracted} 篇文献、${chunks.length} 个切块、${communities.length} 个社群`,
+  }
+}
+
+/**
+ * 文献智脑全景图谱（未搜索时的默认视图）。
+ *
+ * 将切块级索引聚合为文献级节点/边：节点社群取该文献切块的多数 L0 社群，
+ * 边按文献对聚合共现权重。复用已持久化的 edges，无需重建索引。
+ */
+export async function getLiteratureGraph(
+  labIdInput: string,
+): Promise<CsLabLiteratureGraphResult> {
+  const labId = assertLabId(labIdInput)
+  const index = await readLiteratureIndex(labId)
+  if (!index || index.chunks.length === 0) {
+    return {
+      ok: false,
+      nodes: [],
+      edges: [],
+      communityCount: 0,
+      message: '尚未构建跨文献索引，请先执行索引构建',
+    }
+  }
+
+  // 文献节点：社群 = 切块 L0 社群多数投票。
+  const chunkCountByUri = new Map<string, number>()
+  const communityVotes = new Map<string, Map<string, number>>()
+  const uriTitle = new Map<string, string>()
+  for (const chunk of index.chunks) {
+    chunkCountByUri.set(chunk.literatureUri, (chunkCountByUri.get(chunk.literatureUri) ?? 0) + 1)
+    uriTitle.set(chunk.literatureUri, chunk.title)
+    const community = index.chunkCommunity[chunk.id]
+    if (!community) continue
+    const votes = communityVotes.get(chunk.literatureUri) ?? new Map<string, number>()
+    votes.set(community.id, (votes.get(community.id) ?? 0) + 1)
+    communityVotes.set(chunk.literatureUri, votes)
+  }
+
+  const communityTitleById = new Map<string, string>()
+  for (const community of index.communities) {
+    if (community.level === 0) communityTitleById.set(community.id, community.title)
+  }
+
+  const nodes: CsLabLiteratureGraphNode[] = [...chunkCountByUri.entries()].map(([uri, count]) => {
+    const votes = communityVotes.get(uri)
+    let bestId = ''
+    let bestCount = -1
+    if (votes) {
+      for (const [id, count] of votes) {
+        if (count > bestCount) {
+          bestId = id
+          bestCount = count
+        }
+      }
+    }
+    return {
+      uri,
+      title: uriTitle.get(uri) ?? uri,
+      communityId: bestId,
+      communityTitle: communityTitleById.get(bestId) ?? bestId,
+      chunkCount: count,
+    }
+  })
+
+  // 文献对聚合共现边：chunkId 前缀即 literatureUri。
+  const pairWeight = new Map<string, number>()
+  for (const edge of index.edges) {
+    const source = edge.source.split('#')[0] ?? ''
+    const target = edge.target.split('#')[0] ?? ''
+    if (!source || !target || source === target) continue
+    const key = source < target ? `${source}|${target}` : `${target}|${source}`
+    pairWeight.set(key, (pairWeight.get(key) ?? 0) + edge.weight)
+  }
+  const knownUris = new Set(nodes.map((node) => node.uri))
+  const graphEdges: CsLabLiteratureGraphEdge[] = []
+  for (const [key, weight] of pairWeight) {
+    const [source, target] = key.split('|')
+    if (!source || !target || !knownUris.has(source) || !knownUris.has(target)) continue
+    graphEdges.push({ source, target, weight })
+  }
+  graphEdges.sort((a, b) => b.weight - a.weight)
+
+  return {
+    ok: true,
+    nodes,
+    edges: graphEdges,
+    communityCount: communityTitleById.size,
+    builtAt: index.builtAt,
   }
 }

@@ -7,7 +7,15 @@
     "paths": {
       "@/*": ["./src/renderer/*"],
       "@/types/*": ["./src/types/*"],
-      "@assets/*": ["../../assets/*"]
+      "@assets/*": ["../../assets/*"],
+      "@hufe921/canvas-editor": [
+        "./node_modules/@hufe921/canvas-editor/dist/src/editor/index.d.ts",
+        "../../node_modules/@hufe921/canvas-editor/dist/src/editor/index.d.ts"
+      ],
+      "@hufe921/canvas-editor-plugin-comment": [
+        "./node_modules/@hufe921/canvas-editor-plugin-comment/dist/src/comment/index.d.ts",
+        "../../node_modules/@hufe921/canvas-editor-plugin-comment/dist/src/comment/index.d.ts"
+      ]
     }
   },
   "include": ["src/**/*"]

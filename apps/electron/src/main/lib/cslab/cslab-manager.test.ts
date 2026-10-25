@@ -37,7 +37,7 @@ describe('实验室沙箱', () => {
     expect(lab.id).toMatch(/^[a-z0-9-]+$/)
     expect(lab.status).toBe('运行中')
 
-    for (const dir of ['db', 'vault/lit', 'vault/notes', 'vault/raw', 'vault/tables', 'vault/figures', 'vault/manuscripts', 'runtime/tools', 'runtime/logs']) {
+    for (const dir of ['db', 'vault/lit', 'vault/notes', 'vault/raw', 'vault/tables', 'vault/figures', 'vault/manuscripts', 'vault/geo', 'runtime/tools', 'runtime/logs']) {
       expect(existsSync(join(lab.rootPath, dir))).toBe(true)
     }
     expect(existsSync(join(lab.rootPath, 'lab.manifest.json'))).toBe(true)
@@ -63,6 +63,12 @@ describe('实验室沙箱', () => {
     const { createLab } = await import('./cslab-manager')
     expect(() => createLab({ name: '   ' })).toThrow('实验室名称不能为空')
     expect(() => createLab({ name: 'x'.repeat(61) })).toThrow('不能超过 60')
+  })
+
+  test('Given 演示类型 When 创建并读取 Then demoKind 持久化', async () => {
+    const { createLab, getLab } = await import('./cslab-manager')
+    const lab = createLab({ name: '旗舰类型往返测试', demoKind: 'flagship' })
+    expect(getLab(lab.id)?.demoKind).toBe('flagship')
   })
 })
 

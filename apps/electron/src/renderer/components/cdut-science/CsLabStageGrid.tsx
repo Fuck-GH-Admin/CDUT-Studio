@@ -3,16 +3,15 @@
  */
 
 import * as React from 'react'
-import type { Editor } from '@tiptap/core'
 import type {
   CsLabAssetSummary,
   CsLabCanvasDocument,
   CsLabCanvasWriteResult,
-  CsLabCapsule,
   CsLabCellRef,
   CsLabLiteratureItem,
   CsLabManuscript,
   CsLabMolAsset,
+  CsLabGeoRasterPayload,
   CsLabTablePayload,
 } from '@profer/shared'
 import { cn } from '@/lib/utils'
@@ -24,7 +23,12 @@ import {
   type CsLabSplitLayout,
 } from '@/atoms/cslab-atoms'
 import { CsLabStagePane } from './CsLabStagePane'
+import type { CsLabDagNodeTarget } from './CsLabDagCanvas'
 import type { CsLabAssetDragPayload } from './cslab-dnd'
+import type {
+  CsLabCanvasHandle,
+  CsLabCanvasSnapshot,
+} from './canvas-manuscript/cslab-canvas-types'
 
 interface CsLabStageGridProps {
   layout: CsLabSplitLayout
@@ -35,6 +39,7 @@ interface CsLabStageGridProps {
   literature: Record<CsLabPaneId, CsLabLiteratureItem | null>
   canvases: Record<CsLabPaneId, CsLabCanvasDocument | null>
   mols: Record<CsLabPaneId, CsLabMolAsset | null>
+  geos: Record<CsLabPaneId, CsLabGeoRasterPayload | null>
   assets: CsLabAssetSummary[]
   loading: Record<CsLabPaneId, boolean>
   saving: Record<CsLabPaneId, boolean>
@@ -44,18 +49,16 @@ interface CsLabStageGridProps {
   onActivatePane: (paneId: CsLabPaneId) => void
   onClosePane: (paneId: CsLabPaneId) => void
   onMaximizePane: (paneId: CsLabPaneId) => void
-  onEditorReady: (paneId: CsLabPaneId, editor: Editor | null) => void
+  onEditorReady: (paneId: CsLabPaneId, handle: CsLabCanvasHandle | null) => void
   onSaveManuscript: (
     paneId: CsLabPaneId,
-    docJson: unknown,
+    snapshot: CsLabCanvasSnapshot,
     title: string,
-    capsules: CsLabCapsule[],
   ) => Promise<void>
   onSaveManuscriptAs?: (
     paneId: CsLabPaneId,
-    docJson: unknown,
+    snapshot: CsLabCanvasSnapshot,
     title: string,
-    capsules: CsLabCapsule[],
   ) => Promise<void>
   onDirtyChange: (paneId: CsLabPaneId, dirty: boolean) => void
   onTitleChange: (paneId: CsLabPaneId, title: string) => void
@@ -73,6 +76,10 @@ interface CsLabStageGridProps {
     text: string,
     action?: { label: string; path: string },
   ) => void
+  /** 划词右键「检索关联学术文献」反向打开学术检索弹窗。 */
+  onSearchLiterature: (query: string) => void
+  /** 打开推演画布 file/link 节点引用的资产、笔记或外链（Bug 6）。 */
+  onOpenNodeTarget?: (target: CsLabDagNodeTarget) => void
 }
 
 const LAYOUT_CLASS: Record<CsLabSplitLayout, string> = {
@@ -98,6 +105,7 @@ export function CsLabStageGrid({
   literature,
   canvases,
   mols,
+  geos,
   assets,
   loading,
   saving,
@@ -118,6 +126,8 @@ export function CsLabStageGrid({
   onDropAssetOnPane,
   onCanvasSaved,
   onToast,
+  onSearchLiterature,
+  onOpenNodeTarget,
 }: CsLabStageGridProps): React.ReactElement {
   const visiblePanes =
     layout === 'single' ? [activePaneId] : VISIBLE_PANES[layout]
@@ -151,22 +161,24 @@ export function CsLabStageGrid({
             literature={literature[paneId]}
             canvas={canvases[paneId]}
             mol={mols[paneId]}
+            geo={geos[paneId]}
             figureAsset={figureAsset}
             initialPage={pane.pdfInitialPage}
+            focusHighlight={pane.pdfFocusHighlight}
             loading={loading[paneId]}
             saving={saving[paneId]}
             staleCapsuleIds={staleCapsuleIds}
             onActivate={() => onActivatePane(paneId)}
             onClose={() => onClosePane(paneId)}
             onMaximize={() => onMaximizePane(paneId)}
-            onEditorReady={(editor) => onEditorReady(paneId, editor)}
-            onSaveManuscript={(docJson, title, capsules) =>
-              onSaveManuscript(paneId, docJson, title, capsules)
+            onEditorReady={(handle) => onEditorReady(paneId, handle)}
+            onSaveManuscript={(snapshot, title) =>
+              onSaveManuscript(paneId, snapshot, title)
             }
             onSaveManuscriptAs={
               onSaveManuscriptAs
-                ? (docJson: unknown, title: string, capsules: CsLabCapsule[]) =>
-                    onSaveManuscriptAs(paneId, docJson, title, capsules)
+                ? (snapshot: CsLabCanvasSnapshot, title: string) =>
+                    onSaveManuscriptAs(paneId, snapshot, title)
                 : undefined
             }
             onDirtyChange={(dirty) => onDirtyChange(paneId, dirty)}
@@ -177,6 +189,8 @@ export function CsLabStageGrid({
             onDropAsset={(payload) => onDropAssetOnPane(paneId, payload)}
             onCanvasSaved={(document, result) => onCanvasSaved(paneId, document, result)}
             onToast={onToast}
+            onSearchLiterature={onSearchLiterature}
+            onOpenNodeTarget={onOpenNodeTarget}
           />
         )
       })}

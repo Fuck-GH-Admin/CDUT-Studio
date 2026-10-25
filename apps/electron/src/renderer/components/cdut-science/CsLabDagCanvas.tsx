@@ -28,9 +28,21 @@ import {
   canvasToDagGraph,
   evaluateDag,
   findCanvasCycleIds,
+  resolveCanvasFileNodeToLabRelPath,
   wouldCreateCycle,
 } from '@profer/shared'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
+import { edgePath } from './cslab-edge-router'
+
+/**
+ * 节点引用目标。`file` / `link` 节点本质是引用而非正文，
+ * 双击时必须走导航而非进入文本编辑态，否则空文本会覆盖掉引用（Bug 6）。
+ */
+export type CsLabDagNodeTarget =
+  | { kind: 'asset'; uri: string }
+  | { kind: 'file'; relPath: string }
+  | { kind: 'url'; url: string }
 
 interface CsLabDagCanvasProps {
   labId: string
@@ -39,6 +51,8 @@ interface CsLabDagCanvasProps {
   initialMtimeMs: number
   onSaved?: (document: CsLabCanvasDocument, result: CsLabCanvasWriteResult) => void
   onToast?: (kind: 'info' | 'success' | 'error', text: string) => void
+  /** 打开 file/link 节点引用的资产、笔记或外链；缺省时仅阻止编辑态破坏引用。 */
+  onOpenNodeTarget?: (target: CsLabDagNodeTarget) => void
 }
 
 interface ViewTransform {
@@ -74,6 +88,32 @@ const STATE_DOT: Record<CsLabDagValidationState, string> = {
   pruned: 'bg-cslab-border',
 }
 
+/** 高对比状态胶囊：人工事实 + 派生剪枝一望即知。 */
+const STATE_CAPSULE: Record<CsLabDagValidationState, string> = {
+  pending: 'border-cslab-border text-cslab-muted',
+  verified: 'border-[#6E8B6A]/50 bg-[#6E8B6A]/12 text-[#5C7358]',
+  dead_end: 'border-[#B4553F]/50 bg-[#B4553F]/12 text-[#B4553F]',
+  pruned: 'border-dashed border-cslab-border text-cslab-muted',
+}
+
+const STATE_LABEL: Record<CsLabDagValidationState, string> = {
+  pending: '待定',
+  verified: '已验证',
+  dead_end: '死路',
+  pruned: '已剪枝',
+}
+
+/** 人工状态在派生剪枝下的双态提示，消除「标记没生效」的认知割裂。 */
+function dualStateHint(
+  manual: 'verified' | 'dead_end' | 'pending' | undefined,
+  effective: CsLabDagValidationState,
+): string | null {
+  if (effective !== 'pruned') return null
+  if (manual === 'verified') return '手动标记: 已验证（当前受上游死路阻断被自动剪枝）'
+  if (manual === 'dead_end') return '手动标记: 死路（上游连锁折叠）'
+  return '上游存在死路，AND 门限已自动剪枝；如需容忍旁路失败请切换 OR'
+}
+
 function nodeKind(node: CsLabCanvasNode): CsLabDagNodeKind {
   const kind = node.cdut_science?.node_kind
   return kind && kind in KIND_LABEL ? kind : 'hypothesis'
@@ -88,11 +128,24 @@ function nodeOperator(node: CsLabCanvasNode): 'AND' | 'OR' {
   return node.cdut_science?.logical_operator === 'OR' ? 'OR' : 'AND'
 }
 
-function edgePath(from: CsLabCanvasNode, to: CsLabCanvasNode): string {
-  const start = { x: from.x + from.width, y: from.y + from.height / 2 }
-  const end = { x: to.x, y: to.y + to.height / 2 }
-  const dx = Math.max(60, Math.abs(end.x - start.x) * 0.5)
-  return `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}`
+/** 引用类节点（file/link/group）不承载可编辑正文，双击一律走导航。 */
+function isReferenceNode(node: CsLabCanvasNode): boolean {
+  return node.type === 'file' || node.type === 'link' || node.type === 'group'
+}
+
+/** 解析 file/link 节点的导航目标；无有效引用时返回 null。 */
+function nodeTarget(node: CsLabCanvasNode, canvasRelPath?: string): CsLabDagNodeTarget | null {
+  const uri = node.cdut_science?.cdut_uri
+  if (typeof uri === 'string' && uri.trim()) return { kind: 'asset', uri: uri.trim() }
+  if (node.file?.trim()) {
+    const rawFile = node.file.trim()
+    const resolvedRelPath = canvasRelPath
+      ? resolveCanvasFileNodeToLabRelPath(canvasRelPath, rawFile)
+      : rawFile
+    return { kind: 'file', relPath: resolvedRelPath }
+  }
+  if (node.url?.trim()) return { kind: 'url', url: node.url.trim() }
+  return null
 }
 
 function createId(prefix: string): string {
@@ -109,6 +162,7 @@ export function CsLabDagCanvas({
   initialMtimeMs,
   onSaved,
   onToast,
+  onOpenNodeTarget,
 }: CsLabDagCanvasProps): React.ReactElement {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const docRef = React.useRef<CsLabCanvasDocument>(initialDocument)
@@ -253,6 +307,36 @@ export function CsLabDagCanvas({
 
   const saveRef = React.useRef(saveNow)
   saveRef.current = saveNow
+
+  /**
+   * 同步提交：对 docRef.current 原位应用变更 → 更新 State → 立即落盘。
+   * 「标记已验证/死路/重置」走此路径，绕过 600ms 防抖窗口，
+   * 消除视口移动/外部重载与 docRef 的竞态覆盖。
+   */
+  const commitDocument = React.useCallback(
+    (mutator: (doc: CsLabCanvasDocument) => CsLabCanvasDocument): void => {
+      const next = mutator(docRef.current)
+      docRef.current = next
+      setDocument(next)
+      void saveRef.current()
+    },
+    [],
+  )
+
+  /** 节点人工事实变更（状态标记），即时持久化。 */
+  const commitNodeMeta = React.useCallback(
+    (nodeId: string, patch: Record<string, unknown>): void => {
+      commitDocument((doc) => ({
+        ...doc,
+        nodes: doc.nodes.map((node) =>
+          node.id === nodeId
+            ? { ...node, cdut_science: { ...(node.cdut_science ?? {}), ...patch } }
+            : node,
+        ),
+      }))
+    },
+    [commitDocument],
+  )
 
   // 关闭窗格 / 切换实验室前尽量落盘，避免防抖窗口内丢编辑。
   React.useEffect(() => {
@@ -510,6 +594,23 @@ export function CsLabDagCanvas({
     }
   }
 
+  /**
+   * Bug 6 修复：file/link/group 节点是引用不是正文，双击一律导航，
+   * 严禁进入文本编辑态——空 textarea 的 blur 会把引用写成空字符串。
+   */
+  const handleNodeDoubleClick = (node: CsLabCanvasNode): void => {
+    if (!isReferenceNode(node)) {
+      setEditingId(node.id)
+      return
+    }
+    const target = nodeTarget(node, relPath)
+    if (!target) {
+      onToast?.('info', '该节点没有可打开的引用目标')
+      return
+    }
+    onOpenNodeTarget?.(target)
+  }
+
   const handleNodePointerDown = (
     event: React.PointerEvent<HTMLDivElement>,
     node: CsLabCanvasNode,
@@ -604,7 +705,10 @@ export function CsLabDagCanvas({
           <span>{saveMessage ?? (saveState === 'saved' ? '已保存' : '自动保存')}</span>
         )}
         {conflictRelPath && (
-          <span className="truncate text-cslab-accent" title={conflictRelPath}>
+          <span
+            className="truncate text-cslab-accent"
+            title={`冲突副本：${conflictRelPath}。外部（Obsidian）修改与本地编辑冲突时，本应用自动生成时间戳副本，绝不覆盖或丢弃任何一方的改动。`}
+          >
             冲突副本
           </span>
         )}
@@ -638,7 +742,7 @@ export function CsLabDagCanvas({
             return (
               <path
                 key={edge.id}
-                d={edgePath(from, to)}
+                d={edgePath(from, to, edge)}
                 fill="none"
                 stroke={targetOperator === 'OR' ? '#B9A38F' : '#C9C3BA'}
                 strokeWidth={1.5}
@@ -662,6 +766,10 @@ export function CsLabDagCanvas({
           const kind = nodeKind(node)
           const cyclic = cycleIds.has(node.id)
           const isSelected = selectedId === node.id
+          const manual = node.cdut_science?.manual_status
+          const manualStatus =
+            manual === 'verified' || manual === 'dead_end' || manual === 'pending' ? manual : undefined
+          const hint = dualStateHint(manualStatus, state)
           return (
             <div
               key={node.id}
@@ -670,7 +778,7 @@ export function CsLabDagCanvas({
               onPointerDown={(event) => handleNodePointerDown(event, node)}
               onDoubleClick={(event) => {
                 event.stopPropagation()
-                setEditingId(node.id)
+                handleNodeDoubleClick(node)
               }}
               className={cn(
                 'absolute rounded-xl border bg-cslab-elevated text-cslab-text shadow-subtle transition-[opacity,border-color] duration-200',
@@ -696,10 +804,13 @@ export function CsLabDagCanvas({
               <div className="flex items-center gap-1.5 border-b border-cslab-border/60 px-2.5 py-1.5">
                 <span
                   className={cn(
-                    'inline-flex size-1.5 rounded-full',
-                    STATE_DOT[state] ?? 'bg-cslab-muted/50',
+                    'inline-flex items-center gap-1 rounded-full border px-1.5 text-[9px] leading-4 tracking-wide',
+                    STATE_CAPSULE[state] ?? STATE_CAPSULE.pending,
                   )}
-                />
+                >
+                  <span className={cn('inline-flex size-1.5 rounded-full', STATE_DOT[state] ?? 'bg-cslab-muted/50')} />
+                  {STATE_LABEL[state] ?? '待定'}
+                </span>
                 <span className="text-[10px] uppercase tracking-[0.12em] text-cslab-muted">
                   {KIND_LABEL[kind]}
                 </span>
@@ -711,40 +822,55 @@ export function CsLabDagCanvas({
                 <span className="ml-auto flex items-center gap-1" data-node-action>
                   <button
                     type="button"
-                    title="标记已验证"
+                    title="标记已验证（即时保存）"
                     onClick={() =>
-                      setNodeMeta(node.id, {
+                      commitNodeMeta(node.id, {
                         verification_status: 'verified',
                         manual_status: 'verified',
                       })
                     }
-                    className="rounded p-0.5 text-cslab-muted hover:bg-cslab-surface hover:text-[#5C7358]"
+                    className={cn(
+                      'rounded p-0.5 transition-colors',
+                      manualStatus === 'verified'
+                        ? 'bg-[#6E8B6A]/20 text-[#5C7358]'
+                        : 'text-cslab-muted hover:bg-cslab-surface hover:text-[#5C7358]',
+                    )}
                   >
                     <Check size={10} />
                   </button>
                   <button
                     type="button"
-                    title="标记死路"
+                    title="标记死路（即时保存）"
                     onClick={() =>
-                      setNodeMeta(node.id, {
+                      commitNodeMeta(node.id, {
                         verification_status: 'dead_end',
                         manual_status: 'dead_end',
                       })
                     }
-                    className="rounded p-0.5 text-cslab-muted hover:bg-cslab-surface hover:text-[#B4553F]"
+                    className={cn(
+                      'rounded p-0.5 transition-colors',
+                      manualStatus === 'dead_end'
+                        ? 'bg-[#B4553F]/15 text-[#B4553F]'
+                        : 'text-cslab-muted hover:bg-cslab-surface hover:text-[#B4553F]',
+                    )}
                   >
                     <X size={10} />
                   </button>
                   <button
                     type="button"
-                    title="重置为待定"
+                    title="重置为待定（即时保存）"
                     onClick={() =>
-                      setNodeMeta(node.id, {
+                      commitNodeMeta(node.id, {
                         verification_status: 'pending',
                         manual_status: 'pending',
                       })
                     }
-                    className="rounded p-0.5 text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text"
+                    className={cn(
+                      'rounded p-0.5 transition-colors',
+                      manualStatus === 'pending'
+                        ? 'bg-cslab-surface text-cslab-text'
+                        : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+                    )}
                   >
                     <RotateCcw size={10} />
                   </button>
@@ -760,7 +886,7 @@ export function CsLabDagCanvas({
               </div>
 
               <div className="flex h-[calc(100%-30px)] flex-col px-2.5 py-2">
-                {editingId === node.id ? (
+                {editingId === node.id && !isReferenceNode(node) ? (
                   <textarea
                     autoFocus
                     defaultValue={node.text ?? ''}
@@ -778,8 +904,15 @@ export function CsLabDagCanvas({
                     className="h-full w-full resize-none select-text rounded-md border border-cslab-border bg-cslab-bg p-1.5 text-[12px] leading-relaxed text-cslab-text outline-none focus:border-cslab-accent/50"
                   />
                 ) : (
-                  <p className="line-clamp-4 whitespace-pre-wrap text-[12px] leading-relaxed text-cslab-text">
-                    {(node.text ?? node.file ?? node.url ?? '').replace(/^#+\s*/, '') || '双击编辑内容'}
+                  <p
+                    className={cn(
+                      'line-clamp-4 whitespace-pre-wrap text-[12px] leading-relaxed text-cslab-text',
+                      isReferenceNode(node) && 'select-text',
+                    )}
+                  >
+                    {/* 用 || 而非 ?? ：空字符串 text 不得遮蔽 file/url 引用 */}
+                    {(node.text || (node.file ? getFileBaseName(node.file) : '') || node.url || '').replace(/^#+\s*/, '') ||
+                      (isReferenceNode(node) ? '双击打开引用' : '双击编辑内容')}
                   </p>
                 )}
 
@@ -798,7 +931,11 @@ export function CsLabDagCanvas({
                         ? 'border-cslab-accent/40 text-cslab-accent'
                         : 'border-cslab-border text-cslab-muted',
                     )}
-                    title="切换逻辑门限"
+                    title={
+                      nodeOperator(node) === 'AND'
+                        ? 'AND 门限：所有上游假说成立才生效；存在死路时本节点将被自动剪枝。点击切换为 OR'
+                        : 'OR 门限：任一上游成立即可，容忍旁路失败。点击切换为 AND'
+                    }
                   >
                     {nodeOperator(node)}
                   </button>
@@ -808,6 +945,11 @@ export function CsLabDagCanvas({
                     </span>
                   )}
                 </div>
+                {hint && nodeOperator(node) === 'AND' && (
+                  <p className="mt-1 border-t border-dashed border-cslab-border/60 pt-1 text-[9px] leading-relaxed text-[#B4553F]/90">
+                    {hint}
+                  </p>
+                )}
               </div>
 
               <button
@@ -839,6 +981,10 @@ export function CsLabDagCanvas({
             <p className="font-serif text-base text-cslab-text">建立第一个假说节点</p>
             <p className="mt-1 text-[11px] leading-relaxed text-cslab-muted">
               节点之间可拖拽连线；把根假说标记为死路，下游 AND 分支会自动折叠。
+            </p>
+            <p className="mt-1.5 text-[10px] leading-relaxed text-cslab-muted/80">
+              Obsidian 双向互通：本画布即 JSON Canvas 标准格式，可在 Obsidian 中直接打开编辑；
+              Obsidian 中手工指定的连线端点方向会被完整保留，推演元数据隔离在 cdut_science 命名空间。
             </p>
             <button
               type="button"

@@ -11,8 +11,8 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
-import { promises as fs } from 'node:fs'
-import { join, sep } from 'node:path'
+import { existsSync, promises as fs } from 'node:fs'
+import { basename, join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type {
   CsLabCustomTool,
@@ -21,12 +21,15 @@ import type {
   CsLabCustomToolRunInput,
   CsLabCustomToolRunResult,
   CsLabCustomToolScan,
+  CsLabToolPreset,
+  CsLabToolPresetInstallResult,
+  CsLabToolPresetReadResult,
   ProferPermissionMode,
 } from '@profer/shared'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
 import { assertLabId, resolveLabDir, resolveLabRelativePath } from './cslab-paths'
 import { createDebouncer } from './cslab-debounce'
-import { resolveCsLabScript, resolveLabPython } from './cslab-python-runtime'
+import { resolveCsLabResourceDir, resolveCsLabScript, resolveLabPython } from './cslab-python-runtime'
 import { appendCsLabToolAudit } from './cslab-tool-audit'
 
 const execFileAsync = promisify(execFile)
@@ -327,6 +330,23 @@ async function fingerprintFiles(
   return sha256(parts.join('|'))
 }
 
+export async function readPythonSourceSafe(absPath: string): Promise<string> {
+  const buf = await fs.readFile(absPath)
+  let slice = buf
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    slice = buf.subarray(3)
+  }
+  const utf8 = slice.toString('utf-8')
+  if (!utf8.includes('\uFFFD')) return utf8
+  try {
+    const gbk = new TextDecoder('gb18030').decode(slice)
+    if (!gbk.includes('\uFFFD')) return gbk
+  } catch {
+    // 忽略解码错误
+  }
+  return utf8
+}
+
 async function scanWithAst(
   python: { command: string; argsPrefix: string[] },
   scannerPath: string,
@@ -335,7 +355,7 @@ async function scanWithAst(
   const { stdout } = await execFileAsync(
     python.command,
     [...python.argsPrefix, scannerPath, '--file', absPath],
-    { timeout: 20_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+    { timeout: 20_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf-8', env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' } },
   )
   const parsed = parseLastJsonLine(stdout) as
     | { ok?: boolean; moduleDoc?: string; functions?: ScannerFunctionPayload[]; error?: string }
@@ -369,7 +389,7 @@ function buildToolFromAst(
   return {
     name: fn.name,
     moduleRelPath,
-    description: fn.docstring?.split(/\r?\n/)[0]?.trim() || moduleDoc || `${moduleRelPath}::${fn.name}`,
+    description: (fn.docstring?.split(/\r?\n/)[0]?.trim() || moduleDoc || `${moduleRelPath}::${fn.name}`).replace(/\uFFFD+/g, ''),
     params,
     returns: fn.returns ?? undefined,
     unsupportedReason: fn.unsupportedReason ?? undefined,
@@ -422,7 +442,7 @@ export async function scanLabTools(labIdInput: string): Promise<CsLabCustomToolS
         const result = await scanWithAst(python, scannerPath, file.absPath)
         if (!result.ok || !result.functions) {
           astFailures += 1
-          const fallback = parseHeuristicModule(file.relPath, await fs.readFile(file.absPath, 'utf-8'))
+          const fallback = parseHeuristicModule(file.relPath, await readPythonSourceSafe(file.absPath))
           tools.push(...fallback)
           continue
         }
@@ -433,7 +453,7 @@ export async function scanLabTools(labIdInput: string): Promise<CsLabCustomToolS
       } catch (error) {
         astFailures += 1
         console.warn(`[CSLab] AST 扫描失败，降级启发式: ${file.relPath}`, error)
-        const fallback = parseHeuristicModule(file.relPath, await fs.readFile(file.absPath, 'utf-8'))
+        const fallback = parseHeuristicModule(file.relPath, await readPythonSourceSafe(file.absPath))
         tools.push(...fallback)
       }
     }
@@ -445,7 +465,7 @@ export async function scanLabTools(labIdInput: string): Promise<CsLabCustomToolS
     engine = 'heuristic'
     for (const file of files) {
       try {
-        tools.push(...parseHeuristicModule(file.relPath, await fs.readFile(file.absPath, 'utf-8')))
+        tools.push(...parseHeuristicModule(file.relPath, await readPythonSourceSafe(file.absPath)))
       } catch (error) {
         console.warn(`[CSLab] 工具文件读取失败: ${file.relPath}`, error)
       }
@@ -579,7 +599,7 @@ export async function runLabTool(
           '--args',
           argsPath,
         ],
-        { timeout: 120_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, cwd: resolveLabDir(labId) },
+        { timeout: 120_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, cwd: resolveLabDir(labId), encoding: 'utf-8', env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' } },
       )
       const payload = parseLastJsonLine(stdout) as
         | { ok?: boolean; result?: unknown; error?: string }
@@ -735,6 +755,146 @@ export async function closeAllLabToolWatchers(): Promise<void> {
       await active.close()
     } catch {
       // 进程退出路径，忽略。
+    }
+  }
+}
+
+// ===== 预置科研算子（泥石流等方向） =====
+
+/**
+ * 预置算子元数据白名单。
+ * filename 必须命中该表才会被安装/读取 —— 三重校验（正则 + basename + 白名单）的最后屏障，
+ * 杜绝 `../../../../etc/passwd` 等路径穿越。
+ */
+const TOOL_PRESET_META: Record<string, { title: string; description: string; dependency: string }> =
+  {
+    'debris_flow_peak_discharge.py': {
+      title: '泥石流峰值流量推求',
+      description:
+        '雨洪法/配方法计算峰值流量 Qc=(1+Φ)Qp，输入雨强、汇水面积、径流系数与堵塞修正系数。',
+      dependency: '仅标准库',
+    },
+    'debris_flow_runout_distance.py': {
+      title: '泥石流运移距离与爬高',
+      description: '简化 Voellmy 阻力模型估算最大运移距离、最大爬高与危险区半径建议。',
+      dependency: '仅标准库',
+    },
+    'debris_flow_yield_stress_fit.py': {
+      title: '浆体流变参数拟合',
+      description: 'Herschel-Bulkley / Bingham 屈服应力拟合（τ_y、K、n + R²），网格搜索+最小二乘。',
+      dependency: 'numpy',
+    },
+  }
+
+const TOOL_PRESET_FILENAME_RE = /^[a-zA-Z0-9_-]+\.py$/
+
+function resolvePresetDir(): string | undefined {
+  return resolveCsLabResourceDir('tools-preset')
+}
+
+/** 三重白名单校验：正则 + basename + 预置元数据表。 */
+function assertPresetFilename(filename: string): string {
+  if (!TOOL_PRESET_FILENAME_RE.test(filename) || basename(filename) !== filename) {
+    throw new Error('工具标识非法')
+  }
+  if (!Object.hasOwn(TOOL_PRESET_META, filename)) {
+    throw new Error('工具标识非法')
+  }
+  return filename
+}
+
+export async function listToolPresets(labIdInput?: string): Promise<CsLabToolPreset[]> {
+  const presetDir = resolvePresetDir()
+  if (!presetDir) return []
+  const installed = new Set<string>()
+  if (labIdInput) {
+    try {
+      const toolsDir = resolveLabRelativePath(assertLabId(labIdInput), 'runtime/tools')
+      for (const entry of await fs.readdir(toolsDir).catch(() => [])) {
+        installed.add(entry)
+      }
+    } catch {
+      // 实验室尚未创建 runtime/tools 时视为全未安装。
+    }
+  }
+  return Object.entries(TOOL_PRESET_META).map(([filename, meta]) => ({
+    filename,
+    title: meta.title,
+    description: meta.description,
+    dependency: meta.dependency,
+    installed: installed.has(filename),
+  }))
+}
+
+export async function installToolPresets(
+  labIdInput: string,
+  filenames?: string[],
+): Promise<CsLabToolPresetInstallResult> {
+  const labId = assertLabId(labIdInput)
+  const presetDir = resolvePresetDir()
+  if (!presetDir) {
+    return { ok: false, installed: [], skipped: [], message: '预置算子库不存在（资源包缺失）' }
+  }
+
+  const requested = filenames?.length ? filenames : Object.keys(TOOL_PRESET_META)
+  const valid: string[] = []
+  try {
+    for (const filename of requested) {
+      valid.push(assertPresetFilename(filename))
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      installed: [],
+      skipped: [],
+      message: error instanceof Error ? error.message : '工具标识非法',
+    }
+  }
+
+  const toolsDir = resolveLabRelativePath(labId, 'runtime/tools')
+  await fs.mkdir(toolsDir, { recursive: true })
+
+  const installed: string[] = []
+  const skipped: string[] = []
+  for (const filename of valid) {
+    const target = join(toolsDir, filename)
+    if (existsSync(target)) {
+      skipped.push(filename)
+      continue
+    }
+    await fs.copyFile(join(presetDir, filename), target)
+    installed.push(filename)
+  }
+
+  if (installed.length > 0) {
+    // 安装后立即重扫，让新算子进入 Agent 工具清单。
+    await scanLabTools(labId).catch(() => undefined)
+  }
+
+  const parts: string[] = []
+  if (installed.length > 0) parts.push(`已安装 ${installed.length} 个预置算子`)
+  if (skipped.length > 0) parts.push(`${skipped.length} 个已存在跳过`)
+  return {
+    ok: true,
+    installed,
+    skipped,
+    message: parts.join('；') || '没有需要安装的预置算子',
+  }
+}
+
+export async function readToolPresetSource(
+  filenameInput: string,
+): Promise<CsLabToolPresetReadResult> {
+  try {
+    const filename = assertPresetFilename(filenameInput)
+    const presetDir = resolvePresetDir()
+    if (!presetDir) return { ok: false, message: '预置算子库不存在（资源包缺失）' }
+    const source = await fs.readFile(join(presetDir, filename), 'utf-8')
+    return { ok: true, filename, source }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : '预置算子读取失败',
     }
   }
 }

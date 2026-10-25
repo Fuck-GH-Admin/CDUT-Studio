@@ -2,11 +2,10 @@
  * CsLabStagePane — 单个科研窗格
  *
  * 窗格自身只接收资产拖拽（CSLAB_ASSET_MIME）；单元格拖拽必须继续下沉给
- * TipTap 编辑器处理，否则会抢走胶囊投递。
+ * Canvas 编辑器处理，否则会抢走胶囊投递。
  */
 
 import * as React from 'react'
-import type { Editor } from '@tiptap/core'
 import {
   Atom,
   BookOpen,
@@ -28,6 +27,7 @@ import type {
   CsLabLiteratureItem,
   CsLabManuscript,
   CsLabMolAsset,
+  CsLabGeoRasterPayload,
   CsLabTablePayload,
 } from '@profer/shared'
 import { canvasTitleFromRelPath } from '@profer/shared'
@@ -36,10 +36,16 @@ import type { CsLabPaneId, CsLabPaneState, CsLabPdfSelection } from '@/atoms/csl
 import { CsLabDatasetView } from './CsLabDatasetView'
 import { CsLabFigureView } from './CsLabFigureView'
 import { CsLabManuscriptEditor } from './CsLabManuscriptEditor'
+import type {
+  CsLabCanvasHandle,
+  CsLabCanvasSnapshot,
+} from './canvas-manuscript/cslab-canvas-types'
 import { CsLabPdfViewer } from './CsLabPdfViewer'
 import { CsLabDagCanvas } from './CsLabDagCanvas'
+import type { CsLabDagNodeTarget } from './CsLabDagCanvas'
 import { CsLabOriginPlotPane } from './CsLabOriginPlotPane'
 import { CsLabVestaCrystalPane } from './crystal/CsLabVestaCrystalPane'
+import { CsLabTerrainPane } from './CsLabTerrainPane'
 import {
   CSLAB_ASSET_MIME,
   hasDragType,
@@ -59,25 +65,19 @@ interface CsLabStagePaneProps {
   literature: CsLabLiteratureItem | null
   canvas: CsLabCanvasDocument | null
   mol: CsLabMolAsset | null
+  geo?: CsLabGeoRasterPayload | null
   figureAsset?: CsLabAssetSummary | null
   initialPage?: number
+  focusHighlight?: { page: number; bbox: [number, number, number, number] }
   loading: boolean
   saving: boolean
   staleCapsuleIds: Set<string>
   onActivate: () => void
   onClose: () => void
   onMaximize: () => void
-  onEditorReady: (editor: Editor | null) => void
-  onSaveManuscript: (
-    docJson: unknown,
-    title: string,
-    capsules: CsLabCapsule[],
-  ) => Promise<void>
-  onSaveManuscriptAs?: (
-    docJson: unknown,
-    title: string,
-    capsules: CsLabCapsule[],
-  ) => Promise<void>
+  onEditorReady: (handle: CsLabCanvasHandle | null) => void
+  onSaveManuscript: (snapshot: CsLabCanvasSnapshot, title: string) => Promise<void>
+  onSaveManuscriptAs?: (snapshot: CsLabCanvasSnapshot, title: string) => Promise<void>
   onDirtyChange: (dirty: boolean) => void
   onTitleChange: (title: string) => void
   onCapsuleClick: (capsuleId: string) => void
@@ -90,6 +90,10 @@ interface CsLabStagePaneProps {
     text: string,
     action?: { label: string; path: string },
   ) => void
+  /** 划词右键「检索关联学术文献」反向打开学术检索弹窗。 */
+  onSearchLiterature?: (query: string) => void
+  /** 打开推演画布 file/link 节点引用的资产、笔记或外链（Bug 6）。 */
+  onOpenNodeTarget?: (target: CsLabDagNodeTarget) => void
 }
 
 export function CsLabStagePane({
@@ -104,8 +108,10 @@ export function CsLabStagePane({
   literature,
   canvas,
   mol,
+  geo,
   figureAsset,
   initialPage,
+  focusHighlight,
   loading,
   saving,
   staleCapsuleIds,
@@ -123,6 +129,8 @@ export function CsLabStagePane({
   onDropAsset,
   onCanvasSaved,
   onToast,
+  onSearchLiterature,
+  onOpenNodeTarget,
 }: CsLabStagePaneProps): React.ReactElement {
   const [assetOver, setAssetOver] = React.useState(false)
 
@@ -139,8 +147,10 @@ export function CsLabStagePane({
             : '推演画布'
           : pane.viewType === 'mol'
             ? mol?.title ?? '分子与晶体'
-            : pane.viewType === 'figure'
-              ? figureAsset?.title ?? title ?? '科研图表'
+            : pane.viewType === 'terrain'
+              ? geo?.title ?? title ?? '2.5D 地貌'
+              : pane.viewType === 'figure'
+                ? figureAsset?.title ?? title ?? '科研图表'
               : pane.viewType === 'origin-plot'
                 ? title ?? '出版绘图'
                 : '空窗格'
@@ -252,12 +262,14 @@ export function CsLabStagePane({
             onDirtyChange={onDirtyChange}
             onTitleChange={onTitleChange}
             onToast={onToast}
+            onSearchLiterature={onSearchLiterature}
           />
         ) : pane.viewType === 'pdf' && literature ? (
           <CsLabPdfViewer
             labId={labId}
             literature={literature}
             initialPage={initialPage}
+            focusHighlight={focusHighlight}
             onSelection={onPdfSelection}
           />
         ) : pane.viewType === 'dag' && canvas && pane.canvasRelPath ? (
@@ -268,9 +280,12 @@ export function CsLabStagePane({
             initialMtimeMs={pane.canvasMtimeMs ?? 0}
             onSaved={onCanvasSaved}
             onToast={onToast}
+            onOpenNodeTarget={onOpenNodeTarget}
           />
         ) : pane.viewType === 'mol' && mol ? (
           <CsLabVestaCrystalPane paneId={paneId} labId={labId} asset={mol} onToast={onToast} />
+        ) : pane.viewType === 'terrain' && geo ? (
+          <CsLabTerrainPane payload={geo} onToast={onToast} />
         ) : pane.viewType === 'origin-plot' ? (
           <CsLabOriginPlotPane labId={labId} pane={pane} onToast={onToast} />
         ) : (

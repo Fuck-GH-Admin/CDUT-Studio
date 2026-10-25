@@ -198,3 +198,52 @@ describe('OOXML 导入', () => {
     expect(lastBlock?.inlines.some((inline) => inline.kind === 'capsule' && inline.capsuleId === 'cap-orphan')).toBe(true)
   })
 })
+
+describe('OOXML 页眉页脚导出', () => {
+  test('生成 header1/footer1、rels、Content-Types 与 sectPr 引用', async () => {
+    const buffer = await exportManuscriptToDocx({
+      ...EXPORT_INPUT,
+      headerText: 'CDUT Science\n成都理工大学',
+      footerText: '第 1 页',
+    })
+    const zip = await JSZip.loadAsync(buffer)
+    const headerXml = await zip.file('word/header1.xml')!.async('string')
+    const footerXml = await zip.file('word/footer1.xml')!.async('string')
+    expect(headerXml).toContain('<w:hdr ')
+    expect(headerXml).toContain('CDUT Science')
+    expect(headerXml).toContain('成都理工大学')
+    expect(footerXml).toContain('<w:ftr ')
+    expect(footerXml).toContain('第 1 页')
+
+    const documentXml = await zip.file('word/document.xml')!.async('string')
+    expect(documentXml).toContain('<w:headerReference w:type="default" r:id="rIdHeader"/>')
+    expect(documentXml).toContain('<w:footerReference w:type="default" r:id="rIdFooter"/>')
+    // 命名空间必须落在 OPC 关系命名空间，绝不能是 wordprocessingml。
+    expect(documentXml).toContain(
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"',
+    )
+    expect(documentXml).not.toContain('wordprocessingml/2006/relationships')
+
+    const rels = await zip.file('word/_rels/document.xml.rels')!.async('string')
+    expect(rels).toContain('Target="header1.xml"')
+    expect(rels).toContain('Target="footer1.xml"')
+    expect(rels).toContain('relationships/header')
+    expect(rels).toContain('relationships/footer')
+
+    const contentTypes = await zip.file('[Content_Types].xml')!.async('string')
+    expect(contentTypes).toContain('PartName="/word/header1.xml"')
+    expect(contentTypes).toContain('PartName="/word/footer1.xml"')
+    expect(contentTypes).toContain('wordprocessingml.header+xml')
+    expect(contentTypes).toContain('wordprocessingml.footer+xml')
+  })
+
+  test('无页眉页脚时不生成 header/footer 部件', async () => {
+    const buffer = await exportManuscriptToDocx(EXPORT_INPUT)
+    const zip = await JSZip.loadAsync(buffer)
+    expect(zip.file('word/header1.xml')).toBeNull()
+    expect(zip.file('word/footer1.xml')).toBeNull()
+    const documentXml = await zip.file('word/document.xml')!.async('string')
+    expect(documentXml).not.toContain('<w:headerReference')
+    expect(documentXml).not.toContain('<w:footerReference')
+  })
+})

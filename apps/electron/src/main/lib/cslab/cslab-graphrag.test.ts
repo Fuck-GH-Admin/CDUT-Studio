@@ -183,3 +183,109 @@ describe('跨文献 GraphRAG', () => {
     expect(fresh.hits.length).toBeGreaterThan(0)
   })
 })
+
+describe('RRF 混合融合', () => {
+  test('fuseRanks：按 w/(k+rank) 聚合，缺席路不贡献', async () => {
+    const { fuseRanks, RRF_CONFIG } = await import('./cslab-graphrag-router')
+    expect(RRF_CONFIG.k).toBe(60)
+    const fused = fuseRanks([
+      { ids: ['a', 'b'], weight: RRF_CONFIG.wBm25 },
+      { ids: ['b', 'a'], weight: RRF_CONFIG.wVector },
+    ])
+    expect(fused.get('a')).toBeCloseTo(
+      RRF_CONFIG.wBm25 / (RRF_CONFIG.k + 1) + RRF_CONFIG.wVector / (RRF_CONFIG.k + 2),
+      10,
+    )
+    expect(fused.get('b')).toBeCloseTo(
+      RRF_CONFIG.wBm25 / (RRF_CONFIG.k + 2) + RRF_CONFIG.wVector / (RRF_CONFIG.k + 1),
+      10,
+    )
+    // c 仅在社群路第 3 位：只拿社群权重贡献。
+    const withCommunity = fuseRanks([
+      { ids: ['c'], weight: RRF_CONFIG.wCommunity },
+    ])
+    expect(withCommunity.get('c')).toBeCloseTo(RRF_CONFIG.wCommunity / (RRF_CONFIG.k + 1), 10)
+  })
+
+  test('searchIndex：向量路把语义命中切块带入结果（Mock 注入）', async () => {
+    const { searchIndex } = await import('./cslab-graphrag-router')
+    const makeChunk = (id: string, text: string) => ({
+      id,
+      literatureUri: 'cdut://lab/lit/lit-a',
+      title: 'Fixture Paper',
+      page: 1,
+      text,
+    })
+    const index = {
+      version: 1,
+      builtAt: 1,
+      fingerprint: 'fixture',
+      literatureCount: 1,
+      chunks: [
+        makeChunk('chunk-a', 'The quantum yield of the nanocrystals reaches unity.'),
+        makeChunk('chunk-b', 'Photoluminescence efficiency approaches the theoretical limit.'),
+      ],
+      communities: [],
+      chunkCommunity: {
+        'chunk-a': { id: 'c1', title: '发光性能' },
+        'chunk-b': { id: 'c1', title: '发光性能' },
+      },
+      edges: [],
+    } as Parameters<typeof searchIndex>[0]
+
+    // 纯词法：b 无关键词命中，不进结果。
+    const lexical = await searchIndex(index, { labId: 'lab', query: 'quantum yield', topK: 5 }, {})
+    expect(lexical.ok).toBe(true)
+    expect(lexical.hits.map((hit) => hit.chunkId)).toEqual(['chunk-a'])
+
+    // 向量路命中 b：语义切块进入结果，词法命中仍在前列。
+    const hybrid = await searchIndex(
+      index,
+      { labId: 'lab', query: 'quantum yield', topK: 5 },
+      {
+        vectorSearch: async () => [
+          { chunkId: 'chunk-b', score: 0.92 },
+          { chunkId: 'chunk-a', score: 0.71 },
+        ],
+      },
+    )
+    expect(hybrid.ok).toBe(true)
+    const order = hybrid.hits.map((hit) => hit.chunkId)
+    expect(order).toContain('chunk-b')
+    // 词法+社群双路命中 a 仍居首，语义命中 b 进入结果。
+    expect(order[0]).toBe('chunk-a')
+  })
+
+  test('searchIndex：向量路抛错时降级两路融合不崩溃', async () => {
+    const { searchIndex } = await import('./cslab-graphrag-router')
+    const index = {
+      version: 1,
+      builtAt: 1,
+      fingerprint: 'fixture',
+      literatureCount: 1,
+      chunks: [
+        {
+          id: 'chunk-a',
+          literatureUri: 'cdut://lab/lit/lit-a',
+          title: 'Fixture Paper',
+          page: 1,
+          text: 'quantum yield measured under ambient conditions',
+        },
+      ],
+      communities: [],
+      chunkCommunity: { 'chunk-a': { id: 'c1', title: 'T' } },
+      edges: [],
+    } as Parameters<typeof searchIndex>[0]
+    const result = await searchIndex(
+      index,
+      { labId: 'lab', query: 'quantum yield', topK: 5 },
+      {
+        vectorSearch: async () => {
+          throw new Error('vector boom')
+        },
+      },
+    )
+    expect(result.ok).toBe(true)
+    expect(result.hits.map((hit) => hit.chunkId)).toEqual(['chunk-a'])
+  })
+})

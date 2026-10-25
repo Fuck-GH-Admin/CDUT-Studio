@@ -40,7 +40,7 @@ import { useCoachTourRunner } from './coach-tour-runner'
 import { useCoachTourWait } from './coach-tour-wait'
 
 /** 未测量前的气泡估算尺寸；首个 layout effect 会用真实值收敛，避免跳动 */
-const FALLBACK_CARD_SIZE: CardSize = { width: 320, height: 190 }
+const FALLBACK_CARD_SIZE: CardSize = { width: 340, height: 190 }
 const MOVE_TRANSITION = 'left 0.32s cubic-bezier(0.22,1,0.36,1), top 0.32s cubic-bezier(0.22,1,0.36,1), width 0.32s cubic-bezier(0.22,1,0.36,1), height 0.32s cubic-bezier(0.22,1,0.36,1)'
 
 /** 收集某选择器下所有可见且非零尺寸的元素矩形 */
@@ -114,6 +114,7 @@ export function CoachTourOverlay(): React.ReactElement | null {
   const [rect, setRect] = React.useState<AnchorRect | null>(null)
   const [pulseRects, setPulseRects] = React.useState<AnchorRect[]>([])
   const [cardSize, setCardSize] = React.useState<CardSize>(FALLBACK_CARD_SIZE)
+  const [viewport, setViewport] = React.useState({ width: typeof window !== 'undefined' ? window.innerWidth : 1280, height: typeof window !== 'undefined' ? window.innerHeight : 800 })
   const cardRef = React.useRef<HTMLDivElement>(null)
   /** 打开引导时用户所在的主内容区视图，退出时恢复 */
   const restoreViewRef = React.useRef<ActiveView | null>(null)
@@ -159,6 +160,15 @@ export function CoachTourOverlay(): React.ReactElement | null {
     step?.prepare || step?.waitFor || step?.passthrough || isClickToAdvance,
   )
 
+  React.useEffect(() => {
+    if (!open) return
+    const handleResize = (): void => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight })
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [open])
+
   // 打开时：回到第一步 + 记住当前视图（退出恢复）
   React.useEffect(() => {
     if (!open) return
@@ -199,14 +209,23 @@ export function CoachTourOverlay(): React.ReactElement | null {
     return () => claim.release()
   }, [open, close])
 
+  const nextDebounceRef = React.useRef(0)
   const next = React.useCallback(() => {
+    const now = Date.now()
+    if (now - nextDebounceRef.current < 150) return
+    nextDebounceRef.current = now
     if (isLast) {
       finish()
       return
     }
     setStepIndex((current) => current + 1)
   }, [finish, isLast])
+
+  const prevDebounceRef = React.useRef(0)
   const previous = React.useCallback(() => {
+    const now = Date.now()
+    if (now - prevDebounceRef.current < 150) return
+    prevDebounceRef.current = now
     setStepIndex((current) => Math.max(0, current - 1))
   }, [])
 
@@ -353,10 +372,7 @@ export function CoachTourOverlay(): React.ReactElement | null {
   if (!open || !step) return null
 
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  const cardPosition = computeCardPosition(rect, cardSize, step.placement, {
-    width: window.innerWidth,
-    height: window.innerHeight,
-  })
+  const cardPosition = computeCardPosition(rect, cardSize, step.placement, viewport)
   const transition = reduceMotion ? 'none' : MOVE_TRANSITION
   const frame = rect ? clampFrameToViewport(rect) : null
 
@@ -434,7 +450,7 @@ export function CoachTourOverlay(): React.ReactElement | null {
         tabIndex={-1}
         style={{ left: cardPosition.left, top: cardPosition.top, transition }}
         className={cn(
-          'pointer-events-auto absolute w-[320px] rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-2xl outline-none',
+          'pointer-events-auto absolute w-[340px] max-w-[calc(100vw-24px)] rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-2xl outline-none',
           !reduceMotion && 'animate-in fade-in-0 zoom-in-95 duration-200',
         )}
         onClick={(event) => event.stopPropagation()}
@@ -505,21 +521,32 @@ export function CoachTourOverlay(): React.ReactElement | null {
           )}
         </div>
 
-        <div className="mt-3.5 flex items-center justify-between">
-          {/* 步骤指示点 */}
-          <div className="flex items-center gap-1.5" aria-hidden="true">
-            {COACH_TOUR_STEPS.map((s, index) => (
-              <span
-                key={s.key}
-                className={cn(
-                  'h-1.5 rounded-full transition-all duration-200',
-                  index === stepIndex ? 'w-4 bg-primary' : 'w-1.5 bg-muted-foreground/25',
-                )}
-              />
-            ))}
-          </div>
+        <div className="mt-4 flex items-center justify-between gap-3 pt-1">
+          {/* 步骤进度指示：步数少时用离散圆点，步数较多（>7）时用自适应胶囊进度条，杜绝撑破容器挤飞按钮 */}
+          {totalSteps <= 7 ? (
+            <div className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
+              {COACH_TOUR_STEPS.map((s, index) => (
+                <span
+                  key={s.key}
+                  className={cn(
+                    'h-1.5 rounded-full transition-all duration-200',
+                    index === stepIndex ? 'w-4 bg-primary' : 'w-1.5 bg-muted-foreground/25',
+                  )}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="flex shrink-0 items-center gap-2" aria-hidden="true">
+              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted-foreground/20">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
+                  style={{ width: `${Math.round(((stepIndex + 1) / totalSteps) * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
 
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1.5">
             {stepIndex > 0 && (
               <Button type="button" variant="ghost" size="sm" className="h-7 px-2.5 text-xs" onClick={previous}>
                 上一步

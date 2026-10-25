@@ -41,6 +41,13 @@ interface LiteratureMetadata {
   abstract?: string
   collections?: string[]
   pageCount?: number
+  keywords?: string[]
+  tldr?: string
+  sectionTitles?: string[]
+  sectionCount?: number
+  structureRelPath?: string
+  parsedAt?: number
+  parseWarning?: string
 }
 
 function labDb(labId: string): CsLabDatabase {
@@ -89,6 +96,11 @@ function toLiteratureItem(
     annotationCount: countAnnotationsForItem(db, labId, entity.uri),
     hasFile: !!filePath,
     updatedAt: entity.updatedAt,
+    sectionCount: metadata.sectionCount,
+    keywords: toStringArray(metadata.keywords),
+    tldr: metadata.tldr,
+    hasStructure: typeof metadata.structureRelPath === 'string',
+    parseWarning: metadata.parseWarning,
   }
 }
 

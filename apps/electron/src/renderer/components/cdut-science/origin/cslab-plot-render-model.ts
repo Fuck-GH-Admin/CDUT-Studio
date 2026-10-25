@@ -36,14 +36,21 @@ export function dataBounds(
   seriesList: readonly CsLabPlotSeries[],
   key: 'x' | 'y',
 ): { min: number; max: number } {
-  if (axis.min !== undefined && axis.max !== undefined) return { min: axis.min, max: axis.max }
+  if (axis.min !== undefined && axis.max !== undefined) {
+    if (axis.scale !== 'linear' && axis.min <= 0) {
+      const min = 1e-4
+      return { min, max: Math.max(axis.max, min * 1.0001) }
+    }
+    return { min: axis.min, max: axis.max }
+  }
   let min = axis.min ?? Infinity
   let max = axis.max ?? -Infinity
   for (const series of seriesList) {
     const values = key === 'x' ? series.x : series.y
     for (const value of values) {
       if (!Number.isFinite(value)) continue
-      if (axis.scale !== 'linear' && value <= 0 && key === 'y') continue
+      // 对数/倒数等非线性轴不允许非正值进入范围，否则 log 会直接产生 NaN/-Infinity。
+      if (axis.scale !== 'linear' && value <= 0) continue
       if (value < min) min = value
       if (value > max) max = value
     }
@@ -70,10 +77,12 @@ export function buildPlotRenderModel(
     if (visible.length === 0) continue
     const xBounds = dataBounds(layer.xAxis, visible, 'x')
     const left = dataBounds(layer.yAxes[0]!, visible.filter((item) => item.yAxis === 0), 'y')
-    const right = dataBounds(layer.yAxes[1]!, visible.filter((item) => item.yAxis === 1), 'y')
+    const right = layer.yAxes[1]
+      ? dataBounds(layer.yAxes[1], visible.filter((item) => item.yAxis === 1), 'y')
+      : left
     for (const item of visible) {
       const yBounds = item.yAxis === 1 ? right : left
-      const yAxis = item.yAxis === 1 ? layer.yAxes[1]! : layer.yAxes[0]!
+      const yAxis = item.yAxis === 1 && layer.yAxes[1] ? layer.yAxes[1] : layer.yAxes[0]!
       const points: Array<{ x: number; y: number }> = []
       const count = Math.min(item.x.length, item.y.length)
       for (let index = 0; index < count; index += 1) {

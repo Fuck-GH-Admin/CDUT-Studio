@@ -579,6 +579,53 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     expect((filtered.details?.groups ?? []).every((group) => group.id.includes('browser'))).toBe(true)
   })
 
+  test('Given 输入栏关闭 cdut-tools When discover_tools 查询 Then 组标记 off 并携带越狱拦截警示', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      activeToolGroups: new Set(['memory', 'automation']),
+    })
+    const discover = tools.find((tool) => tool.name === 'discover_tools')
+    expect(discover).toBeDefined()
+
+    const result = await discover!.execute!('call-discover-off', { category: 'cdut' }) as {
+      details?: { groups?: Array<{ id: string; enabled: boolean; activation?: string; hint?: string; mountedTools: string[] }> }
+    }
+    const groups = result.details?.groups ?? []
+    const cdut = groups.find((group) => group.id === 'cdut-tools')
+    expect(cdut).toBeDefined()
+    expect(cdut?.enabled).toBe(false)
+    expect(cdut?.activation).toBe('off')
+    expect(cdut?.mountedTools).toEqual([])
+    expect(cdut?.hint).toContain('严禁自行猜测工具名称')
+    expect(cdut?.hint).toContain('输入栏')
+
+    // 全量查询：激活组保持 enabled，未激活组标记 off；已激活且已挂载为 mounted。
+    const all = await discover!.execute!('call-discover-all', {}) as {
+      details?: { groups?: Array<{ id: string; enabled: boolean; activation?: string }> }
+    }
+    const allGroups = all.details?.groups ?? []
+    expect(allGroups.find((group) => group.id === 'automation')?.enabled).toBe(true)
+    expect(allGroups.find((group) => group.id === 'memory')?.activation).toBe('mounted')
+    expect(allGroups.find((group) => group.id === 'cdut-tools')?.activation).toBe('off')
+  })
+
+  test('Given 会话显式开启 CDUT When 构建工具 Then cdut 组实际挂载', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      activeToolGroups: new Set(['cdut-tools']),
+    })
+    expect(tools.some((tool) => tool.name === 'cdut_grades_assessment')).toBe(true)
+    const discover = tools.find((tool) => tool.name === 'discover_tools')
+    const result = await discover!.execute!('call-discover-on', { category: 'cdut' }) as {
+      details?: { groups?: Array<{ id: string; enabled: boolean; activation?: string }> }
+    }
+    const cdut = (result.details?.groups ?? []).find((group) => group.id === 'cdut-tools')
+    expect(cdut?.enabled).toBe(true)
+    expect(cdut?.activation).toBe('mounted')
+  })
+
   test('Given disabledTools 单工具短名 When building Pi builtin tools Then 只过滤列出的工具且同组其余工具保留', async () => {
     const { sdk } = createPiSdkStub()
     const result = await buildPiBuiltinTools(sdk, {

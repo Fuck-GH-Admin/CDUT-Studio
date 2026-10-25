@@ -23,6 +23,8 @@ export const CSLAB_IPC_CHANNELS = {
   LIST_LABS: 'cslab:list-labs',
   CREATE_LAB: 'cslab:create-lab',
   CREATE_DEMO_LAB: 'cslab:create-demo-lab',
+  /** 重置演示实验室：清理沙箱并重新写入官方样本。 */
+  RESET_DEMO_LAB: 'cslab:reset-demo-lab',
   OPEN_LAB: 'cslab:open-lab',
   GET_LAB_SNAPSHOT: 'cslab:get-lab-snapshot',
   RENAME_LAB: 'cslab:rename-lab',
@@ -68,22 +70,50 @@ export const CSLAB_IPC_CHANNELS = {
   ZOTERO_START_WATCH: 'cslab:zotero-start-watch',
   ZOTERO_STOP_WATCH: 'cslab:zotero-stop-watch',
   ZOTERO_GET_BRIDGE_STATUS: 'cslab:zotero-bridge-status',
+  ZOTERO_BRIDGE_WRITE: 'cslab:zotero-bridge-write',
+  /** 一键生成默认 zotero-bridge.json 模板（已存在则不覆盖 token）。 */
+  ZOTERO_BRIDGE_INIT_CONFIG: 'cslab:zotero-bridge-init-config',
+  /** 用本地 Obsidian 打开实验室 vault/notes。 */
+  OPEN_OBSIDIAN_VAULT: 'cslab:open-obsidian-vault',
 
   // ===== 文献阅读 =====
   GET_LITERATURE_ITEM: 'cslab:get-literature-item',
   GET_LITERATURE_URL: 'cslab:get-literature-url',
+  /** 结构化智能导读（按需解析并缓存全文结构）。 */
+  GET_LITERATURE_GUIDE: 'cslab:get-literature-guide',
 
   // ===== 图表逆向数字化 =====
   DIGITIZE_PLOT: 'cslab:digitize-plot',
   SAVE_DIGITIZED_FIGURE: 'cslab:save-digitized-figure',
+  /** 刻度数值模板匹配自动读取（read-tick）。 */
+  READ_TICK_VALUE: 'cslab:read-tick-value',
 
   // ===== 公式识别与验算 =====
   OCR_FORMULA: 'cslab:ocr-formula',
   VERIFY_FORMULA: 'cslab:verify-formula',
 
+  // ===== 选区学术翻译（OCR + 隔离补全，防提示词注入） =====
+  TRANSLATE_SELECTION: 'cslab:translate-selection',
+
+  // ===== 预置科研算子 =====
+  TOOL_PRESET_LIST: 'cslab:tool-preset-list',
+  TOOL_PRESET_INSTALL: 'cslab:tool-preset-install',
+  TOOL_PRESET_READ: 'cslab:tool-preset-read',
+
   // ===== 跨文献 GraphRAG =====
   BUILD_LITERATURE_INDEX: 'cslab:build-literature-index',
   SEARCH_LITERATURE: 'cslab:search-literature',
+  GET_LITERATURE_GRAPH: 'cslab:get-literature-graph',
+
+  // ===== 跨源学术文献检索（多源联邦） =====
+  ACADEMIC_SEARCH: 'cslab:academic-search',
+  ACADEMIC_FETCH_PREVIEW: 'cslab:academic-fetch-preview',
+  ACADEMIC_INGEST_PAPER: 'cslab:academic-ingest-paper',
+
+  // ===== 论文入库流水线 · 实证抽取 · 3D 拓扑 =====
+  GET_LITERATURE_3D_GRAPH: 'cslab:get-literature-3d-graph',
+  GET_EMPIRICAL_METRICS: 'cslab:get-empirical-metrics',
+  SYNTHESIZE_PAPER_VAULT: 'cslab:synthesize-paper-vault',
 
   // ===== 实验规程与批次 =====
   RUN_LIST_PROTOCOLS: 'cslab:run-list-protocols',
@@ -144,6 +174,8 @@ export const CSLAB_IPC_CHANNELS = {
   // ===== 晶体结构与谱图（Phase 4） =====
   GET_MOL_ASSET: 'cslab:get-mol-asset',
   GET_TABLE_SERIES: 'cslab:get-table-series',
+  /** 读取 geo 栅格并降采样为 2.5D 地貌窗格载荷。 */
+  GET_GEO_RASTER: 'cslab:get-geo-raster',
 
   // ===== 科学引擎：晶体分析 / PXRD / 拟合 / 出版绘图 =====
   ANALYZE_CRYSTAL: 'cslab:analyze-crystal',
@@ -187,6 +219,7 @@ export const CSLAB_IPC_CHANNELS = {
   ON_PLOT_UPDATED: 'cslab:on-plot-updated',
   ON_AGENT_CONTEXT: 'cslab:on-agent-context',
   ON_STRUCTURE_FOCUSED: 'cslab:on-structure-focused',
+  ON_ASSET_FOCUSED: 'cslab:on-asset-focused',
 } as const
 
 export type CsLabChannelKey = keyof typeof CSLAB_IPC_CHANNELS
@@ -254,6 +287,11 @@ export type CsLabLayerType =
   | 'mol'
   | 'doc'
   | 'capsule'
+  /** 地理灾害栅格（DEM/GeoTIFF 与推演输出网格）。 */
+  | 'geo'
+
+/** 官方演示实验室类型；普通实验室缺省。 */
+export type CsLabDemoKind = 'flagship'
 
 export type CsLabLabStatus = '运行中' | '调试中' | '筹建中' | '已归档'
 
@@ -269,6 +307,7 @@ export type CsLabPaneViewType =
   | 'mol'
   | 'figure'
   | 'origin-plot'
+  | 'terrain'
 
 export type CsLabCapabilityKind =
   | 'dataset'
@@ -277,6 +316,7 @@ export type CsLabCapabilityKind =
   | 'literature'
   | 'manuscript'
   | 'canvas'
+  | 'terrain'
   | 'generic'
 
 export type CsLabFileAction =
@@ -295,6 +335,7 @@ export type CsLabFileAction =
   | 'ai-review'
   | 'capsule-lineage'
   | 'open-origin-plot'
+  | 'open-terrain'
   | 'analyze-crystal'
   | 'simulate-pxrd'
 
@@ -348,6 +389,8 @@ export interface CsLabLab {
   archivedAt?: number
   /** 归档前的业务状态；解除归档时恢复，避免把「调试中/筹建中」误还原为「运行中」。 */
   statusBeforeArchive?: CsLabLabStatus
+  /** 官方演示实验室类型；普通实验室缺省。 */
+  demoKind?: CsLabDemoKind
 }
 
 export interface CsLabCreateLabInput {
@@ -356,6 +399,8 @@ export interface CsLabCreateLabInput {
   tags?: string[]
   /** 自定义实验室根目录；缺省落在 ~/.cdutai/cslab-workspaces/{labId}。 */
   rootPath?: string
+  /** 内部创建演示实验室时使用；普通新建不传。 */
+  demoKind?: CsLabDemoKind
 }
 
 /** 演示实验室关键科学指标（由演示图版构建时一次性计算）。 */
@@ -366,6 +411,12 @@ export interface CsLabDemoStats {
   ramanRSquared: number
   /** 拉曼分峰解析面积与离散梯形积分的相对误差。 */
   ramanAreaRelativeError: number
+  /** 泥石流演示峰值流量（m³/s）。 */
+  peakDischargeM3s?: number
+  /** 泥石流演示最大冲出距离（m）。 */
+  runoutDistanceM?: number
+  /** 泥石流演示最大流动水深（m）。 */
+  maxFlowDepthM?: number
 }
 
 /** 演示实验室创建结果（含预生成出版图）。 */
@@ -376,6 +427,10 @@ export interface CsLabDemoLabResult {
   /** 全部预生成出版图 ID（顺序固定）。 */
   plotIds?: string[]
   stats?: CsLabDemoStats
+  /** 演示实验室类型；当前唯一值为 flagship。 */
+  kind?: CsLabDemoKind
+  /** 泥石流演示推演指标。 */
+  geohazardStats?: CsLabDemoStats
 }
 
 export interface CsLabAssetSummary {
@@ -388,6 +443,8 @@ export interface CsLabAssetSummary {
   relPath?: string
   sha256?: string
   bytes?: number
+  /** 实体级结构化元数据（JSON 字符串），供演示标定与默认视口使用。 */
+  metaJson?: string
   revision: number
   /** 原始文件是否已上只读锁（Windows 下为 attrib +r 结果）。 */
   locked: boolean
@@ -504,10 +561,31 @@ export interface CsLabManuscriptSummary {
   hasDocx: boolean
 }
 
+/**
+ * Canvas 编辑器主状态（Sidecar v2）。
+ * header/main/footer 使用 unknown[]，避免把 @hufe921/canvas-editor 的类型泄漏进 shared。
+ */
+export interface CsLabCanvasData {
+  header?: unknown[]
+  main: unknown[]
+  footer?: unknown[]
+}
+
+/** Canvas 原生批注；id 即 canvas groupId，锚点保存在元素 groupIds 上。 */
+export interface CsLabManuscriptComment {
+  id: string
+  content: string
+  createdAt: string
+  user?: string
+}
+
 export interface CsLabManuscript {
   uri: string
   title: string
   docJson: unknown
+  /** Sidecar v2：Canvas IElement[] 主状态；旧稿缺失时由渲染层即时升级。 */
+  canvasData?: CsLabCanvasData
+  comments?: CsLabManuscriptComment[]
   capsules: CsLabCapsule[]
   updatedAt: number
   docxPath?: string
@@ -532,6 +610,8 @@ export interface CsLabSaveManuscriptAsInput {
   format?: 'docx' | 'md'
   title: string
   docJson: unknown
+  canvasData?: CsLabCanvasData
+  comments?: CsLabManuscriptComment[]
   capsules: CsLabCapsule[]
 }
 
@@ -552,6 +632,8 @@ export interface CsLabSaveManuscriptInput {
   uri: string
   title: string
   docJson: unknown
+  canvasData?: CsLabCanvasData
+  comments?: CsLabManuscriptComment[]
   capsules: CsLabCapsule[]
 }
 
@@ -615,7 +697,7 @@ export interface CsLabPythonCapability {
 
 // ===== 可选 Python 工具运行时（Phase 2） =====
 
-export type CsLabToolProfile = 'plot' | 'formula' | 'formula-ocr' | 'instrument'
+export type CsLabToolProfile = 'plot' | 'formula' | 'formula-ocr' | 'instrument' | 'docling'
 
 export interface CsLabToolProfileStatus {
   installed: boolean
@@ -657,7 +739,24 @@ export interface CsLabZoteroBridgeStatus {
   reachable: boolean
   endpoint?: string
   message: string
+  /** 实际命中的探测路径（`/connector/ping` 或 `/ping`），用于一键连通诊断展示。 */
+  probePath?: string
 }
+
+/** 写回操作类型：全部经 Zotero 本地 REST 插件 HTTP 通道，绝无直写 sqlite 路径。 */
+export type CsLabZoteroBridgeWriteOp = 'createAnnotation' | 'updateItemTags' | 'addItemCollection'
+
+export interface CsLabZoteroBridgeWriteInput {
+  op: CsLabZoteroBridgeWriteOp
+  payload: Record<string, unknown>
+}
+
+export interface CsLabZoteroBridgeWriteResult {
+  ok: boolean
+  status?: number
+  message: string
+}
+
 
 export interface CsLabZoteroStatus {
   availability: CsLabZoteroAvailability
@@ -718,6 +817,118 @@ export interface CsLabLiteratureItem {
   annotationCount: number
   hasFile: boolean
   updatedAt: number
+  /** 已解析的章节数（结构 sidecar 存在时有值）。 */
+  sectionCount?: number
+  /** 解析出的关键词。 */
+  keywords?: string[]
+  /** 1-2 句核心贡献速读（学术检索入库时外显写入）。 */
+  tldr?: string
+  /** 是否已有结构化解析 sidecar。 */
+  hasStructure?: boolean
+  /** 解析失败时的可读提示。 */
+  parseWarning?: string
+  /** 层级学科分类（如 ['Earth Sciences', 'Geophysics', 'Seismic Imaging']）。 */
+  taxonomy?: string[]
+  /** 正式引用列表。 */
+  references?: PaperReference[]
+  /** 实验协议（实证解析产物）。 */
+  protocols?: ExperimentalProtocol[]
+  /** 数值评估指标（实证解析产物）。 */
+  metrics?: EmpiricalMetric[]
+  /** 抽取的图表资产。 */
+  figureAssets?: PaperFigureAsset[]
+  /** 语义概念/方法图谱。 */
+  conceptGraph?: PaperConceptGraph
+  /** 语义增强来源：LLM 结构化输出或确定性 AST 回退。 */
+  enrichmentSource?: 'llm' | 'deterministic'
+}
+
+// ===== 论文入库流水线：实证抽取与语义增强产物 =====
+
+export interface EmpiricalMetric {
+  name: string
+  value: number | string
+  unit?: string
+  baseline?: string | number
+  condition?: string
+  page: number
+}
+
+export interface ExperimentalProtocol {
+  id: string
+  name: string
+  category: 'synthesis' | 'characterization' | 'computation' | 'measurement' | 'general'
+  steps: string[]
+  parameters: Record<string, string | number>
+  instruments?: string[]
+}
+
+export interface PaperFigureAsset {
+  id: string
+  caption: string
+  pageNumber: number
+  /** 已导出位图相对 vault/notes 的路径；vector-unsampled 时缺省。 */
+  relPath?: string
+  bbox?: [number, number, number, number]
+  /** image-xobject：PDF 内嵌位图直提；vector-unsampled：纯矢量图表未采样（不生成占位图）。 */
+  renderSource: 'image-xobject' | 'vector-unsampled'
+}
+
+export interface PaperReference {
+  title: string
+  authors?: string[]
+  year?: string
+  doi?: string
+  venue?: string
+}
+
+export interface PaperConcept {
+  id: string
+  name: string
+  definition?: string
+  relatedConceptIds?: string[]
+}
+
+export interface PaperMethod {
+  id: string
+  name: string
+  role: 'proposed' | 'baseline' | 'general'
+  description?: string
+  dependsOn?: string[]
+}
+
+export interface PaperConceptGraph {
+  concepts: PaperConcept[]
+  methods: PaperMethod[]
+}
+
+// ===== 分层 3D 空间拓扑 =====
+
+export interface Hierarchical3DGraphNode {
+  id: string
+  label: string
+  layer: 'macro' | 'meso' | 'micro'
+  type: 'paper' | 'author' | 'venue' | 'concept' | 'method' | 'protocol' | 'metric' | 'table' | 'figure'
+  /** 2 for macro, 1 for meso, 0 for micro */
+  zLevel: number
+  x?: number
+  y?: number
+  z?: number
+  details?: Record<string, unknown>
+}
+
+export interface Hierarchical3DGraphEdge {
+  source: string
+  target: string
+  relation: string
+  weight?: number
+}
+
+export interface Hierarchical3DGraphData {
+  nodes: Hierarchical3DGraphNode[]
+  edges: Hierarchical3DGraphEdge[]
+  paperUri: string
+  builtAt: number
 }
 
 export interface CsLabZoteroAnnotation {
@@ -748,6 +959,10 @@ export interface CsLabAxisTick {
   px: number
   py: number
   value: number
+  /** true 表示用户尚未录入刻度值；参与数字化前必须清除。 */
+  pending?: boolean
+  /** true 表示刻度值由 read-tick 模板匹配自动识别回填，导出时附带以便事后复核。 */
+  autoRead?: boolean
 }
 
 export interface CsLabAxisCalibration {
@@ -769,6 +984,10 @@ export interface CsLabPlotDigitizeInput {
   calibration: CsLabPlotCalibration
   /** 目标曲线颜色（#rrggbb）；缺省由后端按色相峰值自动选择。 */
   color?: string
+  /** 多曲线分色提取：多个 #rrggbb，逐色构建掩码；优先于 color。 */
+  colors?: string[]
+  /** 自动聚类的目标簇数（2-4）；0/缺省 = 按色相主峰自动估计。 */
+  seriesCount?: number
   tolerance?: number
 }
 
@@ -793,6 +1012,25 @@ export interface CsLabPlotDigitizeResult {
   rotationDeg?: number
   axisFit?: { x: CsLabAxisFit; y: CsLabAxisFit }
   series: CsLabDigitizedSeries[]
+}
+
+/** 刻度数值自动读取输入（rect 为原图像素坐标下的刻度点外侧标注区域）。 */
+export interface CsLabTickReadInput {
+  labId: string
+  imageDataUrl: string
+  rect: { x: number; y: number; w: number; h: number }
+}
+
+/**
+ * 刻度数值自动读取结果。
+ * value=null 表示模板匹配置信度低于阈值（R4 低置信度防御），由用户手填，绝不猜。
+ */
+export interface CsLabTickReadResult {
+  ok: boolean
+  value: number | null
+  confidence: number
+  missingDependency?: boolean
+  message?: string
 }
 
 export interface CsLabDigitizedFigureInput {
@@ -848,6 +1086,43 @@ export interface CsLabFormulaOcrResult {
   message?: string
 }
 
+/** 选区纯文本 OCR（翻译前置），missingDependency 区分「依赖未装」与「识别失败」。 */
+export interface CsLabSelectionOcrResult {
+  ok: boolean
+  text?: string
+  missingDependency?: boolean
+  message?: string
+}
+
+/** 翻译识别通道：矢量直读 / 视觉识别 / Pix2Text OCR。 */
+export type CsLabTranslateSource = 'vector' | 'vision' | 'ocr'
+
+export interface CsLabTranslateSelectionInput {
+  labId: string
+  /** 当前配置的 LLM 渠道 / 模型（渲染层传入，主进程不猜测）。 */
+  channelId: string
+  modelId: string
+  /** @deprecated 仍兼容；矢量文字优先走 vectorText */
+  imageDataUrl?: string
+  /** PDF 矢量文字直读结果，命中时零 OCR 成本直接进 LLM */
+  vectorText?: string
+  /** 识别通道，用于面板徽标与审计 */
+  source?: CsLabTranslateSource
+}
+
+export interface CsLabTranslateSelectionResult {
+  ok: boolean
+  /** 简体中文译文。 */
+  text?: string
+  /** OCR/矢量原文（供用户核对）。 */
+  ocrText?: string
+  /** 实际命中的识别通道（入口声明与实际分流可能不同，以此为准）。 */
+  source?: CsLabTranslateSource
+  /** true 表示 Pix2Text 未安装，面板可展示可选安装引导。 */
+  missingDependency?: boolean
+  message?: string
+}
+
 // ===== 跨文献 GraphRAG =====
 
 export interface CsLabLiteratureSearchInput {
@@ -866,6 +1141,8 @@ export interface CsLabLiteratureSearchHit {
   score: number
   communityId: string
   communityTitle: string
+  /** 命中切块在 PDF 页内的归一化坐标 [x0, y0, x1, y1]；旧索引缺省时仅跳页不高亮。 */
+  bbox?: [number, number, number, number]
 }
 
 export interface CsLabLiteratureIndexStatus {
@@ -880,6 +1157,80 @@ export interface CsLabLiteratureSearchResult {
   ok: boolean
   builtAt?: number
   hits: CsLabLiteratureSearchHit[]
+  message?: string
+}
+
+// ===== 文献智能导读 =====
+
+export interface CsLabLiteratureSectionRef {
+  title: string
+  level: number
+  page: number
+  /** 章节正文摘录（用于局限/结论卡片）。 */
+  excerpt?: string
+}
+
+export interface CsLabLiteratureEquationRef {
+  latex: string
+  tag?: string
+  page: number
+}
+
+export interface CsLabLiteratureTableRef {
+  page: number
+  caption?: string
+  markdownPreview: string
+}
+
+export interface CsLabLiteratureGuide {
+  ok: boolean
+  uri: string
+  title: string
+  authors: string[]
+  year?: string
+  doi?: string
+  publication?: string
+  pageCount: number
+  abstract?: string
+  keywords: string[]
+  outline: CsLabLiteratureSectionRef[]
+  equations: CsLabLiteratureEquationRef[]
+  tables: CsLabLiteratureTableRef[]
+  limitations: CsLabLiteratureSectionRef[]
+  conclusion?: CsLabLiteratureSectionRef
+  readingPath: string[]
+  parsedAt?: number
+  message?: string
+}
+
+export interface CsLabLiteratureGuideInput {
+  labId: string
+  literatureUri: string
+}
+
+/** 全景知识图谱节点（文献级聚合）。 */
+export interface CsLabLiteratureGraphNode {
+  uri: string
+  title: string
+  communityId: string
+  communityTitle: string
+  chunkCount: number
+}
+
+/** 全景知识图谱边（文献对共现强度，已按文献对聚合）。 */
+export interface CsLabLiteratureGraphEdge {
+  source: string
+  target: string
+  weight: number
+}
+
+/** 未搜索时的文献智脑全景图谱载荷。 */
+export interface CsLabLiteratureGraphResult {
+  ok: boolean
+  nodes: CsLabLiteratureGraphNode[]
+  edges: CsLabLiteratureGraphEdge[]
+  communityCount: number
+  builtAt?: number
   message?: string
 }
 
@@ -1223,6 +1574,42 @@ export interface CsLabCustomToolRunResult {
   elapsedMs: number
 }
 
+// ===== 预置科研算子（泥石流等方向） =====
+
+export interface CsLabToolPreset {
+  /** 文件名（如 debris_flow_peak_discharge.py），安装时的唯一合法标识。 */
+  filename: string
+  title: string
+  description: string
+  /** 依赖提示（如「仅标准库」/「numpy」）。 */
+  dependency: string
+  installed: boolean
+}
+
+export interface CsLabToolPresetInstallInput {
+  labId: string
+  filenames?: string[]
+}
+
+export interface CsLabToolPresetInstallResult {
+  ok: boolean
+  installed: string[]
+  skipped: string[]
+  message: string
+}
+
+export interface CsLabToolPresetReadInput {
+  filename: string
+}
+
+export interface CsLabToolPresetReadResult {
+  ok: boolean
+  filename?: string
+  source?: string
+  message?: string
+}
+
+
 export interface CsLabUvEnsureResult {
   ok: boolean
   uvPath?: string
@@ -1493,6 +1880,13 @@ export interface CsLabMolAsset {
   format: CsLabMolFormat
   text: string
   bytes: number
+  /** 演示资产的默认视口设置（超胞 / Miller 面 / 自旋）。 */
+  defaultSettings?: {
+    supercell?: { na: number; nb: number; nc: number }
+    miller?: [number, number, number]
+    autoSpin?: boolean
+    highlightPolyhedra?: boolean
+  }
 }
 
 export interface CsLabCrystalCell {
@@ -1623,6 +2017,13 @@ export interface CsLabStructureFocusedEvent {
   highlightPolyhedra?: boolean
 }
 
+/** Agent 请求把任意资产在原生窗格中打开。 */
+export interface CsLabAssetFocusedEvent {
+  labId: string
+  uri: string
+  view?: 'auto' | 'terrain'
+}
+
 /** 注入 Agent 系统提示词的实验室资产与环境上下文。 */
 export interface CsLabPromptAssetSummary {
   uri: string
@@ -1631,10 +2032,194 @@ export interface CsLabPromptAssetSummary {
   format?: string
 }
 
+export interface CsLabPromptLiteratureSummary {
+  uri: string
+  title: string
+  year?: string
+  doi?: string
+  pageCount?: number
+  sectionCount?: number
+}
+
+export interface CsLabPromptGeoAssetSummary {
+  uri: string
+  title: string
+  format?: string
+  width?: number
+  height?: number
+  cellsize?: number
+}
+
+/**
+ * 用户视口状态快照（Bug：消除「这是什么」视野盲区）。
+ *
+ * 前端随每条用户消息采集，主进程注入动态上下文，
+ * 让模型明确知道用户此刻正看着哪篇文献、哪个图表或哪条推演链。
+ */
+export interface CsLabViewportSnapshot {
+  /** 当前聚焦的科研视图类型。 */
+  activeTab?: 'pdf' | 'plot' | 'manuscript' | 'notes' | 'brain' | 'dag' | 'dataset' | 'agent'
+  /** 当前选中的资产/文献实体 URI。 */
+  selectedEntityUri?: string
+  /** 当前选中实体的可读标题。 */
+  selectedEntityLabel?: string
+  /** PDF 阅读器当前页码（1 起）。 */
+  pdfCurrentPage?: number
+  /** PDF 当前划词选区文本（截断后）。 */
+  pdfSelectionText?: string
+  /** 当前活动图表（数字化/绘图）ID。 */
+  plotActiveId?: string
+  /** 推演画布当前选中节点 ID。 */
+  dagSelectedNodeId?: string
+  /** 快照采集时间（ISO 8601）。 */
+  capturedAt: string
+}
+
 export interface CsLabPromptLabInfo {
   labId: string
   labName: string
   vaultDir?: string
   structures: readonly CsLabPromptAssetSummary[]
   plots: readonly { id: string; title: string }[]
+  /** 已登记文献（提示词注入用，不含全文）。 */
+  literature?: readonly CsLabPromptLiteratureSummary[]
+  /** 地理栅格资产（DEM/GeoTIFF/推演输出）。 */
+  geoAssets?: readonly CsLabPromptGeoAssetSummary[]
+  /** 列式数据表资产（仅元数据）。 */
+  tables?: readonly { uri: string; title: string; rowCount?: number }[]
+  /** 科研图版资产（仅元数据）。 */
+  figures?: readonly CsLabPromptAssetSummary[]
+  /** 手稿文稿（仅元数据）。 */
+  manuscripts?: readonly { uri: string; title: string; updatedAt: number }[]
+  /** 推演画布（仅元数据）。 */
+  canvases?: readonly { relPath: string; title: string }[]
+}
+
+// ===== 跨源学术文献检索（多源联邦） =====
+
+/** 学术检索联合路由的上游数据源。 */
+export type CsLabAcademicSource = 'openalex' | 'semantic-scholar' | 'arxiv' | 'crossref'
+
+/** 开放获取状态（语义对齐 Unpaywall / OpenAlex）。 */
+export type CsLabOaStatus =
+  | 'gold'
+  | 'green'
+  | 'bronze'
+  | 'diamond'
+  | 'hybrid'
+  | 'closed'
+  | 'preprint'
+
+export interface CsLabAcademicAuthor {
+  name: string
+  institution?: string
+}
+
+/** 预印本-正刊谱系（Omelette 范式版本对齐）。 */
+export interface CsLabAcademicLineage {
+  isPreprint: boolean
+  /** 已刊版本 DOI（预印本并入正刊主卡片后指向正刊）。 */
+  publishedVersionDoi?: string
+  /** 版本来源标记，如 ['arXiv:2404.13950', 'SIGIR 2024']。 */
+  versionSources: string[]
+}
+
+/** 外显元数据卡片契约（检索结果主卡片）。 */
+export interface CsLabAcademicPaperMetadata {
+  id: string
+  title: string
+  authors: CsLabAcademicAuthor[]
+  year?: number
+  publication?: string
+  doi?: string
+  arxivId?: string
+  citationsCount: number
+  isOpenAccess: boolean
+  oaStatus?: CsLabOaStatus
+  /** 合法 OA PDF 首选直链（预览与入库下载用）。 */
+  openAccessPdfUrl?: string
+  /** 候选合法 OA PDF 直链列表（首选失效时自动按顺序回退）。 */
+  openAccessPdfUrls?: string[]
+  /** DOI / 出版方落地页。 */
+  landingPageUrl?: string
+  abstract: string
+  /** 1-2 句核心贡献速读（S2 TL;DR 优先，Docling/LLM 渐进增强补全）。 */
+  tldr?: string
+  /** 方法学关键词胶囊。 */
+  methodKeywords: string[]
+  /** 学科领域标签。 */
+  fieldsOfStudy?: string[]
+  /** 命中并参与融合的上游源。 */
+  sources: CsLabAcademicSource[]
+  /** 各源原始排名（RRF 可解释性）。 */
+  sourceRanks: Partial<Record<CsLabAcademicSource, number>>
+  lineage: CsLabAcademicLineage
+  /** RRF 融合 + 本地轻量重排后的最终得分。 */
+  score: number
+}
+
+export interface CsLabAcademicSearchFilters {
+  yearFrom?: number
+  yearTo?: number
+  openAccessOnly?: boolean
+  sources?: CsLabAcademicSource[]
+  fieldsOfStudy?: string[]
+  /** 限定出版物 / 会议名。 */
+  publication?: string
+}
+
+export interface CsLabAcademicSearchInput {
+  query: string
+  topK?: number
+  filters?: CsLabAcademicSearchFilters
+  /** 当前配置的 LLM 渠道 / 模型（渲染层传入，供 TL;DR 渐进增强；缺省跳过 LLM 补全）。 */
+  channelId?: string
+  modelId?: string
+}
+
+export interface CsLabAcademicSourceStat {
+  source: CsLabAcademicSource
+  hits: number
+  elapsedMs: number
+  /** 该源降级/失败时的可读原因；成功省略。 */
+  error?: string
+}
+
+export interface CsLabAcademicSearchResult {
+  ok: boolean
+  papers: CsLabAcademicPaperMetadata[]
+  /** 各源命中数与耗时（可解释性面板）。 */
+  sourceStats: CsLabAcademicSourceStat[]
+  message?: string
+}
+
+/** 右侧即时预览载荷。 */
+export interface CsLabAcademicPreviewInput {
+  doi?: string
+  openAccessPdfUrl?: string
+  openAccessPdfUrls?: string[]
+  landingPageUrl?: string
+  arxivId?: string
+  title?: string
+}
+
+export interface CsLabAcademicPreviewResult {
+  ok: boolean
+  /** PDF 二进制的 dataURL（仅 OA 直链可达时返回）。 */
+  pdfDataUrl?: string
+  message?: string
+}
+
+/** 一键入库：把 OA PDF 下载为实验室文献资产并登记。 */
+export interface CsLabAcademicIngestInput {
+  labId: string
+  paper: CsLabAcademicPaperMetadata
+}
+
+export interface CsLabAcademicIngestResult {
+  ok: boolean
+  uri?: string
+  /** 入库后的实验室 revision（ON_ASSET_CHANGED 事件载荷）。 */
+  revision?: number
+  message: string
 }

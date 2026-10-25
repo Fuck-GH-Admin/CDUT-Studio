@@ -21,6 +21,7 @@ export type SerializableBlock = Pick<
   | 'readingStreamId'
   | 'readingOrderIndex'
   | 'headingLevel'
+  | 'columnCount'
   | 'equation'
   | 'table'
   | 'footnoteRef'
@@ -35,17 +36,49 @@ export interface OutlineEntry {
 }
 
 /**
+ * 栏位中文描述（聚光灯锚点中「人读」的那一轨）。
+ *
+ * 双栏 → 左栏/右栏；三栏及以上 → 左栏/中栏/右栏；
+ * 单栏版面与跨栏通栏块（`columnCount` 恒记 1）→ 通栏。
+ */
+export function describeColumn(
+  node: Pick<SerializableBlock, 'readingStreamId' | 'columnCount'>,
+): string {
+  const count = node.columnCount ?? 1
+  const stream = node.readingStreamId
+  if (count <= 1 || stream < 0) return '通栏'
+  if (count === 2) return stream === 0 ? '左栏' : '右栏'
+  if (stream === 0) return '左栏'
+  if (stream >= count - 1) return '右栏'
+  return '中栏'
+}
+
+/**
  * 人类可读位置描述：作为双轨定位引用中「人读」的那一轨。
- * 例如「第2页·左栏」「第3页·插图」「第4页·公式」。
+ * 例如「第2页·左栏」「第3页·插图」「第4页·公式」「第5页·中栏」。
  */
 function getHumanLocation(node: SerializableBlock): string {
   const page = node.pageNumber
-  const stream = node.readingStreamId
-  const colDesc = stream === 1 ? '右栏' : stream === 0 ? '左栏' : '通栏'
   if (node.kind === 'figure') return `第${page}页·插图`
   if (node.kind === 'table') return `第${page}页·表格`
   if (node.kind === 'equation') return `第${page}页·公式`
-  return `第${page}页·${colDesc}`
+  return `第${page}页·${describeColumn(node)}`
+}
+
+/**
+ * 空表格判定：除分隔行/结构符外没有任何实质单元格内容（非空字符 < 2）。
+ * 用于入笼清洗，防止空表格 Markdown 污染正文与检索切块。
+ */
+function isEmptyTableMarkdown(markdown: string): boolean {
+  const rows = markdown
+    .split('\n')
+    .map((row) => row.trim())
+    .filter(Boolean)
+  if (rows.length === 0) return true
+  const dataRows = rows.filter((row) => !/^(\|?\s*:?-{2,}:?\s*\|)+$/.test(row) && !/^\|?[\s:|-]+\|?$/.test(row))
+  if (dataRows.length === 0) return true
+  const contentChars = dataRows.join('').replace(/[|:\-`*_\s]/g, '')
+  return contentChars.length < 2
 }
 
 /** 单块 → Markdown 片段（返回空字符串表示该块不进入正文） */
@@ -74,7 +107,8 @@ function serializeBlock(node: SerializableBlock, includeAnchors = true): string 
       break
     case 'equation': {
       const latex = node.equation?.latex.trim() || text
-      if (latex.length === 0) {
+      // 无语义残缺公式清洗：去空白后非空字符不足 2 的碎片（如孤立 =、+）不进入正文。
+      if (latex.replace(/\s/g, '').length < 2) {
         body = ''
         break
       }
@@ -82,9 +116,11 @@ function serializeBlock(node: SerializableBlock, includeAnchors = true): string 
       body = tag ? `$$\n${latex} \\tag{${tag}}\n$$` : `$$\n${latex}\n$$`
       break
     }
-    case 'table':
-      body = node.table?.markdown ?? ''
+    case 'table': {
+      const markdown = node.table?.markdown ?? ''
+      body = isEmptyTableMarkdown(markdown) ? '' : markdown
       break
+    }
     case 'figure':
       body = text.length > 0 ? `> **[${getHumanLocation(node)}]** ${text}` : `> **[${getHumanLocation(node)}]**`
       break

@@ -18,29 +18,40 @@ import { cn } from '@/lib/utils'
 interface BrandLogoProps {
   className?: string
   alt?: string
+  style?: React.CSSProperties
 }
 
 /** 校徽 + 中英文校名组合（PNG 锁版） */
-export function CdutLogo({ className, alt = '成都理工大学校徽' }: BrandLogoProps): React.ReactElement {
+export function CdutLogo({
+  className,
+  alt = '成都理工大学校徽',
+  style,
+}: BrandLogoProps): React.ReactElement {
   const isDark = useIsDarkTheme()
   return (
     <img
       src={isDark ? cdutCeWhite : cdutCeColor}
       alt={alt}
       draggable={false}
+      style={style}
       className={cn('object-contain', className)}
     />
   )
 }
 
 /** 侧边栏 / 速课堂使用的矢量标识 */
-export function CdutMark({ className, alt = 'CDUT Studio' }: BrandLogoProps): React.ReactElement {
+export function CdutMark({
+  className,
+  alt = 'CDUT Studio',
+  style,
+}: BrandLogoProps): React.ReactElement {
   const isDark = useIsDarkTheme()
   return (
     <img
       src={isDark ? cdutMarkDark : cdutMarkColor}
       alt={alt}
       draggable={false}
+      style={style}
       className={cn('object-contain', className)}
     />
   )

@@ -13,7 +13,16 @@
  * 零尺寸、越界、控制字符等类别。若未来接入原始算子流提取器，可填回真实可见性字段。
  */
 
-import type { PdfGeometryExtractResult, PdfGlyphItem, PdfPageGeometry, VectorLine } from './types'
+import { inflateSync } from 'node:zlib'
+import type {
+  NativeMathTag,
+  PageTextHealth,
+  PdfGeometryExtractResult,
+  PdfGlyphItem,
+  PdfPageGeometry,
+  StructTreeSummary,
+  VectorLine,
+} from './types'
 
 /** pdfjs 文本项（只声明用到的字段，避免绑定具体版本类型） */
 interface PdfJsTextItem {
@@ -31,6 +40,8 @@ interface PdfJsPage {
   getViewport(params: { scale: number }): { width: number; height: number; transform: number[] }
   getTextContent(): Promise<{ items: unknown[] }>
   getOperatorList(): Promise<{ fnArray: number[]; argsArray: unknown[][] }>
+  /** 结构树（可选：并非所有 pdfjs 版本/文档都提供） */
+  getStructTree?(): Promise<unknown>
 }
 
 interface PdfJsDocument {
@@ -241,6 +252,144 @@ async function extractVectorLines(page: PdfJsPage, pdfjs: PdfJsModule): Promise<
   }
 }
 
+// ===== 文本层健康度（扫描件 / ToUnicode 乱码页降级判据） =====
+
+/** 纯扫描页判据：单页可读字符数低于此值 */
+const MIN_GLYPHS_PER_PAGE = 30
+/** 乱码占比阈值：U+FFFD / U+FFFE / 私用区（PUA）占比超过即判编码损坏 */
+const GARBLED_RATIO_THRESHOLD = 0.3
+
+/** 判定单个字符是否为乱码 / 私用区编码 */
+function isGarbledChar(char: string): boolean {
+  const code = char.codePointAt(0) ?? 0
+  return (
+    code === 0xfffd ||
+    code === 0xfffe ||
+    code === 0xffff ||
+    (code >= 0xe000 && code <= 0xf8ff) || // BMP 私用区
+    (code >= 0xf0000 && code <= 0xffffd) || // 私用区补充 A
+    (code >= 0x100000 && code <= 0x10fffd) // 私用区补充 B
+  )
+}
+
+/** 评估单页文本层健康度（纯扫描件 / ToUnicode 缺失乱码页） */
+export function assessPageTextHealth(glyphs: readonly PdfGlyphItem[]): PageTextHealth {
+  const glyphCount = glyphs.length
+  if (glyphCount === 0) {
+    return { glyphCount: 0, garbledRatio: 0, isPageDegraded: true, reason: 'no-text-layer' }
+  }
+  let garbled = 0
+  for (const glyph of glyphs) {
+    if (isGarbledChar(glyph.char)) garbled += 1
+  }
+  const garbledRatio = garbled / glyphCount
+  if (glyphCount < MIN_GLYPHS_PER_PAGE) {
+    return { glyphCount, garbledRatio, isPageDegraded: true, reason: 'no-text-layer' }
+  }
+  if (garbledRatio > GARBLED_RATIO_THRESHOLD) {
+    return { glyphCount, garbledRatio, isPageDegraded: true, reason: 'garbled-encoding' }
+  }
+  return { glyphCount, garbledRatio, isPageDegraded: false }
+}
+
+// ===== StructTree 角色摘要（页面级先验） =====
+
+interface StructTreeNodeLike {
+  role?: string
+  children?: Array<StructTreeNodeLike | { type?: string; id?: string }>
+}
+
+const FORMULA_ROLES = new Set(['formula', 'math', 'm'])
+
+/**
+ * 统计页面结构树角色分布。
+ *
+ * 诚实声明：pdfjs 只暴露角色与内容 id，id 无法映射回字形流，
+ * 因此只作置信度先验（例如「本页含公式角色」），绝不伪造块级归属。
+ */
+export async function extractStructTreeSummary(
+  page: PdfJsPage,
+): Promise<StructTreeSummary> {
+  try {
+    const tree = (await page.getStructTree?.()) as StructTreeNodeLike | undefined
+    if (!tree || !Array.isArray(tree.children)) {
+      return { available: false, roleCounts: {}, formulaRoleCount: 0 }
+    }
+    const roleCounts: Record<string, number> = {}
+    let formulaRoleCount = 0
+    const walk = (node: StructTreeNodeLike | { type?: string; id?: string }): void => {
+      const current = node as StructTreeNodeLike
+      const role = (current.role ?? '').toLowerCase()
+      if (role) {
+        roleCounts[role] = (roleCounts[role] ?? 0) + 1
+        if (FORMULA_ROLES.has(role)) formulaRoleCount += 1
+      }
+      if (Array.isArray(current.children)) {
+        for (const child of current.children) walk(child)
+      }
+    }
+    walk(tree)
+    return { available: true, roleCounts, formulaRoleCount }
+  } catch {
+    return { available: false, roleCounts: {}, formulaRoleCount: 0 }
+  }
+}
+
+// ===== 原始对象扫描：内嵌 MathML / TeX 关联文件 =====
+
+/** 触发数学标签抽取的 MIME / 对象特征 */
+const MATH_TAG_HINT_PATTERN =
+  /\/EmbeddedFile|\/Subtype\s*\/XML|application\/x-(?:tex|latex|mathml)|application\/mathml|\/MathML/i
+
+/**
+ * 尽力扫描原始 PDF 对象流中的内嵌数学标签（/AF 关联文件）。
+ *
+ * 大多数论文不内嵌 MathML/TeX，因此这是「加分项」路径：
+ * 捞不到就返回空数组，由几何 Math AST 主力接管，绝不伪造。
+ */
+export function extractAssociatedMathTags(buffer: Uint8Array): NativeMathTag[] {
+  const tags: NativeMathTag[] = []
+  let latin: string
+  try {
+    latin = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength).toString('latin1')
+  } catch {
+    return tags
+  }
+
+  const streamRe = /stream\r?\n?/g
+  let match: RegExpExecArray | null
+  while ((match = streamRe.exec(latin)) !== null) {
+    const start = match.index + match[0].length
+    const end = latin.indexOf('endstream', start)
+    if (end < 0) continue
+    // 只看紧邻的字典（前 800 字节），避免误命中同一对象里的无关文本
+    const dictStart = Math.max(0, match.index - 800)
+    const dict = latin.slice(dictStart, match.index)
+    if (!MATH_TAG_HINT_PATTERN.test(dict)) continue
+
+    const raw = latin.slice(start, end)
+    let text = raw
+    if (/\/FlateDecode/i.test(dict)) {
+      try {
+        text = inflateSync(Buffer.from(raw, 'latin1')).toString('utf8')
+      } catch {
+        continue
+      }
+    }
+    const trimmed = text.trim()
+    if (trimmed.length === 0 || trimmed.length > 200_000) continue
+
+    if (/<(?:math\b|m:math\b|mml:math\b)/i.test(trimmed)) {
+      tags.push({ format: 'mathml', content: trimmed })
+    } else if (/\\(?:frac|sum|int|alpha|begin|left|right|sqrt|mathbb)|\^[A-Za-z0-9{]|_[A-Za-z0-9{]/.test(trimmed)) {
+      tags.push({ format: 'tex', content: trimmed })
+    }
+    streamRe.lastIndex = end
+    if (tags.length >= 50) break
+  }
+  return tags
+}
+
 export interface ExtractGeometryOptions {
   /** 最大页数（1 起），缺省解析全部 */
   maxPages?: number
@@ -309,10 +458,17 @@ export async function extractPdfGeometry(
         height: pageHeight,
         glyphs,
         vectorLines,
+        health: assessPageTextHealth(glyphs),
+        structTree: await extractStructTreeSummary(page),
       })
     }
 
-    return { pages, pageCount: pdf.numPages, extractMs: Date.now() - start }
+    return {
+      pages,
+      pageCount: pdf.numPages,
+      extractMs: Date.now() - start,
+      nativeMathTags: extractAssociatedMathTags(data),
+    }
   } finally {
     await pdf.destroy()
   }

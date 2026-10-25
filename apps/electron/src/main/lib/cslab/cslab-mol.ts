@@ -172,6 +172,17 @@ export async function getMolAsset(
     throw new Error('结构文件超过 32MB 文本上限，暂不支持在 3D 视图中打开')
   }
   const buffer = await fs.readFile(absPath)
+  let defaultSettings: CsLabMolAsset['defaultSettings']
+  if (entity.metaJson) {
+    try {
+      const meta = JSON.parse(entity.metaJson) as {
+        defaultSettings?: CsLabMolAsset['defaultSettings']
+      }
+      defaultSettings = meta.defaultSettings
+    } catch {
+      defaultSettings = undefined
+    }
+  }
   return {
     uri: entity.uri,
     labId,
@@ -179,6 +190,7 @@ export async function getMolAsset(
     format,
     text: buffer.toString('utf-8'),
     bytes: buffer.length,
+    ...(defaultSettings ? { defaultSettings } : {}),
   }
 }
 

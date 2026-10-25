@@ -19,6 +19,7 @@ import { CsLabPlotControls } from './CsLabPlotControls'
 import { CsLabPlotExportDialog } from './origin/CsLabPlotExportDialog'
 import { CsLabPeakFitDrawer, type CsLabFitData } from './origin/CsLabPeakFitDrawer'
 import { buildPlotRenderModel } from './origin/cslab-plot-render-model'
+import { panAxisWindow, zoomAxisWindow } from './origin/cslab-plot-interaction'
 import { drawPlotToCanvas, pixelToData } from './origin/canvas-plot-renderer'
 
 interface CsLabOriginPlotPaneProps {
@@ -45,7 +46,15 @@ export function CsLabOriginPlotPane({
   const [lastRoi, setLastRoi] = React.useState<CsLabAgentPlotRoi | null>(null)
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null)
-  const dragRef = React.useRef<{ x: number; y: number; startPlot: CsLabPlotDocument } | null>(null)
+  const dragRef = React.useRef<{
+    pointerId: number
+    originX: number
+    originY: number
+    lastX: number
+    lastY: number
+    moved: boolean
+    startPlot: CsLabPlotDocument
+  } | null>(null)
 
   React.useEffect(() => {
     setPlotState(plot)
@@ -142,26 +151,33 @@ export function CsLabOriginPlotPane({
     onToast('success', '拟合曲线已加入图层')
   }
 
-  const handleMouseDown = (event: React.MouseEvent<HTMLCanvasElement>): void => {
-    if (!plotState) return
+  const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>): void => {
+    if (!plotState || event.button !== 0) return
     const rect = event.currentTarget.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    const y = event.clientY - rect.top
     dragRef.current = {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
+      pointerId: event.pointerId,
+      originX: x,
+      originY: y,
+      lastX: x,
+      lastY: y,
+      moved: false,
       startPlot: plotState,
     }
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      // 某些环境不支持 pointer capture，退化为普通事件流。
+    }
     if (roiMode) {
-      setSelection({
-        x1: dragRef.current.x,
-        y1: dragRef.current.y,
-        x2: dragRef.current.x,
-        y2: dragRef.current.y,
-      })
+      setSelection({ x1: x, y1: y, x2: x, y2: y })
     }
   }
 
-  const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>): void => {
-    if (!dragRef.current || !plotState) return
+  const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>): void => {
+    const drag = dragRef.current
+    if (!drag || !plotState || drag.pointerId !== event.pointerId) return
     const rect = event.currentTarget.getBoundingClientRect()
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
@@ -169,34 +185,45 @@ export function CsLabOriginPlotPane({
       setSelection((previous) => (previous ? { ...previous, x2: x, y2: y } : previous))
       return
     }
+    if (!drag.moved) {
+      const distance = Math.hypot(x - drag.originX, y - drag.originY)
+      if (distance < 4) return
+      drag.moved = true
+    }
     const container = containerRef.current
     if (!container) return
     const scale = Math.min(container.clientWidth / plotState.sizeMm.width, container.clientHeight / plotState.sizeMm.height)
-    const dx = (x - dragRef.current.x) / scale
-    const dy = (y - dragRef.current.y) / scale
     const layer = plotState.layers[0]
     if (!layer) return
     const model = buildPlotRenderModel(plotState, preset, container.clientWidth, container.clientHeight)
     const entry = model.series[0]
     if (!entry) return
-    const xRange = entry.xBounds.max - entry.xBounds.min
-    const yRange = entry.yBounds.max - entry.yBounds.min
+    const dx = (x - drag.lastX) / scale
+    const dy = (y - drag.lastY) / scale
+    const xWindow = panAxisWindow({
+      scale: layer.xAxis.scale,
+      min: layer.xAxis.min ?? entry.xBounds.min,
+      max: layer.xAxis.max ?? entry.xBounds.max,
+      dataMin: entry.xBounds.min,
+      dataMax: entry.xBounds.max,
+      deltaRatio: dx / Math.max(1e-6, model.plotRect.width),
+    })
+    const yWindow = panAxisWindow({
+      scale: layer.yAxes[0]!.scale,
+      min: layer.yAxes[0]!.min ?? entry.yBounds.min,
+      max: layer.yAxes[0]!.max ?? entry.yBounds.max,
+      dataMin: entry.yBounds.min,
+      dataMax: entry.yBounds.max,
+      deltaRatio: -dy / Math.max(1e-6, model.plotRect.height),
+    })
     const next: CsLabPlotDocument = {
       ...plotState,
       layers: [
         {
           ...layer,
-          xAxis: {
-            ...layer.xAxis,
-            min: (layer.xAxis.min ?? entry.xBounds.min) - (dx / model.plotRect.width) * xRange,
-            max: (layer.xAxis.max ?? entry.xBounds.max) - (dx / model.plotRect.width) * xRange,
-          },
+          xAxis: { ...layer.xAxis, ...xWindow },
           yAxes: [
-            {
-              ...layer.yAxes[0]!,
-              min: (layer.yAxes[0]!.min ?? entry.yBounds.min) + (dy / model.plotRect.height) * yRange,
-              max: (layer.yAxes[0]!.max ?? entry.yBounds.max) + (dy / model.plotRect.height) * yRange,
-            },
+            { ...layer.yAxes[0]!, ...yWindow },
             layer.yAxes[1]!,
           ],
         },
@@ -205,11 +232,18 @@ export function CsLabOriginPlotPane({
       updatedAt: Date.now(),
     }
     updatePlot(next)
-    dragRef.current = { ...dragRef.current, x, y, startPlot: next }
+    drag.lastX = x
+    drag.lastY = y
+    drag.startPlot = next
   }
 
-  const handleMouseUp = (): void => {
+  const handlePointerUp = (event: React.PointerEvent<HTMLCanvasElement>): void => {
     dragRef.current = null
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch {
+      // 已释放或环境不支持。
+    }
     if (!roiMode || !selection || !plotState) return
     const container = containerRef.current
     if (!container) return
@@ -259,15 +293,19 @@ export function CsLabOriginPlotPane({
     const ratio =
       plotWidth > 0 ? Math.max(0, Math.min(1, (localX - plotLeft) / plotWidth)) : 0.5
     const factor = event.deltaY > 0 ? 1.2 : 1 / 1.2
-    const min = layer.xAxis.min ?? entry.xBounds.min
-    const max = layer.xAxis.max ?? entry.xBounds.max
-    const anchor = min + ratio * (max - min)
-    const nextMin = anchor - (anchor - min) * factor
-    const nextMax = anchor + (max - anchor) * factor
+    const window = zoomAxisWindow({
+      scale: layer.xAxis.scale,
+      min: layer.xAxis.min ?? entry.xBounds.min,
+      max: layer.xAxis.max ?? entry.xBounds.max,
+      dataMin: entry.xBounds.min,
+      dataMax: entry.xBounds.max,
+      anchorRatio: ratio,
+      factor,
+    })
     updatePlot({
       ...plotState,
       layers: [
-        { ...layer, xAxis: { ...layer.xAxis, min: nextMin, max: nextMax } },
+        { ...layer, xAxis: { ...layer.xAxis, ...window } },
         ...plotState.layers.slice(1),
       ],
       updatedAt: Date.now(),
@@ -364,7 +402,7 @@ export function CsLabOriginPlotPane({
   return (
     <div data-tour="cslab-origin-plot" data-plot-id={pane.plotId} className="relative flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
+        <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto scrollbar-none border-b px-2 py-1.5">
           <select
             value={plotState.presetId}
             onChange={(event) => changePreset(event.target.value as CsLabJournalPresetId)}
@@ -380,7 +418,7 @@ export function CsLabOriginPlotPane({
             type="button"
             onClick={() => setRoiMode((value) => !value)}
             className={cn(
-              'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px]',
+              'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px]',
               roiMode ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
             )}
           >
@@ -389,7 +427,7 @@ export function CsLabOriginPlotPane({
           <button
             type="button"
             onClick={() => void sendSelectionToAgent()}
-            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
             title="把当前选区与绘图上下文发送给科学助理"
           >
             <Sparkles className="h-3 w-3" /> 发送至助理
@@ -397,7 +435,7 @@ export function CsLabOriginPlotPane({
           <button
             type="button"
             onClick={() => openFit()}
-            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
           >
             <Sigma className="h-3 w-3" /> 拟合
           </button>
@@ -405,14 +443,14 @@ export function CsLabOriginPlotPane({
             type="button"
             onClick={() => void handleSave()}
             disabled={saving}
-            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] hover:bg-muted disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />} 保存
           </button>
           <button
             type="button"
             onClick={() => setExportOpen(true)}
-            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[11px] hover:bg-muted"
           >
             <Download className="h-3 w-3" /> 导出
           </button>
@@ -422,10 +460,10 @@ export function CsLabOriginPlotPane({
           <canvas
             ref={canvasRef}
             className={cn('absolute inset-0', roiMode ? 'cursor-crosshair' : 'cursor-grab')}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
             onDoubleClick={() => {
               const layer = plotState.layers[0]
               if (!layer) return

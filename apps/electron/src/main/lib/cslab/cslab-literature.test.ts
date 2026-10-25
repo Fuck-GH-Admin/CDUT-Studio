@@ -44,7 +44,8 @@ describe('PDF 文献导入', () => {
     const { isFileReadOnly } = await import('./cslab-hash')
 
     const source = join(rootDir, 'paper.pdf')
-    writeFileSync(source, '%PDF-1.4\n% Synthetic literature\n', 'utf-8')
+    const { buildSkLgpDemoPaperPdf } = await import('./cslab-demo-pdf')
+    writeFileSync(source, buildSkLgpDemoPaperPdf())
 
     const results = await ingestFiles(lab.id, [source])
     expect(results).toHaveLength(1)
@@ -81,5 +82,31 @@ describe('PDF 文献导入', () => {
     const result = getLiteratureFilePath(lab.id, `cdut://${lab.id}/lit/not-exist`)
     expect(result.path).toBeUndefined()
     expect(result.reason).toContain('未登记')
+  })
+
+  test('Given 可解析 PDF When 后台富化 Then 结构、导读与章节读取形成闭环', async () => {
+    const { listAssets } = await import('./cslab-iron-cage')
+    const { getLiteratureStructure, buildLiteratureGuide, readPaperSection } =
+      await import('./cslab-literature-structure')
+    const asset = listAssets(lab.id).find((item) => item.layerType === 'lit')
+    expect(asset).toBeTruthy()
+
+    const structure = await getLiteratureStructure(lab.id, asset!.uri, { ensure: true })
+    expect(structure).toBeTruthy()
+    expect(structure!.title).toContain('Wenjia Gully')
+    expect(structure!.abstract).toContain('Debris flows')
+    expect(structure!.sections.some((section) => /Limitations/i.test(section.title))).toBe(true)
+    expect(structure!.equations.length).toBeGreaterThan(0)
+    expect(structure!.tables.length).toBeGreaterThan(0)
+
+    const guide = await buildLiteratureGuide(lab.id, asset!.uri)
+    expect(guide.ok).toBe(true)
+    expect(guide.outline.length).toBeGreaterThan(2)
+    expect(guide.readingPath.length).toBeGreaterThan(2)
+    expect(guide.limitations.length).toBeGreaterThan(0)
+
+    const section = await readPaperSection(lab.id, asset!.uri, { section: 'Limitations' })
+    expect(section.ok).toBe(true)
+    expect(section.markdown).toContain('synthetic')
   })
 })

@@ -7,11 +7,13 @@
 import { useEffect, useRef } from 'react'
 import { useSetAtom } from 'jotai'
 import type {
+  CsLabAssetChangedEvent,
   CsLabCustomToolScan,
   CsLabDagJobsCancelledEvent,
   CsLabHpcJobEvent,
   CsLabHpcMfaRequest,
   CsLabPlotUpdatedEvent,
+  CsLabAssetFocusedEvent,
   CsLabStructureFocusedEvent,
   CsLabStructureSnapshotRequest,
   CsLabShareStatusEvent,
@@ -30,7 +32,7 @@ import {
 } from '@/atoms/cslab-atoms'
 
 export interface CsLabEventHandlers {
-  onAssetChanged?: () => void
+  onAssetChanged?: (event?: CsLabAssetChangedEvent) => void
   onStale?: (capsuleIds: string[]) => void
   onZoteroSynced?: (event: CsLabZoteroSyncedEvent) => void
   onZoteroStatus?: (event: CsLabZoteroStatusEvent) => void
@@ -42,6 +44,7 @@ export interface CsLabEventHandlers {
   onHpcMfa?: (event: CsLabHpcMfaRequest) => void
   onPlotUpdated?: (event: CsLabPlotUpdatedEvent) => void
   onStructureFocused?: (event: CsLabStructureFocusedEvent) => void
+  onAssetFocused?: (event: CsLabAssetFocusedEvent) => void
   onRequestStructureSnapshot?: (event: CsLabStructureSnapshotRequest) => void
 }
 
@@ -66,7 +69,7 @@ export function useCsLabEvents(labId: string | null, handlers: CsLabEventHandler
 
     const offAsset = window.electronAPI.cslab.onAssetChanged((event) => {
       if (event.labId !== labId) return
-      handlersRef.current.onAssetChanged?.()
+      handlersRef.current.onAssetChanged?.(event)
     })
 
     const offStale = window.electronAPI.cslab.onCapsuleStale((event) => {
@@ -143,6 +146,11 @@ export function useCsLabEvents(labId: string | null, handlers: CsLabEventHandler
       handlersRef.current.onStructureFocused?.(event)
     })
 
+    const offAssetFocused = window.electronAPI.cslab.onAssetFocused((event) => {
+      if (event.labId !== labId) return
+      handlersRef.current.onAssetFocused?.(event)
+    })
+
     // 独立科学助理窗口没有 StageGrid：必须静默忽略截图请求，
     // 否则回传 error 会误杀主工作台正在处理的合法请求。
     const isScienceAgentWindow =
@@ -169,6 +177,7 @@ export function useCsLabEvents(labId: string | null, handlers: CsLabEventHandler
       offHpcMfa()
       offPlotUpdated()
       offStructureFocused?.()
+      offAssetFocused()
       offRequestSnapshot()
     }
   }, [labId, setProgress, setStale, setToolProgress, setZoteroStatus, setShareStatus, setHpcJobs, setHpcMfa])

@@ -187,6 +187,20 @@ export function CsLabFigureView({
       if (raster.scaled) {
         onToast('info', `图像已降采样至 ${raster.width}×${raster.height} 用于数字化`)
       }
+      let demoCalibration: CsLabPdfSelection['demoCalibration']
+      if (asset.metaJson) {
+        try {
+          const meta = JSON.parse(asset.metaJson) as {
+            kind?: string
+            calibration?: CsLabPdfSelection['demoCalibration']
+          }
+          if (meta.kind === 'plot-digitizer-standard' && meta.calibration) {
+            demoCalibration = meta.calibration
+          }
+        } catch {
+          demoCalibration = undefined
+        }
+      }
       const payload: CsLabPdfSelection = {
         literatureUri: asset.uri,
         pageIndex: 0,
@@ -194,6 +208,7 @@ export function CsLabFigureView({
         pageHeight: raster.height,
         rect: { x: 0, y: 0, width: raster.width, height: raster.height },
         cropDataUrl: raster.dataUrl,
+        ...(demoCalibration ? { demoCalibration } : {}),
       }
       setDrawer({
         open: true,
@@ -401,7 +416,7 @@ export function CsLabFigureView({
             data-tour="cslab-figure-digitize"
             disabled={!image || !naturalSize || busy !== null || tooLarge}
             onClick={() => void handleDigitize()}
-            className="inline-flex items-center gap-1 rounded-md bg-cslab-accent px-2 py-1 text-[10px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md bg-cslab-accent px-2 py-1 text-[10px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy === 'digitize' ? (
               <Loader2 size={10} className="animate-spin" />
@@ -415,7 +430,7 @@ export function CsLabFigureView({
             disabled={!image || !naturalSize || busy !== null || tooLarge}
             onClick={handleFormula}
             className={cn(
-              'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+              'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-50',
               formulaMode
                 ? 'border-cslab-accent/50 bg-cslab-accent/10 text-cslab-accent'
                 : 'border-cslab-border text-cslab-muted hover:text-cslab-text',

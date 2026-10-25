@@ -75,7 +75,7 @@ export function GatekeeperNoticeModal(): React.ReactElement | null {
         {/* 中部说明与操作按钮 */}
         <div className="space-y-4 px-6 pb-5">
           <div className="rounded-xl bg-muted/60 p-3 text-[11px] leading-relaxed text-muted-foreground">
-            前往 CDUT 专区完成统一身份认证后，即可使用课表、成绩、空教室、考务及反代大模型等专属能力。
+            前往 CDUT 专区完成统一身份认证后，即可使用课表、成绩、空教室及考务等专属能力。
             凭据仅经操作系统安全加密保存在本地，绝不上云。
           </div>
 

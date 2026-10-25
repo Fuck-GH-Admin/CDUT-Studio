@@ -17,6 +17,7 @@ import type {
 } from '@profer/shared'
 import { writeDatasetParquet, writeDatasetPreview } from './cslab-columnar'
 import { buildDataset, type ParsedDataset } from './cslab-formats/types'
+import { decodeImageDataUrl } from './cslab-image-data'
 import {
   getCsLabDatabase,
   insertEdge,
@@ -95,12 +96,12 @@ function alignSeries(series: CleanSeries[]): ParsedDataset | null {
   })
 }
 
-function decodePng(dataUrl: string): Buffer {
-  const match = /^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl.trim())
-  if (!match) throw new Error('框选图像格式无效')
-  const buffer = Buffer.from(match[2]!.replace(/\s/g, ''), 'base64')
-  if (buffer.length === 0) throw new Error('框选图像为空')
-  return buffer
+function decodeImage(dataUrl: string): { buffer: Buffer; extension: string } {
+  const decoded = decodeImageDataUrl(dataUrl)
+  if (decoded.extension === 'svg') {
+    throw new Error('SVG 框选图像不能保存为位图数据表，请先栅格化为 PNG/WebP')
+  }
+  return { buffer: decoded.buffer, extension: decoded.extension }
 }
 
 function labDb(labId: string): CsLabDatabase {
@@ -117,18 +118,18 @@ export async function persistDigitizedFigure(
   if (!dataset) throw new Error('曲线点不足，无法生成数据表')
 
   const title = input.title?.trim() || '数字化图表'
-  const image = decodePng(input.imageDataUrl)
+  const image = decodeImage(input.imageDataUrl)
   const now = Date.now()
   const figUuid = `fig-${randomUUID().slice(0, 8)}`
   const tableUuid = `table-${randomUUID().slice(0, 8)}`
   const figUri = buildCsLabUri(labId, 'fig', figUuid)
   const tableUri = buildCsLabUri(labId, 'table', tableUuid)
-  const figRelPath = `vault/figures/${figUuid}.png`
+  const figRelPath = `vault/figures/${figUuid}.${image.extension}`
   const tableRelPath = `vault/tables/${tableUuid}.parquet`
   const previewRelPath = `vault/tables/${tableUuid}.preview.json`
-  const sha256 = createHash('sha256').update(image).digest('hex')
+  const sha256 = createHash('sha256').update(image.buffer).digest('hex')
 
-  await writeBufferAtomic(resolveLabRelativePath(labId, figRelPath), image)
+  await writeBufferAtomic(resolveLabRelativePath(labId, figRelPath), image.buffer)
   const parquet = await writeDatasetParquet(dataset, resolveLabRelativePath(labId, tableRelPath))
   await writeDatasetPreview(dataset, resolveLabRelativePath(labId, previewRelPath))
 
@@ -141,10 +142,10 @@ export async function persistDigitizedFigure(
       layerType: 'fig',
       entityUuid: figUuid,
       title: `${title} · 框选图像`,
-      format: 'png',
+      format: image.extension,
       relPath: figRelPath,
       sha256,
-      bytes: image.length,
+      bytes: image.buffer.length,
       revision,
       locked: false,
       createdAt: now,

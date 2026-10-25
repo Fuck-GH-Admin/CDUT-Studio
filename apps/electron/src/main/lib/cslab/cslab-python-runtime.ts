@@ -26,19 +26,34 @@ import { confirmUvUntrustedInstall } from './cslab-uv-consent'
 
 const execFileAsync = promisify(execFile)
 
+/**
+ * Windows 中文系统下 `execFile` 继承 GBK/CP936 代码页，
+ * Python 子进程按 locale 编码输出、Node 按 UTF-8 解码 → 乱码（`δװ` 典型产物）。
+ * 所有 Python 相关子进程统一强制 UTF-8，杜绝进程间编码不一致。
+ */
+const PYTHON_UTF8_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  PYTHONIOENCODING: 'utf-8',
+  PYTHONUTF8: '1',
+}
+
 const PROFILE_MODULES: Record<CsLabToolProfile, string[]> = {
   plot: ['numpy', 'cv2', 'skimage', 'scipy'],
-  // SymPy 的 LaTeX 解析依赖 antlr4；缺失时只能退化为 sympify 纯 ASCII 表达式。
+  // Bug 3：antlr4 runtime 已内置为 vendor/antlr4（纯 Python，约 100KB）。
+  // 仍保留探测 antlr4，但探测片段会把 vendor 目录前置到 sys.path，
+  // 因此 vendor 就绪时天然判为已安装，无需用户 pip install。
   formula: ['sympy', 'antlr4'],
   'formula-ocr': ['pix2text'],
   instrument: ['h5py', 'yadg', 'eclabfiles'],
+  docling: ['docling'],
 }
 
 const PROFILE_LABELS: Record<CsLabToolProfile, string> = {
   plot: '图表数字化（numpy / OpenCV / scikit-image / SciPy）',
-  formula: '公式验算（SymPy + antlr4 LaTeX 解析）',
+  formula: '公式验算（SymPy LaTeX 解析；antlr4 已随包内置）',
   'formula-ocr': '公式 OCR（Pix2Text，体积较大）',
   instrument: '仪器增强解析（h5py / yadg / eclabfiles）',
+  docling: '文献结构化蒸馏（Docling，纯 CPU 可运行）',
 }
 
 /** 平台感知的 venv Python 路径（评审加固 11.2）。 */
@@ -75,6 +90,18 @@ export function resolveCsLabScript(name: string): string | undefined {
   return candidates.find((candidate) => existsSync(candidate))
 }
 
+/** 定位随包 cslab 资源子目录（如 tools-preset 预置算子库）。 */
+export function resolveCsLabResourceDir(subdir: string): string | undefined {
+  const candidates: string[] = []
+  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath
+  if (resourcesPath) candidates.push(join(resourcesPath, 'cslab', subdir))
+  candidates.push(join(__dirname, '..', 'resources', 'cslab', subdir))
+  candidates.push(join(__dirname, '..', '..', 'resources', 'cslab', subdir))
+  candidates.push(join(process.cwd(), 'resources', 'cslab', subdir))
+  candidates.push(join(process.cwd(), 'apps', 'electron', 'resources', 'cslab', subdir))
+  return candidates.find((candidate) => existsSync(candidate))
+}
+
 function resolveRequirementsPath(profile: CsLabToolProfile): string | undefined {
   const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath
   const candidates: string[] = []
@@ -93,7 +120,7 @@ function resolveRequirementsPath(profile: CsLabToolProfile): string | undefined 
 
 async function commandWorks(command: string, args: string[]): Promise<boolean> {
   try {
-    await execFileAsync(command, args, { timeout: 3000, windowsHide: true })
+    await execFileAsync(command, args, { timeout: 3000, windowsHide: true, env: PYTHON_UTF8_ENV })
     return true
   } catch {
     return false
@@ -162,8 +189,11 @@ async function probeModules(
   python: { command: string; argsPrefix: string[] },
   modules: string[],
 ): Promise<ModuleProbeResult> {
+  // Bug 3：把随包内置的 vendor 目录前置到 sys.path，使 antlr4 在无 pip 安装时也能被探测到。
+  const vendorDir = resolveCsLabResourceDir(join('vendor'))
   const snippet = [
-    'import importlib.util, json',
+    'import importlib.util, json, sys',
+    ...(vendorDir ? [`sys.path.insert(0, ${JSON.stringify(vendorDir)})`] : []),
     `mods = ${JSON.stringify(modules)}`,
     'missing = [m for m in mods if importlib.util.find_spec(m) is None]',
     'print(json.dumps({"missing": missing}))',
@@ -172,7 +202,7 @@ async function probeModules(
     const { stdout } = await execFileAsync(
       python.command,
       [...python.argsPrefix, '-c', snippet],
-      { timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024 },
+      { timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024, env: PYTHON_UTF8_ENV },
     )
     const parsed = JSON.parse(stdout.trim()) as { missing?: string[] }
     const missing = new Set(Array.isArray(parsed.missing) ? parsed.missing : [])
@@ -219,6 +249,9 @@ export async function getToolRuntimeStatus(labIdInput: string): Promise<CsLabToo
     const missing = modules.filter((module) => probe.missing.includes(module))
     profiles[profile] = { installed: missing.length === 0, missing }
   }
+
+  // Bug 3：antlr4 由随包 vendor/antlr4 提供（probeModules 已把 vendor 前置到 sys.path），
+  // 因此 vendor 就绪时 formula 自然判为 installed；vendor 缺失则如实报 antlr4 缺失。
 
   const status: CsLabToolRuntimeStatus = {
     pythonPath: python.command,
@@ -294,7 +327,7 @@ export async function ensureToolEnvironment(
       await execFileAsync(
         system.command,
         [...system.argsPrefix, '-m', 'venv', venvDir],
-        { timeout: 180_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+        { timeout: 180_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, env: PYTHON_UTF8_ENV },
       )
     }
 
@@ -304,6 +337,7 @@ export async function ensureToolEnvironment(
           timeout: 180_000,
           windowsHide: true,
           maxBuffer: 4 * 1024 * 1024,
+          env: PYTHON_UTF8_ENV,
         })
       } catch (error) {
         emit('venv', 'uv 创建虚拟环境失败，已回退系统 Python')
@@ -328,7 +362,7 @@ export async function ensureToolEnvironment(
       await execFileAsync(
         uvPath,
         ['pip', 'install', '--python', venvPython, '-r', requirements],
-        { timeout: 10 * 60_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+        { timeout: 10 * 60_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, env: PYTHON_UTF8_ENV },
       )
     } catch (error) {
       emit('install', 'uv 安装依赖失败，已回退标准 pip')
@@ -340,7 +374,7 @@ export async function ensureToolEnvironment(
     await execFileAsync(
       venvPython,
       ['-m', 'pip', 'install', '--disable-pip-version-check', '-r', requirements],
-      { timeout: 10 * 60_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+      { timeout: 10 * 60_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, env: PYTHON_UTF8_ENV },
     )
   }
 
@@ -378,6 +412,7 @@ export async function runCsLabPython(
       maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
       // 红线：内部脚本的临时文件、__pycache__ 等副作用必须落在实验室沙箱内。
       cwd: resolveLabDir(labId),
+      env: PYTHON_UTF8_ENV,
     },
   )
   return stdout

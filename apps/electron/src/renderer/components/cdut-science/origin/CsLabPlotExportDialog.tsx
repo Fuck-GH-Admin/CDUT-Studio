@@ -58,6 +58,10 @@ export function CsLabPlotExportDialog({
         transparentBackground: transparent,
         fileName: `${document.title || document.id}.${format}`,
       })
+      if (!result) {
+        // 用户在保存对话框中主动取消，静默退出
+        return
+      }
       onToast('success', `已导出到 ${result.path}`)
       onClose()
     } catch (error) {

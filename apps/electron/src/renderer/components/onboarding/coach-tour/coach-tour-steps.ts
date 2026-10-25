@@ -44,10 +44,6 @@ export const DEMO_AI_CLASS_NAME = '演示课堂 · 红楼梦精读'
 /** 演示资料 ASCII 文件名 */
 export const DEMO_NOVEL_FILE_NAME = 'hongloumeng-quan-shu.txt'
 
-/** 演示实验室中的石榴石晶胞文件名 */
-export const DEMO_GARNET_FILE_NAME =
-  '1792573114138-6ac8d0-石榴石_Y_Al_O____YAG____Ia-3d_完整立方晶胞.cif'
-
 /** 首次启用 CDUT Science 时由引导自动设置的演示密码 */
 export const DEMO_CSLAB_PASSWORD = '123456'
 
@@ -281,8 +277,8 @@ export const COACH_TOUR_STEPS: CoachTourStep[] = [
   },
   {
     key: 'demo-lab',
-    title: '演示实验室 · Origin × VESTA',
-    body: '正在创建并打开演示实验室：内置 PXRD、拉曼、晶体结构、电荷密度与科研图表，任何机器首次进入都会自动解析入库。',
+    title: '演示实验室 · 生物、化学主题',
+    body: '正在创建并打开旗舰演示实验室：公开 PDB 核糖体与 DNA、钙钛矿/金红石晶体、2.5D 地貌、Origin 级图版、双栏演示论文与双链笔记，任何机器首次进入都会自动解析入库。',
     selectors: ['[data-tour="cslab-workspace"]'],
     placement: 'bottom',
     view: 'cdut-science',
@@ -315,7 +311,7 @@ export const COACH_TOUR_STEPS: CoachTourStep[] = [
   {
     key: 'digitize-open',
     title: '科研图表 · 逆向数字化',
-    body: '这是一张光谱图。点击高亮的「逆向数字化」，把像素曲线还原成可计算的数据。',
+    body: '这是一张高对比度标准校准曲线。点击高亮的「逆向数字化」，把像素曲线还原成可计算的数据。',
     selectors: ['[data-tour="cslab-figure-digitize"]'],
     placement: 'bottom',
     view: 'cdut-science',
@@ -352,8 +348,8 @@ export const COACH_TOUR_STEPS: CoachTourStep[] = [
   },
   {
     key: 'mol-gold',
-    title: '金 FCC 纳米颗粒',
-    body: '自动轮播三种演示结构。第一件是金面心立方纳米颗粒，可在 3D 视图中拖拽旋转、缩放观察原子排布。',
+    title: 'B-DNA 双螺旋（1BNA）',
+    body: '自动轮播三种演示结构。第一件是公开 PDB 结构 1BNA 的 B-DNA 十二聚体，默认自旋展示大沟、小沟与碱基配对。',
     selectors: ['[data-tour="cslab-3d-viewport"]'],
     placement: 'left',
     view: 'cdut-science',
@@ -372,8 +368,8 @@ export const COACH_TOUR_STEPS: CoachTourStep[] = [
   },
   {
     key: 'mol-garnet',
-    title: 'YAG 钇铝石榴石',
-    body: '第三件是石榴石 YAG 完整立方晶胞。演示数据已随应用打包，换机器也能直接复现。',
+    title: '金红石 TiO₂（2×2×3 超胞）',
+    body: '第三件是金红石 TiO₂，默认预置 2×2×3 超胞与 (110) 晶面剖切，演示数据随应用打包。',
     selectors: ['[data-tour="cslab-3d-viewport"]'],
     placement: 'left',
     view: 'cdut-science',
@@ -382,8 +378,8 @@ export const COACH_TOUR_STEPS: CoachTourStep[] = [
   },
   {
     key: 'publication-plot',
-    title: 'Nature 单栏出版图版',
-    body: '最后查看演示实验室预置的 Nature 单栏图版：双 Y 轴叠加实验 Cu Kα 衍射与理论 PXRD，可继续调整期刊模板与导出。',
+    title: 'Science 双 Y 轴出版图版',
+    body: '最后查看旗舰实验室预置的 Science 双 Y 轴图版：左轴合成实验 Cu Kα 衍射，右轴金红石理论 PXRD，可继续调整期刊模板与导出。',
     selectors: ['[data-tour="cslab-origin-plot"]'],
     placement: 'left',
     view: 'cdut-science',

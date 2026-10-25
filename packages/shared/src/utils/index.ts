@@ -7,8 +7,16 @@ export function noop(): void {
   // no-op
 }
 
+// 字节大小格式化（多面板统一显示）
+export { formatBytes } from './format'
+// 轻量防抖器（主进程 / 渲染进程通用）
+export { createDebouncer } from './debounce'
+export type { CsLabDebounced } from './debounce'
+
 export { diffCapabilities } from './capabilities-diff'
 export type { CapabilityChange } from './capabilities-diff'
+export { levenshtein, findFuzzyRange } from './levenshtein'
+export type { FuzzyMatchRange } from './levenshtein'
 export { parseGoalCommand, parseGoalContractInput, parseGoalLimitsInput, getGoalBudgetExhaustedReasons, stripGoalResultBlocks, GOAL_UPDATE_TOOL_NAME, isGoalIterationMessage, isGoalUpdateToolName } from './goal-contract'
 export type { GoalLimitsInput } from './goal-contract'
 export {
@@ -120,7 +128,10 @@ export {
   canvasToDagGraph,
   createEmptyCanvasDocument,
   mergeCanvasScienceMeta,
+  normalizeCanvasDocumentFilePaths,
+  normalizeCanvasNodeFilePath,
   parseCanvasDocument,
+  resolveCanvasFileNodeToLabRelPath,
   serializeCanvasDocument,
 } from './cslab-canvas'
 export type { CanvasMetaMergeResult } from './cslab-canvas'

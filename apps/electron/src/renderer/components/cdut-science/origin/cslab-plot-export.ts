@@ -39,12 +39,12 @@ export async function rasterizePlot(
   return canvas.toDataURL('image/png')
 }
 
-/** 调用主进程导出图表。 */
+/** 调用主进程导出图表。用户取消时返回 null，前端按取消语义静默处理。 */
 export async function exportPlot(
   labId: string,
   document: CsLabPlotDocument,
   options: CsLabPlotExportOptions,
-): Promise<CsLabPlotExportResult> {
+): Promise<CsLabPlotExportResult | null> {
   let rasterDataUrl: string | undefined
   if (options.format === 'png' || options.format === 'tiff') {
     rasterDataUrl = await rasterizePlot(document, options.dpi, options.transparentBackground)
