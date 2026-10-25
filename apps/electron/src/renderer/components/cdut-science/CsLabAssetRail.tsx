@@ -31,6 +31,7 @@ import type {
   CsLabManuscriptSummary,
   CsLabPlotSummary,
 } from '@profer/shared'
+import { formatBytes } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { cslabAssetDragAtom } from '@/atoms/cslab-atoms'
 import { supportsMol3dView } from './cslab-capability'
@@ -116,13 +117,6 @@ const EXTRA_GROUP: AssetGroup = {
   label: '分子与晶体',
   layerTypes: ['mol'],
   icon: Atom,
-}
-
-function formatBytes(bytes?: number): string {
-  if (!bytes) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export function CsLabAssetRail({

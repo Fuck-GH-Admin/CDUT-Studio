@@ -43,6 +43,7 @@ import katex from 'katex'
 import DOMPurify from 'dompurify'
 import type { CsLabCapsule, CsLabManuscript } from '@profer/shared'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 import { CSLAB_CELL_MIME, hasDragType } from './cslab-dnd'
 import { CsLabCanvasEditor } from './canvas-manuscript/CsLabCanvasEditor'
 import {
@@ -532,7 +533,7 @@ export function CsLabManuscriptEditor({
               className="h-7 min-w-0 max-w-[420px] flex-1 rounded border border-transparent bg-transparent px-2 font-serif text-[13px] font-semibold text-zinc-900 transition-colors placeholder:text-zinc-300 hover:border-zinc-200 focus:border-cslab-accent/40 focus:bg-white focus:outline-none dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:hover:border-zinc-700 dark:focus:bg-zinc-900"
             />
             <span className="ml-1 hidden shrink-0 font-mono text-[10px] text-zinc-400 sm:inline">
-              {manuscript.uri.split('/').pop()}
+              {getFileBaseName(manuscript.uri)}
             </span>
             <div className="ml-2 flex items-center gap-1">
               {(['home', 'insert', 'review', 'view'] as const).map((tab) => (

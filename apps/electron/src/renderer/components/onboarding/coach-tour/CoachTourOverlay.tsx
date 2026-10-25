@@ -114,6 +114,7 @@ export function CoachTourOverlay(): React.ReactElement | null {
   const [rect, setRect] = React.useState<AnchorRect | null>(null)
   const [pulseRects, setPulseRects] = React.useState<AnchorRect[]>([])
   const [cardSize, setCardSize] = React.useState<CardSize>(FALLBACK_CARD_SIZE)
+  const [viewport, setViewport] = React.useState({ width: typeof window !== 'undefined' ? window.innerWidth : 1280, height: typeof window !== 'undefined' ? window.innerHeight : 800 })
   const cardRef = React.useRef<HTMLDivElement>(null)
   /** 打开引导时用户所在的主内容区视图，退出时恢复 */
   const restoreViewRef = React.useRef<ActiveView | null>(null)
@@ -159,6 +160,15 @@ export function CoachTourOverlay(): React.ReactElement | null {
     step?.prepare || step?.waitFor || step?.passthrough || isClickToAdvance,
   )
 
+  React.useEffect(() => {
+    if (!open) return
+    const handleResize = (): void => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight })
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [open])
+
   // 打开时：回到第一步 + 记住当前视图（退出恢复）
   React.useEffect(() => {
     if (!open) return
@@ -199,14 +209,23 @@ export function CoachTourOverlay(): React.ReactElement | null {
     return () => claim.release()
   }, [open, close])
 
+  const nextDebounceRef = React.useRef(0)
   const next = React.useCallback(() => {
+    const now = Date.now()
+    if (now - nextDebounceRef.current < 150) return
+    nextDebounceRef.current = now
     if (isLast) {
       finish()
       return
     }
     setStepIndex((current) => current + 1)
   }, [finish, isLast])
+
+  const prevDebounceRef = React.useRef(0)
   const previous = React.useCallback(() => {
+    const now = Date.now()
+    if (now - prevDebounceRef.current < 150) return
+    prevDebounceRef.current = now
     setStepIndex((current) => Math.max(0, current - 1))
   }, [])
 
@@ -353,10 +372,7 @@ export function CoachTourOverlay(): React.ReactElement | null {
   if (!open || !step) return null
 
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  const cardPosition = computeCardPosition(rect, cardSize, step.placement, {
-    width: window.innerWidth,
-    height: window.innerHeight,
-  })
+  const cardPosition = computeCardPosition(rect, cardSize, step.placement, viewport)
   const transition = reduceMotion ? 'none' : MOVE_TRANSITION
   const frame = rect ? clampFrameToViewport(rect) : null
 
@@ -434,7 +450,7 @@ export function CoachTourOverlay(): React.ReactElement | null {
         tabIndex={-1}
         style={{ left: cardPosition.left, top: cardPosition.top, transition }}
         className={cn(
-          'pointer-events-auto absolute w-[320px] rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-2xl outline-none',
+          'pointer-events-auto absolute w-[320px] max-w-[calc(100vw-24px)] rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-2xl outline-none',
           !reduceMotion && 'animate-in fade-in-0 zoom-in-95 duration-200',
         )}
         onClick={(event) => event.stopPropagation()}

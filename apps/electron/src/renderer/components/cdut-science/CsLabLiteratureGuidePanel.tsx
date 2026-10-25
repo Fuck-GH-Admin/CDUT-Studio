@@ -1,3 +1,4 @@
+import katex from 'katex'
 /**
  * CsLabLiteratureGuidePanel — 结构化智能导读侧边栏
  *
@@ -25,6 +26,69 @@ interface CsLabLiteratureGuidePanelProps {
   onJumpToPage: (page: number) => void
   onDiscuss: (sectionTitle?: string, page?: number) => void
   onClose: () => void
+}
+
+
+function EquationCard({
+  equation,
+  onJump,
+}: {
+  equation: CsLabLiteratureGuide['equations'][number]
+  onJump: (page: number) => void
+}) {
+  const [copied, setCopied] = React.useState(false)
+
+  const renderedHtml = React.useMemo(() => {
+    try {
+      return katex.renderToString(equation.latex, {
+        displayMode: true,
+        throwOnError: false,
+        strict: 'ignore',
+      })
+    } catch {
+      return null
+    }
+  }, [equation.latex])
+
+  const copyLatex = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    void navigator.clipboard.writeText(equation.latex)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <li className="rounded-lg border border-cslab-border bg-cslab-surface p-2 text-[10px] leading-relaxed text-cslab-text transition-colors hover:border-cslab-accent/30">
+      <div className="flex items-center justify-between text-cslab-muted text-[9px]">
+        <button
+          type="button"
+          onClick={() => onJump(equation.page)}
+          className="flex items-center gap-1 font-mono hover:text-cslab-accent transition-colors"
+          title="点击跳转对应页"
+        >
+          <Sigma size={10} className="text-cslab-accent" />
+          <span>p.{equation.page}{equation.tag ? ` · (${equation.tag})` : ''}</span>
+        </button>
+        <button
+          type="button"
+          onClick={copyLatex}
+          className="rounded px-1.5 py-0.5 text-[9px] hover:bg-cslab-elevated hover:text-cslab-text transition-colors"
+        >
+          {copied ? '已复制' : '复制 LaTeX'}
+        </button>
+      </div>
+      {renderedHtml ? (
+        <div
+          className="my-1 overflow-x-auto py-1 text-center font-serif text-[12px] text-cslab-text select-text"
+          dangerouslySetInnerHTML={{ __html: renderedHtml }}
+        />
+      ) : (
+        <code className="mt-1 block break-all font-mono text-[10px] text-cslab-muted bg-cslab-bg p-1 rounded">
+          {equation.latex}
+        </code>
+      )}
+    </li>
+  )
 }
 
 function SectionBlock({
@@ -190,18 +254,13 @@ export function CsLabLiteratureGuidePanel({
 
             {guide.equations.length > 0 && (
               <SectionBlock title="关键公式" count={guide.equations.length}>
-                <ul className="space-y-1">
-                  {guide.equations.slice(0, 8).map((equation, index) => (
-                    <li
+                <ul className="space-y-1.5">
+                  {guide.equations.slice(0, 16).map((equation, index) => (
+                    <EquationCard
                       key={`${equation.page}-${index}`}
-                      className="rounded-md border border-cslab-border bg-cslab-surface px-2 py-1.5 text-[10px] leading-relaxed text-cslab-text"
-                    >
-                      <div className="flex items-center gap-1 text-cslab-muted">
-                        <Sigma size={10} />
-                        <span>p.{equation.page}{equation.tag ? ` · ${equation.tag}` : ''}</span>
-                      </div>
-                      <code className="mt-0.5 block break-all font-mono text-[10px]">{equation.latex}</code>
-                    </li>
+                      equation={equation}
+                      onJump={onJumpToPage}
+                    />
                   ))}
                 </ul>
               </SectionBlock>

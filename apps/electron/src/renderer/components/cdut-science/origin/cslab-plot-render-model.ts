@@ -77,10 +77,12 @@ export function buildPlotRenderModel(
     if (visible.length === 0) continue
     const xBounds = dataBounds(layer.xAxis, visible, 'x')
     const left = dataBounds(layer.yAxes[0]!, visible.filter((item) => item.yAxis === 0), 'y')
-    const right = dataBounds(layer.yAxes[1]!, visible.filter((item) => item.yAxis === 1), 'y')
+    const right = layer.yAxes[1]
+      ? dataBounds(layer.yAxes[1], visible.filter((item) => item.yAxis === 1), 'y')
+      : left
     for (const item of visible) {
       const yBounds = item.yAxis === 1 ? right : left
-      const yAxis = item.yAxis === 1 ? layer.yAxes[1]! : layer.yAxes[0]!
+      const yAxis = item.yAxis === 1 && layer.yAxes[1] ? layer.yAxes[1] : layer.yAxes[0]!
       const points: Array<{ x: number; y: number }> = []
       const count = Math.min(item.x.length, item.y.length)
       for (let index = 0; index < count; index += 1) {

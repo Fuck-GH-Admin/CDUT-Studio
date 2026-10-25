@@ -1438,6 +1438,13 @@ export function registerCsLabIpc(): void {
         doi: typeof record.doi === 'string' ? record.doi : undefined,
         openAccessPdfUrl:
           typeof record.openAccessPdfUrl === 'string' ? record.openAccessPdfUrl : undefined,
+        openAccessPdfUrls: Array.isArray(record.openAccessPdfUrls)
+          ? record.openAccessPdfUrls.filter((u): u is string => typeof u === 'string')
+          : undefined,
+        landingPageUrl:
+          typeof record.landingPageUrl === 'string' ? record.landingPageUrl : undefined,
+        arxivId: typeof record.arxivId === 'string' ? record.arxivId : undefined,
+        title: typeof record.title === 'string' ? record.title : undefined,
       })
     },
   )
@@ -2089,7 +2096,7 @@ export function registerCsLabIpc(): void {
 
   ipcMain.handle(
     CSLAB_IPC_CHANNELS.EXPORT_FIGURE,
-    async (event, input: unknown): Promise<CsLabPlotExportResult> => {
+    async (event, input: unknown): Promise<CsLabPlotExportResult | null> => {
       const record = asObject(input, '绘图导出参数')
       const labId = asString(record.labId, '实验室标识')
       const plot = record.plot as CsLabPlotDocument
@@ -2107,7 +2114,8 @@ export function registerCsLabIpc(): void {
         ],
       })
       if (result.canceled || !result.filePath) {
-        throw new Error('已取消导出')
+        // 用户主动取消，返回 null 而非抛错，前端按取消语义静默处理
+        return null
       }
       return exportFigure({ labId, plot, options, targetPath: result.filePath })
     },

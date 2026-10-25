@@ -9,6 +9,7 @@ import * as React from 'react'
 import * as THREE from 'three'
 import { Pause, Play, RotateCcw } from 'lucide-react'
 import type { CsLabGeoRasterPayload } from '@profer/shared'
+import { useIsDarkTheme } from '@/hooks/use-is-dark-theme'
 
 interface CsLabTerrainPaneProps {
   payload: CsLabGeoRasterPayload
@@ -43,6 +44,9 @@ export function CsLabTerrainPane({
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const toastRef = React.useRef(onToast)
   toastRef.current = onToast
+  const isDark = useIsDarkTheme()
+  const isDarkRef = React.useRef(isDark)
+  isDarkRef.current = isDark
   const rendererRef = React.useRef<THREE.WebGLRenderer | null>(null)
   const frameRef = React.useRef<number | null>(null)
   const sceneRef = React.useRef<{
@@ -83,7 +87,7 @@ export function CsLabTerrainPane({
     rendererRef.current = renderer
 
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color('#f3efe6')
+    scene.background = new THREE.Color(isDarkRef.current ? '#171614' : '#f3efe6')
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 200)
     const group = new THREE.Group()
     scene.add(group)
@@ -307,6 +311,15 @@ export function CsLabTerrainPane({
       rendererRef.current = null
     }
   }, [payload])
+
+  // ===== 主题切换：仅更新背景色，不重建 Three.js 场景 =====
+  // 早期方案若将 isDark 放入上方 mount effect 依赖，会触发 geometry/material
+  // dispose 与 WebGL 上下文重建，丢失环绕动画与视角。这里单独走轻量路径。
+  React.useEffect(() => {
+    const state = sceneRef.current
+    if (!state) return
+    state.scene.background = new THREE.Color(isDark ? '#171614' : '#f3efe6')
+  }, [isDark])
 
   React.useEffect(() => {
     if (sceneRef.current) sceneRef.current.playing = playing

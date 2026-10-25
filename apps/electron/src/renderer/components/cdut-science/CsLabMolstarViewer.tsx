@@ -327,7 +327,27 @@ export function CsLabMolstarViewer({
         canvas.remove()
       }
     }
-  }, [onToast, isDark])
+  }, [onToast])
+
+  // ===== 主题切换：仅更新背景色，不重建 WebGL 上下文 =====
+  // 早期实现将 isDark 放在上方 mount effect 依赖中，导致每次主题切换都会
+  // dispose plugin / canvas3d 并强制 WEBGL_lose_context，丢失用户相机、
+  // 测量与等值面。这里单独走轻量 SetSettings 路径。
+  React.useEffect(() => {
+    const plugin = pluginRef.current
+    if (!plugin?.canvas3d) return
+    const renderer = plugin.canvas3d.props.renderer
+    PluginCommands.Canvas3D.SetSettings(plugin, {
+      settings: {
+        renderer: {
+          ...renderer,
+          backgroundColor: Color(isDark ? 0x171614 : 0xfaf9f5),
+        },
+      },
+    }).catch((error: unknown) => {
+      console.warn('[CSLab Mol*] 背景色同步失败:', error)
+    })
+  }, [isDark])
 
   // ===== 结构载入 =====
   React.useEffect(() => {

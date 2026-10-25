@@ -330,6 +330,23 @@ async function fingerprintFiles(
   return sha256(parts.join('|'))
 }
 
+export async function readPythonSourceSafe(absPath: string): Promise<string> {
+  const buf = await fs.readFile(absPath)
+  let slice = buf
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    slice = buf.subarray(3)
+  }
+  const utf8 = slice.toString('utf-8')
+  if (!utf8.includes('\uFFFD')) return utf8
+  try {
+    const gbk = new TextDecoder('gb18030').decode(slice)
+    if (!gbk.includes('\uFFFD')) return gbk
+  } catch {
+    // 忽略解码错误
+  }
+  return utf8
+}
+
 async function scanWithAst(
   python: { command: string; argsPrefix: string[] },
   scannerPath: string,
@@ -338,7 +355,7 @@ async function scanWithAst(
   const { stdout } = await execFileAsync(
     python.command,
     [...python.argsPrefix, scannerPath, '--file', absPath],
-    { timeout: 20_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+    { timeout: 20_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf-8', env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' } },
   )
   const parsed = parseLastJsonLine(stdout) as
     | { ok?: boolean; moduleDoc?: string; functions?: ScannerFunctionPayload[]; error?: string }
@@ -372,7 +389,7 @@ function buildToolFromAst(
   return {
     name: fn.name,
     moduleRelPath,
-    description: fn.docstring?.split(/\r?\n/)[0]?.trim() || moduleDoc || `${moduleRelPath}::${fn.name}`,
+    description: (fn.docstring?.split(/\r?\n/)[0]?.trim() || moduleDoc || `${moduleRelPath}::${fn.name}`).replace(/\uFFFD+/g, ''),
     params,
     returns: fn.returns ?? undefined,
     unsupportedReason: fn.unsupportedReason ?? undefined,
@@ -425,7 +442,7 @@ export async function scanLabTools(labIdInput: string): Promise<CsLabCustomToolS
         const result = await scanWithAst(python, scannerPath, file.absPath)
         if (!result.ok || !result.functions) {
           astFailures += 1
-          const fallback = parseHeuristicModule(file.relPath, await fs.readFile(file.absPath, 'utf-8'))
+          const fallback = parseHeuristicModule(file.relPath, await readPythonSourceSafe(file.absPath))
           tools.push(...fallback)
           continue
         }
@@ -436,7 +453,7 @@ export async function scanLabTools(labIdInput: string): Promise<CsLabCustomToolS
       } catch (error) {
         astFailures += 1
         console.warn(`[CSLab] AST 扫描失败，降级启发式: ${file.relPath}`, error)
-        const fallback = parseHeuristicModule(file.relPath, await fs.readFile(file.absPath, 'utf-8'))
+        const fallback = parseHeuristicModule(file.relPath, await readPythonSourceSafe(file.absPath))
         tools.push(...fallback)
       }
     }
@@ -448,7 +465,7 @@ export async function scanLabTools(labIdInput: string): Promise<CsLabCustomToolS
     engine = 'heuristic'
     for (const file of files) {
       try {
-        tools.push(...parseHeuristicModule(file.relPath, await fs.readFile(file.absPath, 'utf-8')))
+        tools.push(...parseHeuristicModule(file.relPath, await readPythonSourceSafe(file.absPath)))
       } catch (error) {
         console.warn(`[CSLab] 工具文件读取失败: ${file.relPath}`, error)
       }
@@ -582,7 +599,7 @@ export async function runLabTool(
           '--args',
           argsPath,
         ],
-        { timeout: 120_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, cwd: resolveLabDir(labId) },
+        { timeout: 120_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024, cwd: resolveLabDir(labId), encoding: 'utf-8', env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' } },
       )
       const payload = parseLastJsonLine(stdout) as
         | { ok?: boolean; result?: unknown; error?: string }

@@ -176,6 +176,10 @@ export function CsLabLiteraturePreviewPane({
       const result = await window.electronAPI.cslab.academicFetchPreview({
         doi: paper.doi,
         openAccessPdfUrl: paper.openAccessPdfUrl,
+        openAccessPdfUrls: paper.openAccessPdfUrls,
+        landingPageUrl: paper.landingPageUrl,
+        arxivId: paper.arxivId,
+        title: paper.title,
       })
       if (result.ok && result.pdfDataUrl) {
         setPdfDataUrl(result.pdfDataUrl)
@@ -187,7 +191,7 @@ export function CsLabLiteraturePreviewPane({
     } finally {
       setPdfLoading(false)
     }
-  }, [paper.doi, paper.openAccessPdfUrl])
+  }, [paper.doi, paper.openAccessPdfUrl, paper.openAccessPdfUrls, paper.landingPageUrl, paper.arxivId, paper.title])
 
   React.useEffect(() => {
     setTab('overview')
@@ -211,13 +215,13 @@ export function CsLabLiteraturePreviewPane({
           disabled={
             ingestState === 'ingesting' ||
             ingestState === 'ingested' ||
-            !(paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi))
+            !(paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi || paper.arxivId || (paper.openAccessPdfUrls && paper.openAccessPdfUrls.length > 0)))
           }
           className={cn(
             'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] transition-colors',
             ingestState === 'ingested'
               ? 'text-cslab-accent'
-              : paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi)
+              : paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi || paper.arxivId || (paper.openAccessPdfUrls && paper.openAccessPdfUrls.length > 0))
                 ? 'bg-cslab-accent text-cslab-bg hover:bg-cslab-accentHover'
                 : 'cursor-not-allowed border border-cslab-border text-cslab-muted',
           )}

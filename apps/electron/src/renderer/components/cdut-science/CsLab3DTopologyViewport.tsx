@@ -591,7 +591,7 @@ export function CsLab3DTopologyViewport({
     <div
       className={cn(
         'overflow-hidden rounded-xl border border-cslab-border bg-cslab-bg',
-        fullscreen && 'fixed inset-0 z-50 flex flex-col rounded-none border-0',
+        fullscreen && 'fixed inset-x-0 bottom-0 top-[40px] z-50 flex flex-col rounded-none border-0',
       )}
     >
       <div className="flex items-center gap-1.5 border-b border-cslab-border px-2.5 py-1.5">
@@ -678,7 +678,11 @@ export function CsLab3DTopologyViewport({
           {hoverNode ? hoverNode.label : ''}
         </div>
         {selectedNode && (
-          <div className="pointer-events-none absolute bottom-2 left-2 right-2 rounded-md border border-cslab-border bg-cslab-elevated/95 px-2 py-1.5 text-[10px] text-cslab-muted shadow-subtle">
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            className="pointer-events-auto absolute bottom-2 left-2 right-2 z-20 rounded-md border border-cslab-border bg-cslab-elevated/95 px-2 py-1.5 text-[10px] text-cslab-muted shadow-subtle"
+          >
             <p className="flex items-baseline justify-between gap-2">
               <span className="min-w-0 flex-1 truncate text-[11px] text-cslab-text">
                 {selectedNode.label}

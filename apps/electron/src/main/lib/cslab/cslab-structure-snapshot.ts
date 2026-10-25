@@ -25,6 +25,7 @@ import {
   toLabRelativePath,
 } from './cslab-paths'
 import { broadcastCsLabEvent } from './cslab-events'
+import { decodeImageDataUrl } from './cslab-image-data'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 const PNG_HEADER_BYTES = 24
@@ -46,9 +47,10 @@ export function normalizeSnapshotScale(scale: number | undefined): number {
 
 /** 解码 PNG DataURL，并校验魔数与最小长度。 */
 export function decodePngDataUrl(dataUrl: string): Buffer {
-  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim())
-  if (!match) throw new Error('快照数据不是合法的 PNG DataURL')
-  const buffer = Buffer.from(match[1]!, 'base64')
+  // 复用 decodeImageDataUrl：其正则允许空白（\s）并执行 .replace(/\s/g, '')，
+  // 兼容 Chromium canvas.toDataURL 输出的分块 base64（含 \r\n / \n）。
+  const decoded = decodeImageDataUrl(dataUrl)
+  const buffer = decoded.buffer
   if (buffer.length < PNG_HEADER_BYTES) throw new Error('快照 PNG 数据不完整')
   if (!buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
     throw new Error('快照 PNG 文件头校验失败')

@@ -23,6 +23,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def read_file_safe(path: str) -> str:
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk", "cp936"):
+        try:
+            with open(path, "r", encoding=enc) as handle:
+                return handle.read()
+        except (UnicodeDecodeError, LookupError):
+            continue
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        return handle.read()
+
+
 def annotation_to_text(node: ast.AST | None) -> str | None:
     if node is None:
         return None
@@ -78,8 +89,7 @@ def collect_function(node: ast.FunctionDef | ast.AsyncFunctionDef, module_doc: s
 def main() -> None:
     args = parse_args()
     try:
-        with open(args.file, "r", encoding="utf-8") as handle:
-            source = handle.read()
+        source = read_file_safe(args.file)
         tree = ast.parse(source)
         module_doc = ast.get_docstring(tree) or ""
         functions = []

@@ -2132,11 +2132,14 @@ export interface CsLabAcademicPaperMetadata {
   year?: number
   publication?: string
   doi?: string
+  arxivId?: string
   citationsCount: number
   isOpenAccess: boolean
   oaStatus?: CsLabOaStatus
-  /** 合法 OA PDF 直链（预览与入库下载用）。 */
+  /** 合法 OA PDF 首选直链（预览与入库下载用）。 */
   openAccessPdfUrl?: string
+  /** 候选合法 OA PDF 直链列表（首选失效时自动按顺序回退）。 */
+  openAccessPdfUrls?: string[]
   /** DOI / 出版方落地页。 */
   landingPageUrl?: string
   abstract: string
@@ -2194,7 +2197,10 @@ export interface CsLabAcademicSearchResult {
 export interface CsLabAcademicPreviewInput {
   doi?: string
   openAccessPdfUrl?: string
+  openAccessPdfUrls?: string[]
   landingPageUrl?: string
+  arxivId?: string
+  title?: string
 }
 
 export interface CsLabAcademicPreviewResult {

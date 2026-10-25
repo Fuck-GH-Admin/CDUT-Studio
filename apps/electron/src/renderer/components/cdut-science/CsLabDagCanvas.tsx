@@ -28,9 +28,11 @@ import {
   canvasToDagGraph,
   evaluateDag,
   findCanvasCycleIds,
+  resolveCanvasFileNodeToLabRelPath,
   wouldCreateCycle,
 } from '@profer/shared'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 import { edgePath } from './cslab-edge-router'
 
 /**
@@ -132,10 +134,16 @@ function isReferenceNode(node: CsLabCanvasNode): boolean {
 }
 
 /** 解析 file/link 节点的导航目标；无有效引用时返回 null。 */
-function nodeTarget(node: CsLabCanvasNode): CsLabDagNodeTarget | null {
+function nodeTarget(node: CsLabCanvasNode, canvasRelPath?: string): CsLabDagNodeTarget | null {
   const uri = node.cdut_science?.cdut_uri
   if (typeof uri === 'string' && uri.trim()) return { kind: 'asset', uri: uri.trim() }
-  if (node.file?.trim()) return { kind: 'file', relPath: node.file.trim() }
+  if (node.file?.trim()) {
+    const rawFile = node.file.trim()
+    const resolvedRelPath = canvasRelPath
+      ? resolveCanvasFileNodeToLabRelPath(canvasRelPath, rawFile)
+      : rawFile
+    return { kind: 'file', relPath: resolvedRelPath }
+  }
   if (node.url?.trim()) return { kind: 'url', url: node.url.trim() }
   return null
 }
@@ -595,7 +603,7 @@ export function CsLabDagCanvas({
       setEditingId(node.id)
       return
     }
-    const target = nodeTarget(node)
+    const target = nodeTarget(node, relPath)
     if (!target) {
       onToast?.('info', '该节点没有可打开的引用目标')
       return
@@ -903,7 +911,7 @@ export function CsLabDagCanvas({
                     )}
                   >
                     {/* 用 || 而非 ?? ：空字符串 text 不得遮蔽 file/url 引用 */}
-                    {(node.text || node.file || node.url || '').replace(/^#+\s*/, '') ||
+                    {(node.text || (node.file ? getFileBaseName(node.file) : '') || node.url || '').replace(/^#+\s*/, '') ||
                       (isReferenceNode(node) ? '双击打开引用' : '双击编辑内容')}
                   </p>
                 )}

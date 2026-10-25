@@ -53,7 +53,7 @@ export function CsLabLiteratureSearchCard({
   onCopyCitation,
   ingestState,
 }: CsLabLiteratureSearchCardProps): React.ReactElement {
-  const canIngest = paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi)
+  const canIngest = paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi || paper.arxivId || (paper.openAccessPdfUrls && paper.openAccessPdfUrls.length > 0))
 
   return (
     <article

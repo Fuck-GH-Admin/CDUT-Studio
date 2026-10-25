@@ -90,12 +90,51 @@ function cleanText(value: string): string {
   return value.replace(/\s+/g, ' ').trim()
 }
 
-const HEADING_FALLBACK = /^(?:\d+(?:\.\d+)*\s+[A-Z][A-Za-z0-9 ,&/()-]{2,80}|abstract|摘要|keywords?|关键词|references|acknowledg(?:e)?ments?|limitations?|conclusions?|discussion|introduction|methods?|results?)$/i
+const SECTION_KEYWORD_RE =
+  /^(abstract|摘要|keywords?|关键词|introduction|引言|background|related\s+work|preliminaries|methods?|methodology|model|architecture|experiments?|experimental\s+setup|results?|discussion|analysis|evaluation|conclusions?|future\s+work|limitations?|broader\s+impact|acknowledg(?:e)?ments?|references|appendix|supplementary)\b/i
+
+const NUMBERED_HEADING_RE =
+  /^(?:(?:[IVXLCDM]+|\d+(?:\.\d+)*)[\s.:\-]+[A-Z\u4e00-\u9fa5][^\n\r]{2,90}|section\s+\d+[:\s]+[^\n\r]{2,80})$/i
 
 function isHeading(block: DocumentLayoutBlock): boolean {
   if (block.kind === 'section-heading' || block.kind === 'title') return true
-  // 演示 PDF / 纯文本排版可能没有字号层级：用编号标题做保守兜底。
-  return HEADING_FALLBACK.test(cleanText(block.text))
+  const text = cleanText(block.text)
+  if (!text || text.length < 3 || text.length > 120) return false
+  if (/[。！？!?]$/.test(text)) return false
+  if (SECTION_KEYWORD_RE.test(text)) return true
+  if (NUMBERED_HEADING_RE.test(text)) return true
+  return false
+}
+
+function computeHeadingLevel(text: string, defaultLevel = 2): number {
+  const match = /^(\d+(?:\.\d+)*)/.exec(text)
+  if (match) {
+    const dots = ((match[1] || "").match(/\./g) || []).length
+    return Math.min(3, 1 + dots)
+  }
+  if (/^[IVXLCDM]+\b/i.test(text)) return 1
+  if (SECTION_KEYWORD_RE.test(text)) return 1
+  return defaultLevel
+}
+
+function cleanEquationLatex(raw: string): string {
+  let cleaned = raw.trim()
+  if (!cleaned) return ''
+  cleaned = cleaned.replace(/^\$\$|\$\$/g, '').replace(/^\$|\$/g, '').trim()
+  cleaned = cleaned
+    .replace(/×/g, '\\times ')
+    .replace(/÷/g, '\\div ')
+    .replace(/±/g, '\\pm ')
+    .replace(/≤/g, '\\le ')
+    .replace(/≥/g, '\\ge ')
+    .replace(/≠/g, '\\ne ')
+    .replace(/≈/g, '\\approx ')
+    .replace(/∞/g, '\\infty ')
+    .replace(/∈/g, '\\in ')
+    .replace(/∑/g, '\\sum ')
+    .replace(/∏/g, '\\prod ')
+    .replace(/√/g, '\\sqrt ')
+  return cleaned
 }
 
 function looksLikeEquationText(text: string): boolean {
@@ -202,7 +241,7 @@ function buildSections(blocks: DocumentLayoutBlock[]): LiteratureStructureSectio
       if (!title) continue
       current = {
         title: title.slice(0, 200),
-        level: block.headingLevel ?? (block.kind === 'title' ? 1 : 2),
+        level: block.headingLevel ?? computeHeadingLevel(title, block.kind === 'title' ? 1 : 2),
         page: block.pageNumber,
         text: '',
       }
@@ -252,7 +291,7 @@ export function buildStructureFromAst(
   const equations = blocks
     .filter((block) => block.kind === 'equation' || looksLikeEquationText(block.text))
     .map((block) => ({
-      latex: block.equation?.latex ?? block.text,
+      latex: cleanEquationLatex(block.equation?.latex ?? block.text),
       tag: block.equation?.tag,
       page: block.pageNumber,
     }))

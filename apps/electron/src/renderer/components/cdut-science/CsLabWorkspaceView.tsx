@@ -49,8 +49,10 @@ import type {
   CsLabStructureSnapshotRequest,
   CsLabTablePayload,
 } from '@profer/shared'
+import { formatBytes as sharedFormatBytes } from '@profer/shared'
 import { detectIsMac, detectIsWindows } from '@profer/ui'
 import { cn } from '@/lib/utils'
+import { getFileBaseName } from '@/lib/file-utils'
 import { resolveWindowControlsRightInset } from '@/lib/window-controls-layout'
 import { setCsLabViewportSnapshot } from '@/lib/cslab-viewport-snapshot'
 
@@ -74,7 +76,9 @@ import {
   cslabPaneGeoAtom,
   cslabPaneMolAtom,
   cslabPaneTablesAtom,
+  cslabNotesAtom,
   cslabPanesAtom,
+  cslabSelectedNoteRelPathAtom,
   cslabRunSeedAtom,
   cslabSnapshotAtom,
   cslabSplitLayoutAtom,
@@ -215,9 +219,7 @@ function visiblePaneIds(layout: CsLabSplitLayout, activePaneId: CsLabPaneId): Cs
 
 function formatBytes(bytes?: number): string {
   if (!bytes) return '—'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return sharedFormatBytes(bytes)
 }
 
 function formatTime(timestamp: number): string {
@@ -234,6 +236,8 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
 
   const snapshot = useAtomValue(cslabSnapshotAtom)
   const [assets, setAssets] = useAtom(cslabAssetsAtom)
+  const [notes] = useAtom(cslabNotesAtom)
+  const setSelectedNoteRelPath = useSetAtom(cslabSelectedNoteRelPathAtom)
   const [manuscripts, setManuscripts] = useAtom(cslabManuscriptsAtom)
   const [panes, setPanes] = useAtom(cslabPanesAtom)
   const [activePaneId, setActivePaneId] = useAtom(cslabActivePaneIdAtom)
@@ -1412,7 +1416,7 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const importDocx = React.useCallback(
     async (docxPath: string): Promise<void> => {
       try {
-        const fileName = docxPath.split(/[\\/]/).pop()?.replace(/\.docx$/i, '') ?? ''
+        const fileName = getFileBaseName(docxPath).replace(/\.docx$/i, '')
         const result = await window.electronAPI.cslab.importDocx({
           labId,
           docxPath,
@@ -2525,6 +2529,13 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
                   )
                 })()
               }}
+              onOpenCanvas={(relPath) => {
+                const paneId = pickTargetPane()
+                setActivePaneId(paneId)
+                setDrawer((previous) => ({ ...previous, open: false }))
+                void openCanvasInPane(paneId, relPath)
+              }}
+              onToast={showToast}
             />
           )}
 

@@ -1921,7 +1921,7 @@ export interface ElectronAPI {
     startVaultWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
     stopVaultWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
     /** 在 Obsidian 中打开 Vault（主进程解析 vault/notes 绝对路径后 shell.openPath）。 */
-    openObsidianVault: (input: { labId: string }) => Promise<{
+    openObsidianVault: (input: { labId: string; relPath?: string }) => Promise<{
       ok: boolean
       path?: string
       message?: string
@@ -2019,7 +2019,7 @@ export interface ElectronAPI {
       labId: string
       plot: CsLabPlotDocument
       options: CsLabPlotExportOptions
-    }) => Promise<CsLabPlotExportResult>
+    }) => Promise<CsLabPlotExportResult | null>
     snapshotStructure: (input: CsLabStructureSnapshotSubmitInput) => Promise<CsLabStructureSnapshotResult>
 
     /** 科学助理独立窗口 */
@@ -4441,7 +4441,7 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_START_WATCH, labId),
     stopVaultWatch: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_STOP_WATCH, labId),
-    openObsidianVault: (input: { labId: string }) =>
+    openObsidianVault: (input: { labId: string; relPath?: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OPEN_OBSIDIAN_VAULT, input),
     listCanvases: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CANVAS_LIST, labId),

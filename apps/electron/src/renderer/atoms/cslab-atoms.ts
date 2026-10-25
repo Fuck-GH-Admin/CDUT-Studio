@@ -235,6 +235,9 @@ export const cslabRunsAtom = atom<CsLabRun[]>([])
 /** Vault 笔记摘要（含反向链接计数）。 */
 export const cslabNotesAtom = atom<CsLabVaultNoteSummary[]>([])
 
+/** 当前选中要查看/编辑的 Vault 笔记相对路径（如 vault/notes/...）。 */
+export const cslabSelectedNoteRelPathAtom = atom<string | null>(null)
+
 /** Vault 索引状态（笔记/Canvas/链接数）。 */
 export const cslabVaultIndexAtom = atom<CsLabVaultIndexStatus | null>(null)
 

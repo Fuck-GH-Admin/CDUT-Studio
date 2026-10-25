@@ -84,7 +84,7 @@ export function buildCsLabLiteratureTools(
           if (!input.ingest) return jsonToolResult(result)
 
           const target = result.papers.find(
-            (paper) => paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi),
+            (paper) => paper.isOpenAccess && (paper.openAccessPdfUrl || paper.doi || paper.arxivId || (paper.openAccessPdfUrls && paper.openAccessPdfUrls.length > 0)),
           )
           if (!target) {
             return jsonToolResult({
