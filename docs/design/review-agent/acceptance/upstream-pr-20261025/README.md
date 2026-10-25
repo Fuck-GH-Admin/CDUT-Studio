@@ -40,3 +40,5 @@
 - [批量 Electron 结果](batch-electron-results.json)
 
 托管 CI 状态以 PR 的 GitHub checks 为准；本记录描述发布前的本地工作流复现。
+
+增量空白检查范围为本轮 CI 修复 `8e2cd9c04..HEAD`。历史冻结原件中的 Markdown 双空格换行、原始文件末尾和补丁上下文保持原样，以保留来源字节及哈希；它们不属于 PR CI 的失败项。
