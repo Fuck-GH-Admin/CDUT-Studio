@@ -747,11 +747,37 @@ async function resolveOaViaUnpaywall(
 async function downloadPdf(
   url: string,
   maxBytes: number,
-): Promise<{ ok: true; buffer: Buffer } | { ok: false; message: string }> {
+  referer?: string,
+): Promise<{ ok: true; buffer: Buffer } | { ok: false; message: string; status?: number; landingPageUrl?: string }> {
   if (!/^https?:\/\//i.test(url)) return { ok: false, message: 'OA 直链协议不合法' }
   try {
-    const response = await fetchWithTimeout(url, { redirect: 'follow' }, DOWNLOAD_TIMEOUT_MS)
-    if (!response.ok) return { ok: false, message: `PDF 下载失败（HTTP ${response.status}）` }
+    // 出版方（Elsevier / Springer / Wiley）对无 UA 的 Node fetch 一律 403。
+    // 必须补齐合规的科研桌面端请求头；Referer 取论文 Landing Page。
+    const response = await fetchWithTimeout(
+      url,
+      {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': getProferUserAgent(),
+          Accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8',
+          ...(referer ? { Referer: referer } : {}),
+        },
+      },
+      DOWNLOAD_TIMEOUT_MS,
+    )
+    if (response.status === 401 || response.status === 403) {
+      return {
+        ok: false,
+        status: response.status,
+        landingPageUrl: referer,
+        message:
+          `出版方拒绝自动下载（HTTP ${response.status}）。` +
+          '未做掠夺性期刊退化下载。请打开原文 Landing Page 后手动导入 PDF：' +
+          (referer ?? url),
+      }
+    }
+    if (!response.ok) return { ok: false, message: `PDF 下载失败（HTTP ${response.status}）`, status: response.status }
     const buffer = Buffer.from(await response.arrayBuffer())
     if (buffer.length > maxBytes) return { ok: false, message: 'PDF 超出大小上限' }
     // 魔数校验：绝不把 HTML 错误页当作 PDF 入库/预览。
@@ -764,15 +790,52 @@ async function downloadPdf(
   }
 }
 
+/** EuropePMC OA 解析：作为 Unpaywall 之后的第二条合规直链来源。 */
+async function resolveOaViaEuropePMC(
+  doi?: string,
+): Promise<{ openAccessPdfUrl?: string; landingPageUrl?: string; oaStatus?: CsLabOaStatus }> {
+  const normalized = normalizeDoi(doi)
+  if (!normalized) return {}
+  try {
+    const url =
+      'https://www.ebi.ac.uk/europepmc/webservices/rest/search' +
+      `?query=${encodeURIComponent(`DOI:"${normalized}"`)}&format=json&resultType=core`
+    const response = await fetchWithTimeout(url)
+    if (!response.ok) return {}
+    const payload = (await response.json()) as Record<string, any>
+    const result = payload?.resultList?.result?.[0] as Record<string, any> | undefined
+    if (!result) return {}
+    const urls = (result.fullTextUrlList?.fullTextUrl ?? []) as Array<Record<string, any>>
+    const pdfEntry = urls.find(
+      (item) =>
+        String(item.availabilityCode ?? '').toUpperCase() !== 'NONE' &&
+        /pdf/i.test(String(item.documentStyle ?? '')) &&
+        /^https?:\/\//i.test(String(item.url ?? '')),
+    )
+    return {
+      openAccessPdfUrl: pdfEntry?.url as string | undefined,
+      landingPageUrl: (urls.find((item) => /^https?:\/\//i.test(String(item.url ?? '')))?.url as string | undefined),
+      oaStatus: (result.isOpenAccess === '1' || result.isOpenAccess === 1 ? 'gold' : undefined) as CsLabOaStatus | undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+/** 多路 OA 直链回退链：既有直链 → Unpaywall → EuropePMC。 */
 async function resolvePdfUrl(input: {
   doi?: string
   openAccessPdfUrl?: string
-}): Promise<string | undefined> {
+}): Promise<{ pdfUrl?: string; landingPageUrl?: string }> {
   if (input.openAccessPdfUrl && /^https?:\/\//i.test(input.openAccessPdfUrl)) {
-    return input.openAccessPdfUrl
+    return { pdfUrl: input.openAccessPdfUrl }
   }
-  const resolved = await resolveOaViaUnpaywall(input.doi)
-  return resolved.openAccessPdfUrl
+  const unpaywall = await resolveOaViaUnpaywall(input.doi)
+  if (unpaywall.openAccessPdfUrl) {
+    return { pdfUrl: unpaywall.openAccessPdfUrl, landingPageUrl: unpaywall.landingPageUrl }
+  }
+  const europePmc = await resolveOaViaEuropePMC(input.doi)
+  return { pdfUrl: europePmc.openAccessPdfUrl, landingPageUrl: europePmc.landingPageUrl }
 }
 
 // ===== 入库（一键摄入实验室资产库） =====
@@ -805,12 +868,12 @@ export async function ingestAcademicPaper(
   const paper = input.paper
   if (!paper?.title?.trim()) return { ok: false, message: '缺少论文元数据' }
 
-  const pdfUrl = await resolvePdfUrl(paper)
+  const { pdfUrl, landingPageUrl } = await resolvePdfUrl(paper)
   if (!pdfUrl) {
     return { ok: false, message: '未找到合法开放获取 PDF 直链，无法自动入库' }
   }
 
-  const downloaded = await downloadPdf(pdfUrl, MAX_INGEST_BYTES)
+  const downloaded = await downloadPdf(pdfUrl, MAX_INGEST_BYTES, landingPageUrl)
   if (!downloaded.ok) return { ok: false, message: downloaded.message }
   const buffer = downloaded.buffer
 
@@ -993,14 +1056,14 @@ export async function searchAcademicPapers(
 export async function fetchPaperPreview(
   input: CsLabAcademicPreviewInput,
 ): Promise<CsLabAcademicPreviewResult> {
-  const pdfUrl = await resolvePdfUrl(input)
+  const { pdfUrl, landingPageUrl } = await resolvePdfUrl(input)
   if (!pdfUrl) {
     return {
       ok: false,
       message: '该文献暂无合法开放获取 PDF，请点击 DOI 跳转出版方页面查看',
     }
   }
-  const downloaded = await downloadPdf(pdfUrl, MAX_PREVIEW_BYTES)
+  const downloaded = await downloadPdf(pdfUrl, MAX_PREVIEW_BYTES, landingPageUrl)
   if (!downloaded.ok) return { ok: false, message: downloaded.message }
   return {
     ok: true,

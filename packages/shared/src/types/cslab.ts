@@ -2012,6 +2012,31 @@ export interface CsLabPromptGeoAssetSummary {
   cellsize?: number
 }
 
+/**
+ * 用户视口状态快照（Bug：消除「这是什么」视野盲区）。
+ *
+ * 前端随每条用户消息采集，主进程注入动态上下文，
+ * 让模型明确知道用户此刻正看着哪篇文献、哪个图表或哪条推演链。
+ */
+export interface CsLabViewportSnapshot {
+  /** 当前聚焦的科研视图类型。 */
+  activeTab?: 'pdf' | 'plot' | 'manuscript' | 'notes' | 'brain' | 'dag' | 'dataset' | 'agent'
+  /** 当前选中的资产/文献实体 URI。 */
+  selectedEntityUri?: string
+  /** 当前选中实体的可读标题。 */
+  selectedEntityLabel?: string
+  /** PDF 阅读器当前页码（1 起）。 */
+  pdfCurrentPage?: number
+  /** PDF 当前划词选区文本（截断后）。 */
+  pdfSelectionText?: string
+  /** 当前活动图表（数字化/绘图）ID。 */
+  plotActiveId?: string
+  /** 推演画布当前选中节点 ID。 */
+  dagSelectedNodeId?: string
+  /** 快照采集时间（ISO 8601）。 */
+  capturedAt: string
+}
+
 export interface CsLabPromptLabInfo {
   labId: string
   labName: string

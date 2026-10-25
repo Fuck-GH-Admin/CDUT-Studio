@@ -42,6 +42,7 @@ import type {
 } from './canvas-manuscript/cslab-canvas-types'
 import { CsLabPdfViewer } from './CsLabPdfViewer'
 import { CsLabDagCanvas } from './CsLabDagCanvas'
+import type { CsLabDagNodeTarget } from './CsLabDagCanvas'
 import { CsLabOriginPlotPane } from './CsLabOriginPlotPane'
 import { CsLabVestaCrystalPane } from './crystal/CsLabVestaCrystalPane'
 import { CsLabTerrainPane } from './CsLabTerrainPane'
@@ -91,6 +92,8 @@ interface CsLabStagePaneProps {
   ) => void
   /** 划词右键「检索关联学术文献」反向打开学术检索弹窗。 */
   onSearchLiterature?: (query: string) => void
+  /** 打开推演画布 file/link 节点引用的资产、笔记或外链（Bug 6）。 */
+  onOpenNodeTarget?: (target: CsLabDagNodeTarget) => void
 }
 
 export function CsLabStagePane({
@@ -127,6 +130,7 @@ export function CsLabStagePane({
   onCanvasSaved,
   onToast,
   onSearchLiterature,
+  onOpenNodeTarget,
 }: CsLabStagePaneProps): React.ReactElement {
   const [assetOver, setAssetOver] = React.useState(false)
 
@@ -276,6 +280,7 @@ export function CsLabStagePane({
             initialMtimeMs={pane.canvasMtimeMs ?? 0}
             onSaved={onCanvasSaved}
             onToast={onToast}
+            onOpenNodeTarget={onOpenNodeTarget}
           />
         ) : pane.viewType === 'mol' && mol ? (
           <CsLabVestaCrystalPane paneId={paneId} labId={labId} asset={mol} onToast={onToast} />

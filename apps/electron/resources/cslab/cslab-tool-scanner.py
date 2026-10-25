@@ -11,6 +11,11 @@ import ast
 import json
 import sys
 
+# 进程间编码治理：Windows 中文系统下默认走 CP936，与 Node 端 UTF-8 解码不一致会产生乱码。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()

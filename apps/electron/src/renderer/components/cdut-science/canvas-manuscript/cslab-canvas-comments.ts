@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Canvas 原生批注注入与本地确定性体检
  *
  * 插件没有“带内容新增批注”的命令，因此统一走：
@@ -28,14 +28,24 @@ function formatCommentContent(item: CsLabReviewCommentInput): string {
   return `${head}${action}${reason}`
 }
 
+export interface ApplyReviewCommentsResult {
+  /** 精确定位命中的批注数。 */
+  applied: number
+  /** 模糊定位命中的批注数（已生成正文批注，但定位非逐字精确）。 */
+  fuzzy: number
+  /** 两级定位均未命中的建议数（收入审阅报告侧栏，不当作失败丢弃）。 */
+  skipped: number
+}
+
 export function applyReviewComments(
   editor: Editor,
   items: CsLabReviewCommentInput[],
-): { applied: number; skipped: number } {
-  if (items.length === 0) return { applied: 0, skipped: 0 }
+): ApplyReviewCommentsResult {
+  if (items.length === 0) return { applied: 0, fuzzy: 0, skipped: 0 }
 
   const comments: IComment[] = [...editor.command.executeGetCommentList()]
   let applied = 0
+  let fuzzy = 0
   let skipped = 0
 
   for (const item of items) {
@@ -45,6 +55,7 @@ export function applyReviewComments(
       skipped += 1
       continue
     }
+    if (range.fuzzy) fuzzy += 1
     editor.command.executeSetRange(range.start, range.end)
     const groupId = editor.command.executeSetGroup()
     if (!groupId) {
@@ -62,7 +73,7 @@ export function applyReviewComments(
     applied += 1
   }
 
-  return { applied, skipped }
+  return { applied, fuzzy, skipped }
 }
 
 export function clearAllComments(editor: Editor): number {

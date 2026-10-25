@@ -33,6 +33,15 @@ import {
 import { cn } from '@/lib/utils'
 import { edgePath } from './cslab-edge-router'
 
+/**
+ * 节点引用目标。`file` / `link` 节点本质是引用而非正文，
+ * 双击时必须走导航而非进入文本编辑态，否则空文本会覆盖掉引用（Bug 6）。
+ */
+export type CsLabDagNodeTarget =
+  | { kind: 'asset'; uri: string }
+  | { kind: 'file'; relPath: string }
+  | { kind: 'url'; url: string }
+
 interface CsLabDagCanvasProps {
   labId: string
   relPath: string
@@ -40,6 +49,8 @@ interface CsLabDagCanvasProps {
   initialMtimeMs: number
   onSaved?: (document: CsLabCanvasDocument, result: CsLabCanvasWriteResult) => void
   onToast?: (kind: 'info' | 'success' | 'error', text: string) => void
+  /** 打开 file/link 节点引用的资产、笔记或外链；缺省时仅阻止编辑态破坏引用。 */
+  onOpenNodeTarget?: (target: CsLabDagNodeTarget) => void
 }
 
 interface ViewTransform {
@@ -115,6 +126,20 @@ function nodeOperator(node: CsLabCanvasNode): 'AND' | 'OR' {
   return node.cdut_science?.logical_operator === 'OR' ? 'OR' : 'AND'
 }
 
+/** 引用类节点（file/link/group）不承载可编辑正文，双击一律走导航。 */
+function isReferenceNode(node: CsLabCanvasNode): boolean {
+  return node.type === 'file' || node.type === 'link' || node.type === 'group'
+}
+
+/** 解析 file/link 节点的导航目标；无有效引用时返回 null。 */
+function nodeTarget(node: CsLabCanvasNode): CsLabDagNodeTarget | null {
+  const uri = node.cdut_science?.cdut_uri
+  if (typeof uri === 'string' && uri.trim()) return { kind: 'asset', uri: uri.trim() }
+  if (node.file?.trim()) return { kind: 'file', relPath: node.file.trim() }
+  if (node.url?.trim()) return { kind: 'url', url: node.url.trim() }
+  return null
+}
+
 function createId(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `${prefix}-${crypto.randomUUID().slice(0, 8)}`
@@ -129,6 +154,7 @@ export function CsLabDagCanvas({
   initialMtimeMs,
   onSaved,
   onToast,
+  onOpenNodeTarget,
 }: CsLabDagCanvasProps): React.ReactElement {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const docRef = React.useRef<CsLabCanvasDocument>(initialDocument)
@@ -560,6 +586,23 @@ export function CsLabDagCanvas({
     }
   }
 
+  /**
+   * Bug 6 修复：file/link/group 节点是引用不是正文，双击一律导航，
+   * 严禁进入文本编辑态——空 textarea 的 blur 会把引用写成空字符串。
+   */
+  const handleNodeDoubleClick = (node: CsLabCanvasNode): void => {
+    if (!isReferenceNode(node)) {
+      setEditingId(node.id)
+      return
+    }
+    const target = nodeTarget(node)
+    if (!target) {
+      onToast?.('info', '该节点没有可打开的引用目标')
+      return
+    }
+    onOpenNodeTarget?.(target)
+  }
+
   const handleNodePointerDown = (
     event: React.PointerEvent<HTMLDivElement>,
     node: CsLabCanvasNode,
@@ -727,7 +770,7 @@ export function CsLabDagCanvas({
               onPointerDown={(event) => handleNodePointerDown(event, node)}
               onDoubleClick={(event) => {
                 event.stopPropagation()
-                setEditingId(node.id)
+                handleNodeDoubleClick(node)
               }}
               className={cn(
                 'absolute rounded-xl border bg-cslab-elevated text-cslab-text shadow-subtle transition-[opacity,border-color] duration-200',
@@ -835,7 +878,7 @@ export function CsLabDagCanvas({
               </div>
 
               <div className="flex h-[calc(100%-30px)] flex-col px-2.5 py-2">
-                {editingId === node.id ? (
+                {editingId === node.id && !isReferenceNode(node) ? (
                   <textarea
                     autoFocus
                     defaultValue={node.text ?? ''}
@@ -853,8 +896,15 @@ export function CsLabDagCanvas({
                     className="h-full w-full resize-none select-text rounded-md border border-cslab-border bg-cslab-bg p-1.5 text-[12px] leading-relaxed text-cslab-text outline-none focus:border-cslab-accent/50"
                   />
                 ) : (
-                  <p className="line-clamp-4 whitespace-pre-wrap text-[12px] leading-relaxed text-cslab-text">
-                    {(node.text ?? node.file ?? node.url ?? '').replace(/^#+\s*/, '') || '双击编辑内容'}
+                  <p
+                    className={cn(
+                      'line-clamp-4 whitespace-pre-wrap text-[12px] leading-relaxed text-cslab-text',
+                      isReferenceNode(node) && 'select-text',
+                    )}
+                  >
+                    {/* 用 || 而非 ?? ：空字符串 text 不得遮蔽 file/url 引用 */}
+                    {(node.text || node.file || node.url || '').replace(/^#+\s*/, '') ||
+                      (isReferenceNode(node) ? '双击打开引用' : '双击编辑内容')}
                   </p>
                 )}
 

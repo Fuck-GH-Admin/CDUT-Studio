@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { dirname } from 'node:path'
 import type {
   ProferPermissionMode,
   PermissionRequest,
@@ -27,6 +28,8 @@ import {
   canonicalAgentToolName,
   isCsLabExecutionTool,
 } from '@profer/shared'
+import type { SandboxContext } from './cslab/cslab-sandbox-guard'
+import { evaluateToolSandbox } from './cslab/cslab-sandbox-guard'
 
 /** SDK PermissionBehavior */
 type PermissionBehavior = 'allow' | 'deny'
@@ -116,6 +119,13 @@ export class AgentPermissionService {
   private sessionWhitelists = new Map<string, SessionWhitelist>()
 
   /**
+   * 沙盒越界确认去重表（R1）。
+   * key = `${access}:${父目录}`；同轮次对同一父目录的多次越界访问共享一次确认，
+   * 杜绝并发写入导致弹窗叠压。
+   */
+  private pendingSandboxConfirms = new Map<string, Promise<PermissionResult>>()
+
+  /**
    * 创建 canUseTool 回调（auto 模式及 escalation 场景使用）
    *
    * SDK 的 auto 模式内置 classifier 自动处理大多数权限决策，仅在 classifier 无法判断时
@@ -126,6 +136,8 @@ export class AgentPermissionService {
     sendToRenderer: (request: PermissionRequest) => void,
     askUserHandler?: (sessionId: string, input: Record<string, unknown>, signal: AbortSignal, sendToRenderer: (request: AskUserRequest) => void) => Promise<PermissionResult>,
     sendAskUserToRenderer?: (request: AskUserRequest) => void,
+    /** 工作区沙盒边界；提供后启用「读宽松 / 写严控」越界拦截（Bug 19）。 */
+    sandbox?: SandboxContext,
   ): (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions) => Promise<PermissionResult> {
     return async (toolName, input, options) => {
       // AskUserQuestion 拦截：委托给交互式问答服务
@@ -134,6 +146,60 @@ export class AgentPermissionService {
       }
 
       const allow = (): PermissionResult => ({ behavior: 'allow' as const, updatedInput: input })
+
+      // ── 工作区沙盒守卫（优先于白名单与只读自动放行，防止隐式提权） ──
+      // 命中「deny」直接拒绝；命中「confirm」走用户授权三档（本次放行 / 始终允许 / 拒绝）。
+      if (sandbox) {
+        const verdict = evaluateToolSandbox({ toolName, toolInput: input, ctx: sandbox })
+        if (verdict.action === 'deny') {
+          return { behavior: 'deny' as const, message: verdict.reason, interrupt: true }
+        }
+        if (verdict.action === 'confirm') {
+          // 子代理没有交互式审批通道：越界一律硬阻断，与既有子代理策略一致。
+          if (options.agentID) {
+            return {
+              behavior: 'deny' as const,
+              message: `子代理禁止访问工作区外路径：${verdict.target}`,
+              interrupt: true,
+            }
+          }
+          // R1 并发去重：同一父目录的越界访问合并为一次确认，避免弹窗叠压。
+          const dedupeKey = `${verdict.access}:${dirname(verdict.target).toLowerCase()}`
+          const inflight = this.pendingSandboxConfirms.get(dedupeKey)
+          if (inflight) return inflight
+
+          const request: PermissionRequest = {
+            requestId: randomUUID(),
+            sessionId,
+            toolName,
+            toolInput: input,
+            description: `工作区外访问授权确认：${verdict.access === 'write' ? '写入' : '读取'} ${verdict.target}`,
+            command: typeof input.command === 'string' ? input.command : undefined,
+            dangerLevel: verdict.access === 'write' ? 'dangerous' : 'normal',
+            sdkTitle: '工作区外访问授权确认',
+            sdkDescription: verdict.reason,
+          }
+          const pending = new Promise<PermissionResult>((resolve) => {
+            this.pendingPermissions.set(request.requestId, {
+              resolve: (result) => {
+                this.pendingSandboxConfirms.delete(dedupeKey)
+                resolve(result)
+              },
+              request,
+            })
+            options.signal.addEventListener('abort', () => {
+              if (this.pendingPermissions.has(request.requestId)) {
+                this.pendingPermissions.delete(request.requestId)
+                this.pendingSandboxConfirms.delete(dedupeKey)
+                resolve({ behavior: 'deny' as const, message: '操作已中止' })
+              }
+            }, { once: true })
+          })
+          this.pendingSandboxConfirms.set(dedupeKey, pending)
+          sendToRenderer(request)
+          return pending
+        }
+      }
 
       // Worker（子代理）的工具调用基本安全审查
       // 避免 UI 等待导致超时死锁，但仍需拦截明确的危险操作

@@ -10,6 +10,7 @@ import { useSetAtom } from 'jotai'
 import {
   Atom,
   BookOpen,
+  ChevronDown,
   Database,
   FileText,
   FlaskConical,
@@ -68,18 +69,50 @@ interface AssetGroup {
   icon: LucideIcon
 }
 
+/** 分组折叠状态的稳定 sectionId（持久化到 localStorage，改名会使用户折叠状态失配）。 */
+const SECTION_ID = {
+  lit: 'lit',
+  note: 'note',
+  run: 'run',
+  data: 'data',
+  geo: 'geo',
+  figure: 'figure',
+  mol: 'mol',
+  plot: 'plot',
+  manuscript: 'manuscript',
+} as const
+
+/** 分组折叠状态：`{ [sectionId]: boolean }`，true = 已折叠。与 rail 级 `collapsed` prop 无关。 */
+const SECTION_COLLAPSED_STORAGE_KEY = 'cslab.assetRail.collapsed'
+
+function loadSectionCollapsed(): Record<string, boolean> {
+  try {
+    const raw = window.localStorage.getItem(SECTION_COLLAPSED_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    const result: Record<string, boolean> = {}
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === 'boolean') result[key] = value
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
 const GROUPS: AssetGroup[] = [
-  { id: 'lit', label: '文献与事实', layerTypes: ['lit', 'fact'], icon: BookOpen },
-  { id: 'note', label: '笔记与节点', layerTypes: ['note', 'node'], icon: PenLine },
-  { id: 'run', label: '实验规程', layerTypes: ['proto', 'run'], icon: FlaskConical },
-  { id: 'data', label: '数据铁笼', layerTypes: ['raw', 'table'], icon: Database },
-  { id: 'geo', label: '地理灾害', layerTypes: ['geo'], icon: Mountain },
-  { id: 'figure', label: '科研图表', layerTypes: ['fig'], icon: ImageIcon },
+  { id: SECTION_ID.lit, label: '文献与事实', layerTypes: ['lit', 'fact'], icon: BookOpen },
+  { id: SECTION_ID.note, label: '笔记与节点', layerTypes: ['note', 'node'], icon: PenLine },
+  { id: SECTION_ID.run, label: '实验规程', layerTypes: ['proto', 'run'], icon: FlaskConical },
+  { id: SECTION_ID.data, label: '数据铁笼', layerTypes: ['raw', 'table'], icon: Database },
+  { id: SECTION_ID.geo, label: '地理灾害', layerTypes: ['geo'], icon: Mountain },
+  { id: SECTION_ID.figure, label: '科研图表', layerTypes: ['fig'], icon: ImageIcon },
 ]
 
 /** 分子/晶体结构单独成组。 */
 const EXTRA_GROUP: AssetGroup = {
-  id: 'mol',
+  id: SECTION_ID.mol,
   label: '分子与晶体',
   layerTypes: ['mol'],
   icon: Atom,
@@ -109,7 +142,21 @@ export function CsLabAssetRail({
 }: CsLabAssetRailProps): React.ReactElement {
   const [query, setQuery] = React.useState('')
   const [dropTargetUri, setDropTargetUri] = React.useState<string | null>(null)
+  const [sectionCollapsed, setSectionCollapsed] = React.useState<Record<string, boolean>>(
+    loadSectionCollapsed,
+  )
   const setAssetDrag = useSetAtom(cslabAssetDragAtom)
+
+  /** 分组级手风琴折叠（持久化到 localStorage）；与 rail 级 `collapsed` prop 互不影响。 */
+  const toggleSection = (sectionId: string): void => {
+    const next = { ...sectionCollapsed, [sectionId]: !sectionCollapsed[sectionId] }
+    setSectionCollapsed(next)
+    try {
+      window.localStorage.setItem(SECTION_COLLAPSED_STORAGE_KEY, JSON.stringify(next))
+    } catch {
+      // localStorage 不可用时仅保留会话内折叠状态
+    }
+  }
 
   const startAssetDrag = (
     event: React.DragEvent<HTMLElement>,
@@ -157,6 +204,9 @@ export function CsLabAssetRail({
     return manuscripts.filter((item) => item.title.toLowerCase().includes(keyword))
   }, [manuscripts, query])
 
+  const isPlotCollapsed = sectionCollapsed[SECTION_ID.plot] === true
+  const isManuscriptCollapsed = sectionCollapsed[SECTION_ID.manuscript] === true
+
   return (
     <aside
       aria-hidden={collapsed}
@@ -178,7 +228,7 @@ export function CsLabAssetRail({
               onChange={(event) => setQuery(event.target.value)}
               placeholder="搜索资产…"
               aria-label="搜索资产"
-              className="w-full bg-transparent text-xs text-cslab-text placeholder:text-cslab-muted/60 focus:outline-none"
+              className="w-full bg-transparent text-xs text-cslab-text placeholder:text-cslab-muted focus:outline-none"
             />
           </div>
           <button
@@ -207,80 +257,98 @@ export function CsLabAssetRail({
           const Icon = group.icon
           // 万篇笔记场景下避免一次性渲染全部条目；搜索框仍可在全量资产中定位。
           const visibleItems = items.slice(0, 80)
+          const isSectionCollapsed = sectionCollapsed[group.id] === true
           return (
             <section key={group.id} data-tour={`cslab-group-${group.id}`} className="mt-3">
               <div className="flex items-center gap-1.5 px-2 pb-1">
-                <Icon size={11} className="text-cslab-muted" />
-                <span className="text-[10px] uppercase tracking-[0.16em] text-cslab-muted">
-                  {group.label}
-                </span>
-                <span className="ml-auto text-[10px] tabular-nums text-cslab-muted/70">
-                  {items.length}
-                </span>
+                <button
+                  type="button"
+                  onClick={() => toggleSection(group.id)}
+                  aria-expanded={!isSectionCollapsed}
+                  title={isSectionCollapsed ? '展开分组' : '收起分组'}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded p-0.5 text-left text-cslab-muted transition-colors hover:text-cslab-text"
+                >
+                  <Icon size={11} className="shrink-0" />
+                  <span className="text-[12px] uppercase tracking-[0.08em]">
+                    {group.label}
+                  </span>
+                  <span className="ml-auto text-[12px] tabular-nums">
+                    {items.length}
+                  </span>
+                  <ChevronDown
+                    size={11}
+                    className={cn(
+                      'shrink-0 transition-transform',
+                      isSectionCollapsed && '-rotate-90',
+                    )}
+                  />
+                </button>
               </div>
-              <ul className="space-y-0.5">
-                {visibleItems.map((asset) => {
-                  const active = activeAssetUri === asset.uri
-                  return (
-                    <li key={asset.uri}>
-                      <button
-                        type="button"
-                        onClick={() => onSelectAsset(asset)}
-                        draggable={
-                          asset.layerType === 'table' ||
-                          asset.layerType === 'doc' ||
-                          asset.layerType === 'lit'
-                        }
-                        onDragStart={(event) => {
-                          if (
-                            asset.layerType !== 'table' &&
-                            asset.layerType !== 'doc' &&
-                            asset.layerType !== 'lit'
-                          ) {
-                            event.preventDefault()
-                            return
+              {!isSectionCollapsed && (
+                <ul className="space-y-0.5">
+                  {visibleItems.map((asset) => {
+                    const active = activeAssetUri === asset.uri
+                    return (
+                      <li key={asset.uri}>
+                        <button
+                          type="button"
+                          onClick={() => onSelectAsset(asset)}
+                          draggable={
+                            asset.layerType === 'table' ||
+                            asset.layerType === 'doc' ||
+                            asset.layerType === 'lit'
                           }
-                          startAssetDrag(event, {
-                            kind: 'asset',
-                            uri: asset.uri,
-                            title: asset.title,
-                            layerType: asset.layerType,
-                          })
-                        }}
-                        onDragEnd={endAssetDrag}
-                        className={cn(
-                          'group flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
-                          active
-                            ? 'bg-cslab-surface text-cslab-text'
-                            : 'text-cslab-muted hover:bg-cslab-surface/70 hover:text-cslab-text',
-                        )}
-                      >
-                        <span className="mt-0.5 shrink-0">
-                          {asset.locked ? (
-                            <Lock size={11} className="text-cslab-muted/70" />
-                          ) : (
-                            <FileText size={11} className="text-cslab-muted/70" />
+                          onDragStart={(event) => {
+                            if (
+                              asset.layerType !== 'table' &&
+                              asset.layerType !== 'doc' &&
+                              asset.layerType !== 'lit'
+                            ) {
+                              event.preventDefault()
+                              return
+                            }
+                            startAssetDrag(event, {
+                              kind: 'asset',
+                              uri: asset.uri,
+                              title: asset.title,
+                              layerType: asset.layerType,
+                            })
+                          }}
+                          onDragEnd={endAssetDrag}
+                          className={cn(
+                            'group flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
+                            active
+                              ? 'relative bg-cslab-accent/8 text-cslab-text before:absolute before:inset-y-1 before:left-0 before:w-[2px] before:rounded-full before:bg-cslab-accent before:content-[""]'
+                              : 'text-cslab-muted hover:bg-cslab-surface/70 hover:text-cslab-text',
                           )}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[12px] leading-snug">
-                            {asset.title}
-                          </span>
-                          <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-cslab-muted/80">
-                            {asset.format && <span className="uppercase">{asset.format}</span>}
-                            {asset.bytes ? <span>{formatBytes(asset.bytes)}</span> : null}
-                            {asset.unsupported && (
-                              <span className="text-amber-600">未解析</span>
+                        >
+                          <span className="mt-0.5 shrink-0">
+                            {asset.locked ? (
+                              <Lock size={11} className="text-cslab-muted" />
+                            ) : (
+                              <FileText size={11} className="text-cslab-muted" />
                             )}
                           </span>
-                        </span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-              {items.length > visibleItems.length && (
-                <p className="px-2 pt-1 text-[10px] leading-relaxed text-cslab-muted/70">
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[12px] leading-snug">
+                              {asset.title}
+                            </span>
+                            <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-cslab-muted">
+                              {asset.format && <span className="uppercase">{asset.format}</span>}
+                              {asset.bytes ? <span>{formatBytes(asset.bytes)}</span> : null}
+                              {asset.unsupported && (
+                                <span className="text-amber-600">未解析</span>
+                              )}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+              {!isSectionCollapsed && items.length > visibleItems.length && (
+                <p className="px-2 pt-1 text-[12px] leading-relaxed text-cslab-muted">
                   另有 {items.length - visibleItems.length} 项，请在「笔记」抽屉中搜索
                 </p>
               )}
@@ -291,114 +359,141 @@ export function CsLabAssetRail({
         {plotList && plotList.length > 0 ? (
           <section data-tour="cslab-plot-group" className="mt-3">
             <div className="flex items-center gap-1.5 px-2 pb-1">
-              <ImageIcon size={11} className="text-cslab-muted" />
-              <span className="text-[10px] uppercase tracking-[0.16em] text-cslab-muted">
-                出版图
-              </span>
-              <span className="ml-auto text-[10px] tabular-nums text-cslab-muted/70">
-                {plotList.length}
-              </span>
+              <button
+                type="button"
+                onClick={() => toggleSection(SECTION_ID.plot)}
+                aria-expanded={!isPlotCollapsed}
+                title={isPlotCollapsed ? '展开分组' : '收起分组'}
+                className="flex min-w-0 flex-1 items-center gap-1.5 rounded p-0.5 text-left text-cslab-muted transition-colors hover:text-cslab-text"
+              >
+                <ImageIcon size={11} className="shrink-0" />
+                <span className="text-[12px] uppercase tracking-[0.08em]">
+                  出版图
+                </span>
+                <span className="ml-auto text-[12px] tabular-nums">
+                  {plotList.length}
+                </span>
+                <ChevronDown
+                  size={11}
+                  className={cn('shrink-0 transition-transform', isPlotCollapsed && '-rotate-90')}
+                />
+              </button>
             </div>
-            <ul className="space-y-0.5">
-              {plotList.slice(0, 40).map((plot) => (
-                <li key={plot.id}>
-                  <button
-                    type="button"
-                    data-plot-id={plot.id}
-                    onClick={() => onSelectPlot?.(plot.id)}
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-cslab-muted transition-colors hover:bg-cslab-surface/70 hover:text-cslab-text"
-                  >
-                    <ImageIcon size={11} className="shrink-0 text-cslab-muted/70" />
-                    <span className="min-w-0 flex-1 truncate text-[12px]">{plot.title}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {!isPlotCollapsed && (
+              <ul className="space-y-0.5">
+                {plotList.slice(0, 40).map((plot) => (
+                  <li key={plot.id}>
+                    <button
+                      type="button"
+                      data-plot-id={plot.id}
+                      onClick={() => onSelectPlot?.(plot.id)}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-cslab-muted transition-colors hover:bg-cslab-surface/70 hover:text-cslab-text"
+                    >
+                      <ImageIcon size={11} className="shrink-0 text-cslab-muted" />
+                      <span className="min-w-0 flex-1 truncate text-[12px]">{plot.title}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         ) : null}
 
         <section className="mt-4">
           <div className="flex items-center gap-1.5 px-2 pb-1">
-            <FileText size={11} className="text-cslab-muted" />
-            <span className="text-[10px] uppercase tracking-[0.16em] text-cslab-muted">
-              论文文稿
-            </span>
+            <button
+              type="button"
+              onClick={() => toggleSection(SECTION_ID.manuscript)}
+              aria-expanded={!isManuscriptCollapsed}
+              title={isManuscriptCollapsed ? '展开分组' : '收起分组'}
+              className="flex min-w-0 flex-1 items-center gap-1.5 rounded p-0.5 text-left text-cslab-muted transition-colors hover:text-cslab-text"
+            >
+              <FileText size={11} className="shrink-0" />
+              <span className="text-[12px] uppercase tracking-[0.08em]">
+                论文文稿
+              </span>
+              <ChevronDown
+                size={11}
+                className={cn('shrink-0 transition-transform', isManuscriptCollapsed && '-rotate-90')}
+              />
+            </button>
             <button
               type="button"
               onClick={onCreateManuscript}
               title="新建文稿"
               aria-label="新建文稿"
-              className="ml-auto rounded p-0.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-accent"
+              className="shrink-0 rounded p-0.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-accent"
             >
               <Plus size={12} />
             </button>
           </div>
 
-          {filteredManuscripts.length === 0 ? (
-            <p className="px-2 py-2 text-[11px] leading-relaxed text-cslab-muted/70">
-              还没有文稿。新建后即可把数据表单元格拖入正文，生成活体胶囊。
-            </p>
-          ) : (
-            <ul className="space-y-0.5">
-              {filteredManuscripts.map((manuscript) => {
-                const active = activeManuscriptUri === manuscript.uri
-                return (
-                  <li key={manuscript.uri}>
-                    <button
-                      type="button"
-                      onClick={() => onSelectManuscript(manuscript)}
-                      draggable
-                      onDragStart={(event) =>
-                        startAssetDrag(event, {
-                          kind: 'manuscript',
-                          uri: manuscript.uri,
-                          title: manuscript.title,
-                        })
-                      }
-                      onDragEnd={endAssetDrag}
-                      onDragOver={(event) => {
-                        if (!hasDragType(event.dataTransfer, CSLAB_CELL_MIME)) return
-                        event.preventDefault()
-                        event.dataTransfer.dropEffect = 'copy'
-                        setDropTargetUri(manuscript.uri)
-                      }}
-                      onDragLeave={() => {
-                        setDropTargetUri((current) =>
-                          current === manuscript.uri ? null : current,
-                        )
-                      }}
-                      onDrop={(event) => {
-                        if (!hasDragType(event.dataTransfer, CSLAB_CELL_MIME)) return
-                        event.preventDefault()
-                        event.stopPropagation()
-                        setDropTargetUri(null)
-                        const cellRef = readCellRef(event.dataTransfer)
-                        if (cellRef) onAppendCellToManuscript(manuscript, cellRef)
-                      }}
-                      className={cn(
-                        'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
-                        dropTargetUri === manuscript.uri
-                          ? 'bg-cslab-accent/10 ring-1 ring-cslab-accent/50'
-                          : active
-                            ? 'bg-cslab-surface text-cslab-text'
-                            : 'text-cslab-muted hover:bg-cslab-surface/70 hover:text-cslab-text',
-                      )}
-                    >
-                      <FileText size={11} className="shrink-0 text-cslab-muted/70" />
-                      <span className="min-w-0 flex-1 truncate text-[12px]">
-                        {manuscript.title}
-                      </span>
-                      {manuscript.hasDocx && (
-                        <span className="shrink-0 text-[9px] uppercase tracking-wide text-cslab-accent">
-                          docx
+          {!isManuscriptCollapsed &&
+            (filteredManuscripts.length === 0 ? (
+              <p className="px-2 py-2 text-[11px] leading-relaxed text-cslab-muted">
+                还没有文稿。新建后即可把数据表单元格拖入正文，生成活体胶囊。
+              </p>
+            ) : (
+              <ul className="space-y-0.5">
+                {filteredManuscripts.map((manuscript) => {
+                  const active = activeManuscriptUri === manuscript.uri
+                  return (
+                    <li key={manuscript.uri}>
+                      <button
+                        type="button"
+                        onClick={() => onSelectManuscript(manuscript)}
+                        draggable
+                        onDragStart={(event) =>
+                          startAssetDrag(event, {
+                            kind: 'manuscript',
+                            uri: manuscript.uri,
+                            title: manuscript.title,
+                          })
+                        }
+                        onDragEnd={endAssetDrag}
+                        onDragOver={(event) => {
+                          if (!hasDragType(event.dataTransfer, CSLAB_CELL_MIME)) return
+                          event.preventDefault()
+                          event.dataTransfer.dropEffect = 'copy'
+                          setDropTargetUri(manuscript.uri)
+                        }}
+                        onDragLeave={() => {
+                          setDropTargetUri((current) =>
+                            current === manuscript.uri ? null : current,
+                          )
+                        }}
+                        onDrop={(event) => {
+                          if (!hasDragType(event.dataTransfer, CSLAB_CELL_MIME)) return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setDropTargetUri(null)
+                          const cellRef = readCellRef(event.dataTransfer)
+                          if (cellRef) onAppendCellToManuscript(manuscript, cellRef)
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
+                          dropTargetUri === manuscript.uri
+                            ? 'bg-cslab-accent/10 ring-1 ring-cslab-accent/50'
+                            : active
+                              ? 'relative bg-cslab-accent/8 text-cslab-text before:absolute before:inset-y-1 before:left-0 before:w-[2px] before:rounded-full before:bg-cslab-accent before:content-[""]'
+                              : 'text-cslab-muted hover:bg-cslab-surface/70 hover:text-cslab-text',
+                        )}
+                      >
+                        <FileText size={11} className="shrink-0 text-cslab-muted" />
+                        <span className="min-w-0 flex-1 truncate text-[12px]">
+                          {manuscript.title}
                         </span>
-                      )}
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
+                        {manuscript.hasDocx && (
+                          <span className="shrink-0 text-[9px] uppercase tracking-wide text-cslab-accent">
+                            docx
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            ))}
         </section>
 
         {!loading && assets.length === 0 && manuscripts.length === 0 && (

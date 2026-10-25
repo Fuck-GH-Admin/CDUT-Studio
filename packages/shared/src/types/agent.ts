@@ -1413,6 +1413,11 @@ export interface AgentSendInput {
   additionalDirectories?: string[]
   /** 动态注入的 MCP 服务器（仅在本次会话中生效，如飞书群聊工具） */
   customMcpServers?: Record<string, Record<string, unknown>>
+  /**
+   * 用户发送消息时的科研视口快照（CDUT Science）。
+   * 注入动态上下文后，模型可回答「这是什么 / 这里」等指代性提问。
+   */
+  cslabViewport?: import('./cslab').CsLabViewportSnapshot
   /** 强制覆盖权限模式（飞书等无 UI 交互场景下强制 'bypassPermissions'） */
   permissionModeOverride?: ProferPermissionMode
   /** 会话级记忆控制：true 表示本轮仅聚焦当前问答，不加载/不向模型回传历史前序问答 */

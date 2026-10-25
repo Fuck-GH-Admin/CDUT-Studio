@@ -46,6 +46,9 @@ export function CsLabNotesPanel({
   const [canvasTitle, setCanvasTitle] = React.useState('新推演画布')
   const [creatingBusy, setCreatingBusy] = React.useState(false)
   const [visibleLimit, setVisibleLimit] = React.useState(200)
+  /** 笔记阅读卡 Tab：正文 / 反向链接。 */
+  const [noteTab, setNoteTab] = React.useState<'body' | 'backlinks'>('body')
+  const [openingVault, setOpeningVault] = React.useState(false)
 
   React.useEffect(() => {
     if (!query.trim()) {
@@ -75,6 +78,7 @@ export function CsLabNotesPanel({
     setBacklinks([])
     setResults(null)
     setQuery('')
+    setNoteTab('body')
   }, [labId])
 
   const visibleNotes = results ?? notes
@@ -91,6 +95,7 @@ export function CsLabNotesPanel({
       return
     }
     setSelected(note)
+    setNoteTab('body')
     setLoadingNote(true)
     try {
       const [read, links] = await Promise.all([
@@ -137,8 +142,34 @@ export function CsLabNotesPanel({
     }
   }
 
+  const openObsidianVault = async (): Promise<void> => {
+    if (openingVault) return
+    setOpeningVault(true)
+    try {
+      const result = await window.electronAPI.cslab.openObsidianVault({ labId })
+      if (result.ok) {
+        onToast('success', `已在 Obsidian 中打开 Vault：${result.path ?? ''}`)
+      } else {
+        onToast('error', result.message ?? 'Vault 打开失败')
+      }
+    } catch (error) {
+      onToast('error', error instanceof Error ? error.message : 'Vault 打开失败')
+    } finally {
+      setOpeningVault(false)
+    }
+  }
+
   return (
     <div className="space-y-3">
+      <button
+        type="button"
+        onClick={() => void openObsidianVault()}
+        disabled={openingVault}
+        className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-cslab-accent px-3 py-2 text-[11px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:opacity-50"
+      >
+        {openingVault ? <Loader2 size={12} className="animate-spin" /> : <BookOpen size={12} />}
+        在 Obsidian 中打开
+      </button>
       <details className="rounded-xl border border-cslab-accent/25 bg-cslab-accent/5 px-3 py-2" open>
         <summary className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-cslab-accent">
           <BookOpen size={11} /> Obsidian 双向互通
@@ -158,7 +189,7 @@ export function CsLabNotesPanel({
             副本，绝不丢弃任何内容。
           </li>
           <li>
-            支持 <span className="font-mono">[[双链]]</span> 语法与反向链接检索（见下方反链面板）。
+            支持 <span className="font-mono">[[双链]]</span> 语法与反向链接检索（见笔记阅读卡的「反向链接」Tab）。
           </li>
         </ul>
       </details>
@@ -315,8 +346,34 @@ export function CsLabNotesPanel({
               {selected.relPath.split('/').pop()}
             </span>
           </header>
+          <div className="flex items-center gap-1 border-b border-cslab-border px-2 py-1">
+            <button
+              type="button"
+              onClick={() => setNoteTab('body')}
+              className={cn(
+                'rounded-md px-2 py-1 text-[11px] transition-colors',
+                noteTab === 'body'
+                  ? 'bg-cslab-accent/12 font-medium text-cslab-accent'
+                  : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+              )}
+            >
+              正文
+            </button>
+            <button
+              type="button"
+              onClick={() => setNoteTab('backlinks')}
+              className={cn(
+                'rounded-md px-2 py-1 text-[11px] transition-colors',
+                noteTab === 'backlinks'
+                  ? 'bg-cslab-accent/12 font-medium text-cslab-accent'
+                  : 'text-cslab-muted hover:bg-cslab-surface hover:text-cslab-text',
+              )}
+            >
+              反向链接 ({backlinks.length})
+            </button>
+          </div>
           <div className="max-h-[46vh] overflow-y-auto px-3 py-2.5">
-            {loadingNote ? (
+            {noteTab === 'body' ? (loadingNote ? (
               <div className="flex items-center gap-2 text-[11px] text-cslab-muted">
                 <Loader2 size={11} className="animate-spin" /> 正在读取…
               </div>
@@ -387,27 +444,22 @@ export function CsLabNotesPanel({
                   {content}
                 </ReactMarkdown>
               </div>
-            )}
-
-            {backlinks.length > 0 && (
-              <div className="mt-3 border-t border-cslab-border pt-2">
-                <p className="text-[10px] uppercase tracking-[0.14em] text-cslab-muted">
-                  反向链接（{backlinks.length}）
-                </p>
-                <ul className="mt-1 space-y-0.5">
-                  {backlinks.map((link) => (
-                    <li key={link.relPath}>
-                      <button
-                        type="button"
-                        onClick={() => void openNote(link)}
-                        className="w-full truncate rounded px-1 py-0.5 text-left text-[11px] text-cslab-text hover:bg-cslab-surface hover:text-cslab-accent"
-                      >
-                        {link.title}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            )) : backlinks.length > 0 ? (
+              <ul className="space-y-0.5">
+                {backlinks.map((link) => (
+                  <li key={link.relPath}>
+                    <button
+                      type="button"
+                      onClick={() => void openNote(link)}
+                      className="w-full truncate rounded px-1 py-0.5 text-left text-[11px] text-cslab-text hover:bg-cslab-surface hover:text-cslab-accent"
+                    >
+                      {link.title}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="py-6 text-center text-[11px] text-cslab-muted">当前笔记无反向链接</p>
             )}
           </div>
         </section>

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AgentView — Agent 模式主视图容器
  *
  * 职责：
@@ -146,6 +146,7 @@ import { ExplorationBranchBar } from './ExplorationBranchBar'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, AgentContextMode, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
+import { getCsLabViewportSnapshot } from '@/lib/cslab-viewport-snapshot'
 
 /** 桌面端 Agent 会话懒加载单页消息数（与 main/agent-session-manager 的 DESKTOP_AGENT_PAGE_SIZE 同步） */
 const DESKTOP_AGENT_PAGE_SIZE = 60
@@ -183,6 +184,12 @@ const EMPTY_SDK_MESSAGES: SDKMessage[] = []
 const LONG_TEXT_ATTACHMENT_THRESHOLD = 2000
 
 /** 构造乐观用户 SDKMessage（用于运行中追加消息立即上屏） */
+
+/** 发送 Agent 消息时自动附带当前科研视口快照，消除「这是什么」视野盲区。 */
+function sendAgentMessageWithViewport(input: AgentSendInput): Promise<void> {
+  const viewport = getCsLabViewportSnapshot()
+  return window.electronAPI.sendAgentMessage(viewport ? { ...input, cslabViewport: viewport } : input)
+}
 function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now()): SDKMessage {
   return {
     type: 'user',
@@ -1506,7 +1513,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
           additionalDirectories: snapshot.additionalDirectories,
         }),
       }
-      window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch((error) => {
+      sendAgentMessageWithViewport(input).then(revealRendererDraft).catch((error) => {
         console.error('[AgentView] 自动发送配置消息失败:', error)
         setStreamingStates((prev) => {
           const current = prev.get(sessionId)
@@ -2159,7 +2166,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
 
       appendOptimisticPersistedMessage(createUserSDKMessage(payload.rawText, message.id, streamStartedAt))
       try {
-        await window.electronAPI.sendAgentMessage({
+        await sendAgentMessageWithViewport({
           sessionId,
           userMessage: payload.rawText,
           channelId: agentChannelId,
@@ -2532,7 +2539,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
     setInputContent('')
     setInputHtmlContent('')
 
-    window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch(async (error) => {
+    sendAgentMessageWithViewport(input).then(revealRendererDraft).catch(async (error) => {
       if (isAgentRunAlreadyActiveError(error)) {
         // renderer 曾短暂误判为空闲；先恢复 owner run 的代次，使其后续事件和真实
         // completion 仍能被接收，再把本条消息追加到该 run。若 run 恰好结束，降级重试为新 run。
@@ -2578,7 +2585,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
               return map
             })
             try {
-              await window.electronAPI.sendAgentMessage(input)
+              await sendAgentMessageWithViewport(input)
               revealRendererDraft()
               return
             } catch (retryError) {
@@ -2826,7 +2833,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       return map
     })
 
-    window.electronAPI.sendAgentMessage({
+    sendAgentMessageWithViewport({
       sessionId,
       userMessage: '/compact',
       // Reuse the optimistic bubble UUID so the persisted user message replaces it
@@ -2918,7 +2925,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
       return map
     })
 
-    window.electronAPI.sendAgentMessage({
+    sendAgentMessageWithViewport({
       sessionId,
       userMessage: lastUserMessage,
       channelId: agentChannelId,
@@ -2960,7 +2967,7 @@ export function AgentView({ sessionId, variant = 'default', emptyState }: AgentV
         return map
       })
 
-      window.electronAPI.sendAgentMessage({
+      sendAgentMessageWithViewport({
         sessionId: meta.id,
         userMessage: prompt,
         channelId: agentChannelId,

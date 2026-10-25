@@ -293,3 +293,46 @@ describe('胶囊提取与文本定位', () => {
     ).toBe('Yield 80 %')
   })
 })
+
+describe('findTextRange 两级定位（Bug 15 模糊定位）', () => {
+  const chars = (text: string): IElement[] =>
+    Array.from(text).map((value) => ({ value }) as unknown as IElement)
+
+  test('Given 逐字一致 Then 精确命中且不标 fuzzy', () => {
+    const hit = findTextRange(chars('研究结论：地球物理反演具有多解性。'), '地球物理反演具有多解性')
+    expect(hit).not.toBeNull()
+    expect(hit!.fuzzy).toBeUndefined()
+    expect(hit!.end - hit!.start + 1).toBe('地球物理反演具有多解性'.length)
+  })
+
+  test('Given 标点全半角差异 Then 模糊命中且标 fuzzy', () => {
+    const hit = findTextRange(chars('方法（Method）是核心'), '方法(Method)是核心')
+    expect(hit).not.toBeNull()
+    expect(hit!.fuzzy).toBe(true)
+  })
+
+  test('Given 空白符差异 Then 模糊命中', () => {
+    const hit = findTextRange(chars('地球物理 反演 具有多解性'), '地球物理反演具有多解性')
+    expect(hit).not.toBeNull()
+    expect(hit!.fuzzy).toBe(true)
+  })
+
+  test('Given 少量错别字 Then 模糊命中', () => {
+    const hit = findTextRange(chars('地球物理反演具有多解性'), '地球物理反演具有多简性')
+    expect(hit).not.toBeNull()
+    expect(hit!.fuzzy).toBe(true)
+  })
+
+  test('Given 完全不相干 Then 返回 null 绝不猜测', () => {
+    expect(findTextRange(chars('这是一个完全无关的句子'), '量子色动力学的渐近自由')).toBeNull()
+  })
+
+  test('Given 命中 Then start/end 落在真实元素索引上', () => {
+    const prefix = '前言。'
+    const body = '反演结论'
+    const hit = findTextRange(chars(prefix + body + '结语。'), body)
+    expect(hit).not.toBeNull()
+    expect(hit!.start).toBe(prefix.length)
+    expect(hit!.end).toBe(prefix.length + body.length - 1)
+  })
+})

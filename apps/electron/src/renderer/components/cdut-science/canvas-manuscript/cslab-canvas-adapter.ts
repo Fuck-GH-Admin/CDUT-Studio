@@ -1,4 +1,4 @@
-/**
+﻿/**
  * TipTap docJson <-> Canvas IElement[] 双向适配
  *
  * 硬性约束：本文件只允许 `import type` 引用 Canvas 引擎类型；
@@ -6,6 +6,7 @@
  */
 
 import type { CsLabCapsule, CsLabCanvasData, CsLabManuscriptComment } from '@profer/shared'
+import { findFuzzyRange } from '@profer/shared'
 import type { IElement } from '@hufe921/canvas-editor'
 import {
   CsCanvasControlComponent,
@@ -715,11 +716,17 @@ export function extractCanvasText(canvasData: CsLabCanvasData): string {
   return pieces.join('')
 }
 
-/** 在正文中定位逐字片段；找不到返回 null（绝不模糊替换）。 */
+/**
+ * 在正文中定位逐字片段。
+ *
+ * 两级定位（Bug 15）：先精确 `indexOf`（零开销），未命中再走
+ * `findFuzzyRange` 模糊定位（容忍标点 / 空白 / 全半角与少量错别字）。
+ * 模糊命中标记 `fuzzy: true`，由上层区分展示；完全不匹配返回 null，绝不猜测替换。
+ */
 export function findTextRange(
   main: IElement[],
   quote: string,
-): { start: number; end: number } | null {
+): { start: number; end: number; fuzzy?: boolean } | null {
   const target = quote.replace(/\s+/g, ' ').trim()
   if (!target) return null
 
@@ -756,10 +763,21 @@ export function findTextRange(
     }
   })
 
+  const toRange = (startPos: number, endPos: number, fuzzy: boolean): { start: number; end: number; fuzzy?: boolean } | null => {
+    const start = indexMap[startPos]
+    const end = indexMap[endPos]
+    if (start === undefined || end === undefined) return null
+    return fuzzy ? { start, end, fuzzy: true } : { start, end }
+  }
+
+  // 一级：精确匹配（既有行为，零开销）。
   const position = haystack.indexOf(target)
-  if (position < 0) return null
-  const start = indexMap[position]
-  const end = indexMap[position + target.length - 1]
-  if (start === undefined || end === undefined) return null
-  return { start, end }
+  if (position >= 0) {
+    return toRange(position, position + target.length - 1, false)
+  }
+
+  // 二级：模糊定位。命中才返回，且明确标记 fuzzy，绝不伪装成精确命中。
+  const hit = findFuzzyRange(haystack, target)
+  if (!hit) return null
+  return toRange(hit.start, Math.max(hit.start, hit.end - 1), true)
 }

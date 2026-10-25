@@ -23,6 +23,7 @@ import {
   type CsLabSplitLayout,
 } from '@/atoms/cslab-atoms'
 import { CsLabStagePane } from './CsLabStagePane'
+import type { CsLabDagNodeTarget } from './CsLabDagCanvas'
 import type { CsLabAssetDragPayload } from './cslab-dnd'
 import type {
   CsLabCanvasHandle,
@@ -77,6 +78,8 @@ interface CsLabStageGridProps {
   ) => void
   /** 划词右键「检索关联学术文献」反向打开学术检索弹窗。 */
   onSearchLiterature: (query: string) => void
+  /** 打开推演画布 file/link 节点引用的资产、笔记或外链（Bug 6）。 */
+  onOpenNodeTarget?: (target: CsLabDagNodeTarget) => void
 }
 
 const LAYOUT_CLASS: Record<CsLabSplitLayout, string> = {
@@ -124,6 +127,7 @@ export function CsLabStageGrid({
   onCanvasSaved,
   onToast,
   onSearchLiterature,
+  onOpenNodeTarget,
 }: CsLabStageGridProps): React.ReactElement {
   const visiblePanes =
     layout === 'single' ? [activePaneId] : VISIBLE_PANES[layout]
@@ -186,6 +190,7 @@ export function CsLabStageGrid({
             onCanvasSaved={(document, result) => onCanvasSaved(paneId, document, result)}
             onToast={onToast}
             onSearchLiterature={onSearchLiterature}
+            onOpenNodeTarget={onOpenNodeTarget}
           />
         )
       })}

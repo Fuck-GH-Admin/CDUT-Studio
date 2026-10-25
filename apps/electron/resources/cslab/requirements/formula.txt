@@ -1,3 +1,4 @@
 sympy>=1.12,<2
 latex2sympy2>=1.9,<2
-antlr4-python3-runtime==4.11
+# antlr4-python3-runtime 已随包内置为 ../vendor/antlr4（4.11.1，见 ../vendor/VENDOR.md），
+# 无需也不要在此声明，避免与 vendor 版本冲突。

@@ -5,7 +5,7 @@
  * 所有渲染进程输入必须先做类型与路径校验。
  */
 
-import { BrowserWindow, dialog, ipcMain as electronIpcMain, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, dialog, ipcMain as electronIpcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { basename, extname, resolve } from 'node:path'
@@ -146,7 +146,8 @@ import {
   stopZoteroWatcher,
   syncZoteroLibrary,
 } from './cslab-zotero'
-import { getZoteroBridgeStatus, writeZoteroBridge } from './cslab-zotero-bridge'
+import { getZoteroBridgeStatus, initZoteroBridgeConfig, writeZoteroBridge } from './cslab-zotero-bridge'
+import { resolveLabRelativePath } from './cslab-paths'
 import { translateSelection } from './cslab-translate'
 import { getLiteratureFilePath, getLiteratureItem } from './cslab-literature'
 import { buildLiteratureGuide, getLiteratureStructure } from './cslab-literature-structure'
@@ -1303,6 +1304,10 @@ export function registerCsLabIpc(): void {
     })
   })
 
+  // 生成默认写回桥接配置模板（zotero-bridge.json）。通道常量暂以字面量注册，
+  // 避免改动共享 CSLAB_IPC_CHANNELS 契约（见 preload 同名通道）。
+  ipcMain.handle('cslab:zotero-bridge-init-config', async () => initZoteroBridgeConfig())
+
   // ===== 跨文献 GraphRAG =====
   ipcMain.handle(CSLAB_IPC_CHANNELS.BUILD_LITERATURE_INDEX, async (_event, input: unknown) => {
     if (!input || typeof input !== 'object') throw new Error('索引构建参数无效')
@@ -1577,6 +1582,22 @@ export function registerCsLabIpc(): void {
       asString(record.labId, '实验室标识'),
       asString(record.relPath, '笔记路径'),
     )
+  })
+
+  // 在 Obsidian 中打开 Vault：主进程解析 vault/notes 绝对路径后 shell.openPath。
+  // 通道常量暂以字面量注册，避免改动共享 CSLAB_IPC_CHANNELS 契约（见 preload 同名通道）。
+  ipcMain.handle('cslab:open-obsidian-vault', async (_event, input: unknown) => {
+    const record = asObject(input, 'Vault 打开参数')
+    const labId = asString(record.labId, '实验室标识')
+    // resolveLabRelativePath 内含实验室沙箱越界校验。
+    const notesDir = resolveLabRelativePath(labId, 'vault/notes')
+    const stat = await fs.stat(notesDir).catch(() => null)
+    if (!stat?.isDirectory()) {
+      return { ok: false as const, message: `Vault 目录不存在：${notesDir}` }
+    }
+    const errMsg = await shell.openPath(notesDir)
+    if (errMsg) return { ok: false as const, message: `打开失败：${errMsg}` }
+    return { ok: true as const, path: notesDir }
   })
 
   ipcMain.handle(CSLAB_IPC_CHANNELS.VAULT_INDEX_STATUS, async (_event, labId: unknown) =>

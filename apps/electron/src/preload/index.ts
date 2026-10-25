@@ -1801,7 +1801,15 @@ export interface ElectronAPI {
     }) => Promise<CsLabZoteroAnnotation[]>
     startZoteroWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
     stopZoteroWatch: (labId: string) => Promise<{ watching: boolean }>
-    getZoteroBridgeStatus: () => Promise<CsLabZoteroBridgeStatus>
+    /** probePath：实际命中的探测路径（/connector/ping 或 /ping）。 */
+    getZoteroBridgeStatus: () => Promise<CsLabZoteroBridgeStatus & { probePath?: string }>
+    /** 生成默认写回桥接配置模板（zotero-bridge.json），返回其绝对路径。 */
+    initZoteroBridgeConfig: () => Promise<{
+      ok: boolean
+      configPath: string
+      created: boolean
+      message: string
+    }>
 
     /** 文献阅读 */
     getLiteratureItem: (input: {
@@ -1909,6 +1917,12 @@ export interface ElectronAPI {
     rebuildVaultIndex: (input: { labId: string; force?: boolean }) => Promise<CsLabVaultIndexResult>
     startVaultWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
     stopVaultWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
+    /** 在 Obsidian 中打开 Vault（主进程解析 vault/notes 绝对路径后 shell.openPath）。 */
+    openObsidianVault: (input: { labId: string }) => Promise<{
+      ok: boolean
+      path?: string
+      message?: string
+    }>
     listCanvases: (labId: string) => Promise<CsLabCanvasSummary[]>
     createCanvas: (input: { labId: string; title: string }) => Promise<CsLabCanvasCreateResult>
     readCanvas: (input: { labId: string; relPath: string }) => Promise<CsLabCanvasReadResult>
@@ -4325,6 +4339,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_STOP_WATCH, labId),
     getZoteroBridgeStatus: () =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_GET_BRIDGE_STATUS),
+    initZoteroBridgeConfig: () =>
+      ipcRenderer.invoke('cslab:zotero-bridge-init-config'),
 
     getLiteratureItem: (input: { labId: string; uri: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_ITEM, input),
@@ -4421,6 +4437,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_START_WATCH, labId),
     stopVaultWatch: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_STOP_WATCH, labId),
+    openObsidianVault: (input: { labId: string }) =>
+      ipcRenderer.invoke('cslab:open-obsidian-vault', input),
     listCanvases: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CANVAS_LIST, labId),
     createCanvas: (input: { labId: string; title: string }) =>

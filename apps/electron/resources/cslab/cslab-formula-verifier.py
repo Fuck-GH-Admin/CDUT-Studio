@@ -18,6 +18,17 @@ import sys
 import tempfile
 import time
 
+# 进程间编码治理：Windows 中文系统下默认走 CP936，与 Node 端 UTF-8 解码不一致会产生乱码。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
+# 内置 antlr4 runtime（vendor/antlr4），使 SymPy parse_latex 开箱即用（Bug 3）。
+# 插入的是 vendor 这一层，让 `import antlr4` 命中 vendor/antlr4/。
+_VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
+if os.path.isdir(_VENDOR_DIR) and _VENDOR_DIR not in sys.path:
+    sys.path.insert(0, _VENDOR_DIR)
+
 
 def emit(payload):
     json.dump(payload, sys.stdout, ensure_ascii=False)

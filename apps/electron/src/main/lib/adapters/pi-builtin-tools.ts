@@ -96,7 +96,7 @@ import {
 } from '../web-search-service'
 import { browserController } from '../browser-controller'
 import { resolveBrowserProfileKey } from '../browser-profile-policy'
-import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
+import { writeClipboardText } from '../clipboard-agent-tools'
 import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
@@ -1311,21 +1311,27 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
 /**
  * Agent 读/写系统剪贴板的正规工具；走主进程 Electron clipboard（UTF-8），
  * 避免 Agent 退化为 PowerShell Get-Clipboard 时踩 Windows 代码页中文乱码。
+ *
+ * 安全红线（Bug 19）：**读取剪贴板对 Agent 一律硬拦截**。
+ * 剪贴板内容只能由用户显式粘贴或前台操作提供，Agent 不得以任何理由静默窃取。
+ * 写入不构成信息窃取，保留能力但在描述中提示敏感信息风险。
  */
 function buildPiClipboardTools(sdk: PiSdk): ToolDefinition[] {
   return [
     sdk.defineTool({
       name: 'clipboard_read_text',
       label: '读取系统剪贴板文本',
-      description: 'Read the system clipboard text. Prefer this tool to obtain clipboard content; do not use PowerShell Get-Clipboard (the Windows console code page garbles Chinese text).',
+      description:
+        'BLOCKED by policy: reading the system clipboard is forbidden for the agent. Clipboard content only reaches the conversation when the user pastes it explicitly. Do not attempt workarounds such as PowerShell Get-Clipboard, pbpaste, xclip -o or clip.exe.',
       parameters: Type.Object({}),
       async execute() {
-        const { text, truncated, totalChars } = readClipboardText()
+        // 硬拦截：不返回剪贴板任何内容，只返回结构化拒绝。
         return jsonToolResult({
-          text,
-          truncated,
-          totalChars,
-          message: truncated ? `剪贴板文本超过上限，已截断到 ${text.length} 字符（原文 ${totalChars} 字符）。` : `已读取 ${totalChars} 个字符。`,
+          ok: false,
+          blocked: true,
+          code: 'CLIPBOARD_READ_BLOCKED',
+          message:
+            'CLIPBOARD_READ_BLOCKED: 禁止 Agent 静默读取系统剪贴板。剪贴板内容只能由用户显式粘贴提供。请改为请用户直接粘贴所需内容。',
         })
       },
     }),

@@ -9,6 +9,8 @@ export function noop(): void {
 
 export { diffCapabilities } from './capabilities-diff'
 export type { CapabilityChange } from './capabilities-diff'
+export { levenshtein, findFuzzyRange } from './levenshtein'
+export type { FuzzyMatchRange } from './levenshtein'
 export { parseGoalCommand, parseGoalContractInput, parseGoalLimitsInput, getGoalBudgetExhaustedReasons, stripGoalResultBlocks, GOAL_UPDATE_TOOL_NAME, isGoalIterationMessage, isGoalUpdateToolName } from './goal-contract'
 export type { GoalLimitsInput } from './goal-contract'
 export {

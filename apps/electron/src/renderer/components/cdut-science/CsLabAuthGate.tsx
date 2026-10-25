@@ -153,6 +153,17 @@ export function CsLabAuthGate(): React.ReactElement {
 
   return (
     <div className="w-full max-w-md font-sans">
+      <div className="mb-5 flex items-center justify-center gap-4" data-tour="cslab-brand-row">
+        <img
+          src={CDUTStudioLogo}
+          alt="CDUT Studio"
+          draggable={false}
+          className="h-12 w-auto object-contain"
+        />
+        <span className="h-8 w-px bg-border/70" aria-hidden="true" />
+        <CdutMark className="h-12 w-auto" alt="成都理工大学校徽" />
+      </div>
+
       <div
         data-tour="cslab-auth-gate"
         className="rounded-2xl border border-cslab-border bg-cslab-elevated/70 p-8 shadow-subtle backdrop-blur-sm"
@@ -222,17 +233,6 @@ export function CsLabAuthGate(): React.ReactElement {
         <p className="mt-5 border-t border-cslab-border/70 pt-4 text-[11px] leading-relaxed text-cslab-muted">
           访问密码仅保存在本机，由操作系统安全存储或本地 AES-256-GCM 加密，绝不明文写入磁盘。
         </p>
-      </div>
-
-      <div className="mt-5 flex items-center justify-center gap-3" data-tour="cslab-brand-row">
-        <img
-          src={CDUTStudioLogo}
-          alt="CDUT Studio"
-          draggable={false}
-          className="h-7 w-auto object-contain opacity-90"
-        />
-        <span className="h-5 w-px bg-cslab-border" aria-hidden="true" />
-        <CdutMark className="h-7 w-auto" alt="成都理工大学校徽" />
       </div>
     </div>
   )

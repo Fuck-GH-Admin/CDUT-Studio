@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CsLabWorkspaceView — CDUT Science 沉浸式科研工作台
  *
  * 布局：顶栏 + 左侧六维资产导航 + 中央 1/4 颗粒度分屏舞台 + 右侧上下文抽屉。
@@ -52,6 +52,8 @@ import type {
 import { detectIsMac, detectIsWindows } from '@profer/ui'
 import { cn } from '@/lib/utils'
 import { resolveWindowControlsRightInset } from '@/lib/window-controls-layout'
+import { setCsLabViewportSnapshot } from '@/lib/cslab-viewport-snapshot'
+
 import {
   CSLAB_PANE_IDS,
   cslabActiveLabIdAtom,
@@ -122,6 +124,25 @@ import {
 } from './cslab-dnd'
 import { useCsLabEvents } from './use-cslab-events'
 import { captureCsLabSnapshot } from '@/lib/cslab/cslab-snapshot-registry'
+import type { CsLabViewportSnapshot } from '@profer/shared'
+
+/** 窗格视图类型 → 用户视口标签（未识别的类型不注入 activeTab）。 */
+const VIEW_TYPE_TO_VIEWPORT_TAB: Record<string, CsLabViewportSnapshot['activeTab']> = {
+  pdf: 'pdf',
+  plot: 'plot',
+  figure: 'plot',
+  manuscript: 'manuscript',
+  notes: 'notes',
+  brain: 'brain',
+  dag: 'dag',
+  canvas: 'dag',
+  table: 'dataset',
+  dataset: 'dataset',
+  mol: 'dataset',
+  terrain: 'dataset',
+  agent: 'agent',
+}
+
 
 interface CsLabWorkspaceViewProps {
   labId: string
@@ -234,6 +255,27 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
   const [assetDrag, setAssetDrag] = useAtom(cslabAssetDragAtom)
   const [tileTarget, setTileTarget] = useAtom(cslabTileTargetAtom)
   const [drawer, setDrawer] = useAtom(cslabDrawerAtom)
+
+  // 用户视口快照：让 Agent 能解析「这是什么 / 这里」等指代性提问。
+  React.useEffect(() => {
+    const pane = panes[activePaneId]
+    if (!pane) return
+    const entityUri =
+      pane.literatureUri ?? pane.assetUri ?? pane.manuscriptUri ?? pane.molUri ?? pane.geoUri ?? pane.figureUri
+    const lit = paneLiterature[activePaneId]
+    const entityLabel = lit?.title ?? (entityUri ? assets.find((item) => item.uri === entityUri)?.title : undefined)
+    const selectionText =
+      drawer.mode === 'selection'
+        ? String((drawer.selection as { text?: unknown } | undefined)?.text ?? '').slice(0, 400)
+        : undefined
+    setCsLabViewportSnapshot({
+      activeTab: VIEW_TYPE_TO_VIEWPORT_TAB[pane.viewType],
+      selectedEntityUri: entityUri,
+      selectedEntityLabel: entityLabel,
+      pdfCurrentPage: pane.pdfInitialPage,
+      pdfSelectionText: selectionText?.trim() ? selectionText : undefined,
+    })
+  }, [panes, activePaneId, paneLiterature, assets, drawer])
   const [academicSearchOpen, setAcademicSearchOpen] = React.useState(false)
   const [academicSearchQuery, setAcademicSearchQuery] = React.useState<string | undefined>(
     undefined,
@@ -2268,6 +2310,33 @@ export function CsLabWorkspaceView({ labId }: CsLabWorkspaceViewProps): React.Re
               onCanvasSaved={(paneId, document) => {
                 setPaneCanvases((previous) => ({ ...previous, [paneId]: document }))
                 void refreshAssets()
+              }}
+              onOpenNodeTarget={(target) => {
+                // Bug 6：推演画布 file/link 节点的引用导航，统一在此解析落点。
+                if (target.kind === 'url') {
+                  void window.electronAPI.openExternal(target.url)
+                  return
+                }
+                const relPath = target.kind === 'file' ? target.relPath : undefined
+                const asset =
+                  target.kind === 'asset'
+                    ? assets.find((item) => item.uri === target.uri)
+                    : assets.find((item) => item.relPath === relPath)
+                if (asset) {
+                  void openAssetInPane(activePaneId, asset)
+                  return
+                }
+                if (relPath && /\.canvas$/i.test(relPath)) {
+                  const paneId = pickTargetPane()
+                  setActivePaneId(paneId)
+                  void openCanvasInPane(paneId, relPath)
+                  return
+                }
+                if (target.kind === 'asset') {
+                  setDrawer({ open: true, mode: 'asset', title: '资产详情', assetUri: target.uri })
+                  return
+                }
+                showToast('info', '未在资产库中找到该引用目标')
               }}
               onToast={showToast}
             />

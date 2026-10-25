@@ -49,6 +49,50 @@ async function readBridgeConfig(): Promise<ZoteroBridgeConfig | null> {
 
 const BRIDGE_TIMEOUT_MS = 1_500
 
+/** 探测结果附加信息：实际命中的探测路径（供 UI 心跳/连通提示展示）。 */
+export interface ZoteroBridgeProbeInfo {
+  /** 实际发起并收到响应的探测路径（/connector/ping 或 /ping）。 */
+  probePath?: string
+}
+
+export type ZoteroBridgeProbeStatus = CsLabZoteroBridgeStatus & ZoteroBridgeProbeInfo
+
+/** 「生成默认配置」结果：configPath 为 zotero-bridge.json 绝对路径。 */
+export interface ZoteroBridgeInitResult {
+  ok: boolean
+  configPath: string
+  /** true=本次写入模板；false=配置已存在（绝不覆盖用户 token）。 */
+  created: boolean
+  message: string
+}
+
+/**
+ * 生成默认写回桥接配置模板（幂等）。
+ *
+ * 注意必须带 `enabled: true` —— readBridgeConfig() 只有在 enabled 为真时才会启用探测，
+ * 缺省该字段将导致配置永远停留在「未配置」态。
+ */
+export async function initZoteroBridgeConfig(): Promise<ZoteroBridgeInitResult> {
+  const configPath = getZoteroBridgeConfigPath()
+  try {
+    if (existsSync(configPath)) {
+      return { ok: true, configPath, created: false, message: '配置文件已存在，已保留现有配置' }
+    }
+    const template: ZoteroBridgeConfig = { enabled: true, port: 23119, token: '' }
+    const tmpPath = `${configPath}.tmp`
+    await fs.writeFile(tmpPath, `${JSON.stringify(template, null, 2)}\n`, 'utf-8')
+    await fs.rename(tmpPath, configPath)
+    return { ok: true, configPath, created: true, message: '默认配置已生成（端口 23119）' }
+  } catch (error) {
+    return {
+      ok: false,
+      configPath,
+      created: false,
+      message: error instanceof Error ? error.message : '默认配置写入失败',
+    }
+  }
+}
+
 async function bridgeFetch(
   port: number,
   path: string,
@@ -69,7 +113,7 @@ async function bridgeFetch(
 }
 
 /** 探测本地回环桥接；失败一律视为不可达。 */
-export async function getZoteroBridgeStatus(): Promise<CsLabZoteroBridgeStatus> {
+export async function getZoteroBridgeStatus(): Promise<ZoteroBridgeProbeStatus> {
   const config = await readBridgeConfig()
   if (!config) {
     return {
@@ -86,6 +130,7 @@ export async function getZoteroBridgeStatus(): Promise<CsLabZoteroBridgeStatus> 
       enabled: true,
       reachable: response.ok,
       endpoint,
+      probePath: '/connector/ping',
       message: response.ok
         ? '写回桥接可达（Zotero 本地 REST 插件）'
         : `写回桥接返回 HTTP ${response.status}`,
@@ -98,6 +143,7 @@ export async function getZoteroBridgeStatus(): Promise<CsLabZoteroBridgeStatus> 
         enabled: true,
         reachable: response.ok,
         endpoint,
+        probePath: '/ping',
         message: response.ok
           ? '写回桥接可达（Zotero 本地 REST 插件）'
           : `写回桥接返回 HTTP ${response.status}`,

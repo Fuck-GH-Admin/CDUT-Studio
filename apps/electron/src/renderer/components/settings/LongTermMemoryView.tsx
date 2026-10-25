@@ -228,9 +228,11 @@ export function LongTermMemoryView(): React.ReactElement | null {
     const element = containerRef.current
     if (!element) return
     const observer = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect
-      if (!rect || rect.width <= 0 || rect.height <= 0) return
-      setSize({ width: Math.round(rect.width), height: Math.round(rect.height) })
+      const entry = entries[0]
+      if (!entry) return
+      // 浮窗弹出动画期间宽高可能为 0 或 NaN，早退避免污染布局坐标
+      if (!(entry.contentRect.width > 0) || !(entry.contentRect.height > 0)) return
+      setSize({ width: Math.round(entry.contentRect.width), height: Math.round(entry.contentRect.height) })
     })
     observer.observe(element)
     return () => observer.disconnect()
@@ -243,10 +245,19 @@ export function LongTermMemoryView(): React.ReactElement | null {
     if (!element) return
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault()
-      setViewport((current) => ({
-        ...current,
-        scale: Math.min(2.4, Math.max(0.6, current.scale * (event.deltaY > 0 ? 0.92 : 1.08))),
-      }))
+      // 以鼠标位置为锚点缩放：锚点在缩放前后保持同一视口坐标，避免视口漂移
+      const rect = element.getBoundingClientRect()
+      const mx = event.clientX - rect.left
+      const my = event.clientY - rect.top
+      setViewport((current) => {
+        const next = Math.min(2.4, Math.max(0.6, current.scale * (event.deltaY > 0 ? 0.92 : 1.08)))
+        const k = next / current.scale
+        return {
+          scale: next,
+          x: mx - k * (mx - current.x),
+          y: my - k * (my - current.y),
+        }
+      })
     }
     element.addEventListener('wheel', onWheel, { passive: false })
     return () => element.removeEventListener('wheel', onWheel)
@@ -319,6 +330,11 @@ export function LongTermMemoryView(): React.ReactElement | null {
   const handlePointerUp = (): void => {
     dragRef.current = null
   }
+
+  // NaN 守护：视口变换绝不输出非有限值到 transform
+  const viewX = Number.isFinite(viewport.x) ? viewport.x : 0
+  const viewY = Number.isFinite(viewport.y) ? viewport.y : 0
+  const viewScale = Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1
 
   return (
     <div
@@ -510,11 +526,20 @@ export function LongTermMemoryView(): React.ReactElement | null {
                 </filter>
               </defs>
 
-              <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
+              <g transform={`translate(${viewX} ${viewY}) scale(${viewScale})`}>
                 {edges.map((edge) => {
                   const from = pointMap.get(edge.from)
                   const to = pointMap.get(edge.to)
                   if (!from || !to) return null
+                  // NaN 守护：坐标非有限的连线跳过渲染
+                  if (
+                    !Number.isFinite(from.x) ||
+                    !Number.isFinite(from.y) ||
+                    !Number.isFinite(to.x) ||
+                    !Number.isFinite(to.y)
+                  ) {
+                    return null
+                  }
                   return (
                     <line
                       key={`${edge.from}-${edge.to}`}
@@ -531,6 +556,8 @@ export function LongTermMemoryView(): React.ReactElement | null {
                 })}
 
                 {points.map(({ node, x, y }) => {
+                  // NaN 守护：派生坐标非有限的节点跳过渲染，绝不输出 NaN 到 transform
+                  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
                   const accent = ACCENT_COLORS[node.category]
                   const radius = 5 + 5 * Math.min(1, node.weight / 10)
                   const active = node.id === (draft?.id ?? selectedId)

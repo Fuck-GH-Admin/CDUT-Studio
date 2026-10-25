@@ -65,20 +65,70 @@ function signature(tool: CsLabCustomTool): string {
   return `${tool.name}(${params})${tool.returns ? ` -> ${tool.returns}` : ''}`
 }
 
+/** 必填但无默认值时的占位初值：保证生成的 JSON 结构完整，不触发「缺少必填参数」。 */
+function placeholderFor(jsonType: CsLabCustomTool['params'][number]['jsonType']): unknown {
+  switch (jsonType) {
+    case 'number':
+      return 0.0
+    case 'integer':
+      return 1
+    case 'boolean':
+      return false
+    case 'array':
+      return []
+    case 'object':
+      return {}
+    default:
+      return ''
+  }
+}
+
+/** 解析 AST 反解析得到的默认值字面量；无法解析时返回 undefined 交由占位逻辑处理。 */
+function parseDefaultValue(
+  raw: string,
+  jsonType: CsLabCustomTool['params'][number]['jsonType'],
+): unknown {
+  if (raw === 'None' || raw === 'null') return undefined
+  switch (jsonType) {
+    case 'number':
+    case 'integer': {
+      const value = Number(raw)
+      return Number.isFinite(value) ? value : undefined
+    }
+    case 'boolean':
+      return raw === 'True' || raw === 'true'
+    case 'array':
+    case 'object': {
+      try {
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) === (jsonType === 'array') ? parsed : undefined
+      } catch {
+        return undefined
+      }
+    }
+    default: {
+      const quoted =
+        (raw.startsWith("'") && raw.endsWith("'")) ||
+        (raw.startsWith('"') && raw.endsWith('"'))
+      return quoted ? raw.slice(1, -1) : raw
+    }
+  }
+}
+
 /** 生成参数 JSON：先套用函数默认值，再把数据表路径注入最匹配的字符串参数。 */
 function buildArgsText(tool: CsLabCustomTool, path?: string | null): string {
   const args: Record<string, unknown> = {}
   for (const param of tool.params) {
-    if (param.defaultValue === undefined) continue
-    const raw = param.defaultValue.trim()
-    if (param.jsonType === 'number' || param.jsonType === 'integer') {
-      const value = Number(raw)
-      if (Number.isFinite(value)) args[param.name] = value
-    } else if (param.jsonType === 'boolean') {
-      args[param.name] = raw === 'True' || raw === 'true'
-    } else if (raw.startsWith("'") || raw.startsWith('"')) {
-      args[param.name] = raw.slice(1, -1)
+    const raw = param.defaultValue?.trim()
+    if (raw === undefined || raw === '') {
+      // Bug 10 修复：必填参数不得被静默跳过，按 jsonType 生成占位初值。
+      if (!param.required) continue
+      args[param.name] = placeholderFor(param.jsonType)
+      continue
     }
+    const parsed = parseDefaultValue(raw, param.jsonType)
+    if (parsed !== undefined) args[param.name] = parsed
+    else if (param.required) args[param.name] = placeholderFor(param.jsonType)
   }
 
   if (path) {
