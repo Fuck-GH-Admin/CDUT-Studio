@@ -67,7 +67,7 @@ export function CdutFeatureSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col p-6 sm:w-[680px] sm:max-w-2xl"
+        className="flex flex-col p-6 w-[680px] !max-w-2xl"
       >
         <SheetHeader className="mb-4 text-left">
           <SheetTitle className="flex items-center gap-2 text-lg font-bold">

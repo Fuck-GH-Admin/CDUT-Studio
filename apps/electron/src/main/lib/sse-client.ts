@@ -28,6 +28,74 @@ interface SSEMeta {
   retryCount: number
   retryDelay: number
   connected: boolean
+  /** 最近一次收到的 SSE 事件 id，用于重连时携带 Last-Event-ID 续传 */
+  lastEventId?: string
+  /** 已处理过的事件 id（带容量上限），用于重连后丢弃重复帧 */
+  seenEventIds?: Set<string>
+}
+
+/** 已处理事件 id 的保留上限，超出时删除最早写入的项 */
+export const MAX_SEEN_EVENT_IDS = 500
+
+/** 单个 SSE 帧的解析结果 */
+export interface ParsedSseFrame {
+  eventType: string
+  eventData: string
+  /** 帧内 `id:` 字段；无 id 或 id 为空时为 undefined */
+  eventId?: string
+}
+
+/**
+ * 解析单个 SSE 帧（纯函数，供单测使用）
+ *
+ * 只处理 `event:` / `data:` / `id:` 与注释行；data 多行时取最后一行，与既有行为保持一致。
+ */
+export function parseSseFrame(frame: string): ParsedSseFrame {
+  let eventType = ''
+  let eventData = ''
+  let eventId: string | undefined
+
+  for (const rawLine of frame.split('\n')) {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+
+    if (line.startsWith('event:')) {
+      eventType = line.slice(6).trim()
+    } else if (line.startsWith('data:')) {
+      eventData = line.slice(5).replace(/^ /, '')
+    } else if (line.startsWith('id:')) {
+      const value = line.slice(3).replace(/^ /, '')
+      if (value) eventId = value
+    } else if (line.startsWith(':')) {
+      // heartbeat 注释，忽略
+    }
+  }
+
+  return { eventType, eventData, eventId }
+}
+
+/** 该 id 是否已被处理过（重复帧应整帧丢弃） */
+export function isDuplicateEventId(
+  seenEventIds: Set<string> | undefined,
+  eventId: string | undefined,
+): boolean {
+  if (!eventId) return false
+  return seenEventIds?.has(eventId) ?? false
+}
+
+/** 记录已处理的事件 id，并按 FIFO 维持容量上限 */
+export function rememberEventId(
+  meta: { lastEventId?: string; seenEventIds?: Set<string> },
+  eventId: string,
+): void {
+  const seen = meta.seenEventIds ?? (meta.seenEventIds = new Set<string>())
+  seen.add(eventId)
+  meta.lastEventId = eventId
+
+  while (seen.size > MAX_SEEN_EVENT_IDS) {
+    const oldest = seen.values().next().value
+    if (oldest === undefined) break
+    seen.delete(oldest)
+  }
 }
 
 // ===== SSE 客户端 =====
@@ -74,6 +142,11 @@ class SSEClientManager {
 
   /** 连接到指定工作区的 SSE 端点 */
   async connect(workspaceId: string, baseUrl: string, token: string): Promise<void> {
+    // 重建连接前保留续传游标，避免窗口重新聚焦等主动重连丢事件
+    const previous = this.connections.get(workspaceId)
+    const previousLastEventId = previous?.lastEventId
+    const previousSeenEventIds = previous?.seenEventIds
+
     // 如果已有连接，先断开
     await this.disconnect(workspaceId)
 
@@ -84,6 +157,8 @@ class SSEClientManager {
       retryCount: 0,
       retryDelay: DEFAULT_RETRY_DELAY,
       connected: false,
+      lastEventId: previousLastEventId,
+      seenEventIds: previousSeenEventIds ?? new Set<string>(),
     }
     this.connections.set(workspaceId, meta)
 
@@ -93,12 +168,18 @@ class SSEClientManager {
   private async doConnect(workspaceId: string, meta: SSEMeta): Promise<void> {
     const url = `${meta.baseUrl}/v1/workspaces/${workspaceId}/events`
 
+    // 重连时携带 Last-Event-ID，让服务端从上次事件之后续传
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${meta.token}`,
+      Accept: 'text/event-stream',
+    }
+    if (meta.lastEventId) {
+      headers['Last-Event-ID'] = meta.lastEventId
+    }
+
     try {
       const response = await (undiciFetch as unknown as typeof fetch)(url, {
-        headers: {
-          Authorization: `Bearer ${meta.token}`,
-          Accept: 'text/event-stream',
-        },
+        headers,
         signal: meta.abortController.signal,
       })
 
@@ -138,7 +219,7 @@ class SSEClientManager {
             const idx = buffer.indexOf('\n\n')
             const frame = buffer.slice(0, idx)
             buffer = buffer.slice(idx + 2)
-            this.parseFrame(workspaceId, frame)
+            this.parseFrame(workspaceId, meta, frame)
           }
         }
       } catch (err) {
@@ -175,19 +256,16 @@ class SSEClientManager {
   }
 
   /** 解析单个 SSE 帧 */
-  private parseFrame(workspaceId: string, frame: string): void {
-    const lines = frame.split('\n')
-    let eventType = ''
-    let eventData = ''
+  private parseFrame(workspaceId: string, meta: SSEMeta, frame: string): void {
+    const { eventType, eventData, eventId } = parseSseFrame(frame)
 
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        eventType = line.slice(7).trim()
-      } else if (line.startsWith('data: ')) {
-        eventData = line.slice(6)
-      } else if (line.startsWith(':')) {
-        // heartbeat 注释，忽略
-      }
+    // 重复 id 的整帧直接丢弃（重连后服务端可能重放）
+    if (isDuplicateEventId(meta.seenEventIds, eventId)) {
+      return
+    }
+    // 先记录游标：即使该帧后续被跳过，重连时也能从它之后继续
+    if (eventId) {
+      rememberEventId(meta, eventId)
     }
 
     if (!eventType || !eventData) return

@@ -90,27 +90,6 @@ export function planRunGraph(template: TemplateVersion): RunGraphNode[] {
   return nodes
 }
 
-/** 恢复检查点：done 且 hash 一致 → 跳过（不重做已完成检查） */
-export function restoreCheckpoints(
-  nodes: RunGraphNode[],
-  checkpoints: CheckpointRecord[],
-): { nodes: RunGraphNode[]; skipped: string[] } {
-  const checkpointById = new Map(checkpoints.map((checkpoint) => [checkpoint.nodeId, checkpoint]))
-  const skipped: string[] = []
-  const restored = nodes.map((node) => {
-    const checkpoint = checkpointById.get(node.id)
-    if (checkpoint && checkpoint.status === 'done' && node.inputHash !== undefined && node.inputHash === checkpoint.inputHash) {
-      skipped.push(node.id)
-      return { ...node, status: 'done' as const, inputHash: checkpoint.inputHash }
-    }
-    if (checkpoint && checkpoint.status === 'failed') {
-      return { ...node, status: 'pending' as const, attempts: checkpoint.attempts, lastError: checkpoint.lastError }
-    }
-    return node
-  })
-  return { nodes: restored, skipped }
-}
-
 export interface RunOutcome {
   status: RunV2Status
   checkpoints: CheckpointRecord[]

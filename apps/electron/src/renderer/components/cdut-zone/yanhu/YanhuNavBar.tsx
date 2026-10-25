@@ -144,7 +144,7 @@ export function YanhuNavBar({
           title="打开研学浏览器底层诊断控制台（实时监控 CDP / DOM 蒸馏 / 因果边）"
         >
           <Activity size={12} className="text-primary" />
-          <span className="hidden sm:inline">诊断控制台</span>
+          <span className="inline">诊断控制台</span>
         </button>
       </div>
 

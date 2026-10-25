@@ -47,6 +47,22 @@ function invoke(channel: string, event: unknown): unknown {
 }
 
 describe('AUTH-06 legacy write sender boundary', () => {
+  test('新增检查点续跑入口同样拒绝非主窗口、子 frame 与越界身份', async () => {
+    handlers.clear()
+    setMainWindow({ isDestroyed: () => false, webContents: sender } as never)
+    registerReviewIpc()
+    const resume = handlers.get(REVIEW_IPC_CHANNELS.RESUME_RUN_V2)!
+    expect(resume).toBeDefined()
+    for (const event of [{ sender: { ...sender }, senderFrame: frame }, { sender, senderFrame: { id: 2 } }]) {
+      await expect(Promise.resolve(resume(event, { caseId: 'resume-case', runId: 'old-run' })))
+        .rejects.toThrow('SENDER_UNTRUSTED')
+    }
+    await expect(Promise.resolve(resume(trusted, { caseId: '../../outside', runId: 'old-run' })))
+      .rejects.toThrow('非法 caseId')
+    await expect(Promise.resolve(resume(trusted, { caseId: 'resume-case', runId: '../../outside' })))
+      .rejects.toThrow('非法 runId')
+  })
+
   test('all legacy high-impact writes reject a forged window and a subframe before writing', () => {
     handlers.clear()
     setMainWindow({ isDestroyed: () => false, webContents: sender } as never)

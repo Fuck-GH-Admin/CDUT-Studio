@@ -153,7 +153,7 @@ export function CreateCaseDialog({ open, onOpenChange, templates, onCreate }: Cr
               : <p className="text-xs text-muted-foreground">此草稿暂不安装正式 CanonicalPlan；材料与人工事项可先记录，自动审核须等已核验的计划和执行授权。</p>}
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="review-case-applicant">申请主体</Label>
               <Input

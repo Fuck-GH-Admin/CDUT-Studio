@@ -8,7 +8,7 @@
  * 布局：工作台二级工具栏（模块导航 + 案卷摘要 + 出口徽标 + 操作按钮） +
  * 三栏（审核依据 | 申请与证明 | AI 审核员） + 助手抽屉 + 底部错误条。
  * 三栏宽度 flex-[3] / flex-[4] / flex-[3]，栏间 1px 分隔，各自独立滚动（overflow-y-auto）。
- * 窄窗口（<1100px）时只挂载当前栏，由顶部三按钮切换；切栏时重放已有定位。
+ * 窄窗口（<lg，即 1024px）时只挂载当前栏，由顶部三按钮切换；切栏时重放已有定位。
  *
  * 交互：
  * - 挂载时 actions.initialize()：刷新案卷列表 + 模型出口自检（工具栏徽标）。
@@ -46,6 +46,7 @@ import {
 import { channelsAtom } from '@/atoms/conversation-atoms'
 import type { ReviewModelGatewayStatus } from '@profer/shared'
 import { cn } from '@/lib/utils'
+import { BREAKPOINTS } from '@/lib/breakpoints'
 import { AssistantDrawer } from './AssistantDrawer'
 import { CenterPanel } from './CenterPanel'
 import { LeftPanel } from './LeftPanel'
@@ -64,8 +65,11 @@ import { ReviewSettingsPanel } from './ReviewSettingsPanel'
 /** 窄屏单栏切换的栏目标识 */
 type Pane = 'left' | 'center' | 'right'
 
-/** 窄屏阈值：小于该宽度降级为单栏（与设计文档"窄窗口可切标签"一致） */
-const NARROW_BREAKPOINT_PX = 1100
+/**
+ * 窄屏阈值：审校三栏在 lg（1024px）以下切单栏。
+ * 阈值来自 lib/breakpoints.ts，与 Tailwind 的 lg 变体同源，避免媒体查询与 JS 判断两套数值。
+ */
+const NARROW_BREAKPOINT_PX = BREAKPOINTS.lg
 
 export function ContentReviewView(): React.ReactElement {
   const reviewCase = useAtomValue(reviewCaseAtom)

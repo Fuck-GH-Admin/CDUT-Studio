@@ -37,7 +37,7 @@ export const ContextMemoryToggleButton: React.FC<ContextMemoryToggleButtonProps>
               <span className="pointer-events-none absolute left-1/2 top-1/2 h-px w-4 -translate-x-1/2 -translate-y-1/2 rotate-45 bg-current" />
             )}
           </span>
-          <span className="hidden sm:inline">{disabled ? '记忆关' : '记忆开'}</span>
+          <span className="hidden min-[420px]:inline">{disabled ? '记忆关' : '记忆开'}</span>
         </button>
       </TooltipTrigger>
       <TooltipContent side="top" className="text-xs max-w-[220px]">

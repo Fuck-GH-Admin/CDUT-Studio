@@ -1,8 +1,8 @@
 /**
  * 同步死信队列：超过重试上限的 envelope 仍落入本队列，而非静默丢弃。
- * 持久化到 ~/.cdutai/sync-dead-letters.jsonl，供 UI 查看 / 手动重试 / 导出。
+ * 持久化到 ~/.cdutai/sync/dead-letters.jsonl，供 UI 查看 / 手动重试 / 导出。
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getConfigDir } from './config-paths'
 import type { SyncEnvelope } from './sync-types'
@@ -37,6 +37,29 @@ export function readDeadLetters(): SyncEnvelope[] {
   } catch (e) {
     console.error('[同步] 读取死信队列失败:', e)
     return []
+  }
+}
+
+/** 原子重写死信文件（先写临时文件再 rename），空数组表示清空队列 */
+export function rewriteDeadLetters(envelopes: SyncEnvelope[]): void {
+  const path = getDeadLetterPath()
+  const tmpPath = `${path}.tmp`
+  const body = envelopes.map((env) => JSON.stringify(env)).join('\n')
+  writeFileSync(tmpPath, body ? `${body}\n` : '', 'utf-8')
+  renameSync(tmpPath, path)
+}
+
+/** 当前死信条数（只统计行数，供 UI 轻量展示） */
+export function getDeadLetterCount(): number {
+  const path = getDeadLetterPath()
+  if (!existsSync(path)) return 0
+  try {
+    const raw = readFileSync(path, 'utf-8').trim()
+    if (!raw) return 0
+    return raw.split('\n').filter((line) => line.trim().length > 0).length
+  } catch (e) {
+    console.error('[同步] 统计死信队列失败:', e)
+    return 0
   }
 }
 

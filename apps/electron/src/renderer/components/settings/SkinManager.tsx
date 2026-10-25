@@ -54,7 +54,7 @@ function SkinGroup({ title, skins, themeMode, themeStyle, onSelect, onDelete, em
   return (
     <SettingsCard divided={false}>
       <div className="px-4 pt-3 text-sm font-medium">{title}</div>
-      {skins.length === 0 ? empty : <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">{skins.map((skin) => {
+      {skins.length === 0 ? empty : <div className="grid grid-cols-4 gap-3 p-4">{skins.map((skin) => {
         const active = themeMode === 'special' && themeStyle === skin.id
         return <div key={skin.id} className="relative">
           <button type="button" onClick={() => onSelect(skin.id)} className={`w-full overflow-hidden rounded-lg border text-left transition-colors ${active ? 'border-primary ring-1 ring-primary' : 'border-surface-border hover:border-primary/50'}`}>

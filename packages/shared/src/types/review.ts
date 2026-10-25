@@ -587,6 +587,8 @@ export const REVIEW_IPC_CHANNELS = {
   STOP_BACKGROUND_PI_REVIEW_V2: 'review-v2:stop-background-pi-review',
   /** 发送失败时结束直接审核运行并撤销本轮授权。 */
   ABORT_PI_REVIEW_V2: 'review-v2:abort-pi-review',
+  /** 续跑：沿用既有运行检查点（崩溃/等待输入后继续） */
+  RESUME_RUN_V2: 'review-v2:resume-run',
   LIST_RUNS_V2: 'review-v2:list-runs',
   GET_RUN_V2: 'review-v2:get-run',
   CANCEL_RUN_V2: 'review-v2:cancel-run',

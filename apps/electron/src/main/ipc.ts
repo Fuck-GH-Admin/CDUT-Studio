@@ -7475,6 +7475,7 @@ export function registerIpcHandlers(): void {
     triggerSync,
     getPendingChanges,
     discardPendingChanges,
+    retryDeadLetterEnvelopes,
   } = require('./lib/sync-manager')
 
   ipcMain.handle(
@@ -7495,6 +7496,19 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     SYNC_IPC_CHANNELS.DISCARD_PENDING_CHANGES,
     async (_, workspaceId: string) => { discardPendingChanges(workspaceId) }
+  )
+
+  ipcMain.handle(
+    SYNC_IPC_CHANNELS.LIST_DEAD_LETTERS,
+    async () => {
+      const { readDeadLetters } = require('./lib/sync-dead-letter')
+      return readDeadLetters()
+    }
+  )
+
+  ipcMain.handle(
+    SYNC_IPC_CHANNELS.RETRY_DEAD_LETTERS,
+    async () => retryDeadLetterEnvelopes()
   )
 
   // ===== 团队管理 =====

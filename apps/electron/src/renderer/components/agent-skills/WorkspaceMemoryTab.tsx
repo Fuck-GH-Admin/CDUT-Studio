@@ -557,8 +557,8 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
         </div>
       </SettingsCard>
 
-      <div className="grid min-h-[520px] gap-4 min-[900px]:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]">
-        <SettingsCard divided={false} className="min-h-[180px] overflow-hidden min-[900px]:min-h-0">
+      <div className="grid min-h-[520px] gap-4 lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]">
+        <SettingsCard divided={false} className="min-h-[180px] overflow-hidden lg:min-h-0">
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
               <div className="text-[13px] font-medium text-foreground/75">记忆文件</div>
@@ -637,7 +637,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
           </div>
         </SettingsCard>
 
-        <SettingsCard divided={false} className="min-h-[360px] overflow-hidden min-[900px]:min-h-0">
+        <SettingsCard divided={false} className="min-h-[360px] overflow-hidden lg:min-h-0">
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/50 px-3 py-3 sm:px-4">
               <div className="min-w-0">

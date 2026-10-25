@@ -123,8 +123,8 @@ export function registerReviewIpc(): void {
 
   // 启动恢复：上次进程遗留的 queued/running 运行标 interrupted（08 设计 §5）
   try {
-    const { markStaleRunsInterrupted } = require('./run-store-v2') as typeof import('./run-store-v2')
-    const recovered = markStaleRunsInterrupted()
+    const { recoverInterruptedRuns } = require('./run-store-v2') as typeof import('./run-store-v2')
+    const recovered = recoverInterruptedRuns()
     if (recovered > 0) console.log(`[审核V2] 启动恢复：${recovered} 个中断运行已标记（可续跑）`)
   } catch (error) {
     console.warn('[审核V2] 启动恢复检查失败:', error)
@@ -1155,8 +1155,8 @@ export function registerReviewIpc(): void {
     const { assembleAndRunReview } = require('./run-async-service') as typeof import('./run-async-service')
     const completed = await runBatchQueue(batchId, {
       runCase: async (caseId: string) => {
-        const run = await assembleAndRunReview(caseId)
-        return { status: run.status }
+        const run = await assembleAndRunReview(caseId, { resumeLatest: true })
+        return { status: run.status, runId: run.id }
       },
     })
     if (completed.automation && completed.automation.mode !== 'assist') {
@@ -1172,6 +1172,19 @@ export function registerReviewIpc(): void {
     // 薄委托共享运行服务（08 设计：IPC 与 Agent 工具同服务函数；人工发起 local-user）
     const { assembleAndRunReview } = require('./run-async-service') as typeof import('./run-async-service')
     return assembleAndRunReview(caseId)
+  })
+  /** 旧 V2 检查点续跑使用同一装配服务，保留当前 Pi/OCR/视觉读取链路。 */
+  ipcMain.handle(REVIEW_IPC_CHANNELS.RESUME_RUN_V2, async (event, input: { caseId: string; runId?: string }) => {
+    assertC0ReviewMainSender(event)
+    if (!input || typeof input !== 'object') throw new Error('参数 input 缺失或类型非法')
+    const caseId = requireString(input.caseId, 'caseId')
+    assertSafeReviewStorageId(caseId, 'caseId')
+    if (input.runId !== undefined && typeof input.runId !== 'string') throw new Error('参数 runId 类型非法')
+    const targetRunId = input.runId ?? findResumableRunId(caseId)
+    if (!targetRunId) throw new Error('没有可续跑的运行')
+    assertSafeReviewStorageId(targetRunId, 'runId')
+    const { assembleAndRunReview } = require('./run-async-service') as typeof import('./run-async-service')
+    return assembleAndRunReview(caseId, { resumeRunId: targetRunId })
   })
   ipcMain.handle(REVIEW_IPC_CHANNELS.PREPARE_PI_REVIEW_V2, (_event, input: { caseId: string; sessionId: string; turnId: string; resumeRunId?: string; inheritReadReceipts?: boolean }) => {
     assertReviewPreuploadAllowed('read', { caseId: input?.caseId })
@@ -1782,6 +1795,12 @@ export function registerReviewIpc(): void {
   })
 
   console.log('[审核专区] IPC 处理器注册完成')
+}
+
+/** 最近一条输入仍匹配的可续跑运行；材料变化不会自动套用旧检查点。 */
+function findResumableRunId(caseId: string): string | undefined {
+  const { findResumableRunIdForCase } = require('./run-async-service') as typeof import('./run-async-service')
+  return findResumableRunIdForCase(caseId)
 }
 
 /** GET_RUN 的实现（独立函数，避免 handler 内联依赖） */

@@ -6,9 +6,9 @@
  * - 取消：cancelRunV2（进程内注册表）+ 外部 signal 穿透 chatCompletion
  * - 发起者：initiatedBy 落盘到运行记录（时间线可辨人工/AI）
  */
-import type { Actor, ReviewRunV2 } from '@profer/shared'
-import { cancelRunV2, isRunCancelled, runReviewCaseV2 } from './run-service-v2'
-import { getRunV2, saveRunV2 } from './run-store-v2'
+import type { Actor, CaseAggregateV2, ReviewRunV2 } from '@profer/shared'
+import { cancelRunV2, computeRunInputHash, isRunCancelled, runReviewCaseV2 } from './run-service-v2'
+import { getRunV2, listRunsV2, saveRunV2 } from './run-store-v2'
 import type { CommandSourceMeta } from './case-store-v2'
 import { getConfigDir } from '../config-paths'
 import { createPiReviewModelClient } from './pi-review-agent-client'
@@ -29,6 +29,21 @@ interface ActiveRun {
 
 /** 进程内运行登记表：key = runId（同案去重与取消都查这里） */
 const activeRuns = new Map<string, ActiveRun>()
+
+/** 自动续跑只复用当前输入的检查点；材料或事实变化时由批次创建新运行。 */
+function matchingResumeRunId(aggregate: CaseAggregateV2): string | undefined {
+  const hash = computeRunInputHash(aggregate.caseV2,
+    aggregate.observations as unknown as Array<Record<string, unknown>>,
+    aggregate.evidenceLinks as unknown as Array<Record<string, unknown>>)
+  return listRunsV2(aggregate.caseV2.id).find(run =>
+    ['failed', 'running', 'awaiting-input'].includes(run.status) && run.inputManifest.hash === hash)?.id
+}
+
+export function findResumableRunIdForCase(caseId: string): string | undefined {
+  const { getCaseV2Aggregate } = require('./application-service') as typeof import('./application-service')
+  const aggregate = getCaseV2Aggregate(caseId)
+  return aggregate ? matchingResumeRunId(aggregate) : undefined
+}
 
 /** 组装模型 client + OCR 端口（渠道/OCR 装配的唯一出口，IPC 与 Agent 工具薄委托） */
 async function assembleReviewClient(caseId: string): Promise<{ client: import('./pi-review-executor').ReviewModelClient; ocrPort: import('./system-tesseract-ocr-adapter').SystemTesseractOcrPort; imageInspector: ReviewImageInspector }> {
@@ -104,7 +119,7 @@ function assertCaseReadyForReview(
   }
 }
 
-export async function assembleAndRunReview(caseId: string, options: { signal?: AbortSignal; initiatedBy?: Actor } = {}): Promise<ReviewRunV2> {
+export async function assembleAndRunReview(caseId: string, options: { signal?: AbortSignal; initiatedBy?: Actor; resumeRunId?: string; resumeLatest?: boolean } = {}): Promise<ReviewRunV2> {
   assertReviewPreuploadAllowed('read', { caseId })
   const { rehydrateLegacyPdfImageBlocks } = require('./case-import') as typeof import('./case-import')
   await rehydrateLegacyPdfImageBlocks(caseId)
@@ -120,6 +135,7 @@ export async function assembleAndRunReview(caseId: string, options: { signal?: A
   const { client, ocrPort, imageInspector } = await assembleReviewClient(caseId)
   const executors = await assembleV2Executors(aggregate, template, { client, ocrPort, imageInspector, signal: options.signal })
   return runReviewCaseV2(aggregate.caseV2, template, executors, {
+    resumeRunId: options.resumeRunId ?? (options.resumeLatest ? matchingResumeRunId(aggregate) : undefined),
     initiatedBy: options.initiatedBy ?? { actorId: 'local-user', actorSource: 'local', role: 'reviewer' },
     cancelled: options.signal ? () => options.signal!.aborted : undefined,
     observationSnapshot: aggregate.observations as unknown as Array<Record<string, unknown>>,

@@ -106,9 +106,9 @@ export function markStaleRunsInterrupted(caseId?: string): number {
             throw new Error('恢复运行记录的案卷或轮次身份与文件路径不一致')
           }
           run.status = 'failed'
-          run.error = '应用重启导致运行中断（材料与检查点已保留，可续跑）'
+          run.error = '应用重启，运行已中断'
           run.completedAt = new Date().toISOString()
-          run.diagnostics = [...(run.diagnostics ?? []), INTERRUPTED_RUN_MARKER]
+          run.diagnostics = [...(run.diagnostics ?? []), INTERRUPTED_RUN_MARKER, '[recovery] 检测到进程重启，运行标记为中断']
           // 复用原子写；不能在容量故障时截断最后一份有效运行记录。
           saveRunV2(run)
           count += 1
@@ -143,6 +143,15 @@ export function listRunsV2(caseId: string): ReviewRunV2[] {
     .map((name) => getRunV2(caseId, name.replace('.json', '')))
     .filter((run): run is ReviewRunV2 => !!run)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+}
+
+/**
+ * 启动恢复：进程崩溃/重启后磁盘上仍是 running 的运行不可能自行推进，统一标记为 failed。
+ * 保留检查点与产物（可续跑），只补错误、完成时间与诊断。返回恢复条数。
+ */
+export function recoverInterruptedRuns(): number {
+  // 与既有启动恢复统一：保留上游 API，并复用路径校验、原子写和旧授权拒止。
+  return markStaleRunsInterrupted()
 }
 
 /** 节点产物目录：runs-v2/{runId}/artifacts/{nodeId}.json（不可变；恢复核验依据，R03） */

@@ -24,14 +24,14 @@ export function CdutWatermarkBackground(): React.ReactElement {
         src={lightMascotImg}
         alt=""
         draggable={false}
-        className="w-[260px] max-w-[42vw] object-contain opacity-30 mix-blend-multiply [mask-image:radial-gradient(circle_at_bottom_left,black_50%,transparent_95%)] sm:w-[320px] dark:hidden"
+        className="w-[320px] max-w-[42vw] object-contain opacity-30 mix-blend-multiply [mask-image:radial-gradient(circle_at_bottom_left,black_50%,transparent_95%)] dark:hidden"
       />
       {/* 深色模式：真透明立绘，避免反相导致的面部变黑与瞳孔发白 */}
       <img
         src={darkMascotImg}
         alt=""
         draggable={false}
-        className="hidden w-[260px] max-w-[42vw] object-contain opacity-20 [mask-image:radial-gradient(circle_at_bottom_left,black_45%,transparent_90%)] sm:w-[320px] dark:block"
+        className="hidden w-[320px] max-w-[42vw] object-contain opacity-20 [mask-image:radial-gradient(circle_at_bottom_left,black_45%,transparent_90%)] dark:block"
       />
     </div>
   )
