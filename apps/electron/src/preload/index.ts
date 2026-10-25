@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Preload 脚本
  *
  * 通过 contextBridge 安全地将 API 暴露给渲染进程
@@ -65,6 +65,8 @@ import {
   type CsLabAcademicIngestResult,
   type CsLabPlotDigitizeInput,
   type CsLabPlotDigitizeResult,
+  type CsLabTickReadInput,
+  type CsLabTickReadResult,
   type CsLabDigitizedFigureInput,
   type CsLabDigitizedFigureResult,
   type CsLabFormulaVerifyInput,
@@ -1801,8 +1803,7 @@ export interface ElectronAPI {
     }) => Promise<CsLabZoteroAnnotation[]>
     startZoteroWatch: (labId: string) => Promise<{ watching: boolean; message: string }>
     stopZoteroWatch: (labId: string) => Promise<{ watching: boolean }>
-    /** probePath：实际命中的探测路径（/connector/ping 或 /ping）。 */
-    getZoteroBridgeStatus: () => Promise<CsLabZoteroBridgeStatus & { probePath?: string }>
+    getZoteroBridgeStatus: () => Promise<CsLabZoteroBridgeStatus>
     /** 生成默认写回桥接配置模板（zotero-bridge.json），返回其绝对路径。 */
     initZoteroBridgeConfig: () => Promise<{
       ok: boolean
@@ -1828,6 +1829,8 @@ export interface ElectronAPI {
 
     /** 图表逆向数字化 */
     digitizePlot: (input: CsLabPlotDigitizeInput) => Promise<CsLabPlotDigitizeResult>
+    /** 刻度数值自动读取（read-tick 模板匹配）；value=null 表示低置信度，由用户手填。 */
+    readTickValue: (input: CsLabTickReadInput) => Promise<CsLabTickReadResult>
     saveDigitizedFigure: (
       input: CsLabDigitizedFigureInput,
     ) => Promise<CsLabDigitizedFigureResult>
@@ -4340,7 +4343,7 @@ const electronAPI: ElectronAPI = {
     getZoteroBridgeStatus: () =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_GET_BRIDGE_STATUS),
     initZoteroBridgeConfig: () =>
-      ipcRenderer.invoke('cslab:zotero-bridge-init-config'),
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.ZOTERO_BRIDGE_INIT_CONFIG),
 
     getLiteratureItem: (input: { labId: string; uri: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_ITEM, input),
@@ -4349,6 +4352,7 @@ const electronAPI: ElectronAPI = {
     getLiteratureGuide: (input: { labId: string; literatureUri: string }) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.GET_LITERATURE_GUIDE, input),
 
+    readTickValue: (input: CsLabTickReadInput) => ipcRenderer.invoke(CSLAB_IPC_CHANNELS.READ_TICK_VALUE, input),
     digitizePlot: (input: CsLabPlotDigitizeInput) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.DIGITIZE_PLOT, input),
     saveDigitizedFigure: (input: CsLabDigitizedFigureInput) =>
@@ -4438,7 +4442,7 @@ const electronAPI: ElectronAPI = {
     stopVaultWatch: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.VAULT_STOP_WATCH, labId),
     openObsidianVault: (input: { labId: string }) =>
-      ipcRenderer.invoke('cslab:open-obsidian-vault', input),
+      ipcRenderer.invoke(CSLAB_IPC_CHANNELS.OPEN_OBSIDIAN_VAULT, input),
     listCanvases: (labId: string) =>
       ipcRenderer.invoke(CSLAB_IPC_CHANNELS.CANVAS_LIST, labId),
     createCanvas: (input: { labId: string; title: string }) =>

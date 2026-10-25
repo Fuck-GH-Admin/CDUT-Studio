@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import Editor, { PageMode } from '@hufe921/canvas-editor'
+import Editor, { EditorMode, ElementType, PageMode } from '@hufe921/canvas-editor'
 import type {
   IEditorData,
   IElement,
@@ -141,6 +141,8 @@ export function CsLabCanvasEditor({
   const initializingRef = React.useRef(true)
   const pageRef = React.useRef({ current: 1, total: 1 })
   const metricsTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [handTool, setHandTool] = React.useState(false)
+  const handToolRef = React.useRef(false)
   const propsRef = React.useRef({
     labId,
     staleCapsuleIds,
@@ -353,6 +355,39 @@ export function CsLabCanvasEditor({
           return ''
         }
       },
+      insertImage(payload: { value: string; width: number; height: number }) {
+        if (!payload.value) return
+        try {
+          editor.command.executeInsertElementList(
+            [
+              {
+                type: ElementType.IMAGE,
+                value: payload.value,
+                width: payload.width,
+                height: payload.height,
+              },
+            ],
+            { isSubmitHistory: true },
+          )
+          editor.command.executeFocus()
+        } catch {
+          propsRef.current.onToast?.('error', '图片插入失败，请先把光标定位到正文')
+        }
+      },
+      insertLatex(latex: string) {
+        const value = latex.trim()
+        if (!value) return
+        try {
+          // 元素规范化阶段引擎会按 value 调内置 LaTeX→SVG 渲染器，回填 laTexSVG/width/height。
+          editor.command.executeInsertElementList([{ type: ElementType.LATEX, value }], {
+            isSubmitHistory: true,
+          })
+          editor.command.executeFocus()
+        } catch {
+          propsRef.current.onToast?.('error', '公式插入失败，请先把光标定位到正文')
+        }
+      },
+      setHandTool: (enabled: boolean) => setHandTool(enabled),
     }
 
     handleRef.current = handle
@@ -415,6 +450,8 @@ export function CsLabCanvasEditor({
     editor.eventBus.on('pageScaleChange', onPageScale)
 
     const onMouseDown = (event: MouseEvent): void => {
+      // 抓手平移态：命中检测交由平移手势处理，避免误触胶囊联动。
+      if (handToolRef.current) return
       try {
         const context = editor.command.getPositionContextByEvent(event, {
           isMustDirectHit: false,
@@ -518,6 +555,62 @@ export function CsLabCanvasEditor({
   React.useEffect(() => {
     handleRef.current?.toggleRuler(showRuler)
   }, [showRuler])
+
+  // 抓手平移：拖拽滚动画布视口（host 即 scrollContainer）；期间切只读防止误编辑/误选区。
+  React.useEffect(() => {
+    handToolRef.current = handTool
+    const host = hostRef.current
+    if (!host) return
+    const applyMode = (mode: EditorMode): void => {
+      try {
+        editorRef.current?.command.executeMode(mode)
+      } catch {
+        // 编辑器已销毁时忽略。
+      }
+    }
+    if (!handTool) {
+      host.style.removeProperty('cursor')
+      applyMode(EditorMode.EDIT)
+      return
+    }
+    applyMode(EditorMode.READONLY)
+    host.style.cursor = 'grab'
+    let panning: { x: number; y: number; scrollLeft: number; scrollTop: number } | null = null
+    const onMouseDown = (event: MouseEvent): void => {
+      if (event.button !== 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      panning = {
+        x: event.clientX,
+        y: event.clientY,
+        scrollLeft: host.scrollLeft,
+        scrollTop: host.scrollTop,
+      }
+      host.style.cursor = 'grabbing'
+    }
+    const onMouseMove = (event: MouseEvent): void => {
+      if (!panning) return
+      event.preventDefault()
+      host.scrollLeft = panning.scrollLeft - (event.clientX - panning.x)
+      host.scrollTop = panning.scrollTop - (event.clientY - panning.y)
+    }
+    const onMouseUp = (): void => {
+      if (!panning) return
+      panning = null
+      host.style.cursor = 'grab'
+    }
+    host.addEventListener('mousedown', onMouseDown, true)
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      host.removeEventListener('mousedown', onMouseDown, true)
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+      host.style.removeProperty('cursor')
+      applyMode(EditorMode.EDIT)
+      handToolRef.current = false
+    }
+  }, [handTool])
 
   return <div ref={hostRef} id={hostId} className="cslab-canvas-host relative h-full w-full" />
 }

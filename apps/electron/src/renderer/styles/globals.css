@@ -3094,28 +3094,32 @@
   flex-shrink: 0;
 }
 
-/* ===== CSLab PDF 文本层（pdf.js TextLayer） =====
- * 文本透明但可原生选中；布局由 pdf.js 以绝对定位注入 span。 */
-.cslab-pdf-text-layer {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  line-height: 1;
-  text-size-adjust: none;
-  transform-origin: 0 0;
+/* ===== CSLab PDF 文本层（pdf.js TextLayer）· 样式作用域隔离 =====
+ * 基础样式由 pdfjs-dist/web/pdf_viewer.css 在 CsLabPdfViewer.tsx 内 import 提供，
+ * 这里只做覆盖，绝不复制 pdf_viewer.css 的规则，也绝不写全局 .textLayer ——
+ * 全部规则带 .cslab-pdf-viewport 前缀，避免污染其他富文本组件。
+ * --scale-factor 同样只在 .cslab-pdf-viewport 容器上由组件注入（当前 zoom 值）。
+ */
+.cslab-pdf-viewport .textLayer {
+  /* 选区层压在 canvas 之上，保证划词可见可点（pdf.js 默认 z-index: 0）。 */
   z-index: 2;
 }
-.cslab-pdf-text-layer span,
-.cslab-pdf-text-layer br {
-  color: transparent;
-  position: absolute;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0% 0%;
-}
-.cslab-pdf-text-layer span::selection {
+.cslab-pdf-viewport .textLayer ::selection {
   background: rgba(47, 111, 237, 0.28);
 }
-.cslab-pdf-text-layer span::-moz-selection {
+.cslab-pdf-viewport .textLayer ::-moz-selection {
   background: rgba(47, 111, 237, 0.28);
+}
+/* 深色模式：pdf.js 默认 ::selection 偏暗看不清，改用亮色高亮。 */
+.dark .cslab-pdf-viewport .textLayer ::selection,
+.dark .cslab-pdf-viewport .textLayer ::-moz-selection,
+.theme-ocean-dark .cslab-pdf-viewport .textLayer ::selection,
+.theme-ocean-dark .cslab-pdf-viewport .textLayer ::-moz-selection,
+.theme-forest-dark .cslab-pdf-viewport .textLayer ::selection,
+.theme-forest-dark .cslab-pdf-viewport .textLayer ::-moz-selection,
+.theme-slate-dark .cslab-pdf-viewport .textLayer ::selection,
+.theme-slate-dark .cslab-pdf-viewport .textLayer ::-moz-selection,
+.theme-terminal-dark .cslab-pdf-viewport .textLayer ::selection,
+.theme-terminal-dark .cslab-pdf-viewport .textLayer ::-moz-selection {
+  background: rgba(125, 211, 252, 0.45);
 }

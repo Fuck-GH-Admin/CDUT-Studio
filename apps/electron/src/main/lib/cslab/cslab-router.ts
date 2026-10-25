@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CSLab IPC 路由与分发层
  *
  * 严格收敛于 cslab 隔离目录，由 main/ipc.ts 单点挂载。
@@ -38,6 +38,7 @@ import type {
   CsLabZoteroBridgeWriteInput,
   CsLabLiteratureSearchInput,
   CsLabPlotDigitizeInput,
+  CsLabTickReadInput,
   CsLabDigitizedFigureInput,
   CsLabTableExportFormat,
   CsLabTableExportResult,
@@ -171,7 +172,7 @@ import {
   ensureToolEnvironment,
   getToolRuntimeStatus,
 } from './cslab-python-runtime'
-import { digitizePlot } from './cslab-plot-digitizer'
+import { digitizePlot, readTickValue } from './cslab-plot-digitizer'
 import { persistDigitizedFigure } from './cslab-dataset-store'
 import { analyzeDem, parseGeoRasterBuffer } from './cslab-geohazard'
 import { ocrFormula, verifyFormula } from './cslab-formula-verifier'
@@ -1217,8 +1218,33 @@ export function registerCsLabIpc(): void {
       mode: record.mode,
       calibration: record.calibration as CsLabPlotDigitizeInput['calibration'],
       color: typeof record.color === 'string' ? record.color : undefined,
+      colors: Array.isArray(record.colors)
+        ? record.colors.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : undefined,
+      seriesCount: typeof record.seriesCount === 'number' ? record.seriesCount : undefined,
       tolerance: typeof record.tolerance === 'number' ? record.tolerance : undefined,
     })
+  })
+
+  // ===== 刻度数值自动读取（read-tick 模板匹配） =====
+  ipcMain.handle(CSLAB_IPC_CHANNELS.READ_TICK_VALUE, async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('刻度识别参数无效')
+    const record = input as Partial<CsLabTickReadInput>
+    const labId = asString(record.labId, '实验室标识')
+    if (typeof record.imageDataUrl !== 'string' || !record.imageDataUrl.trim()) {
+      throw new Error('缺少框选图像')
+    }
+    const rect = record.rect as CsLabTickReadInput['rect'] | undefined
+    if (
+      !rect
+      || !Number.isFinite(rect.x)
+      || !Number.isFinite(rect.y)
+      || !Number.isFinite(rect.w)
+      || !Number.isFinite(rect.h)
+    ) {
+      throw new Error('刻度识别区域无效')
+    }
+    return readTickValue({ labId, imageDataUrl: record.imageDataUrl, rect })
   })
 
   ipcMain.handle(CSLAB_IPC_CHANNELS.SAVE_DIGITIZED_FIGURE, async (_event, input: unknown) => {
@@ -1258,14 +1284,17 @@ export function registerCsLabIpc(): void {
     })
   })
 
-  // ===== 选区学术翻译（OCR + 隔离补全，防提示词注入） =====
+  // ===== 选区学术翻译（矢量直读 / 视觉 LLM / OCR 隔离补全，防提示词注入） =====
   ipcMain.handle(CSLAB_IPC_CHANNELS.TRANSLATE_SELECTION, async (_event, input: unknown) => {
     if (!input || typeof input !== 'object') throw new Error('翻译参数无效')
     const record = input as Partial<CsLabTranslateSelectionInput>
     // 业务级失败（OCR 缺依赖 / 渠道未配置）以结果对象返回，不抛 IPC 异常。
+    // vectorText / imageDataUrl 至少其一即可（仅有矢量文字不得被误拦，R2）。
     return translateSelection({
       labId: asString(record.labId, '实验室标识'),
-      imageDataUrl: asString(record.imageDataUrl, '框选图像'),
+      imageDataUrl: typeof record.imageDataUrl === 'string' ? record.imageDataUrl : undefined,
+      vectorText: typeof record.vectorText === 'string' ? record.vectorText : undefined,
+      source: record.source,
       channelId: asString(record.channelId, '模型渠道'),
       modelId: asString(record.modelId, '模型标识'),
     })
@@ -1306,7 +1335,7 @@ export function registerCsLabIpc(): void {
 
   // 生成默认写回桥接配置模板（zotero-bridge.json）。通道常量暂以字面量注册，
   // 避免改动共享 CSLAB_IPC_CHANNELS 契约（见 preload 同名通道）。
-  ipcMain.handle('cslab:zotero-bridge-init-config', async () => initZoteroBridgeConfig())
+  ipcMain.handle(CSLAB_IPC_CHANNELS.ZOTERO_BRIDGE_INIT_CONFIG, async () => initZoteroBridgeConfig())
 
   // ===== 跨文献 GraphRAG =====
   ipcMain.handle(CSLAB_IPC_CHANNELS.BUILD_LITERATURE_INDEX, async (_event, input: unknown) => {
@@ -1586,7 +1615,7 @@ export function registerCsLabIpc(): void {
 
   // 在 Obsidian 中打开 Vault：主进程解析 vault/notes 绝对路径后 shell.openPath。
   // 通道常量暂以字面量注册，避免改动共享 CSLAB_IPC_CHANNELS 契约（见 preload 同名通道）。
-  ipcMain.handle('cslab:open-obsidian-vault', async (_event, input: unknown) => {
+  ipcMain.handle(CSLAB_IPC_CHANNELS.OPEN_OBSIDIAN_VAULT, async (_event, input: unknown) => {
     const record = asObject(input, 'Vault 打开参数')
     const labId = asString(record.labId, '实验室标识')
     // resolveLabRelativePath 内含实验室沙箱越界校验。

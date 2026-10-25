@@ -18,7 +18,7 @@ import * as React from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { Hierarchical3DGraphData, Hierarchical3DGraphNode } from '@profer/shared'
-import { Layers } from 'lucide-react'
+import { Layers, Maximize2, Minimize2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface CsLab3DTopologyViewportProps {
@@ -53,8 +53,15 @@ const LAYER_LABELS: Record<TopologyLayer, string> = {
 
 const LAYER_TITLES: Record<TopologyLayer, string> = {
   macro: '宏观层：论文 / 作者 / 期刊 / 领域（Z 高）',
-  meso: '中观层：概念 / 方法 / 协议',
+  meso: '中观层：章节 / 概念 / 方法 / 协议',
   micro: '微观层：指标 / 表格 / 图件（Z 低）',
+}
+
+/** 层图例（L0/L1/L2 层级命名 + 内容与配色说明）。 */
+const LAYER_LEGEND: Record<TopologyLayer, { level: string; desc: string }> = {
+  macro: { level: 'L0 文献层', desc: '论文 / 作者 / 期刊 / 领域（蓝）' },
+  meso: { level: 'L1 章节层', desc: '章节 / 概念 / 方法 / 协议（紫）' },
+  micro: { level: 'L2 证据层', desc: '指标 / 表格 / 图件证据（绿）' },
 }
 
 const TYPE_LABELS: Record<Hierarchical3DGraphNode['type'], string> = {
@@ -215,6 +222,13 @@ function formatDetailValue(value: unknown): string {
   }
 }
 
+/** 节点类型展示名：章节节点（details.kind === 'section'）单独标识为「章节」。 */
+function nodeTypeLabel(node: Hierarchical3DGraphNode): string {
+  const details = node.details as Record<string, unknown> | undefined
+  if (details?.kind === 'section') return '章节'
+  return TYPE_LABELS[node.type] ?? node.type
+}
+
 interface SceneHandles {
   layerGroups: Record<TopologyLayer, THREE.Group>
   edgeGroups: Array<{ layers: [TopologyLayer, TopologyLayer]; object: THREE.LineSegments }>
@@ -240,6 +254,17 @@ export function CsLab3DTopologyViewport({
   })
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [hoverId, setHoverId] = React.useState<string | null>(null)
+  const [fullscreen, setFullscreen] = React.useState(false)
+
+  // Esc 退出全屏。
+  React.useEffect(() => {
+    if (!fullscreen) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setFullscreen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [fullscreen])
 
   React.useEffect(() => {
     onSelectNodeRef.current = onSelectNode
@@ -563,7 +588,12 @@ export function CsLab3DTopologyViewport({
     : []
 
   return (
-    <div className="overflow-hidden rounded-xl border border-cslab-border bg-cslab-bg">
+    <div
+      className={cn(
+        'overflow-hidden rounded-xl border border-cslab-border bg-cslab-bg',
+        fullscreen && 'fixed inset-0 z-50 flex flex-col rounded-none border-0',
+      )}
+    >
       <div className="flex items-center gap-1.5 border-b border-cslab-border px-2.5 py-1.5">
         <Layers size={10} className="shrink-0 text-cslab-muted" />
         <span className="text-[10px] text-cslab-muted">图层切片</span>
@@ -588,10 +618,51 @@ export function CsLab3DTopologyViewport({
               {layer.charAt(0).toUpperCase() + layer.slice(1)}
             </button>
           ))}
+          <button
+            type="button"
+            title={fullscreen ? '退出全屏 (Esc)' : '放大至主视区'}
+            aria-label={fullscreen ? '退出全屏' : '放大至主视区'}
+            onClick={() => setFullscreen((value) => !value)}
+            className="ml-1 rounded-md border border-cslab-border p-0.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+          >
+            {fullscreen ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+          </button>
+          {fullscreen && (
+            <button
+              type="button"
+              title="关闭全屏 (Esc)"
+              aria-label="关闭全屏"
+              onClick={() => setFullscreen(false)}
+              className="rounded-md border border-cslab-border p-0.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+            >
+              <X size={11} />
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="relative w-full" style={{ height }}>
+      {/* 层图例：L0/L1/L2 层级命名 + 内容与配色说明 */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-cslab-border px-2.5 py-1">
+        {LAYER_ORDER.map((layer) => (
+          <span
+            key={layer}
+            title={LAYER_TITLES[layer]}
+            className="inline-flex items-center gap-1 text-[9px] text-cslab-muted"
+          >
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: `hsl(${LAYER_HUES[layer]} 62% 58%)` }}
+            />
+            <span className="font-medium text-cslab-text">{LAYER_LEGEND[layer].level}</span>
+            {LAYER_LEGEND[layer].desc}
+          </span>
+        ))}
+      </div>
+
+      <div
+        className={cn('relative w-full', fullscreen && 'min-h-0 flex-1')}
+        style={fullscreen ? undefined : { height }}
+      >
         <div ref={mountRef} className="absolute inset-0" />
         {model.entries.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center">
@@ -613,7 +684,7 @@ export function CsLab3DTopologyViewport({
                 {selectedNode.label}
               </span>
               <span className="shrink-0 text-[9px]">
-                {LAYER_LABELS[selectedNode.layer]} · {TYPE_LABELS[selectedNode.type]}
+                {LAYER_LABELS[selectedNode.layer]} · {nodeTypeLabel(selectedNode)}
               </span>
             </p>
             {detailRows.length > 0 && (
@@ -636,7 +707,7 @@ export function CsLab3DTopologyViewport({
       </div>
 
       <p className="border-t border-cslab-border px-2.5 py-1.5 text-[9px] leading-relaxed text-cslab-muted">
-        分层空间拓扑：宏观（论文/作者/期刊/领域）在上、微观（指标/图表）在下；拖拽旋转、滚轮缩放，点击节点查看详情，点空白处取消选中。
+        分层空间拓扑（L0 文献 → L1 章节 → L2 证据）：文献层在上、证据层在下；拖拽旋转、滚轮缩放，点击节点查看详情，点空白处取消选中。
       </p>
     </div>
   )

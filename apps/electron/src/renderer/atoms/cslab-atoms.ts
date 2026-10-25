@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CSLab Atoms - CDUT Science 客户端状态管理
  *
  * 安全红线契约：
@@ -272,6 +272,8 @@ export interface CsLabPdfSelection {
   pageHeight: number
   rect: { x: number; y: number; width: number; height: number }
   cropDataUrl: string
+  /** PDF 矢量文字直读结果；为空表示纯图片选区，走视觉 LLM / OCR 兜底。 */
+  vectorText?: string
   /** 演示图版预置标定（标准曲线一键逆向化）。 */
   demoCalibration?: CsLabPlotCalibration
 }

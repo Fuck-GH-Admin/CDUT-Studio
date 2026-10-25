@@ -71,6 +71,10 @@ export const CSLAB_IPC_CHANNELS = {
   ZOTERO_STOP_WATCH: 'cslab:zotero-stop-watch',
   ZOTERO_GET_BRIDGE_STATUS: 'cslab:zotero-bridge-status',
   ZOTERO_BRIDGE_WRITE: 'cslab:zotero-bridge-write',
+  /** 一键生成默认 zotero-bridge.json 模板（已存在则不覆盖 token）。 */
+  ZOTERO_BRIDGE_INIT_CONFIG: 'cslab:zotero-bridge-init-config',
+  /** 用本地 Obsidian 打开实验室 vault/notes。 */
+  OPEN_OBSIDIAN_VAULT: 'cslab:open-obsidian-vault',
 
   // ===== 文献阅读 =====
   GET_LITERATURE_ITEM: 'cslab:get-literature-item',
@@ -81,6 +85,8 @@ export const CSLAB_IPC_CHANNELS = {
   // ===== 图表逆向数字化 =====
   DIGITIZE_PLOT: 'cslab:digitize-plot',
   SAVE_DIGITIZED_FIGURE: 'cslab:save-digitized-figure',
+  /** 刻度数值模板匹配自动读取（read-tick）。 */
+  READ_TICK_VALUE: 'cslab:read-tick-value',
 
   // ===== 公式识别与验算 =====
   OCR_FORMULA: 'cslab:ocr-formula',
@@ -733,6 +739,8 @@ export interface CsLabZoteroBridgeStatus {
   reachable: boolean
   endpoint?: string
   message: string
+  /** 实际命中的探测路径（`/connector/ping` 或 `/ping`），用于一键连通诊断展示。 */
+  probePath?: string
 }
 
 /** 写回操作类型：全部经 Zotero 本地 REST 插件 HTTP 通道，绝无直写 sqlite 路径。 */
@@ -953,6 +961,8 @@ export interface CsLabAxisTick {
   value: number
   /** true 表示用户尚未录入刻度值；参与数字化前必须清除。 */
   pending?: boolean
+  /** true 表示刻度值由 read-tick 模板匹配自动识别回填，导出时附带以便事后复核。 */
+  autoRead?: boolean
 }
 
 export interface CsLabAxisCalibration {
@@ -1002,6 +1012,25 @@ export interface CsLabPlotDigitizeResult {
   rotationDeg?: number
   axisFit?: { x: CsLabAxisFit; y: CsLabAxisFit }
   series: CsLabDigitizedSeries[]
+}
+
+/** 刻度数值自动读取输入（rect 为原图像素坐标下的刻度点外侧标注区域）。 */
+export interface CsLabTickReadInput {
+  labId: string
+  imageDataUrl: string
+  rect: { x: number; y: number; w: number; h: number }
+}
+
+/**
+ * 刻度数值自动读取结果。
+ * value=null 表示模板匹配置信度低于阈值（R4 低置信度防御），由用户手填，绝不猜。
+ */
+export interface CsLabTickReadResult {
+  ok: boolean
+  value: number | null
+  confidence: number
+  missingDependency?: boolean
+  message?: string
 }
 
 export interface CsLabDigitizedFigureInput {
@@ -1065,22 +1094,31 @@ export interface CsLabSelectionOcrResult {
   message?: string
 }
 
+/** 翻译识别通道：矢量直读 / 视觉识别 / Pix2Text OCR。 */
+export type CsLabTranslateSource = 'vector' | 'vision' | 'ocr'
+
 export interface CsLabTranslateSelectionInput {
   labId: string
-  /** 框选区域 PNG/JPEG dataURL。 */
-  imageDataUrl: string
   /** 当前配置的 LLM 渠道 / 模型（渲染层传入，主进程不猜测）。 */
   channelId: string
   modelId: string
+  /** @deprecated 仍兼容；矢量文字优先走 vectorText */
+  imageDataUrl?: string
+  /** PDF 矢量文字直读结果，命中时零 OCR 成本直接进 LLM */
+  vectorText?: string
+  /** 识别通道，用于面板徽标与审计 */
+  source?: CsLabTranslateSource
 }
 
 export interface CsLabTranslateSelectionResult {
   ok: boolean
   /** 简体中文译文。 */
   text?: string
-  /** OCR 原文（供用户核对）。 */
+  /** OCR/矢量原文（供用户核对）。 */
   ocrText?: string
-  /** true 表示 Pix2Text 未安装，面板应展示一键安装引导。 */
+  /** 实际命中的识别通道（入口声明与实际分流可能不同，以此为准）。 */
+  source?: CsLabTranslateSource
+  /** true 表示 Pix2Text 未安装，面板可展示可选安装引导。 */
   missingDependency?: boolean
   message?: string
 }

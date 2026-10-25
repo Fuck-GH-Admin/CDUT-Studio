@@ -313,16 +313,240 @@ def extract_scatter(mask):
     return [points] if points else []
 
 
+# ===== 刻度数值读取（--mode read-tick）=====
+# 零依赖实现：只用 numpy + cv2（plot profile 既有要求），不引入任何模型文件。
+# R4 低置信度防御：置信度 < TICK_READ_MIN_CONFIDENCE 时 value 恒为 None，绝不猜。
+
+TICK_CHAR_SIZE = (24, 32)  # (宽, 高)
+TICK_READ_MIN_CONFIDENCE = 0.60
+# 最佳与次佳候选的最小分差：低于此值说明字符本身不可辨识，整段作废。
+TICK_MIN_MARGIN = 0.05
+TICK_GLYPHS = "0123456789.-+e"
+
+
+def _normalize_glyph(binary_img, ref_height):
+    """按**行高 ref_height** 统一缩放到 TICK_CHAR_SIZE。
+
+    关键：必须用整行统一的缩放比，而不是逐字 bbox 归一化。
+    逐字归一化会把小数点拉成大色块，误判为 0 / e（实测已踩过此坑）。
+    统一缩放后小数点仍远小于数字，尺寸特征得以保留。
+    """
+    import cv2
+
+    target_w, target_h = TICK_CHAR_SIZE
+    ys, xs = np.nonzero(binary_img)
+    if len(xs) == 0 or len(ys) == 0:
+        return None
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    roi = binary_img[y0:y1, x0:x1]
+
+    canvas = np.zeros((target_h, target_w), dtype=np.uint8)
+    scale = target_h / max(float(ref_height), 1.0)
+    new_w = max(1, int(round(roi.shape[1] * scale)))
+    new_h = max(1, int(round(roi.shape[0] * scale)))
+    if new_w > target_w:
+        new_w = target_w
+    if new_h > target_h:
+        new_h = target_h
+    resized = cv2.resize(roi, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    _, resized = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    ox = (target_w - new_w) // 2
+    oy = target_h - new_h  # 底部对齐：小数点落在底部，与数字共享基线
+    canvas[oy:oy + new_h, ox:ox + new_w] = resized
+    return canvas
+
+
+def _render_tick_templates():
+    """用 cv2.putText 渲染 0-9 . - + e 的多字体二值模板（按数字高度统一缩放）。"""
+    import cv2
+
+    width, height = TICK_CHAR_SIZE
+    raw_variants = {}
+    ref_height = 1.0
+    for glyph in TICK_GLYPHS:
+        variants = []
+        for font in (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX, cv2.FONT_HERSHEY_PLAIN):
+            for thickness in (1, 2):
+                canvas = np.zeros((height, width), dtype=np.uint8)
+                scale = 1.0 if thickness == 1 else 1.2
+                cv2.putText(canvas, glyph, (2, height - 6), font, scale, 255, thickness, cv2.LINE_AA)
+                ys, _xs = np.nonzero(canvas)
+                if len(ys) == 0:
+                    continue
+                ink_h = int(ys.max() - ys.min()) + 1
+                if glyph == "0":
+                    ref_height = max(ref_height, float(ink_h))
+                variants.append((canvas, ink_h))
+        if variants:
+            raw_variants[glyph] = variants
+
+    templates = {}
+    for glyph, variants in raw_variants.items():
+        normalized = []
+        for canvas, _ink_h in variants:
+            glyph_img = _normalize_glyph(canvas, ref_height)
+            if glyph_img is not None:
+                normalized.append(glyph_img)
+        if normalized:
+            templates[glyph] = normalized
+    return templates
+
+
+def _read_tick_value(image, rect):
+    import cv2
+
+    templates = _render_tick_templates()
+    if not templates:
+        return {"ok": True, "value": None, "confidence": 0.0, "message": "刻度模板生成失败"}
+
+    x, y, w, h = (int(v) for v in rect)
+    height, width = image.shape[:2]
+    x = max(0, min(x, width - 1))
+    y = max(0, min(y, height - 1))
+    w = max(1, min(w, width - x))
+    h = max(1, min(h, height - y))
+    crop = image[y:y + h, x:x + w]
+    if crop.size == 0:
+        return {"ok": True, "value": None, "confidence": 0.0, "message": "刻度识别区域为空"}
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    # 文字通常比底色更暗：Otsu 二值化后取反，使字符为白色前景。
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    char_boxes = []
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        cw = stats[label, cv2.CC_STAT_WIDTH]
+        ch = stats[label, cv2.CC_STAT_HEIGHT]
+        # 过噪点与整条基线/刻度线（宽高比异常）。
+        if area < 12 or cw < 2 or ch < 4:
+            continue
+        if cw > 0 and ch > 0 and (cw / ch > 6 or ch / cw > 6):
+            continue
+        char_boxes.append(
+            (
+                stats[label, cv2.CC_STAT_LEFT],
+                stats[label, cv2.CC_STAT_TOP],
+                cw,
+                ch,
+                labels == label,
+            )
+        )
+
+    if not char_boxes:
+        return {"ok": True, "value": None, "confidence": 0.0, "message": "未切分出刻度字符"}
+
+    char_boxes.sort(key=lambda item: item[0])
+
+    # 整行统一缩放比：取各字符框高度的中位数作为行高，与模板侧的「数字高度」对齐。
+    heights = sorted(int(box[3]) for box in char_boxes)
+    ref_height = float(heights[len(heights) // 2]) if heights else 1.0
+
+    matched = []
+    for left, top, cw, ch, mask in char_boxes:
+        glyph_img = np.zeros((h, w), dtype=np.uint8)
+        glyph_img[mask] = 255
+        normalized = _normalize_glyph(glyph_img, ref_height)
+        if normalized is None:
+            continue
+
+        # 每个 glyph 取其所有字体模板中的最高分，再比较 glyph 之间的分差。
+        per_glyph = {}
+        for glyph, variants in templates.items():
+            best = -1.0
+            for variant in variants:
+                result = cv2.matchTemplate(normalized, variant, cv2.TM_CCOEFF_NORMED)
+                score = float(result[0][0])
+                if score > best:
+                    best = score
+            per_glyph[glyph] = best
+
+        ranked = sorted(per_glyph.items(), key=lambda item: item[1], reverse=True)
+        if not ranked:
+            continue
+        best_glyph, best_score = ranked[0]
+        second_score = ranked[1][1] if len(ranked) > 1 else -1.0
+
+        # R4 歧义防御：最佳与次佳分差过小说明识别不可靠，整段作废由用户手填。
+        if best_score - second_score < TICK_MIN_MARGIN:
+            return {
+                "ok": True,
+                "value": None,
+                "confidence": round(best_score, 4),
+                "message": f"字符「{best_glyph}」与次优候选分差仅 {best_score - second_score:.2f}，识别存在歧义，请手动填写刻度值",
+            }
+        matched.append((best_glyph, best_score))
+
+    if not matched:
+        return {"ok": True, "value": None, "confidence": 0.0, "message": "刻度字符匹配失败"}
+
+    text = "".join(glyph for glyph, _ in matched)
+    confidence = float(sum(score for _, score in matched) / len(matched))
+
+    # R4：低置信度一律不猜，value 恒为 None 由用户手填。
+    if confidence < TICK_READ_MIN_CONFIDENCE:
+        return {
+            "ok": True,
+            "value": None,
+            "confidence": round(confidence, 4),
+            "text": text,
+            "message": f"置信度 {confidence:.2f} 低于阈值 {TICK_READ_MIN_CONFIDENCE:.2f}，请手动填写刻度值",
+        }
+
+    cleaned = text.replace(" ", "")
+    try:
+        value = float(cleaned)
+    except ValueError:
+        # 兼容 1e-5 / 1E+3 之类的科学计数法写法。
+        try:
+            value = float(cleaned.replace("e", "e").replace("E", "e"))
+        except ValueError:
+            return {
+                "ok": True,
+                "value": None,
+                "confidence": round(confidence, 4),
+                "text": text,
+                "message": f"识别文本「{text}」不是合法数值，请手动填写刻度值",
+            }
+
+    return {"ok": True, "value": value, "confidence": round(confidence, 4), "text": text}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
-    parser.add_argument("--calibration", required=True)
-    parser.add_argument("--mode", choices=["line", "scatter"], default="line")
+    parser.add_argument("--calibration", default="", help="line/scatter 模式必填；read-tick 模式忽略")
+    parser.add_argument("--mode", choices=["line", "scatter", "read-tick"], default="line")
+    parser.add_argument("--rect", default="", help="read-tick 模式必填：x,y,w,h（原图像素坐标）")
     parser.add_argument("--color", default="")
     parser.add_argument("--colors", default="", help="逗号分隔的多个 #rrggbb，启用多曲线分色提取")
     parser.add_argument("--series-count", type=int, default=0, help="自动聚类的目标曲线簇数（2-4）；0 = 按色相主峰自动估计")
     parser.add_argument("--tolerance", type=int, default=28)
     args = parser.parse_args()
+
+    # read-tick 只需要 numpy + cv2，且必须最先短路返回。
+    if args.mode == "read-tick":
+        missing = missing_modules(["numpy", "cv2"])
+        if missing:
+            emit({"ok": False, "message": "缺少刻度识别依赖：" + ", ".join(missing), "missing": missing})
+            return
+        import cv2
+
+        image = cv2.imread(args.input, cv2.IMREAD_COLOR)
+        if image is None:
+            emit({"ok": False, "message": "无法读取刻度图像"})
+            return
+        try:
+            rect = [int(part) for part in args.rect.split(",")]
+            if len(rect) != 4:
+                raise ValueError("rect 必须是 x,y,w,h 四段")
+        except Exception as error:
+            emit({"ok": False, "message": f"刻度识别区域无效：{error}"})
+            return
+        emit(_read_tick_value(image, rect))
+        return
 
     required = ["numpy", "cv2", "skimage", "scipy"]
     missing = missing_modules(required)

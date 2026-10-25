@@ -25,6 +25,9 @@ import {
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+// pdf.js 文本层基础样式（.textLayer / 选区）；配套的 --scale-factor 只挂在
+// .cslab-pdf-viewport 作用域容器上，绝不写 :root / body（见 globals.css 的最小覆盖）。
+import 'pdfjs-dist/web/pdf_viewer.css'
 import {
   zoteroRectToViewport,
   type CsLabLiteratureItem,
@@ -32,6 +35,54 @@ import {
 } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import type { CsLabPdfSelection } from '@/atoms/cslab-atoms'
+
+/**
+ * PDF 选区矢量文字直读（Bug 1/2）。
+ *
+ * 从 `page.getTextContent()` 的 TextItem 变换矩阵算出每个字串的包围盒，
+ * 与选区矩形求交，命中即拼接为纯文本——**零 OCR 成本**。
+ * 选区矩形以页面图像坐标（左上原点、y 向下）给出，PDF 用户空间 y 向上，需翻转。
+ * 返回空串表示该选区是纯图片，由上层走视觉 LLM / OCR 兜底。
+ */
+export async function extractPdfSelectionText(
+  page: PDFPageProxy,
+  rect: { x: number; y: number; width: number; height: number },
+  pageWidth: number,
+  pageHeight: number,
+): Promise<string> {
+  const content = await page.getTextContent()
+  const viewport = page.getViewport({ scale: 1 })
+  if (!viewport.width || !viewport.height) return ''
+  const sx = pageWidth / viewport.width
+  const sy = pageHeight / viewport.height
+
+  const x0 = Math.min(rect.x, rect.x + rect.width)
+  const x1 = Math.max(rect.x, rect.x + rect.width)
+  const y0 = Math.min(rect.y, rect.y + rect.height)
+  const y1 = Math.max(rect.y, rect.y + rect.height)
+
+  const pieces: Array<{ text: string; y: number; x: number }> = []
+  for (const item of content.items) {
+    const textItem = item as { str?: string; width?: number; transform?: number[]; hasEOL?: boolean }
+    if (typeof textItem.str !== 'string' || !textItem.str.trim()) continue
+    const t = textItem.transform ?? []
+    const c = t[2] ?? 0
+    const d = t[3] ?? 0
+    const e = t[4] ?? 0
+    const f = t[5] ?? 0
+    const left = e * sx
+    const height = (Math.hypot(c, d) || Math.abs(d) || 1) * sy
+    const top = pageHeight - f * sy - height
+    const width = (textItem.width ?? 0) * sx
+    // 与选区求交（保守：字串横向跨度与选区重叠即算命中）。
+    if (left + width < x0 || left > x1 || top + height < y0 || top > y1) continue
+    pieces.push({ text: textItem.str, y: top, x: left })
+    if (textItem.hasEOL) pieces.push({ text: '\n', y: top + height, x: 0 })
+  }
+
+  pieces.sort((a, b) => (Math.abs(a.y - b.y) > 1 ? a.y - b.y : a.x - b.x))
+  return pieces.map((piece) => piece.text).join('').trim()
+}
 import { detectIsWindows } from '@profer/ui'
 import { CsLabLiteratureGuidePanel } from './CsLabLiteratureGuidePanel'
 import { computeCursorAnchoredScroll, normalizePdfBbox } from './cslab-pdf-geometry'
@@ -484,11 +535,14 @@ export function CsLabPdfViewer({
         onPointerUp={handleContainerPointerUp}
         onPointerCancel={handleContainerPointerUp}
         className={cn(
-          'min-h-0 min-w-0 flex-1 overflow-auto bg-cslab-surface px-5 py-4',
+          'cslab-pdf-viewport min-h-0 min-w-0 flex-1 overflow-auto bg-cslab-surface px-5 py-4',
           pointerMode === 'scroll' && 'cursor-text',
           pointerMode === 'hand' && !panning && 'cursor-grab',
           pointerMode === 'hand' && panning && 'cursor-grabbing',
         )}
+        // --scale-factor 作用域隔离：只在 PDF 视口容器上设当前 zoom，文本层 span 的
+        // calc(Npx * var(--scale-factor)) 由此继承解析，与 Canvas 底层坐标系对齐。
+        style={{ '--scale-factor': String(scale) } as React.CSSProperties}
       >
         {loading && (
           <div className="flex h-full items-center justify-center gap-2 text-[11px] text-cslab-muted">
@@ -798,15 +852,30 @@ function PdfPageView({
       cropHeight,
     )
 
-    onSelection({
-      literatureUri,
-      pageIndex: pageNumber - 1,
-      pageWidth: dimensions.pageWidth,
-      pageHeight: dimensions.pageHeight,
-      rect: current,
-      cropDataUrl: offscreen.toDataURL('image/png'),
-    })
-    setSelection(null)
+    const cropDataUrl = offscreen.toDataURL('image/png')
+    // 矢量文字直读（Bug 1/2）：命中即零 OCR 成本，纯图片选区留空走视觉 LLM / OCR 兜底。
+    void (async () => {
+      let vectorText: string | undefined
+      try {
+        const page = pageRef.current
+        if (page) {
+          const text = await extractPdfSelectionText(page, current, dimensions.pageWidth, dimensions.pageHeight)
+          if (text.trim()) vectorText = text
+        }
+      } catch {
+        vectorText = undefined
+      }
+      onSelection({
+        literatureUri,
+        pageIndex: pageNumber - 1,
+        pageWidth: dimensions.pageWidth,
+        pageHeight: dimensions.pageHeight,
+        rect: current,
+        cropDataUrl,
+        vectorText,
+      })
+      setSelection(null)
+    })()
   }
 
   const width = dimensions ? dimensions.width * scale : 480
@@ -830,16 +899,23 @@ function PdfPageView({
       }}
     >
       <canvas ref={canvasRef} className="block h-full w-full select-none" />
+      {/* 文本层 wrapper：与 canvas 同一坐标系（absolute/inset-0/overflow-hidden），
+          transform-origin: 0 0 保证 pdf.js 的缩放偏移与底层像素严格对齐。 */}
       <div
-        ref={textLayerRef}
-        className={cn(
-          'cslab-pdf-text-layer absolute inset-0',
-          pointerMode === 'scroll' && !ctrlHeld
-            ? 'pointer-events-auto select-text'
-            : 'pointer-events-none select-none',
-        )}
-        style={{ width, height }}
-      />
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+        style={{ transformOrigin: '0 0' }}
+      >
+        <div
+          ref={textLayerRef}
+          className={cn(
+            'textLayer absolute inset-0',
+            pointerMode === 'scroll' && !ctrlHeld
+              ? 'pointer-events-auto select-text'
+              : 'pointer-events-none select-none',
+          )}
+          style={{ width, height }}
+        />
+      </div>
       <div ref={overlayRef} className="pointer-events-none absolute inset-0">
         {focusBox && dimensions && (
           <div

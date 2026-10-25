@@ -366,6 +366,152 @@ function finalizeTopology(ctx: TopologyBuildContext, paperUri: string): Hierarch
   return { nodes: ctx.nodes, edges, paperUri, builtAt: Date.now() }
 }
 
+// ===== 章节（L1）节点装配（读文献结构 sidecar 补齐 文献→章节→证据 链） =====
+
+/** 结构 sidecar（vault/lit/{id}.structure.json）里的章节最小形状。 */
+interface TopologySectionDraft {
+  title: string
+  level: number
+  page: number
+}
+
+/** 单篇论文最多装配的章节节点数（防御超长目录打爆渲染）。 */
+const MAX_SECTIONS_PER_PAPER = 48
+
+/**
+ * 读取文献结构解析结果里的章节列表；文件缺失 / 坏 JSON / 形状不合法一律返回空数组。
+ * 文件名候选同时覆盖原始 uri 末段（structure 模块命名）与清洗后的 paperId。
+ */
+function readStructureSections(root: string, uri: string): TopologySectionDraft[] {
+  const rawName = String(uri ?? '').split('/').filter(Boolean).pop() ?? ''
+  const candidates = rawName === paperIdFromUri(uri) ? [rawName] : [rawName, paperIdFromUri(uri)]
+  for (const name of candidates) {
+    if (!name) continue
+    const target = join(root, 'vault', 'lit', `${name}.structure.json`)
+    try {
+      if (!existsSync(target)) continue
+      const parsed = JSON.parse(readFileSync(target, 'utf-8')) as { sections?: unknown }
+      if (!Array.isArray(parsed.sections)) return []
+      const result: TopologySectionDraft[] = []
+      for (const item of parsed.sections) {
+        if (!item || typeof item !== 'object') continue
+        const raw = item as Record<string, unknown>
+        const title = normalizeName(String(raw.title ?? ''))
+        if (!title) continue
+        const level = Number(raw.level)
+        const page = Number(raw.page)
+        result.push({
+          title: title.slice(0, 120),
+          level: Number.isFinite(level) ? level : 1,
+          page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
+        })
+      }
+      return result
+    } catch (error) {
+      console.warn(`[CSLab] 3D 拓扑章节 sidecar 读取失败: ${target}`, error)
+      return []
+    }
+  }
+  return []
+}
+
+/**
+ * 补齐章节（L1）节点与 文献→章节→证据 跨层边（读时装配，兼容既有落盘拓扑）：
+ * - 章节节点落 meso 层（type 受共享类型约束沿用 'concept'，以 details.kind === 'section' 标识）；
+ * - 边约定：paper→section 'has-section' / section→section 'next-section' /
+ *   section→metric|figure 'contains-evidence'（证据按页码归入最近前序章节）；
+ * - 已有节点坐标原样保留；仅新增章节节点走 确定性哈希初值 + 层内松弛（只改 x/y，不碰 z）；
+ * - 重复调用幂等：按 id 去重，二次装配不增节点不移坐标。
+ */
+function injectSectionTopology(
+  data: Hierarchical3DGraphData,
+  root: string,
+): Hierarchical3DGraphData {
+  const nodes = data.nodes
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  const edges = [...data.edges]
+  const edgeKeys = new Set(edges.map((edge) => `${edge.source}|${edge.target}|${edge.relation}`))
+  const pushEdge = (source: string, target: string, relation: string): void => {
+    if (!source || !target || source === target) return
+    if (!nodeById.has(source) || !nodeById.has(target)) return
+    const key = `${source}|${target}|${relation}`
+    if (edgeKeys.has(key)) return
+    edgeKeys.add(key)
+    edges.push({ source, target, relation })
+  }
+
+  const sectionNodes: Hierarchical3DGraphNode[] = []
+  const chainEdges: Hierarchical3DGraphEdge[] = []
+
+  for (const paper of nodes) {
+    if (paper.type !== 'paper') continue
+    const details = (paper.details ?? {}) as Record<string, unknown>
+    const paperUri = typeof details.uri === 'string' ? details.uri : ''
+    if (!paperUri) continue
+    const paperId = paperIdFromUri(paperUri)
+    const sections = readStructureSections(root, paperUri).slice(0, MAX_SECTIONS_PER_PAPER)
+    if (sections.length === 0) continue
+
+    // 证据节点（指标 / 图件）按页码归入最近前序章节。
+    const evidence: Array<{ id: string; page: number }> = []
+    for (const node of nodes) {
+      if (node.type !== 'metric' && node.type !== 'figure') continue
+      if (!node.id.startsWith(`metric:${paperId}:`) && !node.id.startsWith(`figure:${paperId}:`)) {
+        continue
+      }
+      const page = Number((node.details as Record<string, unknown> | undefined)?.page)
+      evidence.push({ id: node.id, page: Number.isFinite(page) ? page : 1 })
+    }
+
+    // 章节按页码升序（同页保持原文顺序）确定链条与证据归属。
+    const ordered = sections
+      .map((section, index) => ({ ...section, index }))
+      .sort((a, b) => a.page - b.page || a.index - b.index)
+
+    const chain: Array<{ id: string; page: number }> = []
+    let prevId = ''
+    for (const section of ordered) {
+      const id = `section:${paperId}:${section.index}`
+      if (!nodeById.has(id)) {
+        const node = makeNode(id, section.title, 'meso', 'concept', {
+          kind: 'section',
+          level: section.level,
+          page: section.page,
+          sectionIndex: section.index,
+          paperUri,
+        })
+        nodeById.set(id, node)
+        nodes.push(node)
+        sectionNodes.push(node)
+      }
+      chain.push({ id, page: section.page })
+      pushEdge(paper.id, id, 'has-section')
+      if (prevId) {
+        pushEdge(prevId, id, 'next-section')
+        if (nodeById.has(prevId)) {
+          chainEdges.push({ source: prevId, target: id, relation: 'next-section' })
+        }
+      }
+      prevId = id
+    }
+
+    for (const item of evidence) {
+      let target = chain[0]?.id ?? ''
+      for (const link of chain) {
+        if (link.page <= item.page) target = link.id
+        else break
+      }
+      if (target) pushEdge(target, item.id, 'contains-evidence')
+    }
+  }
+
+  if (sectionNodes.length > 0) {
+    assignDeterministicPositions(sectionNodes)
+    relaxLayerLayout(sectionNodes, chainEdges)
+  }
+  return { nodes, edges, paperUri: data.paperUri, builtAt: data.builtAt }
+}
+
 // ===== 拓扑构建 =====
 
 function protocolNodeId(paperId: string, protocol: ExperimentalProtocol, index: number): string {
@@ -706,12 +852,14 @@ export function loadTopology(
       console.warn(`[CSLab] 3D 拓扑文件结构不合法，已忽略: ${target}`)
       return null
     }
-    return {
+    const data: Hierarchical3DGraphData = {
       nodes: parsed.nodes as Hierarchical3DGraphNode[],
       edges: parsed.edges as Hierarchical3DGraphEdge[],
       paperUri: typeof parsed.paperUri === 'string' ? parsed.paperUri : uri,
       builtAt: typeof parsed.builtAt === 'number' ? parsed.builtAt : 0,
     }
+    // 章节（L1）读时装配：补齐 文献→章节→证据 三层链路（幂等，不影响既有坐标）。
+    return injectSectionTopology(data, rootDir ? resolve(rootDir) : resolveLabDir(assertLabId(labId)))
   } catch (error) {
     console.warn(`[CSLab] 3D 拓扑读取失败，已按空拓扑继续: ${target}`, error)
     return null
@@ -722,7 +870,8 @@ export function loadTopology(
 export function loadCorpusTopology(labId: string, rootDir?: string): Hierarchical3DGraphData | null {
   try {
     const safeLabId = assertLabId(labId)
-    const dbDir = rootDir ? join(rootDir, 'db') : join(resolveLabDir(safeLabId), 'db')
+    const root = rootDir ? resolve(rootDir) : resolveLabDir(safeLabId)
+    const dbDir = join(root, 'db')
     if (!existsSync(dbDir)) return null
     const files = readdirSync(dbDir)
       .filter((name) => name.startsWith('graph_3d_') && name.endsWith('.json'))
@@ -755,12 +904,11 @@ export function loadCorpusTopology(labId: string, rootDir?: string): Hierarchica
     }
     // 悬空边过滤（跨文件合并后端点可能被去重掉）。
     const mergedEdges = edges.filter((edge) => nodeById.has(edge.source) && nodeById.has(edge.target))
-    return {
-      nodes: [...nodeById.values()],
-      edges: mergedEdges,
-      paperUri: 'corpus',
-      builtAt,
-    }
+    // 章节（L1）读时装配：全库聚合视图同样补齐 文献→章节→证据 三层链路。
+    return injectSectionTopology(
+      { nodes: [...nodeById.values()], edges: mergedEdges, paperUri: 'corpus', builtAt },
+      root,
+    )
   } catch (error) {
     console.warn('[CSLab] 3D 拓扑聚合读取失败，已按空拓扑继续:', error)
     return null

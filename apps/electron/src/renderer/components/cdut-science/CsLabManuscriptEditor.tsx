@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CsLabManuscriptEditor — Canvas Word 级论文编辑器外壳
  *
  * 纸张渲染与分页由 CsLabCanvasEditor 负责；本组件只承载：
@@ -33,7 +33,14 @@ import {
   Link2,
   MessageSquare,
   Eraser,
+  ImagePlus,
+  Sigma,
+  Hand,
+  MousePointer2,
+  X,
 } from 'lucide-react'
+import katex from 'katex'
+import DOMPurify from 'dompurify'
 import type { CsLabCapsule, CsLabManuscript } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { CSLAB_CELL_MIME, hasDragType } from './cslab-dnd'
@@ -125,6 +132,65 @@ function RibbonDivider(): React.ReactElement {
   return <div className="mx-1 h-5 w-px self-center bg-zinc-200 dark:bg-zinc-800" />
 }
 
+/** 常用 LaTeX 公式模板（点击填入输入框，可在其上改写）。 */
+const FORMULA_TEMPLATES: Array<{ label: string; latex: string }> = [
+  { label: '分式', latex: '\\frac{a}{b}' },
+  { label: '积分', latex: '\\int_{a}^{b} f(x)\\,\\mathrm{d}x' },
+  { label: '根号', latex: '\\sqrt{x}' },
+  { label: '上下标', latex: 'x^{2}_{i}' },
+]
+
+/** KaTeX 预览（复用仓库既有 KaTeX + DOMPurify 组合，与 CsLabFormulaPanel 同款写法）。 */
+function LatexPreview({ latex }: { latex: string }): React.ReactElement {
+  const html = React.useMemo(() => {
+    if (!latex.trim()) return ''
+    try {
+      const rendered = katex.renderToString(latex, {
+        throwOnError: false,
+        displayMode: true,
+        strict: 'ignore',
+      })
+      return DOMPurify.sanitize(rendered, {
+        USE_PROFILES: { html: true, svg: true, mathMl: true },
+      })
+    } catch {
+      return ''
+    }
+  }, [latex])
+
+  if (!html) {
+    return <p className="py-2 text-center text-[10px] text-cslab-muted/70">公式预览</p>
+  }
+  return (
+    <div
+      className="overflow-x-auto py-1 text-center text-[13px] text-cslab-text"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  )
+}
+
+/** 解码 dataURL 的像素尺寸，并等比收敛到正文可用框（794 - 2×96 页边距内）。 */
+function measureImage(dataUrl: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => {
+      const maxWidth = 560
+      const maxHeight = 720
+      const scale = Math.min(
+        1,
+        maxWidth / (image.naturalWidth || 1),
+        maxHeight / (image.naturalHeight || 1),
+      )
+      resolve({
+        width: Math.max(1, Math.round((image.naturalWidth || 1) * scale)),
+        height: Math.max(1, Math.round((image.naturalHeight || 1) * scale)),
+      })
+    }
+    image.onerror = () => resolve(null)
+    image.src = dataUrl
+  })
+}
+
 export function CsLabManuscriptEditor({
   labId,
   manuscript,
@@ -161,10 +227,14 @@ export function CsLabManuscriptEditor({
   const [reviewMenuOpen, setReviewMenuOpen] = React.useState(false)
   const [capsuleMenuOpen, setCapsuleMenuOpen] = React.useState(false)
   const [ready, setReady] = React.useState(false)
+  const [formulaOpen, setFormulaOpen] = React.useState(false)
+  const [formulaText, setFormulaText] = React.useState('E=mc^2')
+  const [handTool, setHandTool] = React.useState(false)
 
   const handleRef = React.useRef<CsLabCanvasHandle | null>(null)
   const lastDirtyRef = React.useRef<boolean | null>(null)
   const lastTitleRef = React.useRef<string | null>(null)
+  const handToolRef = React.useRef(false)
 
   const initial = React.useMemo(() => {
     if (manuscript.canvasData) {
@@ -180,6 +250,8 @@ export function CsLabManuscriptEditor({
     (handle: CsLabCanvasHandle | null): void => {
       handleRef.current = handle
       setReady(!!handle)
+      // 文稿切换重建编辑器后恢复抓手态，保持 UI 与引擎一致。
+      if (handle && handToolRef.current) handle.setHandTool(true)
       onEditorReady(handle)
     },
     [onEditorReady],
@@ -285,15 +357,15 @@ export function CsLabManuscriptEditor({
         if (applied.applied === 0) {
           onToast?.(
             'error',
-            `原文片段未精确命中（${applied.skipped} 条），未产生批注（不做模糊替换）`,
+            `${applied.skipped} 条建议未定位到原文片段，已全部收入审阅报告侧栏（不做盲目替换）`,
           )
         } else if (applied.skipped > 0) {
           onToast?.(
             'success',
-            `已生成 ${applied.applied} 条原生批注，跳过 ${applied.skipped} 条未命中片段`,
+            `已为 ${applied.applied} 处生成正文批注${applied.fuzzy > 0 ? `（其中 ${applied.fuzzy} 处为模糊定位）` : ''}，${applied.skipped} 处建议已收入审阅报告侧栏`,
           )
         } else {
-          onToast?.('success', `已生成 ${applied.applied} 条原生批注，可在右侧批注轨查看`)
+          onToast?.('success', `已为 ${applied.applied} 处生成正文批注${applied.fuzzy > 0 ? `（其中 ${applied.fuzzy} 处为模糊定位）` : ''}，可在右侧批注轨查看`)
         }
       } catch (error) {
         onToast?.('error', error instanceof Error ? error.message : 'AI 审稿失败')
@@ -321,7 +393,7 @@ export function CsLabManuscriptEditor({
       applied.applied > 0 ? 'success' : 'error',
       applied.applied > 0
         ? `已生成 ${applied.applied} 条体检批注${applied.skipped > 0 ? `（跳过 ${applied.skipped} 条）` : ''}`
-        : '未精确命中可批注片段',
+        : '未定位到可批注片段',
     )
   }, [onToast])
 
@@ -358,7 +430,7 @@ export function CsLabManuscriptEditor({
         applied.applied > 0 ? 'success' : 'error',
         applied.applied > 0
           ? `已生成 ${applied.applied} 条批注${applied.skipped > 0 ? `（跳过 ${applied.skipped} 条）` : ''}`
-          : '原文片段未精确命中，未产生批注',
+          : '未定位到原文片段，未产生批注',
       )
     } catch {
       onToast?.('error', '读取剪贴板失败')
@@ -373,6 +445,53 @@ export function CsLabManuscriptEditor({
     setDirty(true)
     onToast?.('success', '已清空全部批注')
   }, [onToast])
+
+  // ===== 插入：图片 / LaTeX 公式 / 抓手平移 =====
+
+  /** 插入图片：复用全局文件选择通道（openFileDialog）→ base64 dataURL → 引擎 image 元素。 */
+  const handleInsertImage = React.useCallback(async (): Promise<void> => {
+    const handle = handleRef.current
+    if (!handle) return
+    try {
+      const result = await window.electronAPI.openFileDialog()
+      const images = (result.files ?? []).filter((file) => file.mediaType.startsWith('image/'))
+      if (images.length === 0) {
+        onToast?.('info', '未选择图片文件（支持 png / jpg / jpeg / gif / webp）')
+        return
+      }
+      let inserted = 0
+      for (const file of images) {
+        const dataUrl = `data:${file.mediaType};base64,${file.data}`
+        const size = await measureImage(dataUrl)
+        if (!size) continue
+        handle.insertImage({ value: dataUrl, width: size.width, height: size.height })
+        inserted += 1
+      }
+      if (inserted > 0) {
+        setDirty(true)
+        onToast?.('success', `已插入 ${inserted} 张图片`)
+      } else {
+        onToast?.('error', '图片解码失败，未插入')
+      }
+    } catch {
+      onToast?.('error', '打开文件选择器失败')
+    }
+  }, [onToast])
+
+  const handleInsertFormula = React.useCallback((): void => {
+    const handle = handleRef.current
+    const latex = formulaText.trim()
+    if (!handle || !latex) return
+    handle.insertLatex(latex)
+    setFormulaOpen(false)
+    setDirty(true)
+  }, [formulaText])
+
+  const toggleHandTool = React.useCallback((enabled: boolean): void => {
+    handToolRef.current = enabled
+    setHandTool(enabled)
+    handleRef.current?.setHandTool(enabled)
+  }, [])
 
   // ===== 胶囊 =====
 
@@ -654,6 +773,88 @@ export function CsLabManuscriptEditor({
               </span>
               <RibbonDivider />
               <RibbonButton
+                title="插入图片（本地文件 → 正文）"
+                disabled={!ready}
+                onClick={() => void handleInsertImage()}
+              >
+                <ImagePlus size={13} />
+                <span className="ml-1 text-[11px]">图片</span>
+              </RibbonButton>
+              <div className="relative">
+                <RibbonButton
+                  title="插入 LaTeX 公式"
+                  disabled={!ready}
+                  active={formulaOpen}
+                  onClick={() => setFormulaOpen((value) => !value)}
+                >
+                  <Sigma size={13} />
+                  <span className="ml-1 text-[11px]">公式</span>
+                </RibbonButton>
+                {formulaOpen && (
+                  <div className="absolute left-0 top-full z-40 mt-1 w-80 rounded-lg border border-cslab-border bg-cslab-elevated p-2.5 shadow-subtle">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-medium text-cslab-text">插入 LaTeX 公式</p>
+                      <button
+                        type="button"
+                        aria-label="关闭公式面板"
+                        onClick={() => setFormulaOpen(false)}
+                        className="rounded p-0.5 text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                    <textarea
+                      value={formulaText}
+                      onChange={(event) => setFormulaText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault()
+                          handleInsertFormula()
+                        }
+                      }}
+                      rows={2}
+                      placeholder="输入 LaTeX，例如 E=mc^2"
+                      aria-label="LaTeX 公式"
+                      className="mt-2 w-full resize-none rounded-md border border-cslab-border bg-cslab-bg px-2 py-1.5 font-mono text-[11px] text-cslab-text outline-none focus:border-cslab-accent/40"
+                    />
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                      {FORMULA_TEMPLATES.map((template) => (
+                        <button
+                          key={template.label}
+                          type="button"
+                          title={`填入 ${template.latex}`}
+                          onClick={() => setFormulaText(template.latex)}
+                          className="rounded-md border border-cslab-border px-1.5 py-0.5 text-[10px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+                        >
+                          {template.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-2 rounded-md border border-cslab-border bg-cslab-bg px-2 py-1">
+                      <LatexPreview latex={formulaText} />
+                    </div>
+                    <div className="mt-2 flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setFormulaOpen(false)}
+                        className="h-6 rounded border border-cslab-border px-2 text-[11px] text-cslab-muted transition-colors hover:bg-cslab-surface hover:text-cslab-text"
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!formulaText.trim()}
+                        onClick={handleInsertFormula}
+                        className="h-6 rounded bg-cslab-accent px-2.5 text-[11px] font-medium text-white transition-colors hover:bg-cslab-accentHover disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        插入
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <RibbonDivider />
+              <RibbonButton
                 title="插入横向分割线"
                 onClick={() => handleRef.current?.separator()}
               >
@@ -751,6 +952,43 @@ export function CsLabManuscriptEditor({
 
           {activeTab === 'view' && (
             <div className="flex items-center gap-2">
+              <div
+                className="inline-flex items-center gap-0.5 rounded border border-cslab-border p-0.5"
+                role="group"
+                aria-label="画布工具"
+              >
+                <button
+                  type="button"
+                  disabled={!ready}
+                  onClick={() => toggleHandTool(false)}
+                  title="选择工具（默认）"
+                  className={cn(
+                    'flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    !handTool
+                      ? 'bg-cslab-accent/15 text-cslab-accent'
+                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
+                  )}
+                >
+                  <MousePointer2 size={12} />
+                  选择
+                </button>
+                <button
+                  type="button"
+                  disabled={!ready}
+                  onClick={() => toggleHandTool(true)}
+                  title="抓手工具：按住拖动平移画布视口"
+                  className={cn(
+                    'flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    handTool
+                      ? 'bg-cslab-accent/15 text-cslab-accent'
+                      : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
+                  )}
+                >
+                  <Hand size={12} />
+                  抓手
+                </button>
+              </div>
+              <RibbonDivider />
               <button
                 type="button"
                 onClick={() => setShowRuler(!showRuler)}

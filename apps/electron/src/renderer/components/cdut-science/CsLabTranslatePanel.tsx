@@ -36,6 +36,8 @@ export function CsLabTranslatePanel({
   const [ocrText, setOcrText] = React.useState<string | null>(null)
   const [result, setResult] = React.useState<string | null>(null)
   const [missingDependency, setMissingDependency] = React.useState(false)
+  /** 本次翻译实际走的识别通道（vector / vision / ocr），用于徽标展示。 */
+  const [channel, setChannel] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [copied, setCopied] = React.useState<'ocr' | 'text' | null>(null)
   const [showOcr, setShowOcr] = React.useState(true)
@@ -66,6 +68,14 @@ export function CsLabTranslatePanel({
     }
   }
 
+  /** 识别通道徽标：让用户知道本次翻译走的是哪条链路。 */
+  const CHANNEL_BADGE: Record<string, string> = {
+    vector: '矢量直读',
+    vision: '视觉识别',
+    ocr: 'Pix2Text',
+  }
+  const channelLabel = channel ? (CHANNEL_BADGE[channel] ?? channel) : null
+
   const translate = async (): Promise<void> => {
     if (!selection) {
       setError('请先在 PDF 中按住 Ctrl 框选要翻译的区域')
@@ -80,13 +90,19 @@ export function CsLabTranslatePanel({
     setResult(null)
     setMissingDependency(false)
     try {
+      // 三分支分流（Bug 1/2）：矢量文字直读最优先（零 OCR 成本），
+      // 其次视觉 LLM，最后才走 Pix2Text OCR。
+      const vectorText = selection.vectorText?.trim() ? selection.vectorText : undefined
       const payload = await window.electronAPI.cslab.translateSelection({
         labId,
-        imageDataUrl: selection.cropDataUrl,
+        vectorText,
+        imageDataUrl: vectorText ? undefined : selection.cropDataUrl,
+        source: vectorText ? 'vector' : 'ocr',
         channelId: channelId!,
         modelId: modelId!,
       })
       setOcrText(payload.ocrText ?? null)
+      setChannel(vectorText ? 'vector' : payload.source ?? 'ocr')
       if (payload.missingDependency) setMissingDependency(true)
       if (payload.ok && payload.text) {
         setResult(payload.text)
@@ -122,7 +138,9 @@ export function CsLabTranslatePanel({
 
       {missingDependency && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-700">
-          学术 OCR 引擎（Pix2Text）尚未安装到本实验室，无法提取框选文字。
+          学术 OCR 引擎（Pix2Text）尚未安装到本实验室。当前走的是矢量直读 / 视觉翻译通道，
+          <strong className="mx-1 font-medium">无需安装即可使用</strong>
+          ；仅当需要纯离线识别扫描件时才需要安装。
           <button
             type="button"
             disabled={busy !== null}
@@ -185,10 +203,19 @@ export function CsLabTranslatePanel({
         ) : (
           <span className="inline-flex items-center gap-1.5">
             <Languages size={12} />
-            {missingDependency ? '请先安装 OCR 引擎' : '翻译为简体中文'}
+            {missingDependency && !selection?.vectorText ? '请先安装 OCR 引擎' : '翻译为简体中文'}
           </span>
         )}
       </button>
+
+      {channelLabel && (
+        <div className="flex items-center gap-1.5 text-[10px] text-cslab-muted">
+          <span className="rounded-full border border-cslab-accent/40 bg-cslab-accent/10 px-2 py-0.5 text-cslab-accent">
+            识别通道：{channelLabel}
+          </span>
+          {channel === 'vector' && <span>零 OCR 成本，PDF 矢量文字直读</span>}
+        </div>
+      )}
 
       {result && (
         <div className="rounded-xl border border-cslab-accent/30 bg-cslab-accent/5 px-3 py-2.5">

@@ -56,6 +56,8 @@ export function CsLabPlotDigitizerPanel({
   const [color, setColor] = React.useState('')
   /** 多曲线分色提取：非空时逐色构建掩码（Series 1/2/...）。 */
   const [colors, setColors] = React.useState<string[]>([])
+  /** 自动分色：不指定吸管颜色，由 Python 侧按 HSV 色相 K-Means 自动分离 2~4 条曲线。 */
+  const [autoSeries, setAutoSeries] = React.useState(false)
   const [tolerance, setTolerance] = React.useState(28)
   const [title, setTitle] = React.useState('')
   const [result, setResult] = React.useState<CsLabPlotDigitizeResult | null>(null)
@@ -111,8 +113,14 @@ export function CsLabPlotDigitizerPanel({
       y: ((event.clientY - rect.top) / rect.height) * naturalSize.height,
     }
     const tick: CsLabAxisTick = { px: point.x, py: point.y, value: 0, pending: true }
-    if (tickAxis === 'x' && xTicks.length < MAX_TICKS) setXTicks([...xTicks, tick])
-    if (tickAxis === 'y' && yTicks.length < MAX_TICKS) setYTicks([...yTicks, tick])
+    if (tickAxis === 'x' && xTicks.length < MAX_TICKS) {
+      setXTicks([...xTicks, tick])
+      autoReadTick('x', xTicks.length, point)
+    }
+    if (tickAxis === 'y' && yTicks.length < MAX_TICKS) {
+      setYTicks([...yTicks, tick])
+      autoReadTick('y', yTicks.length, point)
+    }
   }
 
   const updateTickValue = (
@@ -120,13 +128,42 @@ export function CsLabPlotDigitizerPanel({
     index: number,
     value: number,
     pending = false,
+    autoRead = false,
   ): void => {
     const update = (ticks: CsLabAxisTick[]): CsLabAxisTick[] =>
       ticks.map((tick, current) =>
-        current === index ? { ...tick, value, pending } : tick,
+        current === index ? { ...tick, value, pending, autoRead } : tick,
       )
-    if (axis === 'x') setXTicks(update(xTicks))
-    else setYTicks(update(yTicks))
+    // 函数式更新：自动识别回调可能晚于 setXTicks 落盘，闭包里的旧数组会丢掉新刻度。
+    if (axis === 'x') setXTicks((previous) => update(previous))
+    else setYTicks((previous) => update(previous))
+  }
+
+  /** 撤销自动识别：恢复 pending 由用户手填（R4 低置信度防御的人工出口）。 */
+  const undoAutoRead = (axis: 'x' | 'y', index: number): void => {
+    updateTickValue(axis, index, 0, true, false)
+  }
+
+  /**
+   * 刻度数值自动读取：截取刻度点外侧约 48×24 像素区域做零依赖模板匹配。
+   * 低置信度时 Python 返回 value=null，绝不猜，由用户手填。
+   */
+  const autoReadTick = (axis: 'x' | 'y', index: number, point: { x: number; y: number }): void => {
+    if (!selection) return
+    const rect = {
+      x: Math.max(0, Math.round(point.x) - 24),
+      y: Math.max(0, Math.round(point.y) - 12),
+      w: 48,
+      h: 24,
+    }
+    void window.electronAPI.cslab
+      .readTickValue({ labId, imageDataUrl: selection.cropDataUrl, rect })
+      .then((result) => {
+        if (result.ok && typeof result.value === 'number' && Number.isFinite(result.value)) {
+          updateTickValue(axis, index, result.value, false, true)
+        }
+      })
+      .catch(() => undefined)
   }
 
   /** 点击十字标记删除单个标定点：局部修正无需重新标定。 */
@@ -198,7 +235,9 @@ export function CsLabPlotDigitizerPanel({
         mode: effectiveMode,
         calibration: calibrationInput,
         color: effectiveColor || undefined,
-        colors: effectiveColors.length > 0 ? effectiveColors : undefined,
+        // 自动分色优先：清空吸管颜色，交由 Python 侧 HSV 色相聚类分离多条曲线。
+        colors: autoSeries ? undefined : effectiveColors.length > 0 ? effectiveColors : undefined,
+        seriesCount: autoSeries ? 0 : undefined,
         tolerance: effectiveTolerance,
       })
       setResult(payload)
@@ -522,17 +561,36 @@ export function CsLabPlotDigitizerPanel({
             </p>
             {ticks.length === 0 && <p className="text-[10px] text-cslab-muted/70">点击图像添加</p>}
             {ticks.map((tick, index) => (
-              <input
-                key={`${axis}-${index}`}
-                type="number"
-                value={tick.pending ? '' : Number.isFinite(tick.value) ? tick.value : ''}
-                onChange={(event) => {
-                  const raw = event.target.value.trim()
-                  updateTickValue(axis, index, raw === '' ? 0 : Number(raw), raw === '')
-                }}
-                className="w-full rounded-md border border-cslab-border bg-cslab-elevated px-2 py-1 text-[11px] text-cslab-text outline-none focus:border-cslab-accent/50"
-                aria-label={`${axis} 轴第 ${index + 1} 个刻度值`}
-              />
+              <div key={`${axis}-${index}`} className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={tick.pending ? '' : Number.isFinite(tick.value) ? tick.value : ''}
+                  onChange={(event) => {
+                    const raw = event.target.value.trim()
+                    updateTickValue(axis, index, raw === '' ? 0 : Number(raw), raw === '')
+                  }}
+                  className="w-full min-w-0 flex-1 rounded-md border border-cslab-border bg-cslab-elevated px-2 py-1 text-[11px] text-cslab-text outline-none focus:border-cslab-accent/50"
+                  aria-label={`${axis} 轴第 ${index + 1} 个刻度值`}
+                />
+                {tick.autoRead && (
+                  <span
+                    className="shrink-0 rounded-full border border-cslab-accent/40 bg-cslab-accent/10 px-1.5 py-0.5 text-[9px] leading-4 text-cslab-accent"
+                    title="该值由模板匹配自动识别，可能有误"
+                  >
+                    自动识别
+                  </span>
+                )}
+                {tick.autoRead && (
+                  <button
+                    type="button"
+                    title="撤销自动识别，改为手动填写"
+                    onClick={() => undoAutoRead(axis, index)}
+                    className="shrink-0 rounded border border-cslab-border px-1 py-0.5 text-[9px] leading-4 text-cslab-muted transition-colors hover:border-cslab-accent/50 hover:text-cslab-accent"
+                  >
+                    撤销
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         ))}
@@ -575,6 +633,21 @@ export function CsLabPlotDigitizerPanel({
           aria-label="颜色容差"
         />
       </div>
+
+      {/* 自动分色：不指定吸管颜色，由 Python 侧按 HSV 色相 K-Means 自动分离 2~4 条曲线。 */}
+      <button
+        type="button"
+        onClick={() => setAutoSeries((previous) => !previous)}
+        title="不指定吸管颜色，按 HSV 色相聚类自动分离多条曲线"
+        className={cn(
+          'rounded-full border px-2 py-1 text-[10px] transition-colors',
+          autoSeries
+            ? 'border-cslab-accent/60 bg-cslab-accent/12 text-cslab-accent'
+            : 'border-cslab-border text-cslab-muted hover:border-cslab-accent/50',
+        )}
+      >
+        {autoSeries ? '✓ 自动分色' : '自动分色'}
+      </button>
 
       {/* 多曲线分色（Series 1/2/...）：逐色拾取代表色，非空时优先于单色输入。 */}
       <div className="flex flex-wrap items-center gap-1.5">

@@ -13,6 +13,8 @@ import type {
   CsLabDigitizedSeries,
   CsLabPlotDigitizeInput,
   CsLabPlotDigitizeResult,
+  CsLabTickReadInput,
+  CsLabTickReadResult,
 } from '@profer/shared'
 import { assertLabId } from './cslab-paths'
 import { decodeImageDataUrl } from './cslab-image-data'
@@ -164,6 +166,85 @@ export async function digitizePlot(
       width: 0,
       height: 0,
       series: [],
+    }
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+// ===== 刻度数值自动读取（--mode read-tick，零依赖 cv2 模板匹配） =====
+
+interface RawTickReadPayload {
+  ok?: boolean
+  value?: number | null
+  confidence?: number
+  missing?: string[]
+  message?: string
+}
+
+/**
+ * 读取刻度点外侧标注区域的数值（灰度 → Otsu 二值化 → 连通域切字 → 归一化模板匹配）。
+ *
+ * 红线（R4 低置信度防御）：置信度低于阈值时 value 恒为 null，由用户手填，绝不猜；
+ * Python 不可用或失败时 ok:false 与原因，绝不伪造刻度值。
+ */
+export async function readTickValue(
+  input: CsLabTickReadInput,
+  runner: CsLabPythonRunner = defaultCsLabPythonRunner,
+): Promise<CsLabTickReadResult> {
+  const labId = assertLabId(input.labId)
+  const image = parseDataUrl(input.imageDataUrl)
+  const rect = input.rect
+  if (
+    !rect
+    || !Number.isFinite(rect.x)
+    || !Number.isFinite(rect.y)
+    || !Number.isFinite(rect.w)
+    || !Number.isFinite(rect.h)
+    || rect.w <= 0
+    || rect.h <= 0
+  ) {
+    return { ok: false, value: null, confidence: 0, message: '刻度识别区域无效' }
+  }
+
+  const tempDir = await fs.mkdtemp(join(tmpdir(), 'cslab-tick-'))
+  const imagePath = join(tempDir, `tick-${randomUUID().slice(0, 8)}.${image.extension}`)
+  try {
+    await fs.writeFile(imagePath, image.buffer)
+    const rectText = [
+      Math.round(rect.x),
+      Math.round(rect.y),
+      Math.round(rect.w),
+      Math.round(rect.h),
+    ].join(',')
+    const stdout = await runner.runPython(
+      labId,
+      'cslab-plot-digitizer.py',
+      ['--mode', 'read-tick', '--input', imagePath, '--rect', rectText],
+      { timeoutMs: 60_000 },
+    )
+    const payload = JSON.parse(stdout.trim()) as RawTickReadPayload
+    const missingDependency = Array.isArray(payload.missing) && payload.missing.length > 0
+    const confidence = Number.isFinite(Number(payload.confidence))
+      ? Math.max(0, Math.min(1, Number(payload.confidence)))
+      : 0
+    const value = typeof payload.value === 'number' && Number.isFinite(payload.value)
+      ? payload.value
+      : null
+    return {
+      ok: payload.ok === true,
+      // 低置信度防御：Python 侧已置 null，此处再兜底一次，绝不猜。
+      value: payload.ok === true ? value : null,
+      confidence,
+      missingDependency: missingDependency || undefined,
+      message: payload.message,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      value: null,
+      confidence: 0,
+      message: error instanceof Error ? error.message : '刻度识别失败',
     }
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
