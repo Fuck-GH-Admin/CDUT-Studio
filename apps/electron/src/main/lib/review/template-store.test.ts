@@ -8,7 +8,8 @@ import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { ALL_DEFAULT_TEMPLATES_V2, BUILTIN_TEMPLATES_V2, ensureBuiltinTemplateDrafts } from './builtin-templates'
 import type { TemplateVersion } from '@profer/shared'
-import { deprecateTemplate, getTemplate, isSafeTemplateId, isTemplateVersionRetired, listArchivedTemplates, listTemplateVersions, listTemplates, publishTemplate, removeTemplateFromLibrary, reorderTemplates, restoreTemplateToLibrary, saveDraft, validateTemplate } from './template-store'
+import { deprecateTemplate, getTemplate, installBundledR02TechnicalTemplate, isSafeTemplateId, isTemplateCandidateHeld, isTemplateVersionRetired, listArchivedTemplates, listTemplateVersions, listTemplates, publishTemplate, removeTemplateFromLibrary, reorderTemplates, restoreTemplateToLibrary, saveDraft, validateTemplate } from './template-store'
+import { loadBundledR02Template } from './r02-template-catalog/r02-technical-catalog'
 import { resolveEffectiveRules } from './effective-rules'
 import { emptyAggregate } from './case-store-v2'
 import { combineCoverage } from './coverage-ledger'
@@ -49,6 +50,29 @@ describe('模板发布信任（TAR-08/13/17）', () => {
     const id = 'local-r02-copy'
     saveDraft(baseTemplate(id, { sourceNote: 'R02_RESEARCH_TEMPLATE_NONOFFICIAL: 复制件' }))
     expect(() => publishTemplate(id, 1)).toThrow('模板发布资格未获允许')
+  })
+
+  test('R02 内置业务骨架可技术绑定，但不得伪造审核依据、开放自动通过或覆写版本', async () => {
+    const builtIn = await loadBundledR02Template('S01-T01')
+    expect(builtIn.status).toBe('draft')
+    expect(() => installBundledR02TechnicalTemplate({
+      ...builtIn, policyVersionIds: ['not-a-real-policy'],
+    })).toThrow('R02_TECHNICAL_TEMPLATE_INVALID_OR_POLICY_ESCALATION')
+    expect(() => installBundledR02TechnicalTemplate({
+      ...builtIn, autoPassPolicy: { ...builtIn.autoPassPolicy, enabled: true },
+    })).toThrow('R02_TECHNICAL_TEMPLATE_INVALID_OR_POLICY_ESCALATION')
+    const technical = installBundledR02TechnicalTemplate(builtIn)
+    expect(technical.status).toBe('published')
+    expect(technical.policyVersionIds).toEqual([])
+    expect(technical.policyRefs ?? []).toEqual([])
+    expect(technical.autoPassPolicy?.enabled).toBe(false)
+    expect(isTemplateCandidateHeld(builtIn.templateId, builtIn.version)).toBe(false)
+    expect(installBundledR02TechnicalTemplate(builtIn)).toEqual(technical)
+    expect(() => installBundledR02TechnicalTemplate({
+      ...builtIn, name: '伪造同 ID 的业务骨架',
+    })).toThrow('R02_TECHNICAL_TEMPLATE_EXISTING_VERSION_CONFLICT')
+    expect(() => saveDraft(builtIn)).toThrow('已发布不可覆盖')
+    expect(publishTemplate(builtIn.templateId, builtIn.version)).toEqual(technical)
   })
 
   test('TAR-08：Main 发布事务拒绝缺负责人确认的确定性数值规则', () => {

@@ -22,7 +22,9 @@ import {ReviewB2StagingService,type B2MainContext,type B2MaterialCandidate} from
 import {decodeReviewB2Zip} from './review-zip-intake-v3-b2'
 import {readB30AllCurrentMaterials} from './review-v3-b30-current-materials-read'
 import {ReviewB3OwnerBoundRouteSession,type B3ManualCatalogEntry,type B3RouteState,type B3RouteSuggestion} from './review-intake-routing-adapter-v3-b3'
-import {isTemplateCandidateHeld,listTemplateVersions} from './template-store'
+import {installBundledR02TechnicalTemplate,isTemplateCandidateHeld,listTemplateVersions} from './template-store'
+import {isBundledR02TemplateId,loadBundledR02Template,R02_TECHNICAL_CATALOG} from './r02-template-catalog/r02-technical-catalog'
+import {reclassifyForSelectedTemplate} from './material-auto-classification'
 import {loadD4UnifiedCatalog,loadD4UnifiedWorkspace} from './review-d4-catalog'
 import {prepareB29UnmatchedAuthorDraft,type B29HumanAuthorIntent,
   type B29UnmatchedAuthorDraft} from './review-v3-b3-unmatched-author-bootstrap'
@@ -165,7 +167,7 @@ function session(event:IpcMainInvokeEvent,caseId:string):{data:ReturnType<typeof
     const staging=new ReviewB2StagingService()
     stageOriginals(data.aggregate,data.scope,staging)
     s={signature:data.signature,ctx:data.scope,staging,
-      router:new ReviewB3OwnerBoundRouteSession(staging),interrupted:false,chosen:null}
+      router:new ReviewB3OwnerBoundRouteSession(staging,()=>Date.now()),interrupted:false,chosen:null}
     sessions.set(data.key,s)
   }
   // A changed raw source must be detected even when the JSON Case revision is
@@ -216,7 +218,8 @@ function templateSearchMetadata(value:unknown):{keywords:string[];aliases:string
     description:descriptions.join('；').slice(0,2000)}
 }
 function catalog():B3ManualCatalogEntry[] {
-  const published=listTemplateVersions().filter(x=>x.status==='published').map(x=>{
+  const published=listTemplateVersions().filter(x=>x.status==='published'&&
+    !isBundledR02TemplateId(x.templateId)).map(x=>{
     const metadata=templateSearchMetadata(x)
     const d4Keywords=getD4TemplateKeywords(x.templateId)
     return {
@@ -237,8 +240,11 @@ function catalog():B3ManualCatalogEntry[] {
       aliases:[] as string[],description:'',
     }))
   }
-  const existing=new Set(published.map(x=>x.templateId+'@'+x.templateVersion))
-  return [...published,...historicalD4Catalog.filter(x=>
+  // R02 业务骨架来自随应用打包的可信索引，与政策资料、校方决定相互独立。
+  // 普通草稿不能仿冒这一索引，也无需预先把 143 份大对象全部写入用户配置。
+  const localCatalog=[...published,...R02_TECHNICAL_CATALOG]
+  const existing=new Set(localCatalog.map(x=>x.templateId+'@'+x.templateVersion))
+  return [...localCatalog,...historicalD4Catalog.filter(x=>
     !existing.has(x.templateId+'@'+x.templateVersion))]
 }
 /** Only Main-verified model results with high confidence enter B3 auto-selection. */
@@ -545,6 +551,11 @@ export function installC11LocalNativeProductIntake():void {
           caseCandidateId:input.caseId,templateId:input.templateId,
           templateVersion:input.templateVersion}
       }
+      if(isBundledR02TemplateId(input.templateId)){
+        const bundled=await loadBundledR02Template(input.templateId)
+        if(bundled.version!==version)throw new Error('C11_R02_BUNDLED_VERSION_MISMATCH')
+        installBundledR02TechnicalTemplate(bundled)
+      }
       await updateNativeWorkspaceSettingsV3(input.caseId,{
         caseId:input.caseId,
         reviewTemplate:{templateId:input.templateId,version},
@@ -553,6 +564,9 @@ export function installC11LocalNativeProductIntake():void {
       if(!updated||updated.caseV2.templateId!==input.templateId||
          updated.caseV2.templateVersion!==version)
         throw new Error('C11_NATIVE_TEMPLATE_BINDING_NOT_PERSISTED')
+      // 技术模板已经在案卷中生效；按该模板槽位重新分类当前原件并保存纠错轨迹。
+      await reclassifyForSelectedTemplate(input.caseId,
+        {actorId:'local-reviewer',actorSource:'local',role:'reviewer'})
       // The Case revision changed: discard the old staged route session.
       // The next read reconstructs the inventory from current originals.
       sessions.delete(local(event,input.caseId).key)

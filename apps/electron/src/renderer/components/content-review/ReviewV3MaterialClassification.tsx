@@ -21,6 +21,8 @@ const isRole = (role: unknown): role is MaterialRole => roles.some((item) => ite
 interface Props {
   caseId: string
   aggregate: CaseAggregateV2
+  /** R02 内置业务骨架已由 Main 自动写入类别；人工拖动只用于主动纠错。 */
+  autoMode?: boolean
   confirmed: boolean
   onConfirmed: () => void
   onClassificationChanged: () => void
@@ -35,7 +37,7 @@ interface Props {
  * or the selects update the existing document version instead of duplicating it.
  */
 export function ReviewV3MaterialClassification({
-  caseId, aggregate, confirmed, onConfirmed, onClassificationChanged, onUpdated, onProposeRemediation,
+  caseId, aggregate, autoMode = false, confirmed, onConfirmed, onClassificationChanged, onUpdated, onProposeRemediation,
 }: Props): JSX.Element {
   const [template, setTemplate] = React.useState<TemplateVersion | null>(null)
   const [busy, setBusy] = React.useState(false)
@@ -100,7 +102,9 @@ export function ReviewV3MaterialClassification({
       setSuggestionSnapshot('')
       await onUpdated()
       onClassificationChanged()
-      setMessage('材料分类已保存；旧审核输入已失效，确认分类后再继续。')
+      setMessage(autoMode
+        ? '材料分类已保存；旧审核输入已失效，可依据当前分类重新初审。'
+        : '材料分类已保存；旧审核输入已失效，确认分类后再继续。')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -240,7 +244,9 @@ export function ReviewV3MaterialClassification({
       setSuggestionSnapshot('')
       await onUpdated()
       onClassificationChanged()
-      setMessage(`已在一次事务中应用 ${changedSuggestions.length} 份材料的分类建议；请重新确认分类。`)
+      setMessage(autoMode
+        ? `已在一次事务中应用 ${changedSuggestions.length} 份分类建议；可直接启动或重新运行初审。`
+        : `已在一次事务中应用 ${changedSuggestions.length} 份材料的分类建议；请重新确认分类。`)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
       await onUpdated().catch(() => undefined)
@@ -356,10 +362,11 @@ export function ReviewV3MaterialClassification({
       <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setSuggestions(null); setSuggestionSnapshot('') }}>丢弃建议</Button>
     </div>}
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="sm" disabled={confirmDisabled} onClick={() => {
+      {!autoMode&&<Button size="sm" disabled={confirmDisabled} onClick={() => {
         onConfirmed()
         setMessage('材料分类已确认。可以开始初审；真实审核规则和关键材料由 Main 按当前模板核验。')
-      }}>{confirmed ? '重新确认材料分类' : '确认分类与槽位'}</Button>
+      }}>{confirmed ? '重新确认材料分类' : '确认分类与槽位'}</Button>}
+      {autoMode&&<span className="text-xs text-emerald-700 dark:text-emerald-300">已按业务模板自动分类，可直接初审；分类不合适时可拖动或改选材料槽。</span>}
       <span className="text-xs text-muted-foreground">当前有效材料 {activeDocuments.length} 份 · 申报材料 {applicationCount} 份 · 模板槽位 {slots.length} 个</span>
     </div>
     {message && <p role="status" className="text-xs">{message}</p>}

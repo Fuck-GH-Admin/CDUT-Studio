@@ -48,11 +48,12 @@ function writeAtomic(filePath: string, data: unknown): void {
  *
  * regular-draft：现有本地自建/内置模板发布流程的兼容资格，不表示已核实校规；
  * candidate-held：D0.5/D1 候选永不通过普通草稿编辑操作解锁。
+ * bundled-technical：程序内置的 R02 业务结构可参与本地技术匹配和 Pi 初审；不含校方政策授权。
  *
  * 旧历史版本没有资格记录时拒绝首次发布，需通过 saveDraft() 重新登记；
  * 发布前在同一版本锁内读取资格，避免编辑与发布并发交错。
  */
-type PublicationClass = 'regular-draft' | 'candidate-held'
+type PublicationClass = 'regular-draft' | 'candidate-held' | 'bundled-technical'
 interface PublicationControl {
   schemaVersion: 1
   templateId: string
@@ -72,7 +73,7 @@ function readPublicationControl(templateId: string, version: number): Publicatio
   try { candidate = JSON.parse(readFileSync(path, 'utf8')) as PublicationControl }
   catch { throw new Error('模板发布资格登记损坏，拒绝发布') }
   if (candidate.schemaVersion !== 1 || candidate.templateId !== templateId || candidate.version !== version ||
-      !['regular-draft', 'candidate-held'].includes(candidate.classification)) {
+      !['regular-draft', 'candidate-held', 'bundled-technical'].includes(candidate.classification)) {
     throw new Error('模板发布资格登记不合法，拒绝发布')
   }
   return candidate
@@ -364,7 +365,11 @@ export function isTemplateCandidateHeld(templateId: string, version: number): bo
   if (!isSafeTemplateId(templateId) || !Number.isSafeInteger(version) || version < 1) return true
   const template = getTemplate(templateId, version)
   if (!template) return true
-  return readPublicationControl(templateId, version)?.classification === 'candidate-held' || isCandidateDraft(template)
+  const control = readPublicationControl(templateId, version)
+  // 内置业务模板的技术可选性不等于校方授权；只接受服务端独立记录的发布版本。
+  if (R02_RESEARCH_TEMPLATE_ID.test(templateId) && template.status === 'published' &&
+      control?.classification === 'bundled-technical') return false
+  return control?.classification === 'candidate-held' || isCandidateDraft(template)
 }
 
 export function isAuthoringCandidateDraft(templateId: string, version: number): boolean {
@@ -383,6 +388,51 @@ export function saveDraft(template: TemplateVersion): TemplateVersion {
  */
 export function saveAuthoringCandidateDraft(template: TemplateVersion): TemplateVersion {
   return saveDraftControlled(template, true)
+}
+
+/**
+ * 仅供 Main 从打包的 R02 定义中调用：把可信业务骨架装为本地技术模板。
+ * 绝不为模板生成 PolicyVersion；正式审核依据仍取自用户案卷材料。
+ * 普通 saveDraft / publishTemplate 仍不能把任意 R02 ID 升级为可选模板。
+ */
+export function installBundledR02TechnicalTemplate(template: TemplateVersion): TemplateVersion {
+  if (!R02_RESEARCH_TEMPLATE_ID.test(template.templateId) || template.status !== 'draft' ||
+      !template.sourceNote?.startsWith('R02_RESEARCH_TEMPLATE_NONOFFICIAL:') ||
+      template.policyVersionIds.length > 0 || (template.policyRefs?.length ?? 0) > 0 ||
+      template.autoPassPolicy?.enabled !== false) {
+    throw new Error('R02_TECHNICAL_TEMPLATE_INVALID_OR_POLICY_ESCALATION')
+  }
+  const problems = validateTemplate(template).filter(item => item.level === 'error')
+  if (problems.length) throw new Error('R02_TECHNICAL_TEMPLATE_INVALID: ' + problems.map(p => p.message).join('；'))
+  const originalPayload = (value: TemplateVersion): string => {
+    const { publishedAt: _at, executionScope: _scope, ...body } = value
+    return JSON.stringify({ ...body, status: 'draft' })
+  }
+  return withTemplateVersionLock(template.templateId, template.version, () => {
+    const existing = readTemplateBody(template.templateId, template.version)
+    const control = readPublicationControl(template.templateId, template.version)
+    if (existing && originalPayload(existing) !== originalPayload(template)) {
+      throw new Error('R02_TECHNICAL_TEMPLATE_EXISTING_VERSION_CONFLICT')
+    }
+    if (existing?.status === 'published') {
+      if (control?.classification !== 'bundled-technical')
+        throw new Error('R02_TECHNICAL_TEMPLATE_UNTRUSTED_PUBLISHED_VERSION')
+      return existing
+    }
+    const issued: TemplateVersion = {
+      ...template, status: 'published', executionScope: 'rules', publishedAt: new Date().toISOString(),
+    }
+    const controlFile = controlPath(template.templateId, template.version)
+    mkdirSync(controlDir(template.templateId), { recursive: true })
+    writeAtomic(controlFile, {
+      schemaVersion: 1, templateId: template.templateId, version: template.version,
+      classification: 'bundled-technical',
+    } satisfies PublicationControl)
+    const target = versionPath(template.templateId, template.version)
+    mkdirSync(join(templatesRoot(), template.templateId, 'versions'), { recursive: true })
+    writeAtomic(target, issued)
+    return issued
+  })
 }
 
 export interface TemplateValidationIssue {

@@ -412,6 +412,8 @@ export function ReviewV3LocalCandidateWorkbench({
     {localCaseId&&nativeAggregate&&nativeAggregate.caseV2.templateVersion>0&&(!!activePlan||!!nativeAggregate.d2RuntimePlan||publishedTemplateBound)&&<ReviewV3MaterialClassification
       caseId={localCaseId}
       aggregate={nativeAggregate}
+      autoMode={publishedTemplateBound&&/^(?:S0[1-8]|T0[1-8])-T\d{2}$/.test(nativeAggregate.caseV2.templateId)&&
+        currentTemplate?.sourceNote?.startsWith('R02_RESEARCH_TEMPLATE_NONOFFICIAL:')===true}
       confirmed={classificationConfirmed}
       onConfirmed={()=>setClassificationConfirmed(true)}
       onClassificationChanged={()=>{
@@ -549,7 +551,9 @@ export function ReviewV3LocalCandidateWorkbench({
       nativeV3={nativeAggregate?.receiptLog[0]?.type === 'CreateNativeWorkspaceCaseV3'}
       materialSlots={currentTemplate?.materialSlots}
       canRun={!!activePlan||!!nativeAggregate?.d2RuntimePlan||
-        (publishedTemplateBound&&classificationConfirmed)}
+        (publishedTemplateBound&&(classificationConfirmed||
+          (/^(?:S0[1-8]|T0[1-8])-T\d{2}$/.test(nativeAggregate?.caseV2.templateId??'')&&
+            currentTemplate?.sourceNote?.startsWith('R02_RESEARCH_TEMPLATE_NONOFFICIAL:')===true)))}
       onUpdated={refreshNativeAggregate}
     />}
     {localCaseId&&<div className="space-y-2 rounded-lg border border-border p-3">
