@@ -129,7 +129,6 @@ let httpServer: HttpServer | null = null
 let wss: WebSocketServer | null = null
 let remoteRelayClient: RemoteRelayClient | null = null
 let remoteRelaySink: RemoteRelaySink | null = null
-let remoteRelayCommandContext: RemoteCommandContext = {}
 
 /** 闲置踢人定时器：定期扫描连接，清理长时间无任何入站消息（含 ping）的假死/僵尸连接。 */
 let idleSweepTimer: ReturnType<typeof setInterval> | null = null
@@ -1860,6 +1859,12 @@ export async function handleRemoteCommand(
   }
 }
 
+/** Relay commands are multiplexed from independent viewers over one upstream socket.
+ * Never reuse the LAN connection's active-session fallback across those viewers. */
+export async function handleRemoteRelayCommand(message: string, requestId: unknown = null): Promise<CommandResult> {
+  return handleRemoteCommand(message, requestId)
+}
+
 // ===== 生命周期 =====
 
 /**
@@ -2015,7 +2020,6 @@ export function startRemoteService(): string | null {
     remoteRelayClient = new RemoteRelayClient({
       onOpen: (sink) => {
         remoteRelaySink = sink
-        remoteRelayCommandContext = {}
         // 让 Relay 后面的 Pocket 继续使用现有 WsClient 握手/快照协议。
         sink.send(JSON.stringify({
           kind: 'hello',
@@ -2027,7 +2031,6 @@ export function startRemoteService(): string | null {
       },
       onClose: () => {
         remoteRelaySink = null
-        remoteRelayCommandContext = {}
       },
       onMessage: (raw, sink) => {
         let parsed: { kind?: unknown; type?: unknown; _cmdId?: unknown; requestId?: unknown; cursor?: unknown }
@@ -2051,7 +2054,7 @@ export function startRemoteService(): string | null {
         }
         if (typeof parsed.type !== 'string') return
         const requestId = parsed._cmdId ?? parsed.requestId ?? null
-        void handleRemoteCommand(raw, requestId, remoteRelayCommandContext).then((result) => {
+        void handleRemoteRelayCommand(raw, requestId).then((result) => {
           const commandId = typeof requestId === 'string' && requestId.length > 0 ? requestId : randomUUID()
           if (sink.isOpen()) sink.send(JSON.stringify({ kind: 'command_result', requestId, commandId, ...result }))
         })
@@ -2122,7 +2125,6 @@ export function stopRemoteService(): void {
   remoteRelayClient?.stop()
   remoteRelayClient = null
   remoteRelaySink = null
-  remoteRelayCommandContext = {}
   eventBusUnsubscribe?.()
   eventBusUnsubscribe = null
   chatBusUnsubscribe?.()
