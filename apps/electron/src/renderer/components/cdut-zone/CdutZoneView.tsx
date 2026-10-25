@@ -387,7 +387,7 @@ export function CdutZoneView(): React.ReactElement {
                     <Sparkles size={13} />
                     <span>成都理工大学 · 智慧校园专区</span>
                   </div>
-                  <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl">
+                  <h1 className="text-4xl font-extrabold tracking-tight text-foreground">
                     开启您的专属内网智能体
                   </h1>
                   <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
@@ -397,7 +397,7 @@ export function CdutZoneView(): React.ReactElement {
                 </div>
 
                 {/* 核心特性卡片 */}
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid grid-cols-3 gap-3">
                   {CAPABILITY_CARDS.map((item) => (
                     <div
                       key={item.title}

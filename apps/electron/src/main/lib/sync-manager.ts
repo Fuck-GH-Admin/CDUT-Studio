@@ -16,6 +16,7 @@ import { getSyncStatePath } from './config-paths'
 import { getTeamAuth, refreshAuthToken } from './auth-service'
 import { listAgentWorkspaces, readIndex, writeIndex } from './agent-workspace-manager'
 import { AGENT_IPC_CHANNELS, SYNC_IPC_CHANNELS } from '@profer/shared'
+import { readDeadLetters, rewriteDeadLetters } from './sync-dead-letter'
 import type { SyncEnvelope, SyncStateIndex, WorkspaceSyncState, SyncPullResponse } from './sync-types'
 
 const POLL_INTERVAL_MS = 60_000 // 基础轮询间隔（活跃时）
@@ -498,6 +499,42 @@ export function stopSyncEngine(): void {
 /** 手动触发同步（用于退出前强制同步等场景） */
 export async function triggerSync(_workspaceId?: string): Promise<void> {
   await syncCycle()
+}
+
+/**
+ * 重试全部死信：把死信以 retryCount=0 重新入队（按 envelope.id 去重），
+ * 清空死信文件，并触发一次同步周期复用现有调度。
+ */
+export function retryDeadLetterEnvelopes(): { retried: number } {
+  loadEnvelopeQueue()
+
+  const deadLetters = readDeadLetters()
+  if (deadLetters.length === 0) return { retried: 0 }
+
+  const knownIds = new Set(_pendingEnvelopes.map((e) => e.id))
+  let retried = 0
+  for (const dead of deadLetters) {
+    if (knownIds.has(dead.id)) continue
+    const revived: SyncEnvelope = { ...dead, retryCount: 0 }
+    delete revived.lastError
+    delete (revived as SyncEnvelope & { dead_letter_at?: number }).dead_letter_at
+    _pendingEnvelopes.push(revived)
+    knownIds.add(revived.id)
+    retried++
+  }
+
+  saveEnvelopeQueue()
+  rewriteDeadLetters([])
+
+  if (retried > 0) {
+    // 复用现有同步周期，不新开定时器；失败由同步引擎自身重试逻辑处理
+    void triggerSync().catch((err) => {
+      console.warn('[同步] 死信重试触发同步失败:', err)
+    })
+  }
+
+  console.log(`[同步] 死信重试：${retried}/${deadLetters.length} 条已重新入队`)
+  return { retried }
 }
 
 /** 获取同步状态快照 */

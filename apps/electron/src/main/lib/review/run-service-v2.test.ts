@@ -55,6 +55,23 @@ describe('runReviewCaseV2（M3 编排）', () => {
     expect(parseCalls).toBe(0) // 全部节点跳过
   })
 
+  test('Given 上次运行有节点失败 When 续跑 Then 失败节点重跑（failed 转回 pending）', async () => {
+    const failing: typeof okExecutors = { ...okExecutors, check: async () => { throw new Error('模型超时') } }
+    const failedRun = await runReviewCaseV2(caseV2, template, failing, { runId: 'r-retry' })
+    expect(failedRun.status).toBe('failed')
+    const failedCheckpoint = failedRun.checkpoints.find((checkpoint) => checkpoint.nodeId === 'node-auto-check-check')!
+    expect(failedCheckpoint.status).toBe('failed')
+    expect(failedCheckpoint.attempts).toBe(1)
+    let checkCalls = 0
+    const retry: typeof okExecutors = { ...okExecutors, check: async (node, hash) => { checkCalls += 1; return okExecutors.check(node, hash) } }
+    const resumed = await runReviewCaseV2(caseV2, template, retry, { runId: 'r-retry-2', resumeRunId: 'r-retry' })
+    expect(checkCalls).toBe(1) // failed 节点重跑，不做成永久失败
+    expect(resumed.status).toBe('completed')
+    const retried = resumed.checkpoints.find((checkpoint) => checkpoint.nodeId === 'node-auto-check-check')!
+    expect(retried.status).toBe('done')
+    expect(retried.attempts).toBe(2) // 历史尝试次数保留并递增
+  })
+
   test('Given 输入变化 When 续跑旧运行 Then 拒绝（防混版，K06）', async () => {
     const changed = { ...caseV2, subjects: [{ id: 's-new', type: 'item', title: 'x', fields: {}, sourceRefs: [], correction: 'ai-extracted', status: 'identified' }] } as ReviewCaseV2
     await expect(runReviewCaseV2(changed, template, okExecutors, { runId: 'r-x', resumeRunId: 'r-resume' })).rejects.toThrow('不能在旧运行上续跑')
@@ -116,5 +133,24 @@ describe('runReviewCaseV2（M3 编排）', () => {
     const run = await runReviewCaseV2(caseV2, template, { ...artifacts, ocr: async (node, hash) => { calls++; return artifacts.ocr(node, hash) } }, { runId: 'r-corrupt', resumeRunId: 'r-corrupt' })
     expect(calls).toBe(1)
     expect(run.status).toBe('completed')
+  })
+
+  test('Given 只传 resumeRunId When 续跑 Then 生成新运行且旧运行文件不被覆盖', async () => {
+    await runReviewCaseV2(caseV2, template, okExecutors, { runId: 'r-resume-only' })
+    const before = getRunV2(caseV2.id, 'r-resume-only')!
+    let parseCalls = 0
+    const counting: typeof okExecutors = { ...okExecutors, parse: async (node, hash) => { parseCalls += 1; return okExecutors.parse(node, hash) } }
+    const resumed = await runReviewCaseV2(caseV2, template, counting, { resumeRunId: 'r-resume-only' })
+    // 新运行 ID 绝不能等于续跑目标（否则 saveRunV2 会把新状态写进旧运行文件）
+    expect(resumed.id).not.toBe('r-resume-only')
+    expect(resumed.id).toMatch(/^run-\d+-/)
+    expect(resumed.status).toBe('completed')
+    expect(parseCalls).toBe(0) // 已完成节点复用，不重做
+    const old = getRunV2(caseV2.id, 'r-resume-only')!
+    expect(old.startedAt).toBe(before.startedAt)
+    expect(old.status).toBe(before.status)
+    expect(old.status).toBe('completed')
+    expect(old.checkpoints).toHaveLength(before.checkpoints.length)
+    expect(listRunsV2(caseV2.id).map((run) => run.id)).toEqual(expect.arrayContaining(['r-resume-only', resumed.id]))
   })
 })

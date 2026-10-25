@@ -611,7 +611,7 @@ function AddSoundDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[380px]">
+      <DialogContent className="max-w-[380px]">
         <DialogHeader>
           <DialogTitle>添加自定义音效</DialogTitle>
           <DialogDescription>

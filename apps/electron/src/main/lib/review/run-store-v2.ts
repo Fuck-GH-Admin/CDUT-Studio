@@ -47,6 +47,40 @@ export function listRunsV2(caseId: string): ReviewRunV2[] {
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
 }
 
+/**
+ * 启动恢复：进程崩溃/重启后磁盘上仍是 running 的运行不可能自行推进，统一标记为 failed。
+ * 保留检查点与产物（可续跑），只补错误、完成时间与诊断。返回恢复条数。
+ */
+export function recoverInterruptedRuns(): number {
+  const casesDir = join(getConfigDir(), 'review-cases')
+  if (!existsSync(casesDir)) return 0
+  let recovered = 0
+  for (const caseId of readdirSync(casesDir)) {
+    const dir = join(casesDir, caseId, 'runs-v2')
+    if (!existsSync(dir)) continue
+    for (const name of readdirSync(dir)) {
+      // 只处理运行文件：跳过 {runId}/artifacts 子目录与写入中间文件
+      if (!name.endsWith('.json')) continue
+      let run: ReviewRunV2
+      try {
+        run = JSON.parse(readFileSync(join(dir, name), 'utf-8')) as ReviewRunV2
+      } catch (error) {
+        console.warn(`[审核V2] 运行文件解析失败，跳过恢复: ${caseId}/${name}`, error)
+        continue
+      }
+      if (run.status !== 'running') continue
+      run.status = 'failed'
+      run.error = '应用重启，运行已中断'
+      run.completedAt = new Date().toISOString()
+      run.diagnostics = [...(run.diagnostics ?? []), '[recovery] 检测到进程重启，运行标记为中断']
+      saveRunV2(run)
+      recovered += 1
+    }
+  }
+  if (recovered > 0) console.warn(`[审核V2] 启动恢复：${recovered} 条中断运行已标记为 failed（可续跑）`)
+  return recovered
+}
+
 /** 节点产物目录：runs-v2/{runId}/artifacts/{nodeId}.json（不可变；恢复核验依据，R03） */
 function artifactsDir(caseId: string, runId: string): string {
   const dir = join(getConfigDir(), 'review-cases', caseId, 'runs-v2', runId, 'artifacts')

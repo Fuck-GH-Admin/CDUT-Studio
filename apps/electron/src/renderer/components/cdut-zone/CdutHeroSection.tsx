@@ -64,11 +64,11 @@ const BENTO_MODULES: BentoModule[] = [
 
 export function CdutHeroSection({ onSelect }: CdutHeroSectionProps): React.ReactElement {
   return (
-    <section className="my-auto flex flex-1 flex-col items-center justify-center gap-6 py-4 sm:gap-8 sm:py-6">
+    <section className="my-auto flex flex-1 flex-col items-center justify-center gap-8 py-6">
       {/* 居中校徽（含微淡晕影） */}
       <div className="flex flex-col items-center gap-3">
         {/* Logo 容器自适应高度，图片底部对齐容器底边 */}
-        <div className="relative flex h-36 items-end justify-center sm:h-44">
+        <div className="relative flex h-44 items-end justify-center">
           {/* 校徽底层微淡晕影 */}
           <span
             className="pointer-events-none absolute left-1/2 top-1/2 size-64 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-indigo-400/10 via-primary/5 to-emerald-400/10 blur-3xl"
@@ -78,7 +78,7 @@ export function CdutHeroSection({ onSelect }: CdutHeroSectionProps): React.React
             className="pointer-events-none absolute left-1/2 top-1/2 size-44 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-3xl"
             aria-hidden="true"
           />
-          <CdutLogo className="relative h-40 w-auto drop-shadow-sm sm:h-48" />
+          <CdutLogo className="relative h-48 w-auto drop-shadow-sm" />
         </div>
         <p className="text-xs font-medium tracking-wide text-muted-foreground">
           成理智能体矩阵 · 赋能教科研与校园生活
@@ -86,7 +86,7 @@ export function CdutHeroSection({ onSelect }: CdutHeroSectionProps): React.React
       </div>
 
       {/* Bento 三大战略板块 */}
-      <div className="grid w-full max-w-5xl grid-cols-1 gap-5 md:grid-cols-3">
+      <div className="grid w-full max-w-5xl grid-cols-3 gap-5">
         {BENTO_MODULES.map((mod) => (
           <button
             key={mod.id}

@@ -384,7 +384,7 @@ export function GradesDomainSheet(): React.ReactElement {
                 ))}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-4 gap-3">
               <div>
                 <div className="text-[11px] text-muted-foreground">加权 GPA</div>
                 <div className="mt-0.5 flex items-baseline gap-1">

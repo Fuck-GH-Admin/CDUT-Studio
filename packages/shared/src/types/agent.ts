@@ -2455,6 +2455,10 @@ export const SYNC_IPC_CHANNELS = {
   TRIGGER_SYNC: 'sync:trigger-sync',
   GET_PENDING_CHANGES: 'sync:get-pending-changes',
   DISCARD_PENDING_CHANGES: 'sync:discard-pending-changes',
+  /** 读取死信队列（超过重试上限的变更） */
+  LIST_DEAD_LETTERS: 'sync:list-dead-letters',
+  /** 将死信全部重新入队并触发同步 */
+  RETRY_DEAD_LETTERS: 'sync:retry-dead-letters',
   /** 同步状态变更推送（主进程 → 渲染进程） */
   STATUS_CHANGED: 'sync:status-changed',
 } as const

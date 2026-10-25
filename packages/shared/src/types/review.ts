@@ -475,6 +475,8 @@ export const REVIEW_IPC_CHANNELS = {
   GET_TEMPLATE_V2: 'review-v2:get-template',
   PUBLISH_TEMPLATE_V2: 'review-v2:publish-template',
   RUN_REVIEW_V2: 'review-v2:run-review',
+  /** 续跑：沿用既有运行检查点（崩溃/等待输入后继续） */
+  RESUME_RUN_V2: 'review-v2:resume-run',
   LIST_RUNS_V2: 'review-v2:list-runs',
   GET_RUN_V2: 'review-v2:get-run',
   CANCEL_RUN_V2: 'review-v2:cancel-run',
