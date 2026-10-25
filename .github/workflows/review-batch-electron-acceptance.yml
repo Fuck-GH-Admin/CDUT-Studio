@@ -19,6 +19,7 @@ jobs:
       PROFER_DEV_INSTANCE: 'review-batch-e2e'
       PROFER_VITE_PORT: '5176'
       CI: 'true'
+      GTK_USE_PORTAL: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -67,7 +68,7 @@ jobs:
             sleep 1
           done
           curl --silent --fail http://localhost:5176/ > /dev/null
-          (cd apps/electron && xvfb-run -a bunx electron . --no-sandbox --disable-gpu --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222) > "$QA_REPORT_DIR/electron.log" 2>&1 &
+          (cd apps/electron && xvfb-run -a bunx electron . --no-sandbox --disable-gpu --password-store=basic --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222) > "$QA_REPORT_DIR/electron.log" 2>&1 &
           ELECTRON_PID=$!
           node scripts/qa/batch-premerge-electron.mjs
           test ! -e "$QA_PROFILE_ROOT/path-poc"

@@ -38,12 +38,12 @@ export function finalizePiDocumentCoverage(input: {
         reason: `审核员已核对原件：${document.manualReadReceipt.reason}`,
       }
     }
-    const standaloneRaster = isStandaloneRaster(document)
     // 不凭旧 coverage.read 直接继承：同一版本可能重新解析出新块，旧状态本身
-    // 不是读取凭据。只有本轮块账本、PDF 完整原件预览或人工回执能重新证明完整读取。
-    // Raster imports have an explicit image block tool; a file-level preview is
-    // not a substitute for the per-block Pi read receipt required for these files.
-    if (!standaloneRaster && input.fullyPreviewedDocumentVersionIds?.has(document.versionId)) {
+    // 不是读取凭据。只有本轮块账本、完整原件视觉预览或人工回执能重新证明完整读取。
+    // A complete original preview is a valid fallback when a raster parser did not
+    // produce usable image blocks. When blocks exist, the preferred proof remains
+    // the per-block visual read receipt below.
+    if (input.fullyPreviewedDocumentVersionIds?.has(document.versionId)) {
       return { documentVersionId: document.versionId, status: 'read' }
     }
 
@@ -114,8 +114,8 @@ export function finalizePiDocumentCoverage(input: {
 }
 
 /**
- * 可完整读取的文本材料若仍缺真实读取凭据，不接受 Pi 宣告本轮完成。
- * 扫描件/解析失败的材料不可能靠空块补读，另由部分完成与人工核验接管。
+ * 可读文本、PDF 和独立图片仍缺真实读取凭据时，不接受 Pi 宣告本轮完成。
+ * 没有可用解析块的视觉材料须通过案卷限定的完整原件预览补读。
  */
 export function missingReadablePiDocuments(
   documents: readonly DocumentVersion[],
@@ -126,10 +126,11 @@ export function missingReadablePiDocuments(
     if (document.active === false || document.manualReadReceipt) return false
     const hasParsedText = document.parseStatus === 'parsed'
       && document.blocks.some(block => block.kind !== 'image' && !!block.text?.trim())
-    // PDFs and raster originals with real image assets need an explicit image
-    // receipt; neither a filename nor a parse status counts as visual reading.
+    // PDFs and standalone raster originals always need visual evidence. Raster
+    // files with missing imageAssetPath must fall back to a full original preview,
+    // not disappear from the completion gate.
     const needsVisualRead = extname(document.fileName).toLowerCase() === '.pdf'
-      || hasCompleteRasterImageRepresentation(document)
+      || isStandaloneRaster(document)
     if (document.parseStatus === 'failed' && !needsVisualRead) return false
     return (hasParsedText || needsVisualRead) && statuses.get(document.versionId) !== 'read'
   })

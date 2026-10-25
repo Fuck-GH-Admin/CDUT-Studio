@@ -5,7 +5,7 @@
 import { piObservationFieldContract } from './pi-review-prompt-contract'
 import { existsSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import type { AiOpinion, CaseAggregateV2, CheckResult, FieldValue, Observation, ReviewRunV2, RuleSpec, SourceRef, TemplateVersion } from '@profer/shared'
+import type { AiOpinion, CaseAggregateV2, CheckResult, DocumentVersion, FieldValue, Observation, ReviewRunV2, RuleSpec, SourceRef, TemplateVersion } from '@profer/shared'
 import { getConfigDir } from '../config-paths'
 import { assertSafeReviewStorageId } from './review-storage-id'
 import { getCaseV2Aggregate } from './application-service'
@@ -102,9 +102,8 @@ const CASE_ROOT = (caseId: string): string => {
 }
 
 /**
- * QA-261：prepare 的授权只证明启动那一刻获准。长 Pi 运行期间授权可能已过期或被拒，
- * 材料派生账本的实际写入口必须在首次落盘前用同一 Main gate 重新求值，失败即拒绝，
- * 不产生部分写入；本地 run CAS、binding 与既有终态语义保持不变。
+ * 派生账本写入前刷新材料处理提醒；授权状态未知不阻断本地读取记录。
+ * 案卷归属、运行指派、CAS 和终态仍由各自的 Main 校验入口约束。
  */
 function assertPiReviewLedgerWriteAllowed(caseId: string): void {
   assertReviewPreuploadAllowed('persist', { caseId })
@@ -592,15 +591,19 @@ function promptFor(aggregate: CaseAggregateV2, template: TemplateVersion): strin
     .flatMap((document) => document.blocks
       .filter((block) => block.kind === 'image' && !!block.imageAssetPath)
       .map((block) => `- ${document.fileName} | ${document.versionId} | ${block.blockId}${block.location?.kind === 'pdf-rect' ? ` | 第 ${block.location.page} 页` : ''}`))
-  const rasterImageTargets = aggregate.caseV2.documents.filter((document) => {
+  const isRasterDocument = (document: DocumentVersion) => {
     if (document.active === false || extname(document.fileName).toLowerCase() === '.pdf') return false
     const extension = extname(document.fileName).toLowerCase()
     // Older V1 imports can retain an image block while the document MIME type
     // is generic, so include known raster extensions as well as image/* MIME.
     return document.mimeType.startsWith('image/') || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].includes(extension)
-  }).flatMap((document) => document.blocks
+  }
+  const rasterImageTargets = aggregate.caseV2.documents.filter(isRasterDocument).flatMap((document) => document.blocks
     .filter((block) => block.kind === 'image' && !!block.imageAssetPath)
     .map((block) => `- ${document.fileName} | ${document.versionId} | ${block.blockId}`))
+  const rasterOriginalTargets = aggregate.caseV2.documents.filter(isRasterDocument).filter((document) =>
+    !document.blocks.some((block) => block.kind === 'image' && !!block.imageAssetPath))
+    .map((document) => `- ${document.fileName} | ${document.versionId} | ${document.parseError ?? '没有可读取的图像块'}`)
   const pdfOriginalTargets = aggregate.caseV2.documents.filter((document) => {
     if (document.active === false || extname(document.fileName).toLowerCase() !== '.pdf') return false
     const imageBlocks = document.blocks.filter((block) => block.kind === 'image')
@@ -643,6 +646,9 @@ function promptFor(aggregate: CaseAggregateV2, template: TemplateVersion): strin
     ] : []),
     ...(rasterImageTargets.length > 0 ? [
       `【本轮图片材料读取清单】以下 PNG/JPEG 等独立图片是本案正式审核输入，必须在提交结论前对每个图像块逐项调用 review_inspect_document_image，并使用清单中的真实 documentVersionId 与 blockId。读取图片中与本案事项和模板要求相关的文字、日期、主体、地点、标识/图例及直接可见事实；逐项说明无法辨认的内容。不得只按文件名猜测、只引用文件级来源或跳过图片：\n${rasterImageTargets.join('\n')}`,
+    ] : []),
+    ...(rasterOriginalTargets.length > 0 ? [
+      `【本轮图片原件读取清单】以下独立图片没有可用图像块，必须通过 review_inspect_original（documentVersionId，scope=all）读取原件视觉内容；若原件无法渲染，保持未完成并报告具体原因：\n${rasterOriginalTargets.join('\n')}`,
     ] : []),
     ...(pdfOriginalTargets.length > 0 ? [
       `【本轮 PDF 原件读取清单】以下 PDF 的解析结果或页面图像不完整，必须调用 review_inspect_original（documentVersionId，scope=all）让模型读取原件页面；若工具未返回全部页图或页面渲染失败，保持未完成并报告具体原因，不得只提示用户人工核对：\n${pdfOriginalTargets.join('\n')}`,
@@ -964,7 +970,8 @@ export function recordPiReviewPreviewByPath(
   const extension = extname(document.fileName).toLowerCase()
   const visuallyComplete = inspection.scope === 'all'
     && inspection.visualImageCount > 0
-    && (extension === '.pdf' || document.mimeType.startsWith('image/'))
+    && (extension === '.pdf' || document.mimeType.startsWith('image/')
+      || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].includes(extension))
   const fullyPreviewed = new Set(state.fullyPreviewedDocumentVersionIds ?? [])
   if (visuallyComplete) fullyPreviewed.add(document.versionId)
   saveArtifact(binding.caseId, binding.runId, 'node-pi-read-state', {

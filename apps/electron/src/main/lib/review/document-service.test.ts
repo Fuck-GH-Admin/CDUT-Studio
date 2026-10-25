@@ -403,16 +403,15 @@ describe('parseFileIntoSourceDocument / 图片与未知二进制', () => {
   })
 })
 
-describe('parseFileIntoSourceDocument / PPTX 嵌套预上传门禁', () => {
-  test('Given 入口授权通过但 PPTX 图片门禁拒绝 When 解析 Then 原样抛出 REVIEW_PREUPLOAD_DENIED 且不继续版面解析', async () => {
+describe('parseFileIntoSourceDocument / PPTX 嵌套预上传提醒', () => {
+  test('Given PPTX 图片授权状态变为未知 When 解析 Then 提示不阻断，坏文件仍保留真实解析失败', async () => {
     const filePath = join(testRoot, '嵌套拒止.pptx')
     writeFileSync(filePath, Buffer.from([0x50, 0x4b, 0x03, 0x04]))
 
     officeLayoutEntryCount = 0
     const previousBlock = process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK
     try {
-      // 入口 assert 同步执行；await stat 让下面预排的微任务先切换到拒止，
-      // 由 extractT02PptxImages 内部真实的 gate 抛出 REVIEW_PREUPLOAD_DENIED。
+      // 入口检查同步执行；await stat 让下面微任务在嵌套图片提取前切换授权状态。
       delete process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK
       queueMicrotask(() => {
         process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK = '1'
@@ -423,14 +422,14 @@ describe('parseFileIntoSourceDocument / PPTX 嵌套预上传门禁', () => {
         error => ({ returned: false as const, error }),
       )
 
-      expect(outcome.returned).toBe(false)
-      if (outcome.returned) return
-      expect(outcome.error).toBeInstanceOf(Error)
-      expect((outcome.error as Error).message).toContain('REVIEW_PREUPLOAD_DENIED')
-      // 必须原样上抛，不能被旧 catch-all 包装成“PPTX 图片字节读取失败”的告警。
-      expect((outcome.error as Error).message).not.toContain('PPTX 图片字节读取失败')
-      // 修复前 catch-all 会继续 parseOfficeLayoutBlocks（重新 readFile）；修复后计数保持 0。
-      expect(officeLayoutEntryCount).toBe(0)
+      expect(outcome.returned).toBe(true)
+      if (!outcome.returned) return
+      expect(outcome.document.parseStatus).not.toBe('parsed')
+      expect(outcome.document.blocks).toHaveLength(0)
+      expect(outcome.document.parseError).toBeTruthy()
+      expect(outcome.document.parseError).not.toContain('REVIEW_PREUPLOAD_DENIED')
+      // 授权提醒不跳过解析；损坏的 PPTX 仍不能伪装成可读材料。
+      expect(officeLayoutEntryCount).toBeGreaterThan(0)
     } finally {
       if (previousBlock === undefined) delete process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK
       else process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK = previousBlock

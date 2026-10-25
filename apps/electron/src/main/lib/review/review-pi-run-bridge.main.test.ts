@@ -9,6 +9,7 @@ import { DEFAULT_PRESET_ID, REVIEW_IPC_CHANNELS } from '@profer/shared'
 import type { BrowserWindow, WebContents } from 'electron'
 import type { ReviewPreuploadOperation, ReviewPreuploadScope } from './review-preupload-gate'
 import * as reviewPreuploadGate from './review-preupload-gate'
+import { AgentEventBus } from '../agent-event-bus'
 
 const configDir = mkdtempSync(join(tmpdir(), 'review-main-bridge-'))
 process.env.PROFER_CONFIG_DIR = configDir
@@ -34,6 +35,9 @@ mock.module('./review-preupload-gate', () => ({
   },
 }))
 mock.module('../agent-service', () => ({
+  agentEventBus: new AgentEventBus(),
+  runAgentHeadless: async () => { throw new Error('Unexpected headless run in review bridge test') },
+  stopAgent: () => { throw new Error('Unexpected unbound stop in review bridge test') },
   isAgentSessionActive: (id: string) => active.has(id),
   runAgent: (input: AgentSendInput, _wc: WebContents, _promotion: unknown, owned: () => void) => new Promise<void>((resolve) => {
     sequence.push('runAgent')

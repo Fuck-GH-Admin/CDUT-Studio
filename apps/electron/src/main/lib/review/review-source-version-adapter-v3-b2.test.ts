@@ -200,29 +200,35 @@ function controllableParser() {
 
 describe('B2 解析 await 后重新求值预接收授权（真实 adapter.parse）', () => {
   for (const [label, blockMode] of [
-    ['授权过期/未知', '1'],
+    ['授权状态未知', '1'],
     ['授权服务异常', 'throw'],
   ] as const) {
-    test(`${label}：解析完成必须拒绝且不缓存解析明文`, async () => {
+    test(`${label}：只发出提示，不阻断有效解析和缓存`, async () => {
       const store = new ReviewB2StagingService()
       const svc = new ReviewB2SourceVersionAdapter(store)
       const mat = stage(store, 'delayed.txt', Buffer.from('delayed parse ' + label),
         'req-delayed-' + blockMode, 'file-delayed-' + blockMode)
       const parser = controllableParser()
       const pending = svc.parse(a, mat)
-      // 先接住完成态，避免提前创建 rejects 匹配器阻塞 parser 闸门。
-      const outcome = pending.then(() => null, (error: unknown) => error)
-      // 入口授权已通过并进入 parser await；此刻权限才失效，完成前必须重验。
+      const outcome = pending.then(
+        value => ({ ok: true as const, value }),
+        error => ({ ok: false as const, error }),
+      )
+      // 入口检查已通过并进入 parser await；完成时改为未知/故障状态，应重新评估并提醒但不阻断。
       await parser.started
       process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK = blockMode
-      parser.release('不得缓存的解析明文')
-      const error = await outcome
-      expect(error).toBeInstanceOf(Error)
-      expect((error as Error).message).toContain('REVIEW_PREUPLOAD_DENIED')
+      parser.release('授权提醒不阻断的解析明文')
+      const result = await outcome
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      const parsed = result.value
+      expect(parsed.status).toBe('parsed')
+      expect(parsed.blocks[0]?.text).toBe('授权提醒不阻断的解析明文')
       delete process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK
-      // 没有写入解析缓存：同一 candidate 不能复用任何“成功”结果。
-      expect(() => svc.compareCandidateSourceVersions(a, mat.candidateId, mat.candidateId))
-        .toThrow('B2_SOURCE_TRANSITION_UNVERIFIED')
+      expect(svc.compareCandidateSourceVersions(a, mat.candidateId, mat.candidateId).status)
+        .toBe('same-active-version')
+      const cached = await svc.parse(a, mat)
+      expect(cached.parseRevision).toBe(parsed.parseRevision)
       expect(parser.calls()).toBe(1)
     })
   }

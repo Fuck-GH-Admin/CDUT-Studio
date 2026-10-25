@@ -25,8 +25,8 @@ describe('T03-B 审核材料授权提示', () => {
     ] as const) {
       expect(() => assertReviewPreuploadAllowed(operation)).not.toThrow()
     }
-    // 文案改为直述“系统无法判断/无法核实”，仍须明确不宣称已核验。
-    expect(REVIEW_PREUPLOAD_OFFLINE_NOTICE).toContain('无法判断材料是否涉敏')
+    expect(REVIEW_PREUPLOAD_OFFLINE_NOTICE).toContain('请确认这些材料适合在当前设备和所选模型渠道中处理')
+    expect(REVIEW_PREUPLOAD_OFFLINE_NOTICE).not.toContain('无法判断材料是否涉敏')
     expect(REVIEW_PREUPLOAD_OFFLINE_NOTICE).not.toContain('系统未接收材料')
   })
 

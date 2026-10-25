@@ -23,8 +23,8 @@
  */
 
 import { createServer, Server as HttpServer, IncomingMessage } from 'node:http'
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { readFileSync, existsSync, mkdirSync, writeFileSync, realpathSync, statSync } from 'node:fs'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
@@ -52,7 +52,7 @@ import {
   searchAgentSessionMessages,
 } from './agent-session-manager'
 import { grantCsLabToolTrust, revokeCsLabToolTrust } from './cslab/cslab-tool-trust'
-import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getAgentWorkspacePath, getWorkspaceFilesDir } from './config-paths'
+import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getAgentWorkspacePath, getWorkspaceFilesDir, getAttachmentsDir } from './config-paths'
 import { getSettings } from './settings-service'
 import {
   listAgentWorkspaces,
@@ -114,6 +114,24 @@ import { resolveAuthorizedRemoteFilePath, isReviewPrivateConfigPath } from './re
 import { loadWorkspaceHeatmapDaily } from './workspace-heatmap-query'
 import { RemoteAgentEventLog, type RemoteAgentEventRecord } from './remote-agent-event-log'
 import { RemoteRelayClient, type RemoteRelaySink } from './remote-relay-client'
+
+/** Legacy remote Chat attachments may only resolve below the attachment store. */
+function resolveRemoteAttachmentPath(localPath: string): { absolutePath: string; relativePath: string } | null {
+  if (!localPath || typeof localPath !== 'string') return null
+  try {
+    const attachmentRoot = realpathSync(getAttachmentsDir())
+    const candidate = isAbsolute(localPath) ? resolve(localPath) : resolve(attachmentRoot, localPath)
+    const relativeCandidate = relative(attachmentRoot, candidate)
+    if (!relativeCandidate || relativeCandidate === '..' || relativeCandidate.startsWith('..' + sep) || isAbsolute(relativeCandidate)) return null
+    const realCandidate = realpathSync(candidate)
+    const relativeReal = relative(attachmentRoot, realCandidate)
+    if (!relativeReal || relativeReal === '..' || relativeReal.startsWith('..' + sep) || isAbsolute(relativeReal)) return null
+    if (!statSync(realCandidate).isFile()) return null
+    return { absolutePath: candidate, relativePath: relativeCandidate }
+  } catch {
+    return null
+  }
+}
 
 /** 正式版默认监听端口 */
 export const DEFAULT_REMOTE_PORT = 7788
@@ -1780,8 +1798,10 @@ export async function handleRemoteCommand(
     case 'chat_delete_attachment': {
       const localPath = parsed.localPath as string
       if (!localPath) return { ok: false, error: '缺少 localPath' }
+      const attachment = resolveRemoteAttachmentPath(localPath)
+      if (!attachment) return { ok: false, error: '附件路径不在当前会话授权范围内' }
       try {
-        deleteAttachment(localPath)
+        deleteAttachment(attachment.relativePath)
         return { ok: true, data: { deleted: true } }
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : '附件删除失败' }
@@ -1791,8 +1811,10 @@ export async function handleRemoteCommand(
     case 'chat_read_attachment': {
       const localPath = parsed.localPath as string
       if (!localPath) return { ok: false, error: '缺少 localPath' }
+      const attachment = resolveRemoteAttachmentPath(localPath)
+      if (!attachment) return { ok: false, error: '附件路径不在当前会话授权范围内' }
       try {
-        return { ok: true, data: readAttachmentAsBase64(localPath) }
+        return { ok: true, data: readAttachmentAsBase64(attachment.absolutePath) }
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : '附件读取失败' }
       }

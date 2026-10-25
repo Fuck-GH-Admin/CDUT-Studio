@@ -180,7 +180,7 @@ describe('Pi 单次运行材料覆盖账本', () => {
   test('独立图片的视觉块全部核对后记为已读，未核对时仍保持未读', () => {
     const photo = document({
       fileName: '证明.jpg', mimeType: 'image/jpeg', parseStatus: 'partial',
-      blocks: [{ blockId: 'photo-1', text: '', kind: 'image' }],
+      blocks: [{ blockId: 'photo-1', text: '', kind: 'image', imageAssetPath: 'source-docs/photo.jpg' }],
       parseError: '图片原件已收录；内容由视觉模型识别（不做文本切块）',
     })
     const read = finalizePiDocumentCoverage({
@@ -212,13 +212,53 @@ describe('Pi 完成提交前的可读材料补读门禁', () => {
     expect(missingReadablePiDocuments([source], read)).toEqual([])
   })
 
-  test('扫描件无文本层不要求 Pi 读取虚构文本块，仍由部分覆盖/人工核验处理', () => {
+  test('无页面图像块的扫描 PDF 仍须完整预览原件或人工确认后才能完成', () => {
     const scanned = document({
       fileName: '扫描件.pdf', parseStatus: 'partial', blocks: [], parseError: '无文本层',
     })
-    expect(missingReadablePiDocuments([scanned], [
-      { documentVersionId: scanned.versionId, status: 'unread' },
-    ])).toEqual([])
+    const unreadCoverage = [{ documentVersionId: scanned.versionId, status: 'unread' as const }]
+    expect(missingReadablePiDocuments([scanned], unreadCoverage)).toEqual([
+      { documentVersionId: scanned.versionId, fileName: scanned.fileName },
+    ])
+
+    const previewedCoverage = finalizePiDocumentCoverage({
+      documents: [scanned], previous: unreadCoverage, readBlocksByDocument: {},
+      previewedDocumentVersionIds: new Set([scanned.versionId]),
+      fullyPreviewedDocumentVersionIds: new Set([scanned.versionId]),
+      citedDocumentVersionIds: new Set(),
+    })
+    expect(missingReadablePiDocuments([scanned], previewedCoverage)).toEqual([])
+
+    const manuallyChecked = document({
+      ...scanned,
+      manualReadReceipt: { actorId: 'reviewer', reason: '逐页核对原件', at: '' },
+    })
+    const manualCoverage = finalizePiDocumentCoverage({
+      documents: [manuallyChecked], previous: unreadCoverage, readBlocksByDocument: {},
+      citedDocumentVersionIds: new Set(),
+    })
+    expect(missingReadablePiDocuments([manuallyChecked], manualCoverage)).toEqual([])
+  })
+
+  test('缺少 imageAssetPath 的独立图片仍受完成门禁约束，并可通过完整原件预览补读', () => {
+    const image = document({
+      fileName: '17_活动宣传海报.png', mimeType: 'application/octet-stream', parseStatus: 'partial',
+      blocks: [{ blockId: 'missing-image-asset', kind: 'image', text: '' }],
+      parseError: '图片块缺少可访问的图像资产',
+    })
+    const unread = [{ documentVersionId: image.versionId, status: 'unread' as const }]
+    expect(missingReadablePiDocuments([image], unread)).toEqual([
+      { documentVersionId: image.versionId, fileName: image.fileName },
+    ])
+
+    const previewed = finalizePiDocumentCoverage({
+      documents: [image], previous: unread, readBlocksByDocument: {},
+      previewedDocumentVersionIds: new Set([image.versionId]),
+      fullyPreviewedDocumentVersionIds: new Set([image.versionId]),
+      citedDocumentVersionIds: new Set(),
+    })
+    expect(previewed).toEqual([{ documentVersionId: image.versionId, status: 'read' }])
+    expect(missingReadablePiDocuments([image], previewed)).toEqual([])
   })
 
   test('人工完整核验过的当前原件和非活跃旧版本不再要求 Pi 重读', () => {

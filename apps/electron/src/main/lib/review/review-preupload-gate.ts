@@ -6,7 +6,7 @@
  */
 
 export const REVIEW_PREUPLOAD_OFFLINE_NOTICE =
-  '请确认这些材料适合在当前设备和所选模型渠道中处理。系统无法判断材料是否涉敏，也无法核实你是否有权处理。'
+  '请确认这些材料适合在当前设备和所选模型渠道中处理。'
 
 export type ReviewPreuploadOperation =
   | 'create-case' | 'picker' | 'drop' | 'clipboard' | 'zip' | 'restore'

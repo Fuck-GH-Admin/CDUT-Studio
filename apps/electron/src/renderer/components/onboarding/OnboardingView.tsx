@@ -3,8 +3,13 @@
  *
  * 首次启动时显示的全屏欢迎界面与功能导览。
  *
- * 流程：开屏 → 欢迎概览 → FeatureTour（8 组交互式导览）→ 数据迁移 → 诗意插页 → 品牌收尾。
- * 审核模型设置在应用设置中完成；Windows 执行环境保持静默自适应。
+ * 流程：
+ *  Step 0：开屏水波纹动画（IntroWaterRipple，从水面具现品牌，自动或点击进入下一步）
+ *  Step 1：欢迎概览页（展示核心四大支柱，提供完整导览与快速跳过双入口）
+ *  Step 2：核心功能导览（FeatureTour，8 组高拟真交互式演示舞台，支持暂停/切换/全键盘导航）
+ *  Step 3：迁移数据指引（从其他设备 / 团队导入配置）
+ *  Step 4：诗意插页（海内存知己，天涯若比邻——独立整屏电影感沉浸）
+ *  Step 5：品牌收尾（CDUT Studio / 欢迎您！，进入主界面并自动平滑接力）
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -23,7 +28,6 @@ import {
 } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
-import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import { IntroWaterRipple } from './IntroWaterRipple'
 import { IntroFluidBackground } from './IntroFluidBackground'
 import { FeatureTour } from './FeatureTour'
@@ -48,8 +52,6 @@ export function OnboardingView({
 }: OnboardingViewProps) {
   const [step, setStep] = useState<OnboardingStep>(initialStep)
   const setMigrationImportDialogOpen = useSetAtom(migrationImportDialogOpenAtom)
-  const setSettingsOpen = useSetAtom(settingsOpenAtom)
-  const setSettingsTab = useSetAtom(settingsTabAtom)
 
   const handleFinish = async (openTutorial?: boolean) => {
     if (persistCompletion) {

@@ -137,7 +137,7 @@ describe('Pi 审核结果提交与续审', () => {
 
     expect(rejected.status).toBe('running')
     expect(rejected.rejected).toEqual([expect.objectContaining({ kind: 'check', reason: expect.stringContaining('图像出处尚未通过') })])
-    expect(rejected.missingChecks).toHaveLength(6)
+    expect(rejected.missingChecks).toHaveLength(7)
     expect(rejected.missingChecks).toContainEqual(expect.stringContaining('待补读材料'))
     const stillOpen = getRunV2(context.caseId, context.prepared.runId)!
     expect(stillOpen.status).toBe('running')
@@ -154,7 +154,7 @@ describe('Pi 审核结果提交与续审', () => {
     expect(unreadText.rejected).toHaveLength(5)
     expect(unreadText.rejected.every((item) => item.reason.includes('文字出处尚未在本轮实际读取'))).toBeTrue()
     expect(unreadText.status).toBe('running')
-    expect(unreadText.missingChecks).toHaveLength(6)
+    expect(unreadText.missingChecks).toHaveLength(7)
 
     recordPiReviewDocumentRead(binding, context.textRef.documentVersionId, [context.textRef.blockId], readAggregate(context.caseId)!.caseV2.documents)
     const corrected = submitPiReviewResultV2({
@@ -162,19 +162,29 @@ describe('Pi 审核结果提交与续审', () => {
       triggeredBy: 'user',
       result: { summary: '已改用已核验的正文出处，五项检查均已补交。', checks: checksWithTextRef(context.textRef), finish: true },
     })
-    expect(corrected).toMatchObject({ accepted: 5, rejected: [], missingChecks: [], status: 'completed' })
+    expect(corrected.accepted).toBe(5)
+    expect(corrected.rejected).toEqual([])
+    expect(corrected.status).toBe('running')
+    expect(corrected.missingChecks).toContainEqual(expect.stringContaining(context.imageRef.documentVersionId))
+    expect(getRunV2(context.caseId, context.prepared.runId)?.status).toBe('running')
     expect(getRunV2(context.caseId, context.prepared.runId)?.checks).toHaveLength(5)
 
-    // RUN-42：技术轮 completed，但图像材料仍未读 -> 业务未就绪必须落盘且写进诊断。
+    // The successful image block receipt is required before finish=true can close the run.
+    const documents = readAggregate(context.caseId)!.caseV2.documents
+    recordPiReviewDocumentRead(binding, context.imageRef.documentVersionId, [context.imageRef.blockId], documents)
+    const completed = submitPiReviewResultV2({
+      binding,
+      triggeredBy: 'user',
+      result: { summary: '图像与正文原件均已核验。', checks: checksWithTextRef(context.textRef), finish: true },
+    })
+    expect(completed).toMatchObject({ accepted: 5, rejected: [], missingChecks: [], status: 'completed' })
     const readiness = readArtifact<{ businessReady: boolean; unreadDocuments: number; reasons: string[] }>(
       context.caseId, context.prepared.runId, 'node-pi-business-readiness')!
-    expect(readiness.businessReady).toBeFalse()
-    expect(readiness.unreadDocuments).toBeGreaterThan(0)
-    expect(readiness.reasons.join('；')).toContain('份材料未读')
+    expect(readiness.businessReady).toBeTrue()
+    expect(readiness.unreadDocuments).toBe(0)
     const completedRun = getRunV2(context.caseId, context.prepared.runId)!
     expect(completedRun.status).toBe('completed')
-    expect(completedRun.diagnostics.join('\n')).toContain('技术轮完成，但业务未就绪')
-    expect(completedRun.opinions[0]?.detail).toContain('技术轮完成不等于完整审核通过')
+    expect(completedRun.diagnostics.join('\n')).not.toContain('技术轮完成，但业务未就绪')
   })
 
   test('全部语义检查已提交但另一份可读原件漏读时，Pi 仍不能结束同一轮次', async () => {
@@ -184,6 +194,7 @@ describe('Pi 审核结果提交与续审', () => {
       caseId: context.caseId, runId: context.prepared.runId,
     }
     const documents = readAggregate(context.caseId)!.caseV2.documents
+    recordPiReviewDocumentRead(binding, context.imageRef.documentVersionId, [context.imageRef.blockId], documents)
     recordPiReviewDocumentRead(binding, context.textRef.documentVersionId, [context.textRef.blockId], documents)
     const first = submitPiReviewResultV2({
       binding, triggeredBy: 'user',
@@ -242,12 +253,12 @@ describe('Pi 审核结果提交与续审', () => {
     expect(getPiReviewBindingForSession(context.sessionId)).toMatchObject({ assignmentId: continued.assignmentId, runId: context.prepared.runId })
     expect(getRunV2(context.caseId, context.prepared.runId)?.status).toBe('running')
 
-    recordPiReviewDocumentRead(
-      { assignmentId: continued.assignmentId, sessionId: context.sessionId, caseId: context.caseId, runId: continued.runId },
-      context.textRef.documentVersionId, [context.textRef.blockId], readAggregate(context.caseId)!.caseV2.documents,
-    )
+    const continuedBinding = { assignmentId: continued.assignmentId, sessionId: context.sessionId, caseId: context.caseId, runId: continued.runId }
+    const continuedDocuments = readAggregate(context.caseId)!.caseV2.documents
+    recordPiReviewDocumentRead(continuedBinding, context.textRef.documentVersionId, [context.textRef.blockId], continuedDocuments)
+    recordPiReviewDocumentRead(continuedBinding, context.imageRef.documentVersionId, [context.imageRef.blockId], continuedDocuments)
     const completed = submitPiReviewResultV2({
-      binding: { assignmentId: continued.assignmentId, sessionId: context.sessionId, caseId: context.caseId, runId: continued.runId },
+      binding: continuedBinding,
       triggeredBy: 'user',
       result: { summary: '续审已补齐全部检查。', checks: checksWithTextRef(context.textRef), finish: true },
     })
@@ -316,7 +327,7 @@ describe('Pi 审核结果提交与续审', () => {
       .find((entry) => entry.documentVersionId === context.imageRef.documentVersionId)?.status).toBe('unread')
   })
 
-  test('prepare 后授权过期：读取与预览账本在落盘前重验并拒绝，恢复授权后旧记账语义不变', async () => {
+  test('授权状态未知时提示用户，但不会阻断本地读取与完整原件预览', async () => {
     const context = await setupReviewCase('expiry-ledger')
     const binding = {
       assignmentId: context.prepared.assignmentId,
@@ -325,39 +336,27 @@ describe('Pi 审核结果提交与续审', () => {
       runId: context.prepared.runId,
     }
     const documents = readAggregate(context.caseId)!.caseV2.documents
-    const before = getRunV2(context.caseId, context.prepared.runId)!
     try {
       process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK = '1'
       expect(() => recordPiReviewDocumentRead(
         binding, context.textRef.documentVersionId, [context.textRef.blockId], documents,
-      )).toThrow('REVIEW_PREUPLOAD_DENIED')
-      expect(readArtifact(context.caseId, context.prepared.runId, 'node-pi-read-state')).toBeUndefined()
-      expect(() => recordPiReviewPreviewByPath(binding, context.imagePath, '过期预览', {
+      )).not.toThrow()
+      expect(readArtifact<{ blocks?: Record<string, string[]> }>(
+        context.caseId, context.prepared.runId, 'node-pi-read-state',
+      )?.blocks?.[context.textRef.documentVersionId]).toContain(context.textRef.blockId)
+      expect(recordPiReviewPreviewByPath(binding, context.imagePath, '完整原件预览', {
         scope: 'all', visualImageCount: 1,
-      })).toThrow('REVIEW_PREUPLOAD_DENIED')
-      expect(readArtifact(context.caseId, context.prepared.runId, 'node-pi-read-state')).toBeUndefined()
-      expect(getRunV2(context.caseId, context.prepared.runId)).toEqual(before)
+      })).toBeTrue()
+      expect(readArtifact<{ fullyPreviewedDocumentVersionIds: string[] }>(
+        context.caseId, context.prepared.runId, 'node-pi-read-state',
+      )?.fullyPreviewedDocumentVersionIds).toContain(context.imageRef.documentVersionId)
     } finally {
       delete process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK
     }
-
-    recordPiReviewDocumentRead(binding, context.textRef.documentVersionId, [context.textRef.blockId], documents)
-    const readState = readArtifact<{ blocks?: Record<string, string[]> }>(context.caseId, context.prepared.runId, 'node-pi-read-state')!
-    expect(readState.blocks?.[context.textRef.documentVersionId]).toContain(context.textRef.blockId)
-    expect(recordPiReviewPreviewByPath(binding, context.imagePath, '恢复后的完整预览', {
-      scope: 'all', visualImageCount: 1,
-    })).toBeTrue()
-    const previewState = readArtifact<{
-      blocks?: Record<string, string[]>
-      previewedDocumentVersionIds?: string[]
-      fullyPreviewedDocumentVersionIds?: string[]
-    }>(context.caseId, context.prepared.runId, 'node-pi-read-state')!
-    expect(previewState.previewedDocumentVersionIds).toContain(context.imageRef.documentVersionId)
-    expect(previewState.fullyPreviewedDocumentVersionIds).toContain(context.imageRef.documentVersionId)
-    expect(getRunV2(context.caseId, context.prepared.runId)!.agentActivity?.join('\n')).toContain('恢复后的完整预览')
+    expect(getRunV2(context.caseId, context.prepared.runId)!.agentActivity?.join('\n')).toContain('完整原件预览')
   })
 
-  test('prepare 后授权过期：submit/finish/read-activity 拒绝写入并保持 running，恢复后可正常完成', async () => {
+  test('授权状态未知时提示用户，但不会阻断审核记录与完成提交', async () => {
     const context = await setupReviewCase('expiry-run')
     const binding = {
       assignmentId: context.prepared.assignmentId,
@@ -367,44 +366,21 @@ describe('Pi 审核结果提交与续审', () => {
     }
     const documents = readAggregate(context.caseId)!.caseV2.documents
     recordPiReviewDocumentRead(binding, context.textRef.documentVersionId, [context.textRef.blockId], documents)
-    const before = getRunV2(context.caseId, context.prepared.runId)!
     try {
       process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK = '1'
-      expect(() => updatePiReviewReadActivity(binding, documents, '过期活动')).toThrow('REVIEW_PREUPLOAD_DENIED')
-      expect(getRunV2(context.caseId, context.prepared.runId)!.agentActivity).toEqual(before.agentActivity)
-      expect(() => finishPiReviewRunV2(binding, { status: 'completed' })).toThrow('REVIEW_PREUPLOAD_DENIED')
-      const afterFinish = getRunV2(context.caseId, context.prepared.runId)!
-      expect(afterFinish.status).toBe('running')
-      expect(afterFinish.completedAt).toBeUndefined()
-      expect(afterFinish.error).toBeUndefined()
-      expect(afterFinish.checks).toHaveLength(before.checks.length)
-      // finish=true 但缺项时原本会写 submit-attempt；过期必须连尝试记录也不落盘。
-      expect(() => submitPiReviewResultV2({
+      expect(() => updatePiReviewReadActivity(binding, documents, '审核继续读取')).not.toThrow()
+      expect(getRunV2(context.caseId, context.prepared.runId)!.agentActivity?.join('\n')).toContain('审核继续读取')
+      expect(() => recordPiReviewDocumentRead(
+        binding, context.imageRef.documentVersionId, [context.imageRef.blockId], documents,
+      )).not.toThrow()
+      const completed = submitPiReviewResultV2({
         binding,
         triggeredBy: 'user',
-        result: { summary: '过期缺项提交。', checks: [checksWithTextRef(context.textRef)[0]!], finish: true },
-      })).toThrow('REVIEW_PREUPLOAD_DENIED')
-      expect(() => submitPiReviewResultV2({
-        binding,
-        triggeredBy: 'user',
-        result: { summary: '过期完整提交。', checks: checksWithTextRef(context.textRef), finish: true },
-      })).toThrow('REVIEW_PREUPLOAD_DENIED')
-      const afterSubmit = getRunV2(context.caseId, context.prepared.runId)!
-      expect(afterSubmit.status).toBe('running')
-      expect(afterSubmit.checks).toHaveLength(before.checks.length)
-      expect(readArtifact(context.caseId, context.prepared.runId, 'node-pi-submit-attempts')).toBeUndefined()
-      expect(readArtifact(context.caseId, context.prepared.runId, 'node-pi-business-readiness')).toBeUndefined()
+        result: { summary: '授权提示不影响本地审核提交。', checks: checksWithTextRef(context.textRef), finish: true },
+      })
+      expect(completed).toMatchObject({ accepted: 5, rejected: [], missingChecks: [], status: 'completed' })
     } finally {
       delete process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK
     }
-
-    updatePiReviewReadActivity(binding, documents, '恢复授权后的活动')
-    expect(getRunV2(context.caseId, context.prepared.runId)!.agentActivity?.join('\n')).toContain('恢复授权后的活动')
-    const completed = submitPiReviewResultV2({
-      binding,
-      triggeredBy: 'user',
-      result: { summary: '恢复授权后补齐全部检查。', checks: checksWithTextRef(context.textRef), finish: true },
-    })
-    expect(completed).toMatchObject({ accepted: 5, rejected: [], missingChecks: [], status: 'completed' })
   })
 })

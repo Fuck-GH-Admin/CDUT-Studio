@@ -16,6 +16,7 @@ jobs:
       PROFER_DEV_INSTANCE: 'review-v3-local-qa'
       PROFER_VITE_PORT: '5176'
       CI: 'true'
+      GTK_USE_PORTAL: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -60,7 +61,7 @@ jobs:
               sleep 1
             done
             curl --silent --fail http://localhost:5176/ > /dev/null
-            (cd apps/electron && bunx electron . --no-sandbox --disable-gpu --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222) > "$QA_REPORT_DIR/electron.log" 2>&1 &
+            (cd apps/electron && bunx electron . --no-sandbox --disable-gpu --password-store=basic --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222) > "$QA_REPORT_DIR/electron.log" 2>&1 &
             ELECTRON_PID=$!
             node scripts/qa/review-v3-local-electron.mjs
           '

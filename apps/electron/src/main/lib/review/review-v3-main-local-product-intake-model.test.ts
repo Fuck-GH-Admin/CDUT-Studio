@@ -97,7 +97,7 @@ describe('F04 多原件模板路由',()=>{
 })
 
 describe('C11 缓存会话的读取授权重验',()=>{
-  test('授权通过并缓存后，拒绝或授权源故障在下一次读取原始字节前拒止',async()=>{
+  test('授权状态未知或授权源故障只提醒；原件完整性仍在每次缓存读取时核验',async()=>{
     const root=mkdtempSync(join(tmpdir(),'c11-cache-gate-'))
     const previousConfig=process.env.PROFER_CONFIG_DIR
     const previousBlock=process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK
@@ -141,16 +141,23 @@ describe('C11 缓存会话的读取授权重验',()=>{
       expect(first.read.caseCandidateId).toBe(caseId)
       expect(first.sessionKey).toBeTruthy()
 
-      // 移除原件：若缓存分支在重验前触碰原始字节，会报 C2 读取错误而非门禁错误。
+      // 未知或不可用授权状态只应提醒，不应阻止仍然完整的原件读取。
+      process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK='1'
+      const warned=invoke() as {read:{caseCandidateId:string};sessionKey:string}
+      expect(warned.read.caseCandidateId).toBe(caseId)
+      expect(warned.sessionKey).toBe(first.sessionKey)
+
+      process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK='throw'
+      const authorityUnavailable=invoke() as {read:{caseCandidateId:string};sessionKey:string}
+      expect(authorityUnavailable.read.caseCandidateId).toBe(caseId)
+      expect(authorityUnavailable.sessionKey).toBe(first.sessionKey)
+
+      // The advisory gate must not weaken the independent physical-byte check.
       const aggregate=readAggregate(caseId)!
       const original=join(root,'review-cases',caseId,
         aggregate.caseV2.documents[0]!.assetPath)
       unlinkSync(original)
-
-      process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK='1'
-      expect(invoke).toThrow('REVIEW_PREUPLOAD_DENIED')
-      process.env.PROFER_REVIEW_TEST_PREUPLOAD_BLOCK='throw'
-      expect(invoke).toThrow('REVIEW_PREUPLOAD_DENIED')
+      expect(invoke).toThrow(/物理原件无法从案卷受控目录读取并重新核验/)
     }finally{
       setMainWindow?.(null)
       if(previousConfig===undefined)delete process.env.PROFER_CONFIG_DIR

@@ -614,16 +614,15 @@ describe('C1 legacy Main command isolation and compatibility', () => {
       readBytes(docxSource),
     )).toBe(0)
 
-    // V2 accepts an attachment as "not classified yet". Native V3's
-    // compatibility projection has no attachment role, so the IPC adapter
-    // stages it as provisional evidence instead of rejecting the file.
+    // Native V3 preserves attachment as a real "not classified yet" role;
+    // automatic classification can then promote it using the template slots.
     const attachmentSource = join(root, 'unclassified-material.txt')
     writeFileSync(attachmentSource, '待匹配模板的材料')
     const attachmentId = await Promise.resolve(invoke(REVIEW_IPC_CHANNELS.REGISTER_MATERIAL_PATH_V2, {
       caseId: created.id, sourcePath: attachmentSource, role: 'attachment',
     })) as string
     const attachmentDoc = readAggregate(created.id)!.caseV2.documents.find(doc => doc.versionId === attachmentId)!
-    expect(attachmentDoc).toMatchObject({ fileName: 'unclassified-material.txt', role: 'evidence', active: true })
+    expect(attachmentDoc).toMatchObject({ fileName: 'unclassified-material.txt', role: 'attachment', active: true })
 
     // 重开（重新读聚合，等价于重启后再读）所有材料与原件引用都仍在
     const reopened = readAggregate(created.id)!
