@@ -22,17 +22,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
-      - name: Focused baseline regressions
+      - name: Typecheck workspace
+        run: bun run typecheck
+      - name: Check package boundaries
+        run: bun run check:boundaries
+      - name: Verify built-in skin contract
+        working-directory: apps/electron
+        run: bun run check:skin-contract
+      - name: Build main, preload and renderer
+        working-directory: apps/electron
         run: |
-          bun test --isolate --timeout 30000 apps/electron/src/main/lib/review/single-case-workspace.e2e.test.ts
-          bun test --isolate --timeout 30000 apps/electron/src/main/lib/review/run-service-v2.artifacts.test.ts
-          bun test --isolate --timeout 30000 apps/electron/src/main/lib/review/boot-check.test.ts
-          bun test --isolate --timeout 30000 apps/electron/src/main/lib/review/fixtures/all-templates-fixture.test.ts
-          bun test --isolate --timeout 30000 apps/electron/scripts/packaging-guards.test.ts
-          bun test --isolate --timeout 30000 apps/electron/src/main/lib/skin-manager-service.test.ts
-          bun test --isolate --timeout 30000 apps/electron/src/main/lib/agent-workspace-profile.test.ts
+          bun run build:main
+          bun run build:preload
+          bun run build:renderer
+      - name: Run all unit and regression tests
+        run: bun test --isolate --timeout 30000
